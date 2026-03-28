@@ -72,9 +72,8 @@ function handleChunk(chunk: BondStreamChunk): void {
       appendBubble('meta', escapeHtml(chunk.text ?? chunk.subtype))
       break
     case 'result':
-      if (chunk.subtype === 'success' && chunk.result) {
-        appendBubble('meta', `<span class="ok">Done</span> ${escapeHtml(chunk.result)}`)
-      } else if (chunk.errors?.length) {
+      // Success `result` from the SDK repeats assistant text already streamed as `assistant_text`.
+      if (chunk.errors?.length) {
         appendBubble('meta', `<span class="err">${escapeHtml(chunk.errors.join('; '))}</span>`)
       }
       endBondStream()
