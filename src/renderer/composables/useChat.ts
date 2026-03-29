@@ -1,12 +1,12 @@
 import { ref } from 'vue'
-import type { BondStreamChunk } from '../../shared/stream'
+import type { BondStreamChunk, TaggedChunk } from '../../shared/stream'
 import type { SessionMessage } from '../../shared/session'
 import type { Message } from '../types/message'
 
 export interface ChatDeps {
   send: (text: string, sessionId?: string) => Promise<{ ok: boolean; error?: string }>
-  cancel: () => Promise<{ ok: boolean }>
-  onChunk: (fn: (chunk: BondStreamChunk) => void) => () => void
+  cancel: (sessionId?: string) => Promise<{ ok: boolean }>
+  onChunk: (fn: (chunk: TaggedChunk) => void) => () => void
   respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
   getMessages: (sessionId: string) => Promise<SessionMessage[]>
   saveMessages: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
@@ -50,7 +50,10 @@ export function useChat(deps: ChatDeps = window.bond) {
     messages.value.push(msg)
   }
 
-  function handleChunk(chunk: BondStreamChunk) {
+  function handleChunk(chunk: TaggedChunk) {
+    // Ignore chunks for other sessions
+    if (chunk.sessionId !== currentSessionId.value) return
+
     thinking.value = false
 
     switch (chunk.kind) {
@@ -166,7 +169,7 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   function cancel() {
-    deps.cancel()
+    deps.cancel(currentSessionId.value ?? undefined)
   }
 
   function subscribe() {

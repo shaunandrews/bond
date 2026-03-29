@@ -7,19 +7,21 @@ import { getSoul } from './settings'
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'Bash'])
 
 type ApprovalResolve = (result: { behavior: 'allow' } | { behavior: 'deny'; message: string }) => void
-const pendingApprovals = new Map<string, ApprovalResolve>()
+const pendingApprovals = new Map<string, { resolve: ApprovalResolve; sessionId: string }>()
 
 export function resolvePendingApproval(requestId: string, approved: boolean): void {
-  const resolve = pendingApprovals.get(requestId)
-  if (!resolve) return
+  const entry = pendingApprovals.get(requestId)
+  if (!entry) return
   pendingApprovals.delete(requestId)
-  resolve(approved ? { behavior: 'allow' } : { behavior: 'deny', message: 'User denied this action' })
+  entry.resolve(approved ? { behavior: 'allow' } : { behavior: 'deny', message: 'User denied this action' })
 }
 
-export function clearPendingApprovals(): void {
-  for (const [id, resolve] of pendingApprovals) {
-    resolve({ behavior: 'deny', message: 'Request cancelled' })
-    pendingApprovals.delete(id)
+export function clearSessionApprovals(sessionId: string): void {
+  for (const [id, entry] of pendingApprovals) {
+    if (entry.sessionId === sessionId) {
+      entry.resolve({ behavior: 'deny', message: 'Request cancelled' })
+      pendingApprovals.delete(id)
+    }
   }
 }
 
@@ -153,7 +155,7 @@ export async function runBondQuery(
         description: sdkOptions.description
       })
       return new Promise<{ behavior: 'allow' } | { behavior: 'deny'; message: string }>((resolve) => {
-        pendingApprovals.set(requestId, resolve)
+        pendingApprovals.set(requestId, { resolve, sessionId: options.sessionId ?? '' })
       })
     },
     env: {
@@ -178,7 +180,7 @@ export async function runBondQuery(
   options.abortSignal.addEventListener(
     'abort',
     () => {
-      clearPendingApprovals()
+      clearSessionApprovals(options.sessionId ?? '')
       ac.abort()
       try {
         q.close()

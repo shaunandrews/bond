@@ -1,14 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { BondStreamChunk } from '../shared/stream'
+import type { TaggedChunk } from '../shared/stream'
 import type { Session, SessionMessage } from '../shared/session'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string) => ipcRenderer.invoke('bond:send', text, sessionId) as Promise<{ ok: boolean; error?: string }>,
-  cancel: () => ipcRenderer.invoke('bond:cancel') as Promise<{ ok: boolean }>,
+  cancel: (sessionId?: string) => ipcRenderer.invoke('bond:cancel', sessionId) as Promise<{ ok: boolean }>,
   respondToApproval: (requestId: string, approved: boolean) =>
     ipcRenderer.invoke('bond:approvalResponse', requestId, approved) as Promise<{ ok: boolean }>,
-  onChunk: (fn: (chunk: BondStreamChunk) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, chunk: BondStreamChunk) => fn(chunk)
+  onChunk: (fn: (chunk: TaggedChunk) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, chunk: TaggedChunk) => fn(chunk)
     ipcRenderer.on('bond:chunk', listener)
     return () => ipcRenderer.removeListener('bond:chunk', listener)
   },
