@@ -61,6 +61,14 @@ html, body {
   background: var(--color-bg);
 }
 
+/* Window drag regions */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.drag-region * {
+  -webkit-app-region: no-drag;
+}
+
 .app-footer {
   position: absolute;
   bottom: 0;

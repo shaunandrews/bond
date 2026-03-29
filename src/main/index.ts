@@ -26,6 +26,8 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'Bond',
+    titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 20, y: 18 },
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,

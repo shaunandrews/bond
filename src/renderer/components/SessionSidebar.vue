@@ -116,7 +116,11 @@ function formatDate(iso: string): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 0.75rem 0.5rem;
+  padding: 2.75rem 0.75rem 0.5rem;
+  -webkit-app-region: drag;
+}
+.sidebar-header * {
+  -webkit-app-region: no-drag;
 }
 
 .sidebar-btn {
