@@ -36,21 +36,22 @@ function formatDate(iso: string): string {
 
 <template>
   <aside class="session-sidebar">
+    <!-- Toolbar row — sits beside traffic lights -->
+    <div class="sidebar-toolbar drag-region">
+      <button
+        type="button"
+        @click.stop="emit('create')"
+        class="sidebar-btn no-drag"
+        title="New chat"
+      >
+        +
+      </button>
+    </div>
+
     <!-- Resizable chats + archives area -->
     <BondPanelGroup direction="vertical" autoSaveId="sidebar-panels" class="sidebar-panels">
       <!-- Chats -->
-      <BondPanel id="chats" :defaultSize="65" :minSize="20" header="Chats">
-        <template #header-extra>
-          <button
-            type="button"
-            @click.stop="emit('create')"
-            class="sidebar-btn"
-            title="New chat"
-          >
-            +
-          </button>
-        </template>
-
+      <BondPanel id="chats" :defaultSize="65" :minSize="20">
         <nav class="sidebar-list">
           <div
             v-for="s in sessions"
@@ -153,7 +154,16 @@ function formatDate(iso: string): string {
   border-right: 1px solid var(--color-border);
   background: var(--color-surface);
   overflow: hidden;
-  padding-top: 2rem;
+}
+
+.sidebar-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0.5rem 0.5rem 0;
+  /* macOS traffic lights need ~70px horizontal + some vertical space */
+  min-height: 2rem;
 }
 
 .sidebar-panels {
