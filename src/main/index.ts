@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runBondQuery, type BondStreamChunk } from './agent'
+import { runBondQuery, resolvePendingApproval, type BondStreamChunk } from './agent'
 import {
   listSessions,
   createSession,
@@ -19,6 +19,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 let activeAbort: AbortController | null = null
 let currentModel = 'sonnet'
+const knownSdkSessions = new Set<string>()
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -60,7 +61,7 @@ app.whenReady().then(() => {
   createWindow()
 
   // --- Chat ---
-  ipcMain.handle('bond:send', async (event, text: string) => {
+  ipcMain.handle('bond:send', async (event, text: string, sessionId?: string) => {
     const trimmed = typeof text === 'string' ? text.trim() : ''
     if (!trimmed) {
       return { ok: false as const, error: 'Empty message' }
@@ -71,12 +72,15 @@ app.whenReady().then(() => {
     activeAbort = ac
 
     const win = BrowserWindow.fromWebContents(event.sender)
+    const resumeSession = sessionId ? knownSdkSessions.has(sessionId) : false
 
     try {
       await runBondQuery(trimmed, {
         abortSignal: ac.signal,
         onChunk: (chunk) => sendChunk(win, chunk),
-        model: currentModel
+        model: currentModel,
+        sessionId: sessionId ?? undefined,
+        resumeSession
       })
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
@@ -85,6 +89,7 @@ app.whenReady().then(() => {
       return { ok: false as const, error: message }
     }
 
+    if (sessionId) knownSdkSessions.add(sessionId)
     if (activeAbort === ac) activeAbort = null
     return { ok: true as const }
   })
@@ -92,6 +97,11 @@ app.whenReady().then(() => {
   ipcMain.handle('bond:cancel', async () => {
     activeAbort?.abort()
     activeAbort = null
+    return { ok: true as const }
+  })
+
+  ipcMain.handle('bond:approvalResponse', (_e, requestId: string, approved: boolean) => {
+    resolvePendingApproval(requestId, approved)
     return { ok: true as const }
   })
 

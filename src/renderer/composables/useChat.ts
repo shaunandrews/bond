@@ -4,9 +4,10 @@ import type { SessionMessage } from '../../shared/session'
 import type { Message } from '../types/message'
 
 export interface ChatDeps {
-  send: (text: string) => Promise<{ ok: boolean; error?: string }>
+  send: (text: string, sessionId?: string) => Promise<{ ok: boolean; error?: string }>
   cancel: () => Promise<{ ok: boolean }>
   onChunk: (fn: (chunk: BondStreamChunk) => void) => () => void
+  respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
   getMessages: (sessionId: string) => Promise<SessionMessage[]>
   saveMessages: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
 }
@@ -20,6 +21,7 @@ function toSessionMessages(msgs: Message[]): SessionMessage[] {
     if (m.role === 'user') return { id: m.id, role: 'user', text: m.text }
     if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text, streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: m.name, summary: m.summary }
+    if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', name: m.toolName, summary: m.description, status: m.status }
     if (m.kind === 'error') return { id: m.id, role: 'meta', kind: 'error', text: m.text }
     return { id: m.id, role: 'meta', kind: 'system', text: m.text }
   })
@@ -30,6 +32,7 @@ function fromSessionMessages(msgs: SessionMessage[]): Message[] {
     if (m.role === 'user') return { id: m.id, role: 'user' as const, text: m.text ?? '' }
     if (m.role === 'bond') return { id: m.id, role: 'bond' as const, text: m.text ?? '', streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta' as const, kind: 'tool' as const, name: m.name ?? '', summary: m.summary }
+    if (m.kind === 'approval') return { id: m.id, role: 'meta' as const, kind: 'approval' as const, requestId: '', toolName: m.name ?? '', input: {}, description: m.summary, status: (m.status as 'approved' | 'denied') ?? 'denied' }
     if (m.kind === 'error') return { id: m.id, role: 'meta' as const, kind: 'error' as const, text: m.text ?? '' }
     return { id: m.id, role: 'meta' as const, kind: 'system' as const, text: m.text ?? '' }
   })
@@ -63,6 +66,20 @@ export function useChat(deps: ChatDeps = window.bond) {
 
       case 'assistant_tool':
         addMessage({ id: uid(), role: 'meta', kind: 'tool', name: chunk.name, summary: chunk.summary })
+        break
+
+      case 'tool_approval':
+        addMessage({
+          id: uid(),
+          role: 'meta',
+          kind: 'approval',
+          requestId: chunk.requestId,
+          toolName: chunk.toolName,
+          input: chunk.input,
+          title: chunk.title,
+          description: chunk.description,
+          status: 'pending'
+        })
         break
 
       case 'result':
@@ -126,7 +143,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     await persistMessages()
 
     try {
-      const res = await deps.send(text.trim())
+      const res = await deps.send(text.trim(), currentSessionId.value ?? undefined)
       if (!res.ok && res.error) {
         addMessage({ id: uid(), role: 'meta', kind: 'error', text: res.error })
       }
@@ -136,6 +153,16 @@ export function useChat(deps: ChatDeps = window.bond) {
       endStreaming()
       await persistMessages()
     }
+  }
+
+  function respondToApproval(requestId: string, approved: boolean) {
+    const msg = messages.value.find(
+      (m) => m.role === 'meta' && m.kind === 'approval' && m.requestId === requestId
+    )
+    if (msg && msg.role === 'meta' && msg.kind === 'approval') {
+      msg.status = approved ? 'approved' : 'denied'
+    }
+    deps.respondToApproval(requestId, approved)
   }
 
   function cancel() {
@@ -157,6 +184,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     currentSessionId,
     submit,
     cancel,
+    respondToApproval,
     subscribe,
     unsubscribe,
     loadSession,

@@ -28,7 +28,17 @@ src/renderer/
   types/message.ts               # Message union type
   composables/useChat.ts         # All chat state and logic
   components/
-    ChatHeader.vue               # Header bar
+    BondText.vue                 # Polymorphic text primitive (any element, size, weight, color)
+    BondButton.vue               # Button primitive (primary/secondary/ghost/danger)
+    BondInput.vue                # Text input primitive with v-model
+    BondTextarea.vue             # Multi-line textarea primitive with v-model
+    BondSelect.vue               # Dropdown select primitive
+    BondTab.vue                  # Segmented tab bar primitive
+    BondPanelGroup.vue           # Resizable panel container (horizontal/vertical)
+    BondPanel.vue                # Individual resizable panel
+    BondPanelHandle.vue          # Drag handle between panels
+    panelTypes.ts                # Shared types and injection key for panel system
+    ChatHeader.vue               # Chat title display
     ChatInput.vue                # Textarea + stop/send buttons
     MessageBubble.vue            # Renders all message variants
     ThinkingIndicator.vue        # Animated working indicator
@@ -42,8 +52,56 @@ src/renderer/
 
 **Always use existing components** before creating new ones. When you add a new component or change props/events on an existing one, update this section AND the `DevComponents.vue` catalog.
 
+### BondText
+Polymorphic text component for all UI text. Renders any HTML element via `as` prop.
+- **Props:** `as?: string` (default: `'span'`), `size?: 'xs' | 'sm' | 'base' | 'lg' | 'xl' | '2xl' | '3xl'`, `weight?: 'normal' | 'medium' | 'semibold' | 'bold'`, `color?: 'primary' | 'muted' | 'accent' | 'err' | 'ok' | 'inherit'`, `align?: 'left' | 'center' | 'right'`, `truncate?: boolean`, `mono?: boolean`
+- **Slot:** default — text content
+
+### BondButton
+Button with variant and size options.
+- **Props:** `variant?: 'primary' | 'secondary' | 'ghost' | 'danger'`, `size?: 'sm' | 'md'`, `disabled?: boolean`
+- **Slot:** default — button label
+
+### BondInput
+Text input with v-model support.
+- **Props:** `modelValue?: string`, `placeholder?: string`, `type?: string`, `disabled?: boolean`
+- **Events:** `update:modelValue(value: string)`
+
+### BondTextarea
+Multi-line textarea with v-model support.
+- **Props:** `modelValue?: string`, `placeholder?: string`, `rows?: number`, `disabled?: boolean`
+- **Events:** `update:modelValue(value: string)`
+
+### BondSelect
+Dropdown select with custom chevron.
+- **Props:** `modelValue?: string`, `options: { value, label }[]`, `disabled?: boolean`
+- **Events:** `update:modelValue(value: string)`
+
+### BondTab
+Segmented tab bar.
+- **Props:** `tabs: { id, label }[]`, `modelValue?: string`
+- **Events:** `update:modelValue(value: string)`
+
+### BondPanelGroup
+Flex container that manages resizable panel layout. Nest `BondPanel` and `BondPanelHandle` as direct children.
+- **Props:** `direction?: 'horizontal' | 'vertical'`, `autoSaveId?: string` (localStorage key), `keyboardStep?: number` (default: 5)
+- **Events:** `layoutChange(layout)` (during drag), `layoutChanged(layout)` (after drag ends)
+- **Expose:** `getLayout()`, `setLayout(layout)`
+
+### BondPanel
+Individual resizable panel. Must be a direct child of `BondPanelGroup`. Slot props: `{ size, collapsed }`.
+- **Props:** `id: string`, `defaultSize?: number` (%), `minSize?: number` (% default: 10), `maxSize?: number` (% default: 100), `collapsible?: boolean`, `collapsedSize?: number` (% default: 0), `header?: string` (renders a section header with collapse/expand chevron when collapsible)
+- **Slots:** `default` (panel content), `header-extra` (extra controls in the header row, e.g. a + button)
+- **Expose:** `collapse()`, `expand()`, `getSize()`, `isCollapsed()`, `resize(size)`
+
+### BondPanelHandle
+Drag handle placed between panels. Supports pointer drag, keyboard arrows, Home/End. Styled via `data-state` attribute (`inactive` | `hover` | `drag`).
+- **Props:** `id: string` (format: `handle-N`), `disabled?: boolean`, `hitArea?: number` (px, default: 8)
+- **Accessibility:** `role="separator"`, arrow keys, `aria-orientation`
+
 ### ChatHeader
-Pure presentational header bar with app title. No props or events.
+Displays the current chat title. Rendered inside the app-header layout shell in App.vue.
+- **Props:** `title: string`
 
 ### ChatInput
 Textarea with Send/Stop buttons. Auto-focuses after response completes.
@@ -62,9 +120,9 @@ Renders markdown with syntax highlighting and copy-to-clipboard code blocks.
 Animated "Bond is working..." with blinking dots. No props or events.
 
 ### SessionSidebar
-Left sidebar with session list, archive toggle, and create/archive/delete controls.
-- **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `showArchived: boolean`
-- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `toggleArchived()`
+Left sidebar with resizable chat/archive panels and nav links. Archives panel has built-in collapse/expand via BondPanel header.
+- **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`
+- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `switchView(view)`
 
 ### DevComponents
 Dev-only component catalog. Toggle with **Cmd+Shift+D**. Not rendered in production flows.

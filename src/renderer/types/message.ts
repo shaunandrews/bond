@@ -5,4 +5,5 @@ export type Message =
   | { id: string; role: 'bond'; text: string; streaming: boolean }
   | { id: string; role: 'meta'; kind: 'tool'; name: string; summary?: string }
   | { id: string; role: 'meta'; kind: 'error'; text: string }
+  | { id: string; role: 'meta'; kind: 'approval'; requestId: string; toolName: string; input: Record<string, unknown>; title?: string; description?: string; status: 'pending' | 'approved' | 'denied' }
   | { id: string; role: 'meta'; kind: 'system'; text: string }

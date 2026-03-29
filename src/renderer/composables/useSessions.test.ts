@@ -48,6 +48,7 @@ describe('useSessions', () => {
   let s: UseSessionsReturn
 
   beforeEach(() => {
+    localStorage.clear()
     deps = mockDeps()
     s = withSetup(deps)
   })

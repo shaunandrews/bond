@@ -95,3 +95,129 @@ onUnmounted(() => {
 <template>
   <div ref="rootEl" class="bond-message" v-html="sanitizedHtml" />
 </template>
+
+<style>
+.bond-message p { margin: 0; }
+.bond-message p + p { margin-top: 0.5em; }
+.bond-message strong { font-weight: 600; }
+.bond-message em { font-style: italic; }
+.bond-message ul, .bond-message ol { margin: 0.4em 0; padding-left: 1.4em; }
+.bond-message li { margin: 0.15em 0; }
+.bond-message a { color: var(--color-accent); text-decoration: underline; }
+.bond-message hr { border: none; border-top: 1px solid var(--color-border); margin: 0.6em 0; }
+
+.bond-message h1 { font-size: 1.15em; font-weight: 600; margin: 0.6em 0 0.3em; }
+.bond-message h2 { font-size: 1.08em; font-weight: 600; margin: 0.6em 0 0.3em; }
+.bond-message h3 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.3em; }
+
+.bond-message blockquote {
+  border-left: 3px solid var(--color-border);
+  margin: 0.4em 0;
+  padding-left: 0.8em;
+  color: var(--color-muted);
+}
+
+.bond-message code {
+  background: color-mix(in srgb, var(--color-border) 50%, transparent);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+  font-size: 0.88em;
+  font-family: var(--font-mono);
+}
+
+.bond-message .code-block {
+  margin: 0.6em 0;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+}
+.bond-message .code-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.35em 0.75em;
+  background: color-mix(in srgb, var(--color-border) 50%, transparent);
+  font-size: 0.75em;
+  color: var(--color-muted);
+}
+.bond-message .code-block-lang {
+  font-family: var(--font-mono);
+  text-transform: lowercase;
+}
+.bond-message .code-block-copy {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.85em;
+  color: var(--color-muted);
+  padding: 0.15em 0.5em;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-base), background var(--transition-base);
+}
+.bond-message .code-block-copy:hover {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-border) 40%, transparent);
+}
+.bond-message .code-block pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+  font-size: 0.88em;
+  line-height: 1.55;
+}
+.bond-message .code-block pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+
+.bond-message table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.9em;
+  width: 100%;
+}
+.bond-message th, .bond-message td {
+  border: 1px solid var(--color-border);
+  padding: 0.35em 0.6em;
+  text-align: left;
+}
+.bond-message th {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--color-border) 30%, transparent);
+}
+
+.bond-message ul:has(input[type="checkbox"]) {
+  list-style: none;
+  padding-left: 0.2em;
+}
+.bond-message input[type="checkbox"] {
+  margin-right: 0.4em;
+  accent-color: var(--color-accent);
+}
+
+/* Syntax highlighting */
+.hljs { color: var(--color-text-primary); }
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in { color: #b07d4f; }
+.hljs-string, .hljs-attr { color: #2e7d32; }
+.hljs-comment, .hljs-quote { color: var(--color-muted); font-style: italic; }
+.hljs-number, .hljs-literal { color: #c62828; }
+.hljs-title, .hljs-section { color: #b07d4f; font-weight: 600; }
+.hljs-type, .hljs-class .hljs-title { color: #1565c0; }
+.hljs-meta { color: var(--color-muted); }
+.hljs-variable, .hljs-template-variable { color: #6a1b9a; }
+.hljs-function { color: #1565c0; }
+.hljs-params { color: var(--color-text-primary); }
+
+@media (prefers-color-scheme: dark) {
+  .hljs-keyword, .hljs-selector-tag, .hljs-built_in { color: #c4a07c; }
+  .hljs-string, .hljs-attr { color: #a5d6a7; }
+  .hljs-number, .hljs-literal { color: #f48fb1; }
+  .hljs-title, .hljs-section { color: #c4a07c; font-weight: 600; }
+  .hljs-type, .hljs-class .hljs-title, .hljs-function { color: #81d4fa; }
+  .hljs-variable, .hljs-template-variable { color: #ce93d8; }
+}
+</style>

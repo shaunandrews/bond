@@ -18,12 +18,7 @@ async function handleSave() {
 </script>
 
 <template>
-  <div class="settings-view">
-    <div class="settings-header drag-region">
-      <h1 class="text-lg font-semibold text-text-primary">Settings</h1>
-    </div>
-
-    <div class="settings-content">
+  <main class="settings-content app-main px-6">
       <section class="settings-section">
         <div class="section-header">
           <h2 class="text-sm font-semibold text-text-primary">Personality</h2>
@@ -49,27 +44,12 @@ async function handleSave() {
           </button>
         </div>
       </section>
-    </div>
-  </div>
+  </main>
 </template>
 
 <style scoped>
-.settings-view {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  max-width: 880px;
-}
-
-.settings-header {
-  padding: 1.25rem 1.5rem 0.75rem;
-  padding-top: 2.75rem;
-}
-
 .settings-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.5rem 1.5rem 2rem;
+  padding-bottom: 2rem;
 }
 
 .settings-section {

@@ -44,7 +44,7 @@ function handleKeyDown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <footer class="app-footer border-t border-border bg-bg">
+  <div>
     <div class="px-5 pt-3 pb-4">
       <textarea
         ref="inputEl"
@@ -83,7 +83,7 @@ function handleKeyDown(e: KeyboardEvent) {
         </div>
       </div>
     </div>
-  </footer>
+  </div>
 </template>
 
 <style scoped>

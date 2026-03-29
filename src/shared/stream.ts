@@ -4,4 +4,5 @@ export type BondStreamChunk =
   | { kind: 'system'; subtype: string; text?: string }
   | { kind: 'auth_status'; authenticating: boolean; lines: string[]; error?: string }
   | { kind: 'result'; subtype: string; result?: string; errors?: string[] }
+  | { kind: 'tool_approval'; requestId: string; toolName: string; input: Record<string, unknown>; title?: string; description?: string }
   | { kind: 'raw_error'; message: string }

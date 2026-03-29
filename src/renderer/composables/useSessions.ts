@@ -1,5 +1,7 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { Session } from '../../shared/session'
+
+const SESSION_STORAGE_KEY = 'bond:activeSessionId'
 
 export interface SessionDeps {
   listSessions: () => Promise<Session[]>
@@ -11,8 +13,14 @@ export interface SessionDeps {
 
 export function useSessions(deps: SessionDeps = window.bond) {
   const sessions = ref<Session[]>([])
-  const activeSessionId = ref<string | null>(null)
+  const activeSessionId = ref<string | null>(localStorage.getItem(SESSION_STORAGE_KEY))
+
+  watch(activeSessionId, (id) => {
+    if (id) localStorage.setItem(SESSION_STORAGE_KEY, id)
+    else localStorage.removeItem(SESSION_STORAGE_KEY)
+  })
   const showArchived = ref(false)
+  const generatingTitleId = ref<string | null>(null)
 
   const activeSessions = computed(() =>
     sessions.value.filter((s) => !s.archived)
@@ -73,10 +81,15 @@ export function useSessions(deps: SessionDeps = window.bond) {
   }
 
   async function refreshTitle(id: string) {
-    const { title, summary } = await deps.generateTitle(id)
-    const idx = sessions.value.findIndex((s) => s.id === id)
-    if (idx !== -1) {
-      sessions.value[idx] = { ...sessions.value[idx], title, summary }
+    generatingTitleId.value = id
+    try {
+      const { title, summary } = await deps.generateTitle(id)
+      const idx = sessions.value.findIndex((s) => s.id === id)
+      if (idx !== -1) {
+        sessions.value[idx] = { ...sessions.value[idx], title, summary }
+      }
+    } finally {
+      if (generatingTitleId.value === id) generatingTitleId.value = null
     }
   }
 
@@ -93,6 +106,7 @@ export function useSessions(deps: SessionDeps = window.bond) {
     archive,
     unarchive,
     remove,
+    generatingTitleId,
     refreshTitle
   }
 }

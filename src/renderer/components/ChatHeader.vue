@@ -1,5 +1,7 @@
 <template>
-  <header class="app-header px-5 pt-4 pb-2 border-b border-border bg-bg drag-region">
-    <h1 class="text-xl font-semibold tracking-tight m-0">Bond</h1>
-  </header>
+  <h1 class="text-sm font-medium text-muted m-0 text-center select-none truncate px-5 pt-4 pb-2">{{ title }}</h1>
 </template>
+
+<script setup lang="ts">
+defineProps<{ title: string }>()
+</script>

@@ -4,6 +4,7 @@ const THRESHOLD = 50 // pixels from bottom to count as "at bottom"
 
 export function useAutoScroll(containerRef: Ref<HTMLElement | null>) {
   const isAtBottom = ref(true)
+  let mutationObserver: MutationObserver | null = null
   let resizeObserver: ResizeObserver | null = null
 
   function checkIfAtBottom(el: HTMLElement): boolean {
@@ -23,26 +24,36 @@ export function useAutoScroll(containerRef: Ref<HTMLElement | null>) {
     isAtBottom.value = true
   }
 
+  function autoScroll() {
+    if (isAtBottom.value) {
+      scrollToBottom()
+    }
+  }
+
   onMounted(() => {
     const el = containerRef.value
     if (!el) return
 
     el.addEventListener('scroll', onScroll, { passive: true })
 
-    // Watch the inner content for size changes (new messages, streaming text, images loading)
-    const content = el.firstElementChild as HTMLElement | null
-    if (content) {
-      resizeObserver = new ResizeObserver(() => {
-        if (isAtBottom.value) {
-          scrollToBottom()
-        }
-      })
-      resizeObserver.observe(content)
+    // Watch for any DOM changes inside the container (new messages, streaming text)
+    mutationObserver = new MutationObserver(autoScroll)
+    mutationObserver.observe(el, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    })
+
+    // Watch direct children for size changes (images loading, content reflowing)
+    resizeObserver = new ResizeObserver(autoScroll)
+    for (const child of el.children) {
+      resizeObserver.observe(child)
     }
   })
 
   onUnmounted(() => {
     containerRef.value?.removeEventListener('scroll', onScroll)
+    mutationObserver?.disconnect()
     resizeObserver?.disconnect()
   })
 
