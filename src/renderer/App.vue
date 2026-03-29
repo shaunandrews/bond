@@ -61,6 +61,7 @@ function handleModelChange(model: ModelId) {
 async function handleNewSession() {
   const session = await sessions.create()
   await chat.loadSession(session.id)
+  nextTick(() => footerEl.value?.focus())
 }
 
 async function handleSelectSession(id: string) {
@@ -89,6 +90,7 @@ onMounted(async () => {
   } else {
     await handleNewSession()
   }
+  nextTick(() => footerEl.value?.focus())
 })
 
 onUnmounted(() => {

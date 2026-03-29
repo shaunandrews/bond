@@ -29,6 +29,12 @@ function handleSubmit() {
   inputEl.value!.focus()
 }
 
+function focus() {
+  inputEl.value?.focus()
+}
+
+defineExpose({ focus })
+
 function handleKeyDown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
