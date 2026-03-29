@@ -1,10 +1,17 @@
-import { config as loadEnv } from 'dotenv'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runBondQuery, type BondStreamChunk } from './agent'
-
-loadEnv({ path: join(process.cwd(), '.env'), quiet: true })
+import {
+  listSessions,
+  createSession,
+  getSession,
+  updateSession,
+  deleteSession,
+  getMessages,
+  saveMessages
+} from './sessions'
+import { generateTitleAndSummary } from './generate-title'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -47,6 +54,7 @@ function sendChunk(win: BrowserWindow | null, chunk: BondStreamChunk): void {
 app.whenReady().then(() => {
   createWindow()
 
+  // --- Chat ---
   ipcMain.handle('bond:send', async (event, text: string) => {
     const trimmed = typeof text === 'string' ? text.trim() : ''
     if (!trimmed) {
@@ -79,6 +87,21 @@ app.whenReady().then(() => {
     activeAbort?.abort()
     activeAbort = null
     return { ok: true as const }
+  })
+
+  // --- Sessions ---
+  ipcMain.handle('session:list', () => listSessions())
+  ipcMain.handle('session:create', () => createSession())
+  ipcMain.handle('session:get', (_e, id: string) => getSession(id))
+  ipcMain.handle('session:update', (_e, id: string, updates: Record<string, unknown>) => updateSession(id, updates))
+  ipcMain.handle('session:delete', (_e, id: string) => deleteSession(id))
+  ipcMain.handle('session:getMessages', (_e, sessionId: string) => getMessages(sessionId))
+  ipcMain.handle('session:saveMessages', (_e, sessionId: string, messages: unknown[]) => saveMessages(sessionId, messages as any))
+  ipcMain.handle('session:generateTitle', async (_e, sessionId: string) => {
+    const msgs = getMessages(sessionId)
+    const { title, summary } = await generateTitleAndSummary(msgs)
+    updateSession(sessionId, { title, summary })
+    return { title, summary }
   })
 
   app.on('activate', () => {
