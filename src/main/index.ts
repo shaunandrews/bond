@@ -12,6 +12,7 @@ import {
   saveMessages
 } from './sessions'
 import { generateTitleAndSummary } from './generate-title'
+import { getSoul, saveSoul } from './settings'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -105,6 +106,10 @@ app.whenReady().then(() => {
     updateSession(sessionId, { title, summary })
     return { title, summary }
   })
+
+  // --- Settings ---
+  ipcMain.handle('settings:getSoul', () => getSoul())
+  ipcMain.handle('settings:saveSoul', (_e, content: string) => saveSoul(content))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

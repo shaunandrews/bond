@@ -6,6 +6,7 @@ defineProps<{
   archivedSessions: Session[]
   activeSessionId: string | null
   showArchived: boolean
+  view: 'chat' | 'settings'
 }>()
 
 const emit = defineEmits<{
@@ -15,6 +16,7 @@ const emit = defineEmits<{
   unarchive: [id: string]
   remove: [id: string]
   toggleArchived: []
+  settings: []
 }>()
 
 function formatDate(iso: string): string {
@@ -97,6 +99,18 @@ function formatDate(iso: string): string {
           </button>
         </button>
       </nav>
+
+      <button
+        type="button"
+        :class="['sidebar-settings', { active: view === 'settings' }]"
+        @click="emit('settings')"
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="8" cy="8" r="2.5" />
+          <path d="M6.83 2.17a.5.5 0 0 1 .5-.42h1.34a.5.5 0 0 1 .5.42l.17 1.03a4.5 4.5 0 0 1 1.09.63l.97-.39a.5.5 0 0 1 .6.2l.67 1.16a.5.5 0 0 1-.1.62l-.8.64a4.5 4.5 0 0 1 0 1.26l.8.64a.5.5 0 0 1 .1.62l-.67 1.16a.5.5 0 0 1-.6.2l-.97-.39a4.5 4.5 0 0 1-1.09.63l-.17 1.03a.5.5 0 0 1-.5.42H7.33a.5.5 0 0 1-.5-.42l-.17-1.03a4.5 4.5 0 0 1-1.09-.63l-.97.39a.5.5 0 0 1-.6-.2l-.67-1.16a.5.5 0 0 1 .1-.62l.8-.64a4.5 4.5 0 0 1 0-1.26l-.8-.64a.5.5 0 0 1-.1-.62L4 3.24a.5.5 0 0 1 .6-.2l.97.39a4.5 4.5 0 0 1 1.09-.63l.17-1.03Z" />
+        </svg>
+        Settings
+      </button>
     </div>
   </aside>
 </template>
@@ -229,6 +243,30 @@ function formatDate(iso: string): string {
   transition: color 0.15s;
 }
 .sidebar-toggle:hover {
+  color: var(--color-text-primary);
+}
+
+.sidebar-settings {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem;
+  margin-top: 0.25rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  transition: background 0.12s, color 0.15s;
+}
+.sidebar-settings:hover {
+  background: color-mix(in srgb, var(--color-border) 40%, transparent);
+  color: var(--color-text-primary);
+}
+.sidebar-settings.active {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
   color: var(--color-text-primary);
 }
 </style>

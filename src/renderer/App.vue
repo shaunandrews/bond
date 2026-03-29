@@ -9,9 +9,11 @@ import ThinkingIndicator from './components/ThinkingIndicator.vue'
 import ChatInput from './components/ChatInput.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import DevComponents from './components/DevComponents.vue'
+import SettingsView from './components/SettingsView.vue'
 
 const chat = useChat()
 const sessions = useSessions()
+const currentView = ref<'chat' | 'settings'>('chat')
 
 // Dev screen toggle (Cmd+Shift+D)
 const devView = ref<'chat' | 'components'>('chat')
@@ -64,10 +66,15 @@ async function handleNewSession() {
 }
 
 async function handleSelectSession(id: string) {
+  currentView.value = 'chat'
   if (id === sessions.activeSessionId.value) return
   sessions.select(id)
   await chat.loadSession(id)
   nextTick(scrollToBottom)
+}
+
+function handleSettings() {
+  currentView.value = currentView.value === 'settings' ? 'chat' : 'settings'
 }
 
 onMounted(async () => {
@@ -104,16 +111,21 @@ onUnmounted(() => {
       :archivedSessions="sessions.archivedSessions.value"
       :activeSessionId="sessions.activeSessionId.value"
       :showArchived="sessions.showArchived.value"
+      :view="currentView"
       @select="handleSelectSession"
       @create="handleNewSession"
       @archive="sessions.archive"
       @unarchive="sessions.unarchive"
       @remove="sessions.remove"
       @toggleArchived="sessions.showArchived.value = !sessions.showArchived.value"
+      @settings="handleSettings"
     />
 
     <!-- Dev screens -->
     <DevComponents v-if="devView === 'components'" @close="devView = 'chat'" />
+
+    <!-- Settings -->
+    <SettingsView v-else-if="currentView === 'settings'" />
 
     <!-- Chat (default) -->
     <div v-else class="app-shell">

@@ -22,5 +22,9 @@ contextBridge.exposeInMainWorld('bond', {
   saveMessages: (sessionId: string, messages: SessionMessage[]) =>
     ipcRenderer.invoke('session:saveMessages', sessionId, messages) as Promise<boolean>,
   generateTitle: (sessionId: string) =>
-    ipcRenderer.invoke('session:generateTitle', sessionId) as Promise<{ title: string; summary: string }>
+    ipcRenderer.invoke('session:generateTitle', sessionId) as Promise<{ title: string; summary: string }>,
+
+  // Settings
+  getSoul: () => ipcRenderer.invoke('settings:getSoul') as Promise<string>,
+  saveSoul: (content: string) => ipcRenderer.invoke('settings:saveSoul', content) as Promise<boolean>
 })

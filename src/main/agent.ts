@@ -1,6 +1,7 @@
 import { homedir } from 'node:os'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { BondStreamChunk } from '../shared/stream'
+import { getSoul } from './settings'
 
 export type { BondStreamChunk }
 
@@ -77,6 +78,16 @@ export async function runBondQuery(
   const cwd = homedir()
   const ac = new AbortController()
 
+  const basePrompt =
+    'You are Bond, a careful local assistant running on the user\'s Mac. ' +
+    'You can read files with Read, search with Glob and Grep. Stay concise. ' +
+    'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.'
+
+  const soul = getSoul().trim()
+  const systemPrompt = soul
+    ? `${basePrompt}\n\n<soul>\n${soul}\n</soul>`
+    : basePrompt
+
   const q = query({
     prompt,
     options: {
@@ -84,10 +95,7 @@ export async function runBondQuery(
       cwd,
       allowedTools: ['Read', 'Glob', 'Grep'],
       permissionMode: 'acceptEdits',
-      systemPrompt:
-        'You are Bond, a careful local assistant running on the user\'s Mac. ' +
-        'You can read files with Read, search with Glob and Grep. Stay concise. ' +
-        'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.',
+      systemPrompt,
       env: {
         ...process.env,
         CLAUDE_AGENT_SDK_CLIENT_APP: 'bond-electron/0.1.0'
