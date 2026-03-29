@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runBondQuery, resolvePendingApproval, type BondStreamChunk } from './agent'
+import { runBondQuery, resolvePendingApproval, clearSessionApprovals, type BondStreamChunk } from './agent'
+import type { TaggedChunk } from '../shared/stream'
 import {
   listSessions,
   createSession,
@@ -17,7 +18,7 @@ import { MODEL_IDS } from '../shared/models'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
-let activeAbort: AbortController | null = null
+const activeQueries = new Map<string, AbortController>()
 let currentModel = 'sonnet'
 const knownSdkSessions = new Set<string>()
 
@@ -51,9 +52,10 @@ function createWindow(): void {
   }
 }
 
-function sendChunk(win: BrowserWindow | null, chunk: BondStreamChunk): void {
+function sendChunk(win: BrowserWindow | null, sessionId: string, chunk: BondStreamChunk): void {
   if (win && !win.isDestroyed()) {
-    win.webContents.send('bond:chunk', chunk)
+    const tagged: TaggedChunk = { ...chunk, sessionId }
+    win.webContents.send('bond:chunk', tagged)
   }
 }
 
@@ -66,37 +68,60 @@ app.whenReady().then(() => {
     if (!trimmed) {
       return { ok: false as const, error: 'Empty message' }
     }
+    if (!sessionId) {
+      return { ok: false as const, error: 'sessionId is required' }
+    }
 
-    activeAbort?.abort()
+    // Abort any existing query for this session (not other sessions)
+    const existing = activeQueries.get(sessionId)
+    if (existing) {
+      existing.abort()
+      activeQueries.delete(sessionId)
+      clearSessionApprovals(sessionId)
+    }
+
     const ac = new AbortController()
-    activeAbort = ac
+    activeQueries.set(sessionId, ac)
 
     const win = BrowserWindow.fromWebContents(event.sender)
-    const resumeSession = sessionId ? knownSdkSessions.has(sessionId) : false
+    const resumeSession = knownSdkSessions.has(sessionId)
 
     try {
       await runBondQuery(trimmed, {
         abortSignal: ac.signal,
-        onChunk: (chunk) => sendChunk(win, chunk),
+        onChunk: (chunk) => sendChunk(win, sessionId, chunk),
         model: currentModel,
-        sessionId: sessionId ?? undefined,
+        sessionId,
         resumeSession
       })
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
-      sendChunk(win, { kind: 'raw_error', message })
-      if (activeAbort === ac) activeAbort = null
+      sendChunk(win, sessionId, { kind: 'raw_error', message })
+      activeQueries.delete(sessionId)
       return { ok: false as const, error: message }
     }
 
-    if (sessionId) knownSdkSessions.add(sessionId)
-    if (activeAbort === ac) activeAbort = null
+    knownSdkSessions.add(sessionId)
+    activeQueries.delete(sessionId)
     return { ok: true as const }
   })
 
-  ipcMain.handle('bond:cancel', async () => {
-    activeAbort?.abort()
-    activeAbort = null
+  ipcMain.handle('bond:cancel', async (_e, sessionId?: string) => {
+    if (sessionId) {
+      const ac = activeQueries.get(sessionId)
+      if (ac) {
+        ac.abort()
+        activeQueries.delete(sessionId)
+        clearSessionApprovals(sessionId)
+      }
+    } else {
+      // Fallback: cancel all active queries
+      for (const [id, ac] of activeQueries) {
+        ac.abort()
+        clearSessionApprovals(id)
+      }
+      activeQueries.clear()
+    }
     return { ok: true as const }
   })
 

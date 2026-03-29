@@ -7,6 +7,7 @@ function mockDeps(): ChatDeps {
     send: vi.fn().mockResolvedValue({ ok: true }),
     cancel: vi.fn().mockResolvedValue({ ok: true }),
     onChunk: vi.fn().mockReturnValue(vi.fn()),
+    respondToApproval: vi.fn().mockResolvedValue({ ok: true }),
     getMessages: vi.fn().mockResolvedValue([]),
     saveMessages: vi.fn().mockResolvedValue(true),
   }
@@ -92,9 +93,13 @@ describe('useChat', () => {
   })
 
   describe('handleChunk (via subscribe)', () => {
+    const TEST_SESSION = 'test-session-1'
+
     function getChunkHandler() {
+      chat.currentSessionId.value = TEST_SESSION
       chat.subscribe()
-      return (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      const rawHandler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      return (chunk: Record<string, unknown>) => rawHandler({ ...chunk, sessionId: TEST_SESSION })
     }
 
     it('creates a bond message on assistant_text', () => {
