@@ -213,6 +213,7 @@ function formatDate(iso: string): string {
 .sidebar-footer {
   border-top: 1px solid var(--color-border);
   padding: 0.5rem;
+  padding-bottom: 1rem;
 }
 
 .sidebar-toggle {
