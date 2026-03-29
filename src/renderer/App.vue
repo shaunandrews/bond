@@ -8,9 +8,21 @@ import MessageBubble from './components/MessageBubble.vue'
 import ThinkingIndicator from './components/ThinkingIndicator.vue'
 import ChatInput from './components/ChatInput.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
+import DevComponents from './components/DevComponents.vue'
 
 const chat = useChat()
 const sessions = useSessions()
+
+// Dev screen toggle (Cmd+Shift+D)
+const devView = ref<'chat' | 'components'>('chat')
+
+function handleDevShortcut(e: KeyboardEvent) {
+  if (e.metaKey && e.shiftKey && e.key === 'd') {
+    e.preventDefault()
+    devView.value = devView.value === 'chat' ? 'components' : 'chat'
+  }
+}
+
 
 const headerEl = ref<HTMLElement | null>(null)
 const footerEl = ref<HTMLElement | null>(null)
@@ -59,6 +71,7 @@ async function handleSelectSession(id: string) {
 }
 
 onMounted(async () => {
+  window.addEventListener('keydown', handleDevShortcut)
   chat.subscribe()
   nextTick(measureLayout)
   ro = new ResizeObserver(measureLayout)
@@ -78,6 +91,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleDevShortcut)
   chat.unsubscribe()
   ro?.disconnect()
 })
@@ -98,7 +112,11 @@ onUnmounted(() => {
       @toggleArchived="sessions.showArchived.value = !sessions.showArchived.value"
     />
 
-    <div class="app-shell">
+    <!-- Dev screens -->
+    <DevComponents v-if="devView === 'components'" @close="devView = 'chat'" />
+
+    <!-- Chat (default) -->
+    <div v-else class="app-shell">
       <ChatHeader ref="headerEl" />
 
       <main ref="mainEl" class="app-main px-5 flex flex-col gap-2.5">
