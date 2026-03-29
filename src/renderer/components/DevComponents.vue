@@ -254,10 +254,10 @@ const components = [
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 1.25rem;
   color: var(--color-muted);
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--transition-base), color var(--transition-base);
 }
 .dev-close:hover {
   background: color-mix(in srgb, var(--color-border) 60%, transparent);
@@ -272,7 +272,7 @@ const components = [
 
 .dev-card {
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   margin-bottom: 0.75rem;
 }
@@ -286,7 +286,7 @@ const components = [
   width: 100%;
   box-sizing: border-box;
   padding: 0.75rem 1rem;
-  transition: background 0.12s;
+  transition: background var(--transition-fast);
 }
 .dev-card-header:hover {
   background: color-mix(in srgb, var(--color-border) 25%, transparent);
@@ -302,13 +302,13 @@ const components = [
   font-size: 0.75rem;
   color: var(--color-muted);
   margin-left: 0.75rem;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 
 .dev-card-chevron {
   font-size: 0.65rem;
   color: var(--color-muted);
-  transition: transform 0.15s;
+  transition: transform var(--transition-base);
 }
 .dev-card-chevron.open {
   transform: rotate(90deg);
@@ -348,9 +348,9 @@ const components = [
 .dev-table code {
   background: color-mix(in srgb, var(--color-border) 40%, transparent);
   padding: 0.1em 0.35em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 0.85em;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 
 .dev-preview {
@@ -359,7 +359,7 @@ const components = [
 
 .dev-preview-area {
   border: 1px dashed var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 1rem;
   background: var(--color-bg);
 }

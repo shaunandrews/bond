@@ -13,10 +13,12 @@ import {
 } from './sessions'
 import { generateTitleAndSummary } from './generate-title'
 import { getSoul, saveSoul } from './settings'
+import { MODEL_IDS } from '../shared/models'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 let activeAbort: AbortController | null = null
+let currentModel = 'sonnet'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -73,7 +75,8 @@ app.whenReady().then(() => {
     try {
       await runBondQuery(trimmed, {
         abortSignal: ac.signal,
-        onChunk: (chunk) => sendChunk(win, chunk)
+        onChunk: (chunk) => sendChunk(win, chunk),
+        model: currentModel
       })
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
@@ -91,6 +94,16 @@ app.whenReady().then(() => {
     activeAbort = null
     return { ok: true as const }
   })
+
+  // --- Model ---
+  ipcMain.handle('bond:setModel', (_e, model: string) => {
+    if ((MODEL_IDS as readonly string[]).includes(model)) {
+      currentModel = model
+    }
+    return { ok: true as const }
+  })
+
+  ipcMain.handle('bond:getModel', () => currentModel)
 
   // --- Sessions ---
   ipcMain.handle('session:list', () => listSessions())

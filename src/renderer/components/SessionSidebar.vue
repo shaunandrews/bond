@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import type { Session } from '../../shared/session'
+import type { AppView } from '../composables/useAppView'
 
 defineProps<{
   sessions: Session[]
   archivedSessions: Session[]
   activeSessionId: string | null
   showArchived: boolean
-  view: 'chat' | 'settings'
+  activeView: AppView
 }>()
 
 const emit = defineEmits<{
@@ -16,7 +17,7 @@ const emit = defineEmits<{
   unarchive: [id: string]
   remove: [id: string]
   toggleArchived: []
-  settings: []
+  switchView: [view: AppView]
 }>()
 
 function formatDate(iso: string): string {
@@ -33,8 +34,9 @@ function formatDate(iso: string): string {
 
 <template>
   <aside class="session-sidebar">
-    <div class="sidebar-header">
-      <span class="text-sm font-semibold text-muted uppercase tracking-wide">Chats</span>
+    <!-- Chats section -->
+    <div class="sidebar-section-header">
+      <span class="sidebar-section-label">Chats</span>
       <button
         type="button"
         @click="emit('create')"
@@ -50,7 +52,7 @@ function formatDate(iso: string): string {
         v-for="s in sessions"
         :key="s.id"
         type="button"
-        :class="['session-item', { active: s.id === activeSessionId }]"
+        :class="['session-item', { active: s.id === activeSessionId && activeView === 'chat' }]"
         @click="emit('select', s.id)"
       >
         <span class="session-title">{{ s.title }}</span>
@@ -70,45 +72,57 @@ function formatDate(iso: string): string {
       </p>
     </nav>
 
-    <div class="sidebar-footer">
+    <!-- Archives section -->
+    <div v-if="archivedSessions.length" class="sidebar-section-divider">
       <button
         type="button"
-        class="sidebar-toggle"
+        class="sidebar-section-label clickable"
         @click="emit('toggleArchived')"
       >
-        {{ showArchived ? 'Hide' : 'Show' }} archived ({{ archivedSessions.length }})
+        Archives
+        <span class="sidebar-section-count">{{ archivedSessions.length }}</span>
       </button>
+    </div>
 
-      <nav v-if="showArchived && archivedSessions.length" class="sidebar-list">
-        <button
-          v-for="s in archivedSessions"
-          :key="s.id"
-          type="button"
-          class="session-item archived"
-          @click="emit('select', s.id)"
-        >
-          <span class="session-title">{{ s.title }}</span>
-          <span class="session-meta">{{ formatDate(s.updatedAt) }}</span>
-          <button
-            type="button"
-            class="session-action"
-            title="Unarchive"
-            @click.stop="emit('unarchive', s.id)"
-          >
-            &uarr;
-          </button>
-        </button>
-      </nav>
-
+    <nav v-if="showArchived && archivedSessions.length" class="sidebar-list sidebar-list-archived">
       <button
+        v-for="s in archivedSessions"
+        :key="s.id"
         type="button"
-        :class="['sidebar-settings', { active: view === 'settings' }]"
-        @click="emit('settings')"
+        class="session-item archived"
+        @click="emit('select', s.id)"
       >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="8" cy="8" r="2.5" />
-          <path d="M6.83 2.17a.5.5 0 0 1 .5-.42h1.34a.5.5 0 0 1 .5.42l.17 1.03a4.5 4.5 0 0 1 1.09.63l.97-.39a.5.5 0 0 1 .6.2l.67 1.16a.5.5 0 0 1-.1.62l-.8.64a4.5 4.5 0 0 1 0 1.26l.8.64a.5.5 0 0 1 .1.62l-.67 1.16a.5.5 0 0 1-.6.2l-.97-.39a4.5 4.5 0 0 1-1.09.63l-.17 1.03a.5.5 0 0 1-.5.42H7.33a.5.5 0 0 1-.5-.42l-.17-1.03a4.5 4.5 0 0 1-1.09-.63l-.97.39a.5.5 0 0 1-.6-.2l-.67-1.16a.5.5 0 0 1 .1-.62l.8-.64a4.5 4.5 0 0 1 0-1.26l-.8-.64a.5.5 0 0 1-.1-.62L4 3.24a.5.5 0 0 1 .6-.2l.97.39a4.5 4.5 0 0 1 1.09-.63l.17-1.03Z" />
-        </svg>
+        <span class="session-title">{{ s.title }}</span>
+        <span class="session-meta">{{ formatDate(s.updatedAt) }}</span>
+        <button
+          type="button"
+          class="session-action"
+          title="Unarchive"
+          @click.stop="emit('unarchive', s.id)"
+        >
+          &uarr;
+        </button>
+      </button>
+    </nav>
+
+    <!-- Dev screens -->
+    <div class="sidebar-section-divider">
+      <button
+        :class="['sidebar-nav-item', { active: activeView === 'design-system' }]"
+        @click="emit('switchView', 'design-system')"
+      >
+        Design System
+      </button>
+      <button
+        :class="['sidebar-nav-item', { active: activeView === 'components' }]"
+        @click="emit('switchView', 'components')"
+      >
+        Components
+      </button>
+      <button
+        :class="['sidebar-nav-item', { active: activeView === 'settings' }]"
+        @click="emit('switchView', 'settings')"
+      >
         Settings
       </button>
     </div>
@@ -126,7 +140,7 @@ function formatDate(iso: string): string {
   background: var(--color-surface);
 }
 
-.sidebar-header {
+.sidebar-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -137,6 +151,57 @@ function formatDate(iso: string): string {
   -webkit-app-region: no-drag;
 }
 
+.sidebar-section-label {
+  all: unset;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+}
+.sidebar-section-label.clickable {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: color var(--transition-base);
+}
+.sidebar-section-label.clickable:hover {
+  color: var(--color-text-primary);
+}
+.sidebar-section-count {
+  font-size: 0.65rem;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.sidebar-section-divider {
+  padding: 0.5rem 0.75rem 0.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.sidebar-nav-item {
+  all: unset;
+  cursor: pointer;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.45rem 0.5rem;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-muted);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.sidebar-nav-item:hover {
+  background: color-mix(in srgb, var(--color-border) 40%, transparent);
+  color: var(--color-text-primary);
+}
+.sidebar-nav-item.active {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-text-primary);
+}
+
 .sidebar-btn {
   all: unset;
   cursor: pointer;
@@ -145,11 +210,11 @@ function formatDate(iso: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 1.1rem;
   font-weight: 600;
   color: var(--color-muted);
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--transition-base), color var(--transition-base);
 }
 .sidebar-btn:hover {
   background: color-mix(in srgb, var(--color-border) 60%, transparent);
@@ -172,8 +237,8 @@ function formatDate(iso: string): string {
   width: 100%;
   box-sizing: border-box;
   padding: 0.5rem 0.5rem;
-  border-radius: 6px;
-  transition: background 0.12s;
+  border-radius: var(--radius-md);
+  transition: background var(--transition-fast);
   position: relative;
 }
 .session-item:hover {
@@ -210,11 +275,11 @@ function formatDate(iso: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 0.75rem;
   color: var(--color-muted);
   opacity: 0;
-  transition: opacity 0.12s, background 0.12s;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
 }
 .session-item:hover .session-action {
   opacity: 1;
@@ -224,49 +289,8 @@ function formatDate(iso: string): string {
   color: var(--color-text-primary);
 }
 
-.sidebar-footer {
-  border-top: 1px solid var(--color-border);
-  padding: 0.5rem;
+.sidebar-list-archived {
+  flex: 0;
   padding-bottom: 1rem;
-}
-
-.sidebar-toggle {
-  all: unset;
-  cursor: pointer;
-  display: block;
-  width: 100%;
-  text-align: center;
-  font-size: 0.75rem;
-  color: var(--color-muted);
-  padding: 0.35rem 0;
-  border-radius: 4px;
-  transition: color 0.15s;
-}
-.sidebar-toggle:hover {
-  color: var(--color-text-primary);
-}
-
-.sidebar-settings {
-  all: unset;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.5rem;
-  margin-top: 0.25rem;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  color: var(--color-muted);
-  transition: background 0.12s, color 0.15s;
-}
-.sidebar-settings:hover {
-  background: color-mix(in srgb, var(--color-border) 40%, transparent);
-  color: var(--color-text-primary);
-}
-.sidebar-settings.active {
-  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
-  color: var(--color-text-primary);
 }
 </style>

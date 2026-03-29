@@ -1,3 +1,5 @@
+export type { ModelId } from '../../shared/models'
+
 export type Message =
   | { id: string; role: 'user'; text: string }
   | { id: string; role: 'bond'; text: string; streaming: boolean }

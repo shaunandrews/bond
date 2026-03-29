@@ -87,17 +87,17 @@ async function handleSave() {
   width: 100%;
   min-height: 200px;
   padding: 0.75rem;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   color: var(--color-text-primary);
-  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: 0.85rem;
   line-height: 1.6;
   resize: vertical;
   box-sizing: border-box;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color var(--transition-base);
 }
 .soul-editor::placeholder {
   color: var(--color-muted);
@@ -116,12 +116,12 @@ async function handleSave() {
   all: unset;
   cursor: pointer;
   padding: 0.4rem 1rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 0.85rem;
   font-weight: 500;
   background: var(--color-accent);
   color: #fff;
-  transition: opacity 0.15s;
+  transition: opacity var(--transition-base);
 }
 .save-btn:hover {
   opacity: 0.85;

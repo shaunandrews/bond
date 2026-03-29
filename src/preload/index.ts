@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('bond', {
     return () => ipcRenderer.removeListener('bond:chunk', listener)
   },
 
+  // Model
+  setModel: (model: string) => ipcRenderer.invoke('bond:setModel', model) as Promise<{ ok: boolean }>,
+  getModel: () => ipcRenderer.invoke('bond:getModel') as Promise<string>,
+
   // Sessions
   listSessions: () => ipcRenderer.invoke('session:list') as Promise<Session[]>,
   createSession: () => ipcRenderer.invoke('session:create') as Promise<Session>,

@@ -21,6 +21,8 @@ declare global {
       getMessages: (sessionId: string) => Promise<SessionMessage[]>
       saveMessages: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
       generateTitle: (sessionId: string) => Promise<{ title: string; summary: string }>
+      setModel: (model: string) => Promise<{ ok: boolean }>
+      getModel: () => Promise<string>
     }
   }
 }

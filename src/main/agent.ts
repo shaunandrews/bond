@@ -15,12 +15,9 @@ function summarizeToolInput(input: Record<string, unknown>): string | undefined 
   }
 }
 
-function* flattenAssistantMessage(msg: SDKMessage): Generator<BondStreamChunk> {
+function* flattenToolBlocks(msg: SDKMessage): Generator<BondStreamChunk> {
   if (msg.type !== 'assistant' || !msg.message?.content) return
   for (const block of msg.message.content) {
-    if (block.type === 'text' && 'text' in block && block.text) {
-      yield { kind: 'assistant_text', text: block.text }
-    }
     if (block.type === 'tool_use' && 'name' in block) {
       const name = String(block.name)
       const input =
@@ -32,9 +29,24 @@ function* flattenAssistantMessage(msg: SDKMessage): Generator<BondStreamChunk> {
   }
 }
 
+function extractTextDelta(msg: SDKMessage): BondStreamChunk | null {
+  if (msg.type !== 'stream_event') return null
+  const evt = msg.event as { type: string; delta?: { type: string; text?: string } }
+  if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
+    return { kind: 'assistant_text', text: evt.delta.text }
+  }
+  return null
+}
+
 export function* bondMessageToChunks(message: SDKMessage): Generator<BondStreamChunk> {
+  if (message.type === 'stream_event') {
+    const delta = extractTextDelta(message)
+    if (delta) yield delta
+    return
+  }
   if (message.type === 'assistant') {
-    yield* flattenAssistantMessage(message)
+    // Text was already streamed via deltas — only emit tool blocks
+    yield* flattenToolBlocks(message)
     return
   }
   if (message.type === 'result') {
@@ -73,7 +85,7 @@ export function* bondMessageToChunks(message: SDKMessage): Generator<BondStreamC
 
 export async function runBondQuery(
   prompt: string,
-  options: { abortSignal: AbortSignal; onChunk: (c: BondStreamChunk) => void }
+  options: { abortSignal: AbortSignal; onChunk: (c: BondStreamChunk) => void; model?: string }
 ): Promise<void> {
   const cwd = homedir()
   const ac = new AbortController()
@@ -94,6 +106,8 @@ export async function runBondQuery(
       abortController: ac,
       cwd,
       allowedTools: ['Read', 'Glob', 'Grep'],
+      model: options.model,
+      includePartialMessages: true,
       permissionMode: 'acceptEdits',
       systemPrompt,
       env: {

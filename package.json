@@ -15,6 +15,7 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
     "@types/dompurify": "^3.0.5",
     "@types/node": "^25.5.0",
     "@vitejs/plugin-vue": "^6.0.5",

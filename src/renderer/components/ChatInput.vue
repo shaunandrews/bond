@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { ref, watch, toRefs, nextTick } from 'vue'
+import { MODEL_IDS, type ModelId } from '../../shared/models'
 
-const props = defineProps<{ busy: boolean }>()
+const props = defineProps<{ busy: boolean; model: ModelId }>()
 const { busy } = toRefs(props)
 
 const emit = defineEmits<{
   submit: [text: string]
   cancel: []
+  'update:model': [value: ModelId]
 }>()
+
+const models = MODEL_IDS.map(id => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) }))
 
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 
@@ -45,24 +49,54 @@ function handleKeyDown(e: KeyboardEvent) {
         @keydown="handleKeyDown"
         class="w-full resize-y min-h-[4.5rem] max-h-48 px-3 py-2.5 rounded-lg border border-border bg-surface text-text-primary font-[inherit] text-base focus:outline-2 focus:outline-accent focus:outline-offset-1"
       />
-      <div class="flex justify-end gap-2 mt-2">
-        <button
-          type="button"
-          :disabled="!busy"
-          @click="emit('cancel')"
-          class="text-sm font-semibold px-4 py-1.5 rounded-lg border border-border bg-transparent text-text-primary cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+      <div class="flex items-center justify-between mt-2">
+        <select
+          :value="model"
+          class="model-select"
+          @change="emit('update:model', ($event.target as HTMLSelectElement).value as ModelId)"
         >
-          Stop
-        </button>
-        <button
-          type="button"
-          :disabled="busy"
-          @click="handleSubmit()"
-          class="text-sm font-semibold px-4 py-1.5 rounded-lg border-transparent bg-accent text-white cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
-        >
-          Send
-        </button>
+          <option v-for="m in models" :key="m.id" :value="m.id">{{ m.label }}</option>
+        </select>
+        <div class="flex gap-2">
+          <button
+            type="button"
+            :disabled="!busy"
+            @click="emit('cancel')"
+            class="text-sm font-semibold px-4 py-1.5 rounded-lg border border-border bg-transparent text-text-primary cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+          >
+            Stop
+          </button>
+          <button
+            type="button"
+            :disabled="busy"
+            @click="handleSubmit()"
+            class="text-sm font-semibold px-4 py-1.5 rounded-lg border-transparent bg-accent text-white cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+          >
+            Send
+          </button>
+        </div>
       </div>
     </div>
   </footer>
 </template>
+
+<style scoped>
+.model-select {
+  appearance: none;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.3em 2em 0.3em 0.6em;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%235c6570' d='M3 4.5l3 3 3-3'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5em center;
+}
+.model-select:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+</style>
