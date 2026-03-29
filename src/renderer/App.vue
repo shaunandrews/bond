@@ -19,8 +19,8 @@ let titleGenPending = false
 
 function measureLayout() {
   const root = document.documentElement
-  root.style.setProperty('--header-h', `${headerEl.value?.offsetHeight ?? 0}px`)
-  root.style.setProperty('--footer-h', `${footerEl.value?.offsetHeight ?? 0}px`)
+  root.style.setProperty('--header-h', `${headerEl.value?.$el?.offsetHeight ?? 0}px`)
+  root.style.setProperty('--footer-h', `${footerEl.value?.$el?.offsetHeight ?? 0}px`)
 }
 
 let ro: ResizeObserver | undefined
@@ -57,8 +57,8 @@ onMounted(async () => {
   chat.subscribe()
   nextTick(measureLayout)
   ro = new ResizeObserver(measureLayout)
-  if (headerEl.value) ro.observe(headerEl.value)
-  if (footerEl.value) ro.observe(footerEl.value)
+  if (headerEl.value?.$el) ro.observe(headerEl.value.$el)
+  if (footerEl.value?.$el) ro.observe(footerEl.value.$el)
 
   // Load sessions and select the most recent, or create a new one
   await sessions.load()
