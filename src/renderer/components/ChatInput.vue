@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch, toRefs, nextTick } from 'vue'
 
-defineProps<{ busy: boolean }>()
+const props = defineProps<{ busy: boolean }>()
+const { busy } = toRefs(props)
 
 const emit = defineEmits<{
   submit: [text: string]
@@ -10,11 +11,18 @@ const emit = defineEmits<{
 
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 
+watch(busy, (isBusy) => {
+  if (!isBusy) {
+    nextTick(() => inputEl.value?.focus())
+  }
+})
+
 function handleSubmit() {
   const text = inputEl.value?.value.trim()
   if (!text) return
   inputEl.value!.value = ''
   emit('submit', text)
+  inputEl.value!.focus()
 }
 
 function handleKeyDown(e: KeyboardEvent) {
