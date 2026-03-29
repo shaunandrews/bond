@@ -1,4 +1,4 @@
-import { ref, nextTick } from 'vue'
+import { ref } from 'vue'
 import type { BondStreamChunk } from '../../shared/stream'
 import type { SessionMessage } from '../../shared/session'
 import type { Message } from '../types/message'
@@ -43,15 +43,8 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   let unsub: (() => void) | undefined
 
-  function scrollToBottom() {
-    nextTick(() => {
-      window.scrollTo({ top: document.body.scrollHeight })
-    })
-  }
-
   function addMessage(msg: Message) {
     messages.value.push(msg)
-    scrollToBottom()
   }
 
   function handleChunk(chunk: BondStreamChunk) {
@@ -65,7 +58,6 @@ export function useChat(deps: ChatDeps = window.bond) {
         } else {
           messages.value.push({ id: uid(), role: 'bond', text: chunk.text, streaming: true })
         }
-        scrollToBottom()
         break
       }
 
@@ -116,7 +108,6 @@ export function useChat(deps: ChatDeps = window.bond) {
     currentSessionId.value = sessionId
     const saved = await deps.getMessages(sessionId)
     messages.value = fromSessionMessages(saved)
-    scrollToBottom()
   }
 
   function clearMessages() {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useChat } from './composables/useChat'
+import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import ChatHeader from './components/ChatHeader.vue'
 import MessageBubble from './components/MessageBubble.vue'
@@ -13,6 +14,8 @@ const sessions = useSessions()
 
 const headerEl = ref<HTMLElement | null>(null)
 const footerEl = ref<HTMLElement | null>(null)
+const mainEl = ref<HTMLElement | null>(null)
+const { scrollToBottom } = useAutoScroll(mainEl)
 
 // Track whether we've generated a title for the current session's first exchange
 let titleGenPending = false
@@ -26,6 +29,7 @@ function measureLayout() {
 let ro: ResizeObserver | undefined
 
 async function handleSubmit(text: string) {
+  nextTick(scrollToBottom)
   await chat.submit(text)
 
   // After first assistant reply in a "New chat", generate a title
@@ -51,6 +55,7 @@ async function handleSelectSession(id: string) {
   if (id === sessions.activeSessionId.value) return
   sessions.select(id)
   await chat.loadSession(id)
+  nextTick(scrollToBottom)
 }
 
 onMounted(async () => {
@@ -66,6 +71,7 @@ onMounted(async () => {
     const first = sessions.activeSessions.value[0]
     sessions.select(first.id)
     await chat.loadSession(first.id)
+    nextTick(scrollToBottom)
   } else {
     await handleNewSession()
   }
@@ -95,7 +101,7 @@ onUnmounted(() => {
     <div class="app-shell">
       <ChatHeader ref="headerEl" />
 
-      <main class="app-main px-5 flex flex-col gap-2.5">
+      <main ref="mainEl" class="app-main px-5 flex flex-col gap-2.5">
         <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" />
         <ThinkingIndicator v-if="chat.thinking.value" />
       </main>
