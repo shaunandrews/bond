@@ -13,6 +13,8 @@ export function getDb(): Database.Database {
   _db.pragma('foreign_keys = ON')
 
   createSchema(_db)
+  migrateAddImagesColumn(_db)
+  migrateAddEditModeColumn(_db)
   migrateFromFiles(_db)
 
   return _db
@@ -56,6 +58,20 @@ function createSchema(db: Database.Database): void {
       value TEXT NOT NULL
     );
   `)
+}
+
+function migrateAddImagesColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(messages)') as { name: string }[]
+  if (!columns.some(c => c.name === 'images')) {
+    db.exec('ALTER TABLE messages ADD COLUMN images TEXT')
+  }
+}
+
+function migrateAddEditModeColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(sessions)') as { name: string }[]
+  if (!columns.some(c => c.name === 'edit_mode')) {
+    db.exec("ALTER TABLE sessions ADD COLUMN edit_mode TEXT NOT NULL DEFAULT '{\"type\":\"full\"}'")
+  }
 }
 
 // --- One-time migration from file-based storage ---

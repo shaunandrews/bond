@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { BondClient } from '../shared/client'
 import type { TaggedChunk } from '../shared/stream'
+import type { AttachedImage } from '../shared/session'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -171,8 +172,8 @@ app.whenReady().then(async () => {
   })
 
   // --- Chat (proxied to daemon) ---
-  ipcMain.handle('bond:send', async (_event, text: string, sessionId?: string) => {
-    return client.send(text, sessionId)
+  ipcMain.handle('bond:send', async (_event, text: string, sessionId?: string, images?: AttachedImage[]) => {
+    return client.send(text, sessionId, images)
   })
 
   ipcMain.handle('bond:cancel', async (_e, sessionId?: string) => {

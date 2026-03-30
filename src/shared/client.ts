@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
-import type { Session, SessionMessage } from './session'
+import type { Session, SessionMessage, AttachedImage } from './session'
 import {
   makeRequest,
   isResponse,
@@ -109,8 +109,8 @@ export class BondClient {
 
   // --- Chat ---
 
-  async send(text: string, sessionId?: string): Promise<{ ok: boolean; error?: string }> {
-    return await this.call('bond.send', { text, sessionId }) as { ok: boolean; error?: string }
+  async send(text: string, sessionId?: string, images?: AttachedImage[]): Promise<{ ok: boolean; error?: string }> {
+    return await this.call('bond.send', { text, sessionId, images }) as { ok: boolean; error?: string }
   }
 
   async cancel(sessionId?: string): Promise<{ ok: boolean }> {
@@ -160,7 +160,7 @@ export class BondClient {
     return await this.call('session.get', { id }) as Session | null
   }
 
-  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived'>>): Promise<Session | null> {
+  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>): Promise<Session | null> {
     return await this.call('session.update', { id, updates }) as Session | null
   }
 

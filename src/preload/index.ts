@@ -1,9 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
-import type { Session, SessionMessage } from '../shared/session'
+import type { Session, SessionMessage, AttachedImage } from '../shared/session'
 
 contextBridge.exposeInMainWorld('bond', {
-  send: (text: string, sessionId?: string) => ipcRenderer.invoke('bond:send', text, sessionId) as Promise<{ ok: boolean; error?: string }>,
+  send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string }>,
   cancel: (sessionId?: string) => ipcRenderer.invoke('bond:cancel', sessionId) as Promise<{ ok: boolean }>,
   respondToApproval: (requestId: string, approved: boolean) =>
     ipcRenderer.invoke('bond:approvalResponse', requestId, approved) as Promise<{ ok: boolean }>,
@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('bond', {
   listSessions: () => ipcRenderer.invoke('session:list') as Promise<Session[]>,
   createSession: () => ipcRenderer.invoke('session:create') as Promise<Session>,
   getSession: (id: string) => ipcRenderer.invoke('session:get', id) as Promise<Session | null>,
-  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived'>>) =>
+  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) =>
     ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id) as Promise<boolean>,
   getMessages: (sessionId: string) => ipcRenderer.invoke('session:getMessages', sessionId) as Promise<SessionMessage[]>,

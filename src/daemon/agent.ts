@@ -1,10 +1,53 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
+import { join, resolve, normalize } from 'node:path'
+import { writeFileSync, mkdirSync, unlinkSync } from 'node:fs'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { BondStreamChunk } from '../shared/stream'
+import type { AttachedImage, EditMode } from '../shared/session'
 import { getSoul } from './settings'
 
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp'
+}
+
+const TEMP_IMAGE_DIR = join(homedir(), '.bond', 'tmp-images')
+
+function saveImagesToTemp(images: AttachedImage[]): string[] {
+  mkdirSync(TEMP_IMAGE_DIR, { recursive: true })
+  return images.map((img) => {
+    const ext = MIME_TO_EXT[img.mediaType] ?? '.png'
+    const filePath = join(TEMP_IMAGE_DIR, `${randomUUID()}${ext}`)
+    writeFileSync(filePath, Buffer.from(img.data, 'base64'))
+    return filePath
+  })
+}
+
+function cleanupTempImages(paths: string[]): void {
+  for (const p of paths) {
+    try { unlinkSync(p) } catch { /* ignore */ }
+  }
+}
+
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'Bash'])
+const READ_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch']
+const ALL_TOOLS = [...READ_TOOLS, 'Edit', 'Write', 'Bash']
+
+function extractTargetPath(input: Record<string, unknown>): string | null {
+  if (typeof input.file_path === 'string') return resolve(input.file_path)
+  return null
+}
+
+function isWithinAllowedPaths(targetPath: string, allowedPaths: string[]): boolean {
+  const target = normalize(targetPath)
+  return allowedPaths.some(allowed => {
+    const norm = normalize(resolve(allowed.replace(/^~/, homedir())))
+    return target === norm || target.startsWith(norm + '/')
+  })
+}
 
 type ApprovalResolve = (result: { behavior: 'allow' } | { behavior: 'deny'; message: string }) => void
 const pendingApprovals = new Map<string, { resolve: ApprovalResolve; sessionId: string }>()
@@ -113,28 +156,45 @@ export async function runBondQuery(
     model?: string
     sessionId?: string
     resumeSession?: boolean
+    images?: AttachedImage[]
+    editMode?: EditMode
   }
-): Promise<void> {
+): Promise<boolean> {
   const cwd = homedir()
   const ac = new AbortController()
 
   const basePrompt =
-    'You are Bond, a careful local assistant running on the user\'s Mac. ' +
+    'You are Bond, a standalone desktop assistant app for Mac. ' +
+    'Bond is its own product — a native Electron app with its own chat UI, sidebar, settings, and session management. ' +
+    'You are NOT Claude, Claude Code, or the Claude website. You are powered by Claude (an AI model by Anthropic), but your identity is Bond. ' +
+    'When the user says "your UI", "your app", "your settings", or similar, they mean the Bond app they are using right now — not Claude\'s UI or any Anthropic product. ' +
+    'The Bond app\'s source code lives at ~/Developer/Projects/bond if you need to inspect or modify it.\n\n' +
     'You can read files with Read, search with Glob and Grep, edit files with Edit and Write, and run shell commands with Bash. ' +
     'You can search the web with WebSearch and fetch page content with WebFetch. ' +
     'Write operations require user approval before they execute. Stay concise. ' +
     'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.'
 
+  const editMode = options.editMode ?? { type: 'full' }
+  const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS
+
+  let modePrompt = ''
+  if (editMode.type === 'readonly') {
+    modePrompt = '\n\nThis session is in READ-ONLY mode. You can only use Read, Glob, Grep, WebSearch, and WebFetch. You cannot edit files, write files, or run shell commands.'
+  } else if (editMode.type === 'scoped') {
+    modePrompt = `\n\nThis session is in SCOPED WRITE mode. Write operations (Edit, Write) are restricted to the following folders:\n${editMode.allowedPaths.map(p => `- ${p}`).join('\n')}\nBash commands still require user approval. Do not attempt to write to files outside these folders.`
+  }
+
   const soul = getSoul().trim()
+  const base = basePrompt + modePrompt
   const systemPrompt = soul
-    ? `${basePrompt}\n\n<soul>\n${soul}\n</soul>`
-    : basePrompt
+    ? `${base}\n\n<soul>\n${soul}\n</soul>`
+    : base
 
   const queryOptions: Record<string, unknown> = {
     abortController: ac,
     cwd,
-    tools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'WebSearch', 'WebFetch'],
-    allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'WebSearch', 'WebFetch'],
+    tools: [...tools],
+    allowedTools: [...tools],
     model: options.model,
     includePartialMessages: true,
     permissionMode: 'acceptEdits',
@@ -146,6 +206,15 @@ export async function runBondQuery(
     ) => {
       if (!WRITE_TOOLS.has(toolName)) {
         return { behavior: 'allow' as const }
+      }
+      if (editMode.type === 'readonly') {
+        return { behavior: 'deny' as const, message: 'Session is in read-only mode' }
+      }
+      if (editMode.type === 'scoped') {
+        const targetPath = extractTargetPath(input)
+        if (targetPath && !isWithinAllowedPaths(targetPath, editMode.allowedPaths)) {
+          return { behavior: 'deny' as const, message: `Path ${targetPath} is outside allowed folders` }
+        }
       }
       const requestId = randomUUID()
       options.onChunk({
@@ -174,8 +243,18 @@ export async function runBondQuery(
     }
   }
 
+  let tempImagePaths: string[] = []
+  let effectivePrompt = prompt
+
+  if (options.images?.length) {
+    tempImagePaths = saveImagesToTemp(options.images)
+    const imageList = tempImagePaths.map(p => `  - ${p}`).join('\n')
+    const imageNote = `<attached-images>\nThe user attached ${tempImagePaths.length} image(s) to this message. You MUST read each file with the Read tool before responding:\n${imageList}\n</attached-images>`
+    effectivePrompt = prompt ? `${imageNote}\n\n${prompt}` : imageNote
+  }
+
   const q = query({
-    prompt,
+    prompt: effectivePrompt,
     options: queryOptions as any
   })
 
@@ -194,11 +273,15 @@ export async function runBondQuery(
   )
 
   let chunkCount = 0
+  let succeeded = false
   try {
     for await (const message of q) {
       if (options.abortSignal.aborted) break
       for (const chunk of bondMessageToChunks(message)) {
         chunkCount++
+        if (chunk.kind === 'result' && chunk.subtype === 'success') {
+          succeeded = true
+        }
         options.onChunk(chunk)
       }
     }
@@ -210,4 +293,10 @@ export async function runBondQuery(
   if (chunkCount === 0) {
     console.warn('[bond] query completed with no chunks emitted')
   }
+
+  if (tempImagePaths.length) {
+    cleanupTempImages(tempImagePaths)
+  }
+
+  return succeeded
 }

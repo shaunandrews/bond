@@ -3,7 +3,7 @@ import { createServer, type Server as HttpServer } from 'node:http'
 import { existsSync, unlinkSync } from 'node:fs'
 import type { TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
-import type { SessionMessage } from '../shared/session'
+import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
 import type { ModelId } from '../shared/models'
 import {
   makeResponse,
@@ -139,8 +139,12 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'bond.send': {
         const text = getStringParam(p, 'text')?.trim()
         const sessionId = getStringParam(p, 'sessionId')
-        if (!text) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'text is required'))
+        const images = getParam(p, 'images') as AttachedImage[] | undefined
+        if (!text && !images?.length) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'text or images required'))
         if (!sessionId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'sessionId is required'))
+
+        const session = getSession(sessionId)
+        if (!session) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'session not found'))
 
         // Auto-subscribe this client to the session
         subscribeTo(sessionId, ws)
@@ -157,22 +161,30 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         activeQueries.set(sessionId, ac)
         const resumeSession = knownSdkSessions.has(sessionId)
 
+        let succeeded = false
         try {
-          await runBondQuery(text, {
+          succeeded = await runBondQuery(text ?? '', {
             abortSignal: ac.signal,
             onChunk: (chunk) => broadcastChunk(sessionId, chunk),
             model: currentModel,
             sessionId,
-            resumeSession
+            resumeSession,
+            images,
+            editMode: session.editMode
           })
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e)
           broadcastChunk(sessionId, { kind: 'raw_error', message })
           activeQueries.delete(sessionId)
+          knownSdkSessions.delete(sessionId)
           return JSON.stringify(makeResponse(id, { ok: false, error: message }))
         }
 
-        knownSdkSessions.add(sessionId)
+        if (succeeded) {
+          knownSdkSessions.add(sessionId)
+        } else {
+          knownSdkSessions.delete(sessionId)
+        }
         activeQueries.delete(sessionId)
         return JSON.stringify(makeResponse(id, { ok: true }))
       }

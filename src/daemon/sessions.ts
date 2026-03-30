@@ -1,5 +1,20 @@
-import type { Session, SessionMessage } from '../shared/session'
+import type { Session, SessionMessage, EditMode } from '../shared/session'
+import { DEFAULT_EDIT_MODE } from '../shared/session'
 import { getDb } from './db'
+
+function parseEditMode(raw: unknown): EditMode {
+  if (typeof raw !== 'string') return DEFAULT_EDIT_MODE
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed?.type === 'readonly') return { type: 'readonly' }
+    if (parsed?.type === 'scoped' && Array.isArray(parsed.allowedPaths)) {
+      return { type: 'scoped', allowedPaths: parsed.allowedPaths }
+    }
+    return DEFAULT_EDIT_MODE
+  } catch {
+    return DEFAULT_EDIT_MODE
+  }
+}
 
 function rowToSession(row: Record<string, unknown>): Session {
   return {
@@ -7,6 +22,7 @@ function rowToSession(row: Record<string, unknown>): Session {
     title: row.title as string,
     summary: row.summary as string,
     archived: row.archived === 1,
+    editMode: parseEditMode(row.edit_mode),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string
   }
@@ -23,6 +39,9 @@ function rowToMessage(row: Record<string, unknown>): SessionMessage {
   if (row.name != null) msg.name = row.name as string
   if (row.summary != null) msg.summary = row.summary as string
   if (row.status != null) msg.status = row.status as string
+  if (row.images != null) {
+    try { msg.images = JSON.parse(row.images as string) } catch { /* ignore */ }
+  }
   return msg
 }
 
@@ -43,7 +62,7 @@ export function createSession(): Session {
     'INSERT INTO sessions (id, title, summary, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(id, 'New chat', '', 0, now, now)
 
-  return { id, title: 'New chat', summary: '', archived: false, createdAt: now, updatedAt: now }
+  return { id, title: 'New chat', summary: '', archived: false, editMode: DEFAULT_EDIT_MODE, createdAt: now, updatedAt: now }
 }
 
 export function getSession(id: string): Session | null {
@@ -52,7 +71,7 @@ export function getSession(id: string): Session | null {
   return row ? rowToSession(row as Record<string, unknown>) : null
 }
 
-export function updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived'>>): Session | null {
+export function updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>): Session | null {
   const db = getDb()
   const now = new Date().toISOString()
 
@@ -62,6 +81,7 @@ export function updateSession(id: string, updates: Partial<Pick<Session, 'title'
   if (updates.title !== undefined) { sets.push('title = ?'); values.push(updates.title) }
   if (updates.summary !== undefined) { sets.push('summary = ?'); values.push(updates.summary) }
   if (updates.archived !== undefined) { sets.push('archived = ?'); values.push(updates.archived ? 1 : 0) }
+  if (updates.editMode !== undefined) { sets.push('edit_mode = ?'); values.push(JSON.stringify(updates.editMode)) }
 
   values.push(id)
   const result = db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`).run(...values)
@@ -93,7 +113,7 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
     db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId)
 
     const insert = db.prepare(
-      'INSERT INTO messages (id, session_id, position, role, text, streaming, kind, name, summary, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO messages (id, session_id, position, role, text, streaming, kind, name, summary, status, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
 
     for (let i = 0; i < messages.length; i++) {
@@ -105,7 +125,8 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
         m.kind ?? null,
         m.name ?? null,
         m.summary ?? null,
-        m.status ?? null
+        m.status ?? null,
+        m.images?.length ? JSON.stringify(m.images) : null
       )
     }
 
