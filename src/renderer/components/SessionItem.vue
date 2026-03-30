@@ -38,15 +38,17 @@ function formatTime(iso: string): string {
     <span :class="['session-title', { generating }]">
       {{ generating ? 'Naming...' : session.title }}
     </span>
-    <span class="session-meta">{{ formatTime(session.updatedAt) }}</span>
-    <button
-      type="button"
-      class="session-action"
-      :title="actionTitle"
-      @click.stop="emit('action')"
-    >
-      <slot />
-    </button>
+    <span class="session-end">
+      <span class="session-meta">{{ formatTime(session.updatedAt) }}</span>
+      <button
+        type="button"
+        class="session-action"
+        :title="actionTitle"
+        @click.stop="emit('action')"
+      >
+        <slot />
+      </button>
+    </span>
   </div>
 </template>
 
@@ -59,10 +61,9 @@ function formatTime(iso: string): string {
   gap: 0.25rem;
   width: 100%;
   box-sizing: border-box;
-  padding: 0.5rem 0.5rem;
+  padding: 0.5rem 0.25rem 0.5rem 0.5rem;
   border-radius: var(--radius-md);
   transition: background var(--transition-fast);
-  position: relative;
 }
 .session-item:hover {
   background: var(--sidebar-hover-bg);
@@ -89,37 +90,40 @@ function formatTime(iso: string): string {
   font-style: italic;
 }
 
+.session-end {
+  flex-shrink: 0;
+  width: 24px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .session-meta {
   font-size: 0.7rem;
   color: var(--sidebar-text-faint);
-  flex-shrink: 0;
   transition: opacity var(--transition-fast);
 }
 
 .session-action {
   all: unset;
   cursor: pointer;
-  position: absolute;
-  right: 0.375rem;
-  top: 50%;
-  transform: translateY(-50%);
   width: 22px;
   height: 22px;
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
   font-size: 0.75rem;
   color: var(--sidebar-text-muted);
-  opacity: 0;
   background: var(--sidebar-action-bg);
-  transition: opacity var(--transition-fast), background var(--transition-fast);
+  transition: background var(--transition-fast);
 }
 .session-item:hover .session-action {
-  opacity: 1;
+  display: flex;
 }
 .session-item:hover .session-meta {
-  opacity: 0;
+  display: none;
 }
 .session-action:hover {
   background: var(--sidebar-hover-bg);
