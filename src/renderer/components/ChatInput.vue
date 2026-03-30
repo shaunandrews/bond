@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, toRefs, nextTick } from 'vue'
+import { ref, watch, toRefs, nextTick, onMounted } from 'vue'
 import { PhArrowUp, PhCaretDown, PhPaperclip, PhStop, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode } from '../../shared/session'
@@ -63,6 +63,7 @@ function handleSubmit() {
   inputEl.value!.value = ''
   emit('submit', text, attachedImages.value.map(i => ({ data: i.data, mediaType: i.mediaType })))
   attachedImages.value = []
+  nextTick(autoResize)
   inputEl.value!.focus()
 }
 
@@ -71,6 +72,13 @@ function focus() {
 }
 
 defineExpose({ focus })
+
+function autoResize() {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 'px'
+}
 
 function handleKeyDown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -139,11 +147,12 @@ function removeImage(index: number) {
       <!-- Textarea -->
       <textarea
         ref="inputEl"
-        rows="3"
+        rows="2"
         placeholder="Ask Bond something…"
         :spellcheck="false"
         :disabled="busy"
         @keydown="handleKeyDown"
+        @input="autoResize"
         @paste="handlePaste"
         class="chat-textarea"
       />
@@ -237,9 +246,9 @@ function removeImage(index: number) {
 .chat-textarea {
   display: block;
   width: 100%;
-  resize: vertical;
-  min-height: 4.5rem;
+  resize: none;
   max-height: 12rem;
+  overflow-y: auto;
   padding: 0.75rem 0.75rem 0.5rem;
   border: 1px solid var(--color-border);
   border-radius: 12px;
