@@ -43,6 +43,7 @@ src/renderer/
     MessageBubble.vue            # Renders all message variants
     ThinkingIndicator.vue        # Animated working indicator
     MarkdownMessage.vue          # Markdown rendering with syntax highlighting
+    SessionItem.vue              # Single session row (used in sidebar lists)
     SessionSidebar.vue           # Sidebar with session list and controls
     DevComponents.vue            # Dev screen — component catalog
   lib/highlight.ts               # highlight.js language registration
@@ -119,13 +120,46 @@ Renders markdown with syntax highlighting and copy-to-clipboard code blocks.
 ### ThinkingIndicator
 Animated "Bond is working..." with blinking dots. No props or events.
 
+### SessionItem
+Single session row used in both active and archived lists inside SessionSidebar. Action button floats over content on hover (no reserved space).
+- **Props:** `session: Session`, `active?: boolean`, `archived?: boolean`, `generating?: boolean`, `actionTitle: string`
+- **Slot:** default — action button content (icon)
+- **Events:** `select()`, `action()`
+
 ### SessionSidebar
-Left sidebar with resizable chat/archive panels and nav links. Archives panel has built-in collapse/expand via BondPanel header.
+Left sidebar with session lists and nav links. Uses SessionItem for consistent rendering across active and archived lists. Archives section has built-in collapse/expand.
 - **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`
 - **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `switchView(view)`
 
 ### DevComponents
 Dev-only component catalog. Toggle with **Cmd+Shift+D**. Not rendered in production flows.
+
+## Icons
+
+Bond uses [Phosphor Icons](https://phosphoricons.com) via `@phosphor-icons/vue`. Import individual icons by name — they are tree-shaken automatically.
+
+```vue
+<script lang="ts" setup>
+import { PhHouse, PhGear, PhTrash } from '@phosphor-icons/vue'
+</script>
+
+<template>
+  <PhHouse :size="20" weight="regular" />
+  <PhGear :size="20" weight="bold" />
+  <PhTrash :size="20" color="var(--color-err)" />
+</template>
+```
+
+### Props (all optional)
+- **size**: `number | string` — width & height (default: `24`)
+- **color**: `string` — stroke/fill color, any CSS value (default: `currentColor`)
+- **weight**: `"thin" | "light" | "regular" | "bold" | "fill" | "duotone"` (default: `"regular"`)
+- **mirrored**: `boolean` — flip horizontally for RTL
+
+### Rules
+- **Always use `currentColor`** (the default) so icons inherit text color from their parent.
+- **Import individually** — never register globally, to keep bundles small.
+- Browse available icons at [phosphoricons.com](https://phosphoricons.com).
 
 ## Design Tokens
 
