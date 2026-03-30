@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { bondMessageToChunks } from './agent'
+import { bondMessageToChunks } from '../daemon/agent'
 
 // Minimal SDKMessage-shaped objects for testing
 

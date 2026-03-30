@@ -15,4 +15,5 @@ export interface SessionMessage {
   kind?: string
   name?: string
   summary?: string
+  status?: string
 }

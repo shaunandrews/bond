@@ -121,6 +121,7 @@ export async function runBondQuery(
   const basePrompt =
     'You are Bond, a careful local assistant running on the user\'s Mac. ' +
     'You can read files with Read, search with Glob and Grep, edit files with Edit and Write, and run shell commands with Bash. ' +
+    'You can search the web with WebSearch and fetch page content with WebFetch. ' +
     'Write operations require user approval before they execute. Stay concise. ' +
     'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.'
 
@@ -132,7 +133,8 @@ export async function runBondQuery(
   const queryOptions: Record<string, unknown> = {
     abortController: ac,
     cwd,
-    allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
+    tools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'WebSearch', 'WebFetch'],
+    allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'WebSearch', 'WebFetch'],
     model: options.model,
     includePartialMessages: true,
     permissionMode: 'acceptEdits',
@@ -191,15 +193,21 @@ export async function runBondQuery(
     { once: true }
   )
 
+  let chunkCount = 0
   try {
     for await (const message of q) {
       if (options.abortSignal.aborted) break
       for (const chunk of bondMessageToChunks(message)) {
+        chunkCount++
         options.onChunk(chunk)
       }
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    console.error('[bond] query error:', msg)
     options.onChunk({ kind: 'raw_error', message: msg })
+  }
+  if (chunkCount === 0) {
+    console.warn('[bond] query completed with no chunks emitted')
   }
 }

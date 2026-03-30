@@ -1,28 +1,27 @@
-declare module '*.vue' {
-  import type { DefineComponent } from 'vue'
-  const component: DefineComponent<object, object, unknown>
-  export default component
-}
-
-import type { BondStreamChunk } from '../shared/stream'
-import type { Session, SessionMessage } from '../shared/session'
-
 declare global {
   interface Window {
     bond: {
-      send: (text: string) => Promise<{ ok: boolean; error?: string }>
-      cancel: () => Promise<{ ok: boolean }>
-      onChunk: (fn: (chunk: BondStreamChunk) => void) => () => void
-      listSessions: () => Promise<Session[]>
-      createSession: () => Promise<Session>
-      getSession: (id: string) => Promise<Session | null>
-      updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived'>>) => Promise<Session | null>
+      send: (text: string, sessionId?: string) => Promise<{ ok: boolean; error?: string }>
+      cancel: (sessionId?: string) => Promise<{ ok: boolean }>
+      respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
+      onChunk: (fn: (chunk: import('../../shared/stream').TaggedChunk) => void) => () => void
+      listSessions: () => Promise<import('../../shared/session').Session[]>
+      createSession: () => Promise<import('../../shared/session').Session>
+      getSession: (id: string) => Promise<import('../../shared/session').Session | null>
+      updateSession: (id: string, updates: Partial<Pick<import('../../shared/session').Session, 'title' | 'summary' | 'archived'>>) => Promise<import('../../shared/session').Session | null>
       deleteSession: (id: string) => Promise<boolean>
-      getMessages: (sessionId: string) => Promise<SessionMessage[]>
-      saveMessages: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
+      getMessages: (sessionId: string) => Promise<import('../../shared/session').SessionMessage[]>
+      saveMessages: (sessionId: string, messages: import('../../shared/session').SessionMessage[]) => Promise<boolean>
       generateTitle: (sessionId: string) => Promise<{ title: string; summary: string }>
+      openExternal: (url: string) => Promise<void>
       setModel: (model: string) => Promise<{ ok: boolean }>
       getModel: () => Promise<string>
+      getSoul: () => Promise<string>
+      saveSoul: (content: string) => Promise<boolean>
+      getAccentColor: () => Promise<string>
+      saveAccentColor: (hex: string) => Promise<boolean>
     }
   }
 }
+
+export {}

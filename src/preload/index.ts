@@ -30,7 +30,12 @@ contextBridge.exposeInMainWorld('bond', {
   generateTitle: (sessionId: string, userMessage?: string) =>
     ipcRenderer.invoke('session:generateTitle', sessionId, userMessage) as Promise<{ title: string; summary: string }>,
 
+  // Shell
+  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url) as Promise<void>,
+
   // Settings
   getSoul: () => ipcRenderer.invoke('settings:getSoul') as Promise<string>,
-  saveSoul: (content: string) => ipcRenderer.invoke('settings:saveSoul', content) as Promise<boolean>
+  saveSoul: (content: string) => ipcRenderer.invoke('settings:saveSoul', content) as Promise<boolean>,
+  getAccentColor: () => ipcRenderer.invoke('settings:getAccentColor') as Promise<string>,
+  saveAccentColor: (hex: string) => ipcRenderer.invoke('settings:saveAccentColor', hex) as Promise<boolean>
 })

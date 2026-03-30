@@ -5,8 +5,9 @@
   "main": "./out/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "dev": "npm run build:daemon && electron-vite dev",
+    "build": "electron-vite build && npm run build:daemon",
+    "build:daemon": "esbuild src/daemon/main.ts --bundle --platform=node --format=esm --outfile=out/daemon/main.mjs --external:@anthropic-ai/claude-agent-sdk --external:better-sqlite3 --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
     "preview": "electron-vite preview",
     "test": "vitest",
     "test:run": "vitest run"
@@ -29,10 +30,15 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.86",
+    "@phosphor-icons/vue": "^2.2.1",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/ws": "^8.18.1",
+    "better-sqlite3": "^12.8.0",
     "dompurify": "^3.3.3",
     "highlight.js": "^11.11.1",
     "marked": "^17.0.5",
     "tailwindcss": "^4.2.2",
-    "vue": "^3.5.31"
+    "vue": "^3.5.31",
+    "ws": "^8.20.0"
   }
 }
