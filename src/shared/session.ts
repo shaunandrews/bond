@@ -1,8 +1,28 @@
+export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const
+export type ImageMediaType = (typeof ACCEPTED_IMAGE_TYPES)[number]
+
+export interface AttachedImage {
+  data: string          // base64-encoded (no data URI prefix)
+  mediaType: ImageMediaType
+}
+
+export function imageDataUri(img: AttachedImage): string {
+  return `data:${img.mediaType};base64,${img.data}`
+}
+
+export type EditMode =
+  | { type: 'full' }
+  | { type: 'readonly' }
+  | { type: 'scoped'; allowedPaths: string[] }
+
+export const DEFAULT_EDIT_MODE: EditMode = { type: 'full' }
+
 export interface Session {
   id: string
   title: string
   summary: string
   archived: boolean
+  editMode: EditMode
   createdAt: string   // ISO 8601
   updatedAt: string   // ISO 8601
 }
@@ -16,4 +36,5 @@ export interface SessionMessage {
   name?: string
   summary?: string
   status?: string
+  images?: AttachedImage[]
 }
