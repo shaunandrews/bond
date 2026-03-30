@@ -9,6 +9,23 @@ defineProps<{ msg: Message }>()
 defineEmits<{ approve: [requestId: string, approved: boolean] }>()
 
 const thinkingExpanded = ref(false)
+const toast = ref<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false })
+let toastTimer: ReturnType<typeof setTimeout> | undefined
+
+function copyText(msg: Message, event: MouseEvent) {
+  let text = ''
+  if (msg.role === 'user') text = msg.text
+  else if (msg.role === 'bond') text = msg.text
+  else if (msg.kind === 'thinking') text = msg.text ?? ''
+  else if (msg.kind === 'error' || msg.kind === 'system') text = msg.text
+  else return
+  if (!text) return
+  navigator.clipboard.writeText(text)
+  window.getSelection()?.removeAllRanges()
+  clearTimeout(toastTimer)
+  toast.value = { x: event.clientX, y: event.clientY - 8, visible: true }
+  toastTimer = setTimeout(() => { toast.value.visible = false }, 1200)
+}
 
 function formatApprovalInput(input: Record<string, unknown>): string {
   const filePath = input.file_path ?? input.path
@@ -32,7 +49,7 @@ function formatDuration(sec: number | undefined): string {
 
 <template>
   <!-- User message -->
-  <div v-if="msg.role === 'user'" class="self-end max-w-[92%] flex flex-col items-end gap-1.5">
+  <div v-if="msg.role === 'user'" class="self-end max-w-[92%] flex flex-col items-end gap-1.5" @dblclick="copyText(msg, $event)">
     <div v-if="msg.images?.length" class="flex flex-wrap justify-end gap-1.5">
       <img
         v-for="(img, i) in msg.images"
@@ -52,6 +69,7 @@ function formatDuration(sec: number | undefined): string {
     :text="msg.text"
     :streaming="msg.streaming"
     class="self-start w-full px-3.5 py-2.5 text-sm leading-relaxed"
+    @dblclick="copyText(msg, $event)"
   />
 
   <!-- Tool approval -->
@@ -84,6 +102,7 @@ function formatDuration(sec: number | undefined): string {
   <div
     v-else-if="msg.kind === 'thinking'"
     class="self-start w-full text-xs text-muted"
+    @dblclick="copyText(msg, $event)"
   >
     <!-- Working (no text yet) or Thinking (text streaming) -->
     <div v-if="msg.streaming" class="px-1 py-1 italic opacity-70">
@@ -132,6 +151,7 @@ function formatDuration(sec: number | undefined): string {
   <div
     v-else-if="msg.kind === 'error'"
     class="self-center max-w-[96%] px-3.5 py-2.5 rounded-[10px] text-xs text-err border border-dashed border-border"
+    @dblclick="copyText(msg, $event)"
   >
     {{ msg.text }}
   </div>
@@ -140,9 +160,17 @@ function formatDuration(sec: number | undefined): string {
   <div
     v-else
     class="self-center max-w-[96%] px-3.5 py-2.5 rounded-[10px] text-xs text-muted border border-dashed border-border"
+    @dblclick="copyText(msg, $event)"
   >
     {{ msg.text }}
   </div>
+  <Teleport to="body">
+    <Transition name="copy-toast">
+      <div v-if="toast.visible" class="copy-toast" :style="{ left: toast.x + 'px', top: toast.y + 'px' }">
+        Message copied
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -164,5 +192,35 @@ function formatDuration(sec: number | undefined): string {
 @keyframes blink {
   0%, 80%, 100% { opacity: 0.2; }
   40% { opacity: 1; }
+}
+
+.copy-toast {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-md);
+  font-size: 11px;
+  color: var(--color-muted);
+  pointer-events: none;
+  z-index: 9999;
+  white-space: nowrap;
+}
+
+.copy-toast-enter-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.copy-toast-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.copy-toast-enter-from {
+  opacity: 0;
+  transform: translate(-50%, -80%);
+}
+.copy-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -120%);
 }
 </style>
