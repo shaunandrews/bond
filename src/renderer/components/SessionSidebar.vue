@@ -141,19 +141,21 @@ function selectView(view: AppView) {
         </span>
       </button>
 
-      <nav v-show="archivesOpen" class="sidebar-list">
-        <SessionItem
-          v-for="s in archivedSessions"
-          :key="s.id"
-          :session="s"
-          archived
-          actionTitle="Unarchive"
-          @select="emit('select', s.id)"
-          @action="emit('unarchive', s.id)"
-        >
-          <PhArrowLineUp :size="14" weight="bold" />
-        </SessionItem>
-      </nav>
+      <div :class="['archives-collapsible', { open: archivesOpen }]">
+        <nav class="sidebar-list">
+          <SessionItem
+            v-for="s in archivedSessions"
+            :key="s.id"
+            :session="s"
+            archived
+            actionTitle="Unarchive"
+            @select="emit('select', s.id)"
+            @action="emit('unarchive', s.id)"
+          >
+            <PhArrowLineUp :size="14" weight="bold" />
+          </SessionItem>
+        </nav>
+      </div>
     </div>
 
   </aside>
@@ -262,6 +264,20 @@ button.sidebar-section-header:hover {
 .sidebar-btn.active {
   background: var(--sidebar-hover-bg);
   color: var(--sidebar-text);
+}
+
+.archives-collapsible {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--transition-base);
+  min-height: 0;
+}
+.archives-collapsible.open {
+  grid-template-rows: 1fr;
+}
+.archives-collapsible > .sidebar-list {
+  overflow: hidden;
+  min-height: 0;
 }
 
 .sidebar-list {
