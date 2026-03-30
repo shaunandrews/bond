@@ -226,8 +226,7 @@ function contrastClass(color: string): string {
   flex: 1;
   min-width: 0;
   max-width: 960px;
-  height: 100vh;
-  overflow-y: auto;
+  flex: 1;
   padding: 2rem 2.5rem 4rem;
 }
 

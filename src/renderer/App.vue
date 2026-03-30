@@ -1,19 +1,19 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useChat } from './composables/useChat'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useAppView } from './composables/useAppView'
+import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId } from './types/message'
-import ChatHeader from './components/ChatHeader.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ThinkingIndicator from './components/ThinkingIndicator.vue'
 import ChatInput from './components/ChatInput.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import DesignSystemView from './components/DesignSystemView.vue'
 import DevComponents from './components/DevComponents.vue'
-import ViewHeader from './components/ViewHeader.vue'
 import SettingsView from './components/SettingsView.vue'
+import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
 import BondPanelHandle from './components/BondPanelHandle.vue'
@@ -21,32 +21,19 @@ import BondPanelHandle from './components/BondPanelHandle.vue'
 const chat = useChat()
 const sessions = useSessions()
 const { activeView } = useAppView()
+const { load: loadAccent } = useAccentColor()
 const selectedModel = ref<ModelId>('sonnet')
 
-// Re-measure layout when view changes (header/footer refs swap)
-watch(activeView, () => nextTick(measureLayout))
+const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
+const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
+const { scrollToBottom } = useAutoScroll(scrollEl)
 
-const headerEl = ref<HTMLElement | null>(null)
-const footerEl = ref<HTMLElement | null>(null)
-const mainEl = ref<HTMLElement | null>(null)
-const { scrollToBottom } = useAutoScroll(mainEl)
-
-// Track whether we've generated a title for the current session's first exchange
 let titleGenPending = false
-
-function measureLayout() {
-  const root = document.documentElement
-  root.style.setProperty('--header-h', `${headerEl.value?.offsetHeight ?? 0}px`)
-  root.style.setProperty('--footer-h', `${footerEl.value?.offsetHeight ?? 0}px`)
-}
-
-let ro: ResizeObserver | undefined
 
 async function handleSubmit(text: string) {
   nextTick(scrollToBottom)
   await chat.submit(text)
 
-  // After first reply completes, generate a title from the user's message
   if (
     sessions.activeSessionId.value &&
     sessions.activeSession.value?.title === 'New chat' &&
@@ -67,7 +54,8 @@ function handleModelChange(model: ModelId) {
 async function handleNewSession() {
   const session = await sessions.create()
   await chat.loadSession(session.id)
-  nextTick(() => footerEl.value?.focus())
+  const model = await window.bond.getModel() as ModelId
+  selectedModel.value = model
 }
 
 async function handleSelectSession(id: string) {
@@ -80,16 +68,11 @@ async function handleSelectSession(id: string) {
 
 onMounted(async () => {
   chat.subscribe()
-  nextTick(measureLayout)
-  ro = new ResizeObserver(measureLayout)
-  if (headerEl.value) ro.observe(headerEl.value)
-  if (footerEl.value) ro.observe(footerEl.value)
+  loadAccent()
 
-  // Sync model and load sessions concurrently
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
 
-  // Restore saved session, fall back to first, or create new
   const savedId = sessions.activeSessionId.value
   const savedSession = savedId
     ? sessions.activeSessions.value.find((s) => s.id === savedId)
@@ -107,12 +90,10 @@ onMounted(async () => {
   } else {
     await handleNewSession()
   }
-  nextTick(() => footerEl.value?.focus())
 })
 
 onUnmounted(() => {
   chat.unsubscribe()
-  ro?.disconnect()
 })
 </script>
 
@@ -137,41 +118,32 @@ onUnmounted(() => {
     <BondPanelHandle id="handle-0" />
 
     <BondPanel id="main" :defaultSize="80" :minSize="40">
-      <div v-if="activeView === 'chat'" class="app-shell">
-        <header ref="headerEl" class="app-header drag-region">
-          <ChatHeader :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')" />
-        </header>
-
-        <main ref="mainEl" class="app-main px-5 flex flex-col gap-2.5">
+      <ViewShell
+        v-if="activeView === 'chat'"
+        ref="chatShellRef"
+        :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
+      >
+        <div class="px-5 pb-10 flex flex-col gap-2.5 flex-1">
           <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" @approve="chat.respondToApproval" />
           <ThinkingIndicator v-if="chat.thinking.value" />
-        </main>
+        </div>
 
-        <footer ref="footerEl" class="app-footer">
+        <template #footer>
           <ChatInput :busy="chat.busy.value" :model="selectedModel" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" />
-        </footer>
-      </div>
+        </template>
+      </ViewShell>
 
-      <div v-else-if="activeView === 'design-system'" class="app-shell">
-        <header ref="headerEl" class="app-header drag-region">
-          <ViewHeader title="Design System" />
-        </header>
+      <ViewShell v-else-if="activeView === 'design-system'" title="Design System">
         <DesignSystemView />
-      </div>
+      </ViewShell>
 
-      <div v-else-if="activeView === 'components'" class="app-shell">
-        <header ref="headerEl" class="app-header drag-region">
-          <ViewHeader title="Components" />
-        </header>
+      <ViewShell v-else-if="activeView === 'components'" title="Components">
         <DevComponents />
-      </div>
+      </ViewShell>
 
-      <div v-else-if="activeView === 'settings'" class="app-shell">
-        <header ref="headerEl" class="app-header drag-region">
-          <ViewHeader title="Settings" />
-        </header>
+      <ViewShell v-else-if="activeView === 'settings'" title="Settings">
         <SettingsView />
-      </div>
+      </ViewShell>
     </BondPanel>
   </BondPanelGroup>
 </template>
@@ -179,7 +151,9 @@ onUnmounted(() => {
 <style>
 @import "tailwindcss";
 
-@theme {
+/* Register colors for Tailwind utility generation only — no CSS output.
+   Actual values live in :root / @media blocks below so dark mode works. */
+@theme reference {
   --color-bg: #f6f5f2;
   --color-surface: #fff;
   --color-border: #ddd9d0;
@@ -188,7 +162,9 @@ onUnmounted(() => {
   --color-accent: #7a5c3b;
   --color-err: #e57373;
   --color-ok: #81c784;
+}
 
+@theme {
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
 
@@ -205,6 +181,32 @@ onUnmounted(() => {
   --transition-base: 0.15s ease;
 }
 
+/* Light defaults (unlayered — always beats @layer theme) */
+:root {
+  color-scheme: light dark;
+
+  --color-bg: #f6f5f2;
+  --color-surface: #fff;
+  --color-border: #ddd9d0;
+  --color-text-primary: #1a1c1f;
+  --color-muted: #5c6570;
+  --color-accent: #7a5c3b;
+  --color-err: #e57373;
+  --color-ok: #81c784;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.08);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.12);
+
+  --sidebar-border: rgba(0, 0, 0, 0.1);
+  --sidebar-text: rgba(0, 0, 0, 0.8);
+  --sidebar-text-muted: rgba(0, 0, 0, 0.5);
+  --sidebar-text-faint: rgba(0, 0, 0, 0.4);
+  --sidebar-hover-bg: rgba(0, 0, 0, 0.06);
+  --sidebar-active-bg: rgba(0, 0, 0, 0.08);
+  --sidebar-action-bg: rgba(255, 255, 255, 0.5);
+}
+
+/* Dark mode */
 @media (prefers-color-scheme: dark) {
   :root {
     --color-bg: #0f1114;
@@ -213,50 +215,28 @@ onUnmounted(() => {
     --color-text-primary: #e8eaed;
     --color-muted: #8b939e;
     --color-accent: #c4a07c;
+    --color-err: #ef9a9a;
+    --color-ok: #a5d6a7;
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
     --shadow-md: 0 2px 8px rgba(0,0,0,0.3);
     --shadow-lg: 0 4px 16px rgba(0,0,0,0.4);
-  }
-}
 
-:root {
-  --header-h: 0px;
-  --footer-h: 0px;
+    --sidebar-border: rgba(255, 255, 255, 0.1);
+    --sidebar-text: rgba(255, 255, 255, 0.85);
+    --sidebar-text-muted: rgba(255, 255, 255, 0.5);
+    --sidebar-text-faint: rgba(255, 255, 255, 0.35);
+    --sidebar-hover-bg: rgba(255, 255, 255, 0.08);
+    --sidebar-active-bg: rgba(255, 255, 255, 0.1);
+    --sidebar-action-bg: rgba(0, 0, 0, 0.3);
+  }
 }
 
 html, body, #app {
   margin: 0;
   height: 100%;
-  background: var(--color-bg);
+  background: transparent;
   color: var(--color-text-primary);
   font-family: var(--font-sans);
-}
-
-.app-shell {
-  position: relative;
-  min-width: 0;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.app-header {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 10;
-}
-
-.app-header::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  mask-image: linear-gradient(to bottom, black 50%, transparent);
-  -webkit-mask-image: linear-gradient(to bottom, black 50%, transparent);
 }
 
 .drag-region {
@@ -264,31 +244,5 @@ html, body, #app {
 }
 .no-drag {
   -webkit-app-region: no-drag;
-}
-
-.app-footer {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 10;
-}
-
-.app-footer::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  mask-image: linear-gradient(to top, black 50%, transparent);
-  -webkit-mask-image: linear-gradient(to top, black 50%, transparent);
-}
-
-.app-main {
-  flex: 1;
-  overflow-y: auto;
-  padding-top: calc(var(--header-h) + 1rem);
-  padding-bottom: calc(var(--footer-h) + 1rem);
 }
 </style>
