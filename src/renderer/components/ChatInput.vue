@@ -63,6 +63,7 @@ function handleSubmit() {
   inputEl.value!.value = ''
   emit('submit', text, attachedImages.value.map(i => ({ data: i.data, mediaType: i.mediaType })))
   attachedImages.value = []
+  selectedImageIndex.value = null
   nextTick(autoResize)
   inputEl.value!.focus()
 }
@@ -122,22 +123,56 @@ function handlePaste(e: ClipboardEvent) {
   }
 }
 
+const selectedImageIndex = ref<number | null>(null)
+
 function removeImage(index: number) {
   attachedImages.value.splice(index, 1)
+  if (selectedImageIndex.value === index) {
+    selectedImageIndex.value = null
+  } else if (selectedImageIndex.value !== null && selectedImageIndex.value > index) {
+    selectedImageIndex.value--
+  }
+}
+
+function selectImage(index: number) {
+  selectedImageIndex.value = selectedImageIndex.value === index ? null : index
+}
+
+function deselectImage() {
+  selectedImageIndex.value = null
+}
+
+function handleImageKeyDown(e: KeyboardEvent) {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedImageIndex.value !== null) {
+    e.preventDefault()
+    removeImage(selectedImageIndex.value)
+  }
 }
 </script>
 
 <template>
   <div class="px-5 pt-3 pb-5">
-    <div class="chat-box">
+    <div class="chat-box" @click="deselectImage">
       <!-- Image preview strip -->
-      <div v-if="attachedImages.length" class="flex flex-wrap gap-2 px-3 pt-3">
-        <div v-for="(img, i) in attachedImages" :key="i" class="relative">
-          <img :src="imageDataUri(img)" class="w-12 h-12 rounded-md object-cover" />
+      <div
+        v-if="attachedImages.length"
+        class="image-strip"
+        tabindex="0"
+        @keydown="handleImageKeyDown"
+      >
+        <div
+          v-for="(img, i) in attachedImages"
+          :key="i"
+          class="image-thumb group relative cursor-pointer"
+          :class="{ 'ring-2 ring-accent rounded-lg': selectedImageIndex === i }"
+          @click.stop="selectImage(i)"
+        >
+          <img :src="imageDataUri(img)" class="rounded-lg object-cover max-h-28 max-w-48" />
           <button
             type="button"
-            class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-err text-white border-none cursor-pointer flex items-center justify-center p-0"
-            @click="removeImage(i)"
+            class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-surface border border-border text-muted cursor-pointer flex items-center justify-center p-0 transition-opacity duration-[var(--transition-fast)] hover:text-text-primary"
+            :class="selectedImageIndex === i ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+            @click.stop="removeImage(i)"
           >
             <PhX :size="10" weight="bold" />
           </button>
@@ -264,6 +299,16 @@ function removeImage(index: number) {
 .chat-textarea:focus {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.image-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 1px;
+  margin-bottom: 0.5rem;
+  outline: none;
 }
 
 .toolbar-select {
