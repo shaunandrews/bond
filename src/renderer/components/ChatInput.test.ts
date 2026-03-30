@@ -4,7 +4,7 @@ import ChatInput from './ChatInput.vue'
 
 describe('ChatInput', () => {
   function createWrapper(busy = false) {
-    return mount(ChatInput, { props: { busy, model: 'sonnet' as const } })
+    return mount(ChatInput, { props: { busy, model: 'sonnet' as const, editMode: { type: 'full' as const } } })
   }
 
   it('emits submit with text on Enter', async () => {
@@ -15,7 +15,7 @@ describe('ChatInput', () => {
     await textarea.trigger('keydown', { key: 'Enter' })
 
     expect(wrapper.emitted('submit')).toHaveLength(1)
-    expect(wrapper.emitted('submit')![0]).toEqual(['hello'])
+    expect(wrapper.emitted('submit')![0]).toEqual(['hello', []])
   })
 
   it('does not emit submit on Shift+Enter', async () => {
@@ -48,44 +48,45 @@ describe('ChatInput', () => {
     expect((textarea.element as HTMLTextAreaElement).value).toBe('')
   })
 
-  it('emits submit on Send button click', async () => {
+  it('emits submit on action button click when not busy', async () => {
     const wrapper = createWrapper()
     const textarea = wrapper.find('textarea')
     ;(textarea.element as HTMLTextAreaElement).value = 'hello'
 
-    const sendButton = wrapper.findAll('button').find((b) => b.text() === 'Send')!
-    await sendButton.trigger('click')
+    const actionBtn = wrapper.find('[data-action="send"]')
+    await actionBtn.trigger('click')
 
     expect(wrapper.emitted('submit')).toHaveLength(1)
-    expect(wrapper.emitted('submit')![0]).toEqual(['hello'])
+    expect(wrapper.emitted('submit')![0]).toEqual(['hello', []])
   })
 
-  it('emits cancel on Stop button click', async () => {
+  it('emits cancel on action button click when busy', async () => {
     const wrapper = createWrapper(true)
 
-    const stopButton = wrapper.findAll('button').find((b) => b.text() === 'Stop')!
-    await stopButton.trigger('click')
+    const actionBtn = wrapper.find('[data-action="stop"]')
+    await actionBtn.trigger('click')
 
     expect(wrapper.emitted('cancel')).toHaveLength(1)
   })
 
-  it('disables textarea and Send when busy', () => {
-    const wrapper = createWrapper(true)
-    const textarea = wrapper.find('textarea')
-    const sendButton = wrapper.findAll('button').find((b) => b.text() === 'Send')!
-    const stopButton = wrapper.findAll('button').find((b) => b.text() === 'Stop')!
+  it('shows send button when not busy', () => {
+    const wrapper = createWrapper(false)
 
-    expect(textarea.attributes('disabled')).toBeDefined()
-    expect(sendButton.attributes('disabled')).toBeDefined()
-    expect(stopButton.attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-action="send"]').exists()).toBe(true)
+    expect(wrapper.find('[data-action="stop"]').exists()).toBe(false)
   })
 
-  it('disables Stop when not busy', () => {
-    const wrapper = createWrapper(false)
-    const stopButton = wrapper.findAll('button').find((b) => b.text() === 'Stop')!
-    const sendButton = wrapper.findAll('button').find((b) => b.text() === 'Send')!
+  it('shows stop button when busy', () => {
+    const wrapper = createWrapper(true)
 
-    expect(stopButton.attributes('disabled')).toBeDefined()
-    expect(sendButton.attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-action="stop"]').exists()).toBe(true)
+    expect(wrapper.find('[data-action="send"]').exists()).toBe(false)
+  })
+
+  it('disables textarea when busy', () => {
+    const wrapper = createWrapper(true)
+    const textarea = wrapper.find('textarea')
+
+    expect(textarea.attributes('disabled')).toBeDefined()
   })
 })

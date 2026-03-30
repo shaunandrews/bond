@@ -1,20 +1,55 @@
 <script setup lang="ts">
 import { ref, watch, toRefs, nextTick } from 'vue'
-import { PhCaretDown } from '@phosphor-icons/vue'
+import { PhArrowUp, PhCaretDown, PhPaperclip, PhStop, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
+import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode } from '../../shared/session'
 
-const props = defineProps<{ busy: boolean; model: ModelId }>()
+const props = defineProps<{ busy: boolean; model: ModelId; editMode: EditMode }>()
 const { busy } = toRefs(props)
 
 const emit = defineEmits<{
-  submit: [text: string]
+  submit: [text: string, images: AttachedImage[]]
   cancel: []
   'update:model': [value: ModelId]
+  'update:editMode': [value: EditMode]
 }>()
+
+const EDIT_MODE_OPTIONS = [
+  { value: 'full', label: 'Full access' },
+  { value: 'readonly', label: 'Read only' },
+  { value: 'scoped', label: 'Scoped' }
+] as const
+
+const scopedPathsInput = ref('')
+
+watch(() => props.editMode, (mode) => {
+  if (mode?.type === 'scoped') {
+    scopedPathsInput.value = mode.allowedPaths.join(', ')
+  }
+}, { immediate: true })
+
+function handleEditModeChange(e: Event) {
+  const type = (e.target as HTMLSelectElement).value as 'full' | 'readonly' | 'scoped'
+  if (type === 'scoped') {
+    scopedPathsInput.value = ''
+    emit('update:editMode', { type: 'scoped', allowedPaths: [] })
+  } else {
+    emit('update:editMode', { type })
+  }
+}
+
+function handleScopedPathsChange(e: Event) {
+  const raw = (e.target as HTMLInputElement).value
+  scopedPathsInput.value = raw
+  const paths = raw.split(',').map(p => p.trim()).filter(Boolean)
+  emit('update:editMode', { type: 'scoped', allowedPaths: paths })
+}
 
 const models = MODEL_IDS.map(id => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) }))
 
 const inputEl = ref<HTMLTextAreaElement | null>(null)
+const fileInputEl = ref<HTMLInputElement | null>(null)
+const attachedImages = ref<AttachedImage[]>([])
 
 watch(busy, (isBusy) => {
   if (!isBusy) {
@@ -23,10 +58,11 @@ watch(busy, (isBusy) => {
 })
 
 function handleSubmit() {
-  const text = inputEl.value?.value.trim()
-  if (!text) return
+  const text = inputEl.value?.value.trim() ?? ''
+  if (!text && !attachedImages.value.length) return
   inputEl.value!.value = ''
-  emit('submit', text)
+  emit('submit', text, attachedImages.value.map(i => ({ data: i.data, mediaType: i.mediaType })))
+  attachedImages.value = []
   inputEl.value!.focus()
 }
 
@@ -42,11 +78,65 @@ function handleKeyDown(e: KeyboardEvent) {
     handleSubmit()
   }
 }
+
+function addImageFile(file: File) {
+  if (!ACCEPTED_IMAGE_TYPES.includes(file.type as any)) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const result = reader.result as string
+    const base64 = result.split(',')[1]
+    if (base64) {
+      attachedImages.value.push({ data: base64, mediaType: file.type })
+    }
+  }
+  reader.readAsDataURL(file)
+}
+
+function handleAttachClick() {
+  fileInputEl.value?.click()
+}
+
+function handleFileChange(e: Event) {
+  const files = (e.target as HTMLInputElement).files
+  if (!files) return
+  for (const file of Array.from(files)) addImageFile(file)
+  ;(e.target as HTMLInputElement).value = ''
+}
+
+function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  for (const item of Array.from(items)) {
+    if (item.kind === 'file' && ACCEPTED_IMAGE_TYPES.includes(item.type as any)) {
+      const file = item.getAsFile()
+      if (file) addImageFile(file)
+    }
+  }
+}
+
+function removeImage(index: number) {
+  attachedImages.value.splice(index, 1)
+}
 </script>
 
 <template>
-  <div>
-    <div class="px-5 pt-3 pb-5">
+  <div class="px-5 pt-3 pb-5">
+    <div class="chat-box">
+      <!-- Image preview strip -->
+      <div v-if="attachedImages.length" class="flex flex-wrap gap-2 px-3 pt-3">
+        <div v-for="(img, i) in attachedImages" :key="i" class="relative">
+          <img :src="imageDataUri(img)" class="w-12 h-12 rounded-md object-cover" />
+          <button
+            type="button"
+            class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-err text-white border-none cursor-pointer flex items-center justify-center p-0"
+            @click="removeImage(i)"
+          >
+            <PhX :size="10" weight="bold" />
+          </button>
+        </div>
+      </div>
+
+      <!-- Textarea -->
       <textarea
         ref="inputEl"
         rows="3"
@@ -54,51 +144,122 @@ function handleKeyDown(e: KeyboardEvent) {
         :spellcheck="false"
         :disabled="busy"
         @keydown="handleKeyDown"
-        class="w-full resize-y min-h-[4.5rem] max-h-48 px-3 py-2.5 rounded-lg border border-border bg-surface text-text-primary font-[inherit] text-base focus:outline-2 focus:outline-accent focus:outline-offset-1"
+        @paste="handlePaste"
+        class="chat-textarea"
       />
-      <div class="flex items-center justify-between mt-2">
-        <div class="model-select-wrap">
-          <select
-            :value="model"
-            class="model-select"
-            @change="emit('update:model', ($event.target as HTMLSelectElement).value as ModelId)"
-          >
-            <option v-for="m in models" :key="m.id" :value="m.id">{{ m.label }}</option>
-          </select>
-          <PhCaretDown class="model-select-icon" :size="12" weight="bold" />
-        </div>
-        <div class="flex gap-2">
-          <button
-            type="button"
-            :disabled="!busy"
-            @click="emit('cancel')"
-            class="text-sm font-semibold px-4 py-1.5 rounded-lg border border-border bg-transparent text-text-primary cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
-          >
-            Stop
-          </button>
+
+      <!-- Scoped paths input -->
+      <div v-if="editMode.type === 'scoped'" class="px-3 pt-2">
+        <input
+          type="text"
+          :value="scopedPathsInput"
+          placeholder="~/Projects/myapp, ~/Documents"
+          @change="handleScopedPathsChange"
+          class="w-full py-1 px-2.5 border border-border rounded-md bg-transparent text-text-primary text-sm font-sans placeholder:text-muted focus:outline-2 focus:outline-accent focus:-outline-offset-1"
+        />
+      </div>
+
+      <!-- Toolbar -->
+      <div class="flex items-center justify-between pt-2">
+        <div class="flex items-center gap-2">
+          <div class="relative inline-block">
+            <select
+              :value="model"
+              class="toolbar-select"
+              @change="emit('update:model', ($event.target as HTMLSelectElement).value as ModelId)"
+            >
+              <option v-for="m in models" :key="m.id" :value="m.id">{{ m.label }}</option>
+            </select>
+            <PhCaretDown class="absolute right-2 top-1/2 -translate-y-1/2 text-muted pointer-events-none" :size="12" weight="bold" />
+          </div>
+          <div class="relative inline-block">
+            <select
+              :value="editMode.type"
+              class="toolbar-select"
+              @change="handleEditModeChange"
+            >
+              <option v-for="opt in EDIT_MODE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+            <PhCaretDown class="absolute right-2 top-1/2 -translate-y-1/2 text-muted pointer-events-none" :size="12" weight="bold" />
+          </div>
           <button
             type="button"
             :disabled="busy"
-            @click="handleSubmit()"
-            class="text-sm font-semibold px-4 py-1.5 rounded-lg border-transparent bg-accent text-white cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+            @click="handleAttachClick"
+            class="flex items-center justify-center w-7 h-7 rounded-md border border-border bg-transparent text-muted cursor-pointer transition-colors duration-[var(--transition-fast)] hover:text-text-primary disabled:opacity-45 disabled:cursor-not-allowed"
+            title="Attach image"
           >
-            Send
+            <PhPaperclip :size="16" weight="regular" />
           </button>
+          <input
+            ref="fileInputEl"
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp"
+            multiple
+            class="hidden"
+            @change="handleFileChange"
+          />
         </div>
+
+        <!-- Combined action button -->
+        <button
+          v-if="busy"
+          type="button"
+          data-action="stop"
+          class="flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-border text-text-primary hover:opacity-85"
+          @click="emit('cancel')"
+        >
+          <PhStop :size="16" weight="fill" />
+        </button>
+        <button
+          v-else
+          type="button"
+          data-action="send"
+          class="flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-accent text-white hover:opacity-85"
+          @click="handleSubmit()"
+        >
+          <PhArrowUp :size="16" weight="bold" />
+        </button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.model-select-wrap {
-  position: relative;
-  display: inline-block;
+.chat-box {
+  border: 1px solid var(--color-border);
+  border-radius: 18px 18px 22px 12px;
+  padding: 6px;
+  background: var(--color-tint);
+  transition: border-color var(--transition-fast);
 }
 
-.model-select {
-  appearance: none;
+.chat-textarea {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  min-height: 4.5rem;
+  max-height: 12rem;
+  padding: 0.75rem 0.75rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
   background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 1rem;
+  outline: none;
+}
+.chat-textarea::placeholder {
+  color: var(--color-muted);
+}
+.chat-textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.toolbar-select {
+  appearance: none;
+  background: transparent;
   color: var(--color-text-primary);
   border: 1px solid var(--color-border);
   border-radius: 6px;
@@ -107,17 +268,8 @@ function handleKeyDown(e: KeyboardEvent) {
   font-family: inherit;
   cursor: pointer;
 }
-.model-select:focus {
+.toolbar-select:focus {
   outline: 2px solid var(--color-accent);
   outline-offset: -1px;
-}
-
-.model-select-icon {
-  position: absolute;
-  right: 0.5em;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--color-muted);
-  pointer-events: none;
 }
 </style>

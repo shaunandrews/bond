@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Message } from '../types/message'
+import { imageDataUri } from '../../shared/session'
 import MarkdownMessage from './MarkdownMessage.vue'
 
 defineProps<{ msg: Message }>()
@@ -19,11 +20,18 @@ function formatApprovalInput(input: Record<string, unknown>): string {
 
 <template>
   <!-- User message -->
-  <div
-    v-if="msg.role === 'user'"
-    class="self-end max-w-[92%] px-3.5 py-2.5 rounded-[10px] text-sm leading-relaxed bg-surface border border-border whitespace-pre-wrap"
-  >
-    {{ msg.text }}
+  <div v-if="msg.role === 'user'" class="self-end max-w-[92%] flex flex-col items-end gap-1.5">
+    <div v-if="msg.images?.length" class="flex flex-wrap justify-end gap-1.5">
+      <img
+        v-for="(img, i) in msg.images"
+        :key="i"
+        :src="imageDataUri(img)"
+        class="rounded-lg max-w-[200px] max-h-[200px] object-cover"
+      />
+    </div>
+    <div v-if="msg.text" class="px-3.5 py-2.5 rounded-[10px] text-sm leading-relaxed bg-surface border border-border whitespace-pre-wrap">
+      {{ msg.text }}
+    </div>
   </div>
 
   <!-- Bond message -->
