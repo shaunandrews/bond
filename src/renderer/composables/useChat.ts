@@ -1,10 +1,10 @@
 import { ref } from 'vue'
 import type { BondStreamChunk, TaggedChunk } from '../../shared/stream'
-import type { SessionMessage } from '../../shared/session'
+import type { SessionMessage, AttachedImage } from '../../shared/session'
 import type { Message } from '../types/message'
 
 export interface ChatDeps {
-  send: (text: string, sessionId?: string) => Promise<{ ok: boolean; error?: string }>
+  send: (text: string, sessionId?: string, images?: AttachedImage[]) => Promise<{ ok: boolean; error?: string }>
   cancel: (sessionId?: string) => Promise<{ ok: boolean }>
   onChunk: (fn: (chunk: TaggedChunk) => void) => () => void
   respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
@@ -18,7 +18,7 @@ function uid(): string {
 
 function toSessionMessages(msgs: Message[]): SessionMessage[] {
   return msgs.map((m) => {
-    if (m.role === 'user') return { id: m.id, role: 'user', text: m.text }
+    if (m.role === 'user') return { id: m.id, role: 'user', text: m.text, images: m.images?.map(i => ({ data: i.data, mediaType: i.mediaType })) }
     if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text, streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: m.name, summary: m.summary }
     if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', name: m.toolName, summary: m.description, status: m.status }
@@ -29,7 +29,7 @@ function toSessionMessages(msgs: Message[]): SessionMessage[] {
 
 function fromSessionMessages(msgs: SessionMessage[]): Message[] {
   return msgs.map((m) => {
-    if (m.role === 'user') return { id: m.id, role: 'user' as const, text: m.text ?? '' }
+    if (m.role === 'user') return { id: m.id, role: 'user' as const, text: m.text ?? '', images: m.images }
     if (m.role === 'bond') return { id: m.id, role: 'bond' as const, text: m.text ?? '', streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta' as const, kind: 'tool' as const, name: m.name ?? '', summary: m.summary }
     if (m.kind === 'approval') return { id: m.id, role: 'meta' as const, kind: 'approval' as const, requestId: '', toolName: m.name ?? '', input: {}, description: m.summary, status: (m.status as 'approved' | 'denied') ?? 'denied' }
@@ -38,11 +38,17 @@ function fromSessionMessages(msgs: SessionMessage[]): Message[] {
   })
 }
 
+// Preserve chat state across HMR reloads so in-flight streaming
+// isn't lost when Vite hot-updates a module during a response.
+const _hmr = import.meta.hot?.data as
+  | { messages?: Message[]; busy?: boolean; thinking?: boolean; sessionId?: string | null }
+  | undefined
+
 export function useChat(deps: ChatDeps = window.bond) {
-  const messages = ref<Message[]>([])
-  const busy = ref(false)
-  const thinking = ref(false)
-  const currentSessionId = ref<string | null>(null)
+  const messages = ref<Message[]>(_hmr?.messages ?? [])
+  const busy = ref(_hmr?.busy ?? false)
+  const thinking = ref(_hmr?.thinking ?? false)
+  const currentSessionId = ref<string | null>(_hmr?.sessionId ?? null)
 
   let unsub: (() => void) | undefined
 
@@ -138,10 +144,11 @@ export function useChat(deps: ChatDeps = window.bond) {
     currentSessionId.value = null
   }
 
-  async function submit(text: string) {
-    if (!text.trim() || busy.value) return
+  async function submit(text: string, images?: AttachedImage[]) {
+    const trimmed = text.trim()
+    if ((!trimmed && !images?.length) || busy.value) return
 
-    addMessage({ id: uid(), role: 'user', text: text.trim() })
+    addMessage({ id: uid(), role: 'user', text: trimmed, images: images?.length ? images : undefined })
     busy.value = true
     thinking.value = true
 
@@ -149,7 +156,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     await persistMessages()
 
     try {
-      const res = await deps.send(text.trim(), currentSessionId.value ?? undefined)
+      const res = await deps.send(trimmed, currentSessionId.value ?? undefined, images)
       if (!res.ok && res.error) {
         addMessage({ id: uid(), role: 'meta', kind: 'error', text: res.error })
       }
@@ -181,6 +188,16 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   function unsubscribe() {
     unsub?.()
+  }
+
+  // Stash reactive state before HMR disposes this module
+  if (import.meta.hot) {
+    import.meta.hot.dispose((data) => {
+      data.messages = messages.value
+      data.busy = busy.value
+      data.thinking = thinking.value
+      data.sessionId = currentSessionId.value
+    })
   }
 
   return {

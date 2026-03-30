@@ -6,7 +6,7 @@ const SESSION_STORAGE_KEY = 'bond:activeSessionId'
 export interface SessionDeps {
   listSessions: () => Promise<Session[]>
   createSession: () => Promise<Session>
-  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived'>>) => Promise<Session | null>
+  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) => Promise<Session | null>
   deleteSession: (id: string) => Promise<boolean>
   generateTitle: (sessionId: string) => Promise<{ title: string; summary: string }>
 }
@@ -80,6 +80,13 @@ export function useSessions(deps: SessionDeps = window.bond) {
     }
   }
 
+  function updateLocal(id: string, updates: Partial<Session>) {
+    const idx = sessions.value.findIndex((s) => s.id === id)
+    if (idx !== -1) {
+      sessions.value[idx] = { ...sessions.value[idx], ...updates }
+    }
+  }
+
   async function refreshTitle(id: string) {
     generatingTitleId.value = id
     try {
@@ -106,6 +113,7 @@ export function useSessions(deps: SessionDeps = window.bond) {
     archive,
     unarchive,
     remove,
+    updateLocal,
     generatingTitleId,
     refreshTitle
   }

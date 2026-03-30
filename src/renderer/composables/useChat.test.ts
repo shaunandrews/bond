@@ -44,7 +44,7 @@ describe('useChat', () => {
 
       expect(chat.messages.value).toHaveLength(1)
       expect(chat.messages.value[0]).toMatchObject({ role: 'user', text: 'hello' })
-      expect(deps.send).toHaveBeenCalledWith('hello', undefined)
+      expect(deps.send).toHaveBeenCalledWith('hello', undefined, undefined)
     })
 
     it('sets busy during send and resets after', async () => {

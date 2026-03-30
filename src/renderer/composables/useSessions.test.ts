@@ -9,6 +9,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     title: 'Test chat',
     summary: '',
     archived: false,
+    editMode: { type: 'full' },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,
