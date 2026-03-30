@@ -58,7 +58,7 @@ import {
 
 // --- State ---
 
-const activeQueries = new Map<string, AbortController>()
+const activeQueries = new Map<string, { ac: AbortController; promise: Promise<boolean> }>()
 let currentModel: string = 'sonnet'
 const knownSdkSessions = new Set<string>()
 
@@ -163,12 +163,13 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         // Auto-subscribe this client to the session
         subscribeTo(sessionId, ws)
 
-        // Abort existing query for this session
+        // Abort existing query for this session and wait for it to finish
         const existing = activeQueries.get(sessionId)
         if (existing) {
-          existing.abort()
-          activeQueries.delete(sessionId)
+          existing.ac.abort()
           clearSessionApprovals(sessionId)
+          try { await existing.promise } catch { /* already handled */ }
+          activeQueries.delete(sessionId)
         }
 
         // Save images to permanent storage before running the query
@@ -178,24 +179,51 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         }
 
         const ac = new AbortController()
-        activeQueries.set(sessionId, ac)
         const resumeSession = knownSdkSessions.has(sessionId)
 
-        let succeeded = false
-        try {
-          succeeded = await runBondQuery(text ?? '', {
-            abortSignal: ac.signal,
-            onChunk: (chunk) => broadcastChunk(sessionId, chunk),
-            model: currentModel,
-            sessionId,
-            resumeSession,
-            imageIds,
-            editMode: session.editMode
-          })
-        } catch (e) {
-          // If resume failed, retry with a fresh session automatically
-          if (resumeSession && !ac.signal.aborted) {
-            console.warn('[bond] resume failed, retrying with fresh session:', sessionId)
+        const queryPromise = (async () => {
+          let succeeded = false
+          try {
+            succeeded = await runBondQuery(text ?? '', {
+              abortSignal: ac.signal,
+              onChunk: (chunk) => broadcastChunk(sessionId, chunk),
+              model: currentModel,
+              sessionId,
+              resumeSession,
+              imageIds,
+              editMode: session.editMode
+            })
+          } catch (e) {
+            // If resume failed, retry with a fresh session automatically
+            if (resumeSession && !ac.signal.aborted) {
+              console.warn('[bond] resume failed, retrying with fresh session:', sessionId)
+              knownSdkSessions.delete(sessionId)
+              try {
+                succeeded = await runBondQuery(text ?? '', {
+                  abortSignal: ac.signal,
+                  onChunk: (chunk) => broadcastChunk(sessionId, chunk),
+                  model: currentModel,
+                  sessionId,
+                  resumeSession: false,
+                  imageIds,
+                  editMode: session.editMode
+                })
+              } catch (retryErr) {
+                const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
+                broadcastChunk(sessionId, { kind: 'raw_error', message })
+                return false
+              }
+            } else {
+              const message = e instanceof Error ? e.message : String(e)
+              broadcastChunk(sessionId, { kind: 'raw_error', message })
+              knownSdkSessions.delete(sessionId)
+              return false
+            }
+          }
+
+          // If resume produced no success, retry with a fresh session
+          if (!succeeded && resumeSession && !ac.signal.aborted) {
+            console.warn('[bond] resume returned no success, retrying fresh:', sessionId)
             knownSdkSessions.delete(sessionId)
             try {
               succeeded = await runBondQuery(text ?? '', {
@@ -210,37 +238,15 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
             } catch (retryErr) {
               const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
               broadcastChunk(sessionId, { kind: 'raw_error', message })
-              activeQueries.delete(sessionId)
-              return JSON.stringify(makeResponse(id, { ok: false, error: message }))
             }
-          } else {
-            const message = e instanceof Error ? e.message : String(e)
-            broadcastChunk(sessionId, { kind: 'raw_error', message })
-            activeQueries.delete(sessionId)
-            knownSdkSessions.delete(sessionId)
-            return JSON.stringify(makeResponse(id, { ok: false, error: message }))
           }
-        }
 
-        // If resume produced no success, retry with a fresh session
-        if (!succeeded && resumeSession && !ac.signal.aborted) {
-          console.warn('[bond] resume returned no success, retrying fresh:', sessionId)
-          knownSdkSessions.delete(sessionId)
-          try {
-            succeeded = await runBondQuery(text ?? '', {
-              abortSignal: ac.signal,
-              onChunk: (chunk) => broadcastChunk(sessionId, chunk),
-              model: currentModel,
-              sessionId,
-              resumeSession: false,
-              imageIds,
-              editMode: session.editMode
-            })
-          } catch (retryErr) {
-            const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
-            broadcastChunk(sessionId, { kind: 'raw_error', message })
-          }
-        }
+          return succeeded
+        })()
+
+        activeQueries.set(sessionId, { ac, promise: queryPromise })
+
+        const succeeded = await queryPromise
 
         if (succeeded) {
           knownSdkSessions.add(sessionId)
@@ -254,17 +260,19 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'bond.cancel': {
         const sessionId = getStringParam(p, 'sessionId')
         if (sessionId) {
-          const ac = activeQueries.get(sessionId)
-          if (ac) {
-            ac.abort()
-            activeQueries.delete(sessionId)
+          const entry = activeQueries.get(sessionId)
+          if (entry) {
+            entry.ac.abort()
             clearSessionApprovals(sessionId)
+            try { await entry.promise } catch { /* already handled */ }
+            activeQueries.delete(sessionId)
           }
         } else {
-          for (const [sid, ac] of activeQueries) {
-            ac.abort()
+          for (const [sid, entry] of activeQueries) {
+            entry.ac.abort()
             clearSessionApprovals(sid)
           }
+          await Promise.allSettled([...activeQueries.values()].map(e => e.promise))
           activeQueries.clear()
         }
         return JSON.stringify(makeResponse(id, { ok: true }))
@@ -495,8 +503,8 @@ export function startServer(socketPath: string): BondServer {
     wss,
     close: () => new Promise<void>((resolve) => {
       // Abort all active queries
-      for (const [sid, ac] of activeQueries) {
-        ac.abort()
+      for (const [sid, entry] of activeQueries) {
+        entry.ac.abort()
         clearSessionApprovals(sid)
       }
       activeQueries.clear()
