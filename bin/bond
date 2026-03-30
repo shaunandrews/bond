@@ -1,0 +1,145 @@
+#!/bin/bash
+set -euo pipefail
+
+BOND_DIR="$HOME/.bond"
+PID_FILE="$BOND_DIR/daemon.pid"
+SOCK_FILE="$BOND_DIR/bond.sock"
+LOG_FILE="$BOND_DIR/daemon.log"
+SCRIPT_PATH="$0"
+[[ -L "$SCRIPT_PATH" ]] && SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+PROJECT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+
+# Colors
+R='\033[0;31m' G='\033[0;32m' Y='\033[0;33m' B='\033[0;34m' D='\033[0;90m' N='\033[0m'
+
+daemon_pid() {
+  if [[ -f "$PID_FILE" ]]; then
+    local pid
+    pid=$(<"$PID_FILE")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "$pid"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+cmd_status() {
+  local pid
+  if pid=$(daemon_pid); then
+    echo -e "${G}Daemon running${N}  pid $pid"
+    echo -e "  socket  $SOCK_FILE"
+    echo -e "  log     $LOG_FILE"
+  else
+    echo -e "${D}Daemon not running${N}"
+  fi
+}
+
+cmd_stop() {
+  local pid
+  if pid=$(daemon_pid); then
+    kill "$pid" 2>/dev/null && echo -e "${Y}Stopped${N} daemon (pid $pid)" || echo -e "${R}Failed to stop${N} pid $pid"
+    rm -f "$PID_FILE" "$SOCK_FILE"
+  else
+    echo -e "${D}Daemon not running${N}"
+    rm -f "$PID_FILE" "$SOCK_FILE"
+  fi
+}
+
+cmd_start() {
+  if pid=$(daemon_pid); then
+    echo -e "${D}Already running${N} (pid $pid)"
+    return 0
+  fi
+  echo -e "${B}Starting daemon...${N}"
+  cd "$PROJECT_DIR"
+  npm run dev &
+  echo -e "${G}Dev server starting${N}"
+}
+
+cmd_restart() {
+  cmd_stop
+  sleep 0.3
+  cmd_start
+}
+
+cmd_build() {
+  local what="${1:-all}"
+  cd "$PROJECT_DIR"
+  case "$what" in
+    daemon)
+      echo -e "${B}Building daemon...${N}"
+      npm run build:daemon
+      echo -e "${G}Done${N}"
+      ;;
+    all)
+      echo -e "${B}Building everything...${N}"
+      npm run build
+      echo -e "${G}Done${N}"
+      ;;
+    *)
+      echo -e "${R}Unknown target:${N} $what (use 'daemon' or 'all')"
+      return 1
+      ;;
+  esac
+}
+
+cmd_rebuild() {
+  cmd_stop
+  cmd_build "${1:-daemon}"
+  sleep 0.3
+  cmd_start
+}
+
+cmd_log() {
+  if [[ -f "$LOG_FILE" ]]; then
+    tail -f "$LOG_FILE"
+  else
+    echo -e "${D}No log file yet${N}"
+  fi
+}
+
+cmd_dev() {
+  cmd_stop
+  sleep 0.3
+  cd "$PROJECT_DIR"
+  npm run build:daemon && electron-vite dev
+}
+
+cmd_test() {
+  cd "$PROJECT_DIR"
+  npm run test:run
+}
+
+cmd_help() {
+  echo -e "${B}bond${N} — Bond CLI"
+  echo ""
+  echo -e "  ${G}status${N}             Daemon status"
+  echo -e "  ${G}start${N}              Start dev server"
+  echo -e "  ${G}stop${N}               Stop the daemon"
+  echo -e "  ${G}restart${N}            Stop + start"
+  echo -e "  ${G}dev${N}                Stop daemon, then run full dev server"
+  echo -e "  ${G}build${N} [daemon|all] Build (default: all)"
+  echo -e "  ${G}rebuild${N} [target]   Stop, build, start"
+  echo -e "  ${G}log${N}                Tail daemon log"
+  echo -e "  ${G}test${N}               Run tests"
+  echo -e "  ${G}help${N}               This message"
+}
+
+case "${1:-help}" in
+  status)  cmd_status ;;
+  stop)    cmd_stop ;;
+  start)   cmd_start ;;
+  restart) cmd_restart ;;
+  dev)     cmd_dev ;;
+  build)   cmd_build "${2:-all}" ;;
+  rebuild) cmd_rebuild "${2:-daemon}" ;;
+  log)     cmd_log ;;
+  test)    cmd_test ;;
+  help|-h|--help) cmd_help ;;
+  *)
+    echo -e "${R}Unknown command:${N} $1"
+    cmd_help
+    exit 1
+    ;;
+esac
