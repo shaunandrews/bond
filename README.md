@@ -1,6 +1,6 @@
 # Bond
 
-Bond is a local Electron app that chats with an agent powered by the [**Claude Agent SDK**](https://platform.claude.com/docs/en/agent-sdk/overview) (`@anthropic-ai/claude-agent-sdk`). The MVP focuses on **read-only** access to files on your machine: **Read**, **Glob**, and **Grep**, with the agent session rooted at your **home directory**.
+Bond is a macOS desktop assistant powered by the [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview). It runs a standalone daemon that manages Claude conversations, tool use, and session persistence — with a Vue 3 + Tailwind CSS interface wrapped in Electron.
 
 ## Requirements
 
@@ -14,69 +14,152 @@ npm install
 npm run dev
 ```
 
+This builds the daemon, then launches the Electron app with hot-reload via electron-vite.
+
+## CLI
+
+Bond ships a CLI at `bin/bond` for managing the daemon and dev workflow:
+
+```bash
+bond status              # Check if daemon is running
+bond start               # Start the daemon
+bond stop                # Stop the daemon
+bond restart             # Stop + start
+bond dev                 # Full dev server (stops daemon, runs electron-vite dev)
+bond build [daemon|all]  # Build targets (default: all)
+bond rebuild [target]    # Stop, build, start
+bond log                 # Tail daemon log
+bond test                # Run tests
+bond help                # Show all commands
+```
+
 ## Scripts
 
-| Script            | Description                                      |
-| ----------------- | ------------------------------------------------ |
-| `npm run dev`     | Development: electron-vite dev server + Electron |
-| `npm run build`   | Production build into `out/`                     |
-| `npm run preview` | Run electron-vite preview                        |
-| `npm run test:run`| Run tests once (Vitest)                          |
-| `npm test`        | Run tests in watch mode (Vitest)                 |
+| Script              | Description                                         |
+| ------------------- | --------------------------------------------------- |
+| `npm run dev`       | Build daemon + electron-vite dev server              |
+| `npm run build`     | Production build (electron-vite + daemon)            |
+| `npm run build:daemon` | Build daemon only (esbuild → `out/daemon/main.mjs`) |
+| `npm run preview`   | Run electron-vite preview                            |
+| `npm run test:run`  | Run tests once (Vitest)                              |
+| `npm test`          | Run tests in watch mode (Vitest)                     |
 
 ## Architecture
 
-Bond follows the usual Electron split so the Agent SDK never runs in the renderer:
+Bond separates concerns across four layers. The renderer never touches the Agent SDK directly — all queries flow through the daemon over a Unix socket.
 
-1. **Main process** (`src/main/`)
-   - Creates the window, loads the renderer.
-   - Handles IPC: `bond:send` (run a user prompt through the SDK), `bond:cancel` (abort the active run).
-   - `agent.ts` calls `query()` from `@anthropic-ai/claude-agent-sdk`, streams `SDKMessage` values, and maps them to chunk objects for the UI.
+```
+┌──────────────────┐
+│  Renderer (Vue)  │  Chat UI, sessions, settings
+└────────┬─────────┘
+         │ Electron IPC
+┌────────┴─────────┐
+│   Main Process   │  Window, daemon lifecycle, IPC proxy
+└────────┬─────────┘
+         │ Unix socket (WebSocket + JSON-RPC 2.0)
+┌────────┴─────────┐
+│     Daemon       │  Agent SDK, SQLite, session state
+└────────┬─────────┘
+         │ HTTPS
+┌────────┴─────────┐
+│   Claude API     │
+└──────────────────┘
+```
 
-2. **Preload** (`src/preload/index.ts`)
-   - Exposes `window.bond`: `send`, `cancel`, `onChunk`.
+### 1. Daemon (`src/daemon/`)
 
-3. **Renderer** (`src/renderer/`)
-   - Vue 3 + Tailwind CSS v4 chat UI; no Node integration in the page.
+A standalone Node.js process that runs independently of the Electron app. Communicates over a Unix domain socket at `~/.bond/bond.sock` using WebSocket with JSON-RPC 2.0.
 
-4. **Shared types** (`src/shared/stream.ts`)
-   - `BondStreamChunk` — serializable stream events shared between main, preload, and renderer.
+**Responsibilities:**
+- Run agent queries via `@anthropic-ai/claude-agent-sdk`
+- Stream response chunks to subscribed clients
+- Manage sessions and messages in SQLite (`~/Library/Application Support/bond/bond.db`)
+- Handle tool approvals (allow/deny flow)
+- Auto-generate session titles via Haiku
+- Persist settings (model, soul/personality, accent color)
 
-### Build tooling
+**Key RPC methods:**
+- `bond.send` / `bond.cancel` — query lifecycle
+- `bond.subscribe` / `bond.unsubscribe` — chunk streaming
+- `bond.setModel` / `bond.getModel` — model selection
+- `bond.approvalResponse` — tool approval flow
+- `session.*` — CRUD, messages, title generation
+- `settings.*` — soul, accent color
 
-- **electron-vite** builds three targets: `out/main`, `out/preload` (ESM as `index.mjs`), `out/renderer`.
-- **@vitejs/plugin-vue** for SFC compilation.
-- **Tailwind CSS v4** via `@import "tailwindcss"` — no PostCSS config needed.
+**Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
 
-## Agent behavior (MVP)
+### 2. Main Process (`src/main/`)
 
-- **`cwd`**: `os.homedir()` — agent file tools are scoped relative to that.
-- **`allowedTools`**: `Read`, `Glob`, `Grep` only — no writes or shell commands.
-- **`permissionMode`**: `acceptEdits` — aligns with the SDK's permission model.
-- **`systemPrompt`**: Short identity/instruction string for Bond.
-- **`CLAUDE_AGENT_SDK_CLIENT_APP`**: `bond-electron/0.1.0`.
+Manages the Electron window and proxies IPC calls to the daemon via `BondClient`.
 
-## Security notes
+- Spawns the daemon if not already running (checks PID file)
+- Waits for the socket to appear before connecting
+- Creates a BrowserWindow with native macOS vibrancy
+- Proxies all `bond:*`, `session:*`, and `settings:*` IPC to the daemon
+- Screenshot capture support for dev tooling
 
-- This app can read files under the configured session root. Expanding to write or execute tools should be paired with explicit user approval and a clear workspace boundary.
+### 3. Preload (`src/preload/index.ts`)
+
+Exposes `window.bond` to the renderer via `contextBridge` — a typed API surface covering chat, sessions, settings, model selection, and shell utilities.
+
+### 4. Renderer (`src/renderer/`)
+
+Vue 3 + Tailwind CSS v4 chat interface. Composition API throughout. Four views:
+
+- **Chat** — message history, streaming responses, tool approvals
+- **Settings** — accent color, default model, personality/soul
+- **Design System** — live token browser
+- **Components** — dev-only component catalog (Cmd+Shift+D)
+
+### 5. Shared (`src/shared/`)
+
+Types and utilities shared across all layers:
+
+- `protocol.ts` — JSON-RPC 2.0 request/response/notification types
+- `stream.ts` — `BondStreamChunk` union type (text, tool, approval, error, system)
+- `client.ts` — `BondClient` WebSocket client class
+- `session.ts` — Session, SessionMessage, EditMode, AttachedImage types
+- `models.ts` — `ModelId` type (`'opus' | 'sonnet' | 'haiku'`)
+
+## Data & Runtime
+
+```
+~/.bond/
+  bond.sock          # Unix domain socket
+  daemon.pid         # Process ID
+  daemon.log         # Daemon output
+  tmp-images/        # Temporary attached images
+
+~/Library/Application Support/bond/
+  bond.db            # SQLite (sessions, messages, settings)
+```
+
+## Build tooling
+
+- **electron-vite** builds three targets: `out/main`, `out/preload` (ESM), `out/renderer`
+- **esbuild** bundles the daemon separately (`out/daemon/main.mjs`)
+- **@vitejs/plugin-vue** for SFC compilation
+- **Tailwind CSS v4** via `@import "tailwindcss"` — no PostCSS config needed
 
 ## Dependencies
 
-- **Runtime**: `@anthropic-ai/claude-agent-sdk`, `vue`.
-- **Dev**: `electron`, `electron-vite`, `vite`, `typescript`, `@vitejs/plugin-vue`, `tailwindcss`, `vitest`, `@vue/test-utils`, `happy-dom`.
+- **Runtime**: `@anthropic-ai/claude-agent-sdk`, `better-sqlite3`, `vue`, `ws`
+- **Dev**: `electron`, `electron-vite`, `vite`, `typescript`, `@vitejs/plugin-vue`, `tailwindcss`, `vitest`, `@vue/test-utils`, `happy-dom`
 
 ## Repository layout
 
 ```
+bin/bond                 # CLI for daemon management
 src/
-  main/              # Electron main + Agent SDK query loop
-  preload/           # contextBridge API
-  renderer/          # Vue 3 chat UI + Tailwind
-    composables/     # State and logic (useChat)
-    components/      # Vue components
-    types/           # Shared renderer types (Message)
-    lib/             # Utilities (highlight.js setup)
-  shared/            # Shared stream chunk types
+  daemon/                # Standalone daemon (Agent SDK, SQLite, WebSocket server)
+  main/                  # Electron main process (window, IPC proxy, daemon lifecycle)
+  preload/               # contextBridge → window.bond API
+  renderer/              # Vue 3 chat UI + Tailwind
+    composables/         # State and logic (useChat, useSessions, useAutoScroll, useAccentColor, useAppView)
+    components/          # Vue components (primitives, layout, chat, views)
+    types/               # Message types
+    lib/                 # Utilities (highlight.js setup)
+  shared/                # Protocol, stream chunks, client, session types, models
 electron.vite.config.ts
 vitest.config.ts
 package.json
