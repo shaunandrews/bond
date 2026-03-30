@@ -84,6 +84,8 @@ async function handleSave() {
   saveTimeout = setTimeout(() => { saved.value = false }, 2000)
 }
 
+defineExpose({ handleSave, saved })
+
 function handleColorInput(e: Event) {
   const val = (e.target as HTMLInputElement).value
   setAccent(val)
@@ -159,16 +161,6 @@ function handleModelChange(model: string) {
           placeholder="e.g. You speak casually and use dry humor. Keep answers short unless asked to elaborate. You're encouraging but honest — don't sugarcoat things."
           spellcheck="false"
         />
-
-        <div class="section-footer">
-          <button
-            type="button"
-            class="save-btn"
-            @click="handleSave"
-          >
-            {{ saved ? 'Saved' : 'Save' }}
-          </button>
-        </div>
       </section>
 
       <section class="settings-section">
@@ -234,6 +226,9 @@ function handleModelChange(model: string) {
 
 <style scoped>
 .settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
   padding-bottom: 2rem;
 }
 
@@ -275,21 +270,6 @@ function handleModelChange(model: string) {
 .section-footer {
   display: flex;
   justify-content: flex-start;
-}
-
-.save-btn {
-  all: unset;
-  cursor: pointer;
-  padding: 0.4rem 1rem;
-  border-radius: var(--radius-md);
-  font-size: 0.85rem;
-  font-weight: 500;
-  background: var(--color-accent);
-  color: #fff;
-  transition: opacity var(--transition-base);
-}
-.save-btn:hover {
-  opacity: 0.85;
 }
 
 .color-picker-row {

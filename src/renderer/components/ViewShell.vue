@@ -18,6 +18,9 @@ defineExpose({ scrollAreaEl })
           <slot name="header-left" />
         </div>
         <h1 class="view-title">{{ title }}</h1>
+        <div v-if="$slots['header-right']" class="view-header-right no-drag">
+          <slot name="header-right" />
+        </div>
       </header>
 
       <div class="view-content">
@@ -73,6 +76,15 @@ defineExpose({ scrollAreaEl })
 .view-header-left {
   position: absolute;
   left: 0.75rem;
+  top: 0.8rem;
+  display: flex;
+  align-items: center;
+  z-index: 1;
+}
+
+.view-header-right {
+  position: absolute;
+  right: 0.75rem;
   top: 0.8rem;
   display: flex;
   align-items: center;
