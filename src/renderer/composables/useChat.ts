@@ -61,6 +61,24 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   let unsub: (() => void) | undefined
   let thinkingStartedAt = 0
+  let persistTimer: ReturnType<typeof setTimeout> | null = null
+
+  // Throttled persist: saves at most every 2s during streaming
+  function schedulePersist() {
+    if (persistTimer) return
+    persistTimer = setTimeout(() => {
+      persistTimer = null
+      persistMessages()
+    }, 2000)
+  }
+
+  function flushPersist() {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    persistMessages()
+  }
 
   function addMessage(msg: Message) {
     messages.value.push(msg)
@@ -117,11 +135,13 @@ export function useChat(deps: ChatDeps = window.bond) {
         } else {
           messages.value.push({ id: uid(), role: 'bond', text: chunk.text, streaming: true })
         }
+        schedulePersist()
         break
       }
 
       case 'assistant_tool':
         addMessage({ id: uid(), role: 'meta', kind: 'tool', name: chunk.name, summary: chunk.summary })
+        schedulePersist()
         break
 
       case 'tool_approval':
@@ -152,11 +172,12 @@ export function useChat(deps: ChatDeps = window.bond) {
           }
         }
         // Auto-save after each completed turn
-        persistMessages()
+        flushPersist()
         break
 
       case 'raw_error':
         addMessage({ id: uid(), role: 'meta', kind: 'error', text: chunk.message })
+        flushPersist()
         break
 
       case 'system':
@@ -179,7 +200,11 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   async function loadSession(sessionId: string) {
-    // Save current session before switching
+    // Flush any pending throttled persist and save current session before switching
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
     await persistMessages()
     currentSessionId.value = sessionId
     const saved = await deps.getMessages(sessionId)
@@ -259,6 +284,9 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   function cancel() {
     deps.cancel(currentSessionId.value ?? undefined)
+    finalizeThinking()
+    endStreaming()
+    flushPersist()
   }
 
   function subscribe() {
