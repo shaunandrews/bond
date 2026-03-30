@@ -197,7 +197,7 @@ export async function runBondQuery(
     allowedTools: [...tools],
     model: options.model,
     includePartialMessages: true,
-    permissionMode: 'acceptEdits',
+    permissionMode: 'default',
     systemPrompt,
     canUseTool: async (
       toolName: string,

@@ -173,11 +173,53 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
             editMode: session.editMode
           })
         } catch (e) {
-          const message = e instanceof Error ? e.message : String(e)
-          broadcastChunk(sessionId, { kind: 'raw_error', message })
-          activeQueries.delete(sessionId)
+          // If resume failed, retry with a fresh session automatically
+          if (resumeSession && !ac.signal.aborted) {
+            console.warn('[bond] resume failed, retrying with fresh session:', sessionId)
+            knownSdkSessions.delete(sessionId)
+            try {
+              succeeded = await runBondQuery(text ?? '', {
+                abortSignal: ac.signal,
+                onChunk: (chunk) => broadcastChunk(sessionId, chunk),
+                model: currentModel,
+                sessionId,
+                resumeSession: false,
+                images,
+                editMode: session.editMode
+              })
+            } catch (retryErr) {
+              const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
+              broadcastChunk(sessionId, { kind: 'raw_error', message })
+              activeQueries.delete(sessionId)
+              return JSON.stringify(makeResponse(id, { ok: false, error: message }))
+            }
+          } else {
+            const message = e instanceof Error ? e.message : String(e)
+            broadcastChunk(sessionId, { kind: 'raw_error', message })
+            activeQueries.delete(sessionId)
+            knownSdkSessions.delete(sessionId)
+            return JSON.stringify(makeResponse(id, { ok: false, error: message }))
+          }
+        }
+
+        // If resume produced no success, retry with a fresh session
+        if (!succeeded && resumeSession && !ac.signal.aborted) {
+          console.warn('[bond] resume returned no success, retrying fresh:', sessionId)
           knownSdkSessions.delete(sessionId)
-          return JSON.stringify(makeResponse(id, { ok: false, error: message }))
+          try {
+            succeeded = await runBondQuery(text ?? '', {
+              abortSignal: ac.signal,
+              onChunk: (chunk) => broadcastChunk(sessionId, chunk),
+              model: currentModel,
+              sessionId,
+              resumeSession: false,
+              images,
+              editMode: session.editMode
+            })
+          } catch (retryErr) {
+            const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
+            broadcastChunk(sessionId, { kind: 'raw_error', message })
+          }
         }
 
         if (succeeded) {
