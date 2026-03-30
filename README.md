@@ -85,6 +85,7 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `bond.approvalResponse` — tool approval flow
 - `session.*` — CRUD, messages, title generation
 - `settings.*` — soul, accent color
+- `wordpress.*` — list, create, start, and stop WordPress Studio sites
 
 **Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
 
@@ -104,7 +105,7 @@ Exposes `window.bond` to the renderer via `contextBridge` — a typed API surfac
 
 ### 4. Renderer (`src/renderer/`)
 
-Vue 3 + Tailwind CSS v4 chat interface. Composition API throughout. Four views:
+Vue 3 + Tailwind CSS v4 chat interface. Composition API throughout. Five views:
 
 - **Chat** — message history, streaming responses, tool approvals
 - **Settings** — accent color, default model, personality/soul
@@ -120,6 +121,7 @@ Types and utilities shared across all layers:
 - `client.ts` — `BondClient` WebSocket client class
 - `session.ts` — Session, SessionMessage, EditMode, AttachedImage types
 - `models.ts` — `ModelId` type (`'opus' | 'sonnet' | 'haiku'`)
+- `wordpress.ts` — `WordPressSite` interface
 
 ## Data & Runtime
 
@@ -155,7 +157,7 @@ src/
   main/                  # Electron main process (window, IPC proxy, daemon lifecycle)
   preload/               # contextBridge → window.bond API
   renderer/              # Vue 3 chat UI + Tailwind
-    composables/         # State and logic (useChat, useSessions, useAutoScroll, useAccentColor, useAppView)
+    composables/         # State and logic (useChat, useSessions, useAutoScroll, useAccentColor, useAppView, useWordPress)
     components/          # Vue components (primitives, layout, chat, views)
     types/               # Message types
     lib/                 # Utilities (highlight.js setup)

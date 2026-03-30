@@ -34,7 +34,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | File | Purpose |
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`) |
+| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `wordpress.*`) |
 | `agent.ts` | Runs `query()` from Claude Agent SDK, streams chunks, handles tool approvals |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
@@ -42,6 +42,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `settings.ts` | Key-value settings storage (soul, model, accent color) |
 | `generate-title.ts` | Auto-generates session titles via Haiku |
 | `paths.ts` | Data directory resolution |
+| `wordpress.ts` | WordPress Studio CLI integration (list/create/start/stop sites) |
 
 ### Main Process (`src/main/`)
 
@@ -56,10 +57,11 @@ Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, sett
 | File | Purpose |
 |------|---------|
 | `protocol.ts` | JSON-RPC 2.0 types and helpers |
-| `stream.ts` | `BondStreamChunk` union type (text, tool, approval, error, system) |
+| `stream.ts` | `BondStreamChunk` union type (text, thinking, tool, approval, error, system) |
 | `client.ts` | `BondClient` WebSocket client class |
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage types |
 | `models.ts` | `ModelId` type (`'opus' | 'sonnet' | 'haiku'`) |
+| `wordpress.ts` | `WordPressSite` interface |
 
 ### CLI (`bin/bond`)
 
@@ -80,14 +82,18 @@ src/
     settings.ts                      # Settings storage
     generate-title.ts                # Auto title generation
     paths.ts                         # Data directory paths
+    skills.ts                        # Skill scanning from ~/.bond/skills/
+    wordpress.ts                     # WordPress Studio CLI integration
   main/index.ts                      # Electron main process
   preload/index.ts                   # contextBridge API
   shared/
     protocol.ts                      # JSON-RPC 2.0 types
-    stream.ts                        # BondStreamChunk types
+    stream.ts                        # BondStreamChunk types (incl. thinking_text)
+
     client.ts                        # BondClient WebSocket client
     session.ts                       # Session, message, ImageRecord types
     models.ts                        # ModelId type
+    wordpress.ts                     # WordPressSite type
   renderer/
     App.vue                          # Root shell — panel layout + view routing
     app.css                          # Tailwind v4 theme tokens
@@ -98,6 +104,7 @@ src/
       useAutoScroll.ts               # Smart scroll-to-bottom
       useAccentColor.ts              # Dynamic accent color theming
       useAppView.ts                  # View routing state
+      useWordPress.ts                # WordPress Studio site management
     components/
       BondText.vue                   # Polymorphic text primitive
       BondButton.vue                 # Button primitive (primary/secondary/ghost/danger)
@@ -115,9 +122,10 @@ src/
       ChatInput.vue                  # Textarea + model/edit-mode selectors + attach + send/stop
       MessageBubble.vue              # Renders all message variants
       MarkdownMessage.vue            # Markdown with syntax highlighting + copy
-      ThinkingIndicator.vue          # Animated working indicator
+      ThinkingIndicator.vue          # Standalone "Bond is working..." dots (unused, kept for reference)
       SessionItem.vue                # Single session row
       SessionSidebar.vue             # Sidebar with session lists + nav
+      WordPressSiteView.vue          # WordPress site detail view (status, start/stop)
       SettingsView.vue               # Accent color, model, personality settings
       AboutView.vue                  # Architecture, tools, data paths, CLI reference
       DesignSystemView.vue           # Live design token browser
@@ -197,7 +205,7 @@ Unified chat box combining textarea, model selector, edit mode selector, attach 
 - Single bordered container with textarea on top and a toolbar row below (model select, edit mode select, attach, action button). Action button shows send (arrow-up, accent) when idle, stop (stop icon) when busy. Attach button opens native file picker for jpeg/png/gif/webp. Image thumbnails appear above textarea inside the box. Edit mode selector switches between readonly, scoped (with paths input), and full.
 
 ### MessageBubble
-Renders all message variants based on the `Message` union type. Delegates markdown to MarkdownMessage. User messages render attached images above text.
+Renders all message variants based on the `Message` union type. Delegates markdown to MarkdownMessage. User messages render attached images above text. Thinking messages transition through three states: "Bond is working..." (no text yet) → "Thinking..." (streaming) → "Thought for Xs" accordion (finalized, click to expand).
 - **Props:** `msg: Message` — role/kind determines which variant renders
 - **Events:** `approve(requestId: string, approved: boolean)` — emitted for tool approval actions
 
@@ -207,7 +215,7 @@ Renders markdown with syntax highlighting and copy-to-clipboard code blocks. Use
 - Throttled rendering during streaming. External links open via `window.bond.openExternal()`.
 
 ### ThinkingIndicator
-Animated "Bond is working..." with blinking dots. No props or events.
+Standalone animated "Bond is working..." with blinking dots. No longer used in the main app — thinking UI is now handled inline by MessageBubble's `thinking` message variant. Kept as a standalone component file.
 
 ### SessionItem
 Single session row used in both active and archived lists inside SessionSidebar. Action button floats over content on hover (no reserved space).
@@ -216,9 +224,14 @@ Single session row used in both active and archived lists inside SessionSidebar.
 - **Events:** `select()`, `action()`
 
 ### SessionSidebar
-Left sidebar with session lists and nav links. Uses SessionItem for consistent rendering across active and archived lists. Archives section has built-in collapse/expand.
-- **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`
-- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `switchView(view)`, `toggleSidebar()`
+Left sidebar with WordPress sites, session lists, and nav links. WordPress section (collapsible, above chats) shows Studio sites with status dots (pulsing during start/stop) and open-in-browser actions. Archives section has built-in collapse/expand.
+- **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`, `wordPressSites: WordPressSite[]`, `wordPressAvailable: boolean | null`, `wordPressCreating: boolean`, `selectedWpSiteId: string | null`, `togglingSiteId: string | null`
+- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `switchView(view)`, `wpSelect(site: WordPressSite)`, `wpOpen(site: WordPressSite)`, `wpCreate()`
+
+### WordPressSiteView
+Detail view for a selected WordPress Studio site. Shows site name, path, status, URL, port, and quick actions (open in browser, start/stop). Loading states on buttons and status row during start/stop.
+- **Props:** `site: WordPressSite`, `toggling: boolean`
+- **Events:** `open()`, `start()`, `stop()`
 
 ### SettingsView
 Settings panel with accent color picker (8 presets + custom), default model selector, and personality/soul text editor. No props — reads/writes via `window.bond` directly.
@@ -235,8 +248,8 @@ Dev-only component catalog with live previews and prop/event documentation. Togg
 ## Composables
 
 ### useChat(deps)
-All chat state and logic. Handles message streaming, persistence, tool approvals, and HMR-safe state preservation.
-- **State:** `messages`, `busy`, `thinking`, `currentSessionId`
+All chat state and logic. Handles message streaming, persistence, tool approvals, thinking message lifecycle, and HMR-safe state preservation. On submit, creates a thinking message immediately (Working state). Thinking deltas from the API accumulate into it (Thinking state). When the first non-thinking chunk arrives, it finalizes with duration (Thought state) or is removed if no thinking text was received.
+- **State:** `messages`, `busy`, `currentSessionId`
 - **Methods:** `submit()`, `cancel()`, `respondToApproval()`, `subscribe()`, `unsubscribe()`, `loadSession()`, `clearMessages()`, `persistMessages()`
 
 ### useSessions(deps)
@@ -254,9 +267,14 @@ Dynamic accent color theming. Derives a full palette from a single hex color (HS
 - **State:** `accent`, `defaultAccent`
 - **Methods:** `load()`, `setAccent()`, `reset()`
 
+### useWordPress(deps?)
+WordPress Studio site management. Lists, creates, starts, and stops sites by shelling out to the `studio` CLI via the daemon. Refreshes on window focus. Tracks selected site and toggling state for loading indicators.
+- **State:** `sites`, `available` (null until loaded, false if `studio` CLI not installed), `loading`, `creating`, `selectedSiteId`, `selectedSite`, `togglingSiteId`
+- **Methods:** `load()`, `createSite()`, `selectSite(id)`, `startSite(id, path)`, `stopSite(id, path)`
+
 ### useAppView()
 View routing state. Persists to localStorage.
-- **State:** `activeView` (`'chat' | 'settings' | 'design-system' | 'components'`)
+- **State:** `activeView` (`'chat' | 'settings' | 'design-system' | 'components' | 'about' | 'wordpress'`)
 
 ## Icons
 
@@ -316,6 +334,8 @@ type Message =
   | { id, role: 'user', text, images?: AttachedImage[], imageIds?: string[] }
   | { id, role: 'bond', text, streaming: boolean }
   | { id, role: 'meta', kind: 'tool', name, summary? }
+  | { id, role: 'meta', kind: 'skill', name, args? }
+  | { id, role: 'meta', kind: 'thinking', text, durationSec?, streaming: boolean }
   | { id, role: 'meta', kind: 'error', text }
   | { id, role: 'meta', kind: 'approval', requestId, toolName, input, title?, description?, status: 'pending' | 'approved' | 'denied' }
   | { id, role: 'meta', kind: 'system', text }
