@@ -15,10 +15,6 @@ import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ChatInput from './components/ChatInput.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
-import DesignSystemView from './components/DesignSystemView.vue'
-import DevComponents from './components/DevComponents.vue'
-import SettingsView from './components/SettingsView.vue'
-import AboutView from './components/AboutView.vue'
 import WordPressSiteView from './components/WordPressSiteView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
@@ -30,11 +26,21 @@ const sessions = useSessions()
 const { activeView } = useAppView()
 const { load: loadAccent } = useAccentColor()
 const wordpress = useWordPress()
+
+function applyWindowOpacity(val: number) {
+  document.documentElement.style.setProperty('--window-bg-opacity', `${Math.round(val * 100)}%`)
+}
+
+async function loadWindowOpacity() {
+  try {
+    const val = await window.bond.getWindowOpacity()
+    applyWindowOpacity(val)
+  } catch { /* use CSS default */ }
+}
 const selectedModel = ref<ModelId>('sonnet')
 
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
-const settingsRef = ref<InstanceType<typeof SettingsView> | null>(null)
 const sidebarPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
 function getInitialSidebarWidth(): number {
   try {
@@ -123,6 +129,9 @@ async function handleCreateSkill(description: string) {
   })
 }
 
+let removeCreateSkillListener: (() => void) | null = null
+let removeOpacityListener: (() => void) | null = null
+
 async function handleSelectSession(id: string) {
   activeView.value = 'chat'
   if (id === sessions.activeSessionId.value) return
@@ -147,7 +156,7 @@ function onKeyDown(e: KeyboardEvent) {
   }
   if (e.metaKey && e.key === ',') {
     e.preventDefault()
-    activeView.value = 'settings'
+    window.bond.openSettings()
   }
   if (e.metaKey && e.key === 'n') {
     e.preventDefault()
@@ -160,8 +169,11 @@ function handleWpRefresh() { wordpress.load() }
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('focus', handleWpRefresh)
+  removeCreateSkillListener = window.bond.onCreateSkill(handleCreateSkill)
+  removeOpacityListener = window.bond.onWindowOpacity(applyWindowOpacity)
   chat.subscribe()
   loadAccent()
+  loadWindowOpacity()
   wordpress.load()
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
@@ -191,6 +203,8 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('focus', handleWpRefresh)
+  removeCreateSkillListener?.()
+  removeOpacityListener?.()
   chat.unsubscribe()
 })
 </script>
@@ -214,7 +228,6 @@ onUnmounted(() => {
         @archive="sessions.archive"
         @unarchive="sessions.unarchive"
         @remove="sessions.remove"
-        @switchView="(v) => activeView = v"
         @wpSelect="handleSelectWpSite"
         @wpOpen="handleOpenWpSite"
         @wpCreate="wordpress.createSite"
@@ -255,47 +268,6 @@ onUnmounted(() => {
         </template>
       </ViewShell>
 
-      <ViewShell v-else-if="activeView === 'design-system'" title="Design System">
-        <template #header-left>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-        <DesignSystemView />
-      </ViewShell>
-
-      <ViewShell v-else-if="activeView === 'components'" title="Components">
-        <template #header-left>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-        <DevComponents />
-      </ViewShell>
-
-      <ViewShell v-else-if="activeView === 'settings'" title="Settings">
-        <template #header-left>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-        <template #header-right>
-          <BondButton variant="primary" size="sm" @click="settingsRef?.handleSave()">
-            {{ settingsRef?.saved ? 'Saved' : 'Save' }}
-          </BondButton>
-        </template>
-        <SettingsView ref="settingsRef" @createSkill="handleCreateSkill" />
-      </ViewShell>
-
-      <ViewShell v-else-if="activeView === 'about'" title="About Bond">
-        <template #header-left>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-        <AboutView />
-      </ViewShell>
-
       <ViewShell v-else-if="activeView === 'wordpress'" :title="wordpress.selectedSite.value?.name ?? 'WordPress'">
         <template #header-left>
           <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
@@ -317,105 +289,7 @@ onUnmounted(() => {
 </template>
 
 <style>
-@import "tailwindcss";
-
-/* Register colors for Tailwind utility generation only — no CSS output.
-   Actual values live in :root / @media blocks below so dark mode works. */
-@theme reference {
-  --color-bg: #f6f5f2;
-  --color-surface: #fff;
-  --color-border: #ddd9d0;
-  --color-text-primary: #1a1c1f;
-  --color-muted: #5c6570;
-  --color-accent: #7a5c3b;
-  --color-err: #e57373;
-  --color-ok: #81c784;
-  --color-tint: rgba(255,255,255,0.65);
-}
-
-@theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
-
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-  --shadow-md: 0 2px 8px rgba(0,0,0,0.08);
-  --shadow-lg: 0 4px 16px rgba(0,0,0,0.12);
-
-  --transition-fast: 0.12s ease;
-  --transition-base: 0.15s ease;
-}
-
-/* Light defaults (unlayered — always beats @layer theme) */
-:root {
-  color-scheme: light dark;
-
-  --color-bg: #f6f5f2;
-  --color-surface: #fff;
-  --color-border: #ddd9d0;
-  --color-text-primary: #1a1c1f;
-  --color-muted: #5c6570;
-  --color-accent: #7a5c3b;
-  --color-err: #e57373;
-  --color-ok: #81c784;
-  --color-tint: rgba(255,255,255,0.65);
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-  --shadow-md: 0 2px 8px rgba(0,0,0,0.08);
-  --shadow-lg: 0 4px 16px rgba(0,0,0,0.12);
-
-  --sidebar-border: rgba(0, 0, 0, 0.1);
-  --sidebar-text: rgba(0, 0, 0, 0.8);
-  --sidebar-text-muted: rgba(0, 0, 0, 0.5);
-  --sidebar-text-faint: rgba(0, 0, 0, 0.4);
-  --sidebar-hover-bg: rgba(0, 0, 0, 0.06);
-  --sidebar-active-bg: rgba(0, 0, 0, 0.08);
-  --sidebar-action-bg: rgba(255, 255, 255, 0.5);
-}
-
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: #0f1114;
-    --color-surface: #181b21;
-    --color-border: #343b45;
-    --color-text-primary: #e8eaed;
-    --color-muted: #8b939e;
-    --color-accent: #c4a07c;
-    --color-err: #ef9a9a;
-    --color-ok: #a5d6a7;
-    --color-tint: rgba(255,255,255,0.08);
-    --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
-    --shadow-md: 0 2px 8px rgba(0,0,0,0.3);
-    --shadow-lg: 0 4px 16px rgba(0,0,0,0.4);
-
-    --sidebar-border: rgba(255, 255, 255, 0.1);
-    --sidebar-text: rgba(255, 255, 255, 0.85);
-    --sidebar-text-muted: rgba(255, 255, 255, 0.5);
-    --sidebar-text-faint: rgba(255, 255, 255, 0.35);
-    --sidebar-hover-bg: rgba(255, 255, 255, 0.08);
-    --sidebar-active-bg: rgba(255, 255, 255, 0.1);
-    --sidebar-action-bg: rgba(0, 0, 0, 0.3);
-  }
-}
-
-html, body, #app {
-  margin: 0;
-  height: 100%;
-  background: transparent;
-  color: var(--color-text-primary);
-  font-family: var(--font-sans);
-}
-
-.drag-region {
-  -webkit-app-region: drag;
-}
-.no-drag {
-  -webkit-app-region: no-drag;
-}
+@import './app.css';
 
 .main-panel-wrap {
   position: relative;

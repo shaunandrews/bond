@@ -46,11 +46,27 @@ contextBridge.exposeInMainWorld('bond', {
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url) as Promise<void>,
 
+  // Settings window
+  openSettings: () => ipcRenderer.invoke('window:openSettings') as Promise<void>,
+  createSkillViaChat: (description: string) => ipcRenderer.invoke('settings:createSkillViaChat', description) as Promise<void>,
+  onCreateSkill: (fn: (description: string) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, description: string) => fn(description)
+    ipcRenderer.on('bond:createSkill', listener)
+    return () => ipcRenderer.removeListener('bond:createSkill', listener)
+  },
+
   // Settings
   getSoul: () => ipcRenderer.invoke('settings:getSoul') as Promise<string>,
   saveSoul: (content: string) => ipcRenderer.invoke('settings:saveSoul', content) as Promise<boolean>,
   getAccentColor: () => ipcRenderer.invoke('settings:getAccentColor') as Promise<string>,
   saveAccentColor: (hex: string) => ipcRenderer.invoke('settings:saveAccentColor', hex) as Promise<boolean>,
+  getWindowOpacity: () => ipcRenderer.invoke('settings:getWindowOpacity') as Promise<number>,
+  saveWindowOpacity: (opacity: number) => ipcRenderer.invoke('settings:saveWindowOpacity', opacity) as Promise<boolean>,
+  onWindowOpacity: (fn: (opacity: number) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, opacity: number) => fn(opacity)
+    ipcRenderer.on('bond:windowOpacity', listener)
+    return () => ipcRenderer.removeListener('bond:windowOpacity', listener)
+  },
 
   // WordPress
   listWordPressSites: () => ipcRenderer.invoke('wordpress:list') as Promise<{ available: boolean; sites: WordPressSite[] }>,

@@ -116,10 +116,13 @@ async function connectClient(): Promise<void> {
   throw lastError ?? new Error('Failed to connect to daemon')
 }
 
-// --- Window ---
+// --- Windows ---
+
+let mainWindow: BrowserWindow | null = null
+let settingsWindow: BrowserWindow | null = null
 
 function createWindow(): void {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 960,
     height: 720,
     minWidth: 640,
@@ -139,7 +142,11 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+    mainWindow!.show()
+  })
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
   })
 
   client.onChunk((chunk: TaggedChunk) => {
@@ -153,6 +160,57 @@ function createWindow(): void {
     void mainWindow.loadURL(devUrl)
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+function createSettingsWindow(): void {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.focus()
+    return
+  }
+
+  // Center settings window on the same display as the main window
+  const parentBounds = mainWindow?.getBounds()
+  const display = parentBounds
+    ? require('electron').screen.getDisplayMatching(parentBounds)
+    : require('electron').screen.getPrimaryDisplay()
+  const { x: dx, y: dy, width: dw, height: dh } = display.workArea
+  const sw = 600, sh = 580
+
+  settingsWindow = new BrowserWindow({
+    width: sw,
+    height: sh,
+    x: Math.round(dx + (dw - sw) / 2),
+    y: Math.round(dy + (dh - sh) / 2),
+    minWidth: 480,
+    minHeight: 400,
+    show: false,
+    autoHideMenuBar: true,
+    title: 'Settings',
+    titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 16, y: 14 },
+    vibrancy: 'under-window',
+    visualEffectState: 'active',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.mjs'),
+      contextIsolation: true,
+      sandbox: false
+    }
+  })
+
+  settingsWindow.on('ready-to-show', () => {
+    settingsWindow!.show()
+  })
+
+  settingsWindow.on('closed', () => {
+    settingsWindow = null
+  })
+
+  const devUrl = process.env.ELECTRON_RENDERER_URL
+  if (devUrl) {
+    void settingsWindow.loadURL(`${devUrl}/settings.html`)
+  } else {
+    void settingsWindow.loadFile(join(__dirname, '../renderer/settings.html'))
   }
 }
 
@@ -188,6 +246,18 @@ app.whenReady().then(async () => {
     const image = await win.webContents.capturePage()
     writeFileSync(outputPath, image.toPNG())
     return outputPath
+  })
+
+  // --- Settings window ---
+  ipcMain.handle('window:openSettings', () => {
+    createSettingsWindow()
+  })
+
+  ipcMain.handle('settings:createSkillViaChat', (_e, description: string) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:createSkill', description)
+      mainWindow.focus()
+    }
   })
 
   // --- External links (stays client-side) ---
@@ -249,6 +319,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('settings:saveSoul', (_e, content: string) => client.saveSoul(content))
   ipcMain.handle('settings:getAccentColor', () => client.getAccentColor())
   ipcMain.handle('settings:saveAccentColor', (_e, hex: string) => client.saveAccentColor(hex))
+  ipcMain.handle('settings:getWindowOpacity', () => client.getWindowOpacity())
+  ipcMain.handle('settings:saveWindowOpacity', async (_e, opacity: number) => {
+    const result = await client.saveWindowOpacity(opacity)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:windowOpacity', opacity)
+    }
+    return result
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear, PhArrowSquareOut, PhGlobe } from '@phosphor-icons/vue'
+import { ref, watch, computed } from 'vue'
+import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear, PhArrowSquareOut } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import type { WordPressSite } from '../../shared/wordpress'
 import type { AppView } from '../composables/useAppView'
@@ -34,54 +34,20 @@ const props = defineProps<{
 
 const chatCount = computed(() => props.sessions.length)
 
+function openSettings() {
+  window.bond.openSettings()
+}
+
 const emit = defineEmits<{
   select: [id: string]
   create: []
   archive: [id: string]
   unarchive: [id: string]
   remove: [id: string]
-  switchView: [view: AppView]
   wpSelect: [site: WordPressSite]
   wpOpen: [site: WordPressSite]
   wpCreate: []
 }>()
-
-const menuOpen = ref(false)
-const menuRef = ref<HTMLElement | null>(null)
-const menuBtnRef = ref<HTMLElement | null>(null)
-const menuPos = ref({ top: '0px', left: '0px' })
-
-async function toggleMenu() {
-  menuOpen.value = !menuOpen.value
-  if (menuOpen.value && menuBtnRef.value) {
-    const el = (menuBtnRef.value as any).$el as HTMLElement
-    const rect = el.getBoundingClientRect()
-    menuPos.value = {
-      top: `${rect.bottom + 4}px`,
-      left: `${rect.left}px`,
-    }
-  }
-}
-
-function handleClickOutside(e: MouseEvent) {
-  if (
-    menuOpen.value &&
-    menuRef.value &&
-    !menuRef.value.contains(e.target as Node) &&
-    menuBtnRef.value &&
-    !(menuBtnRef.value as any).$el.contains(e.target as Node)
-  ) {
-    menuOpen.value = false
-  }
-}
-
-onMounted(() => document.addEventListener('pointerdown', handleClickOutside))
-onBeforeUnmount(() => document.removeEventListener('pointerdown', handleClickOutside))
-
-function selectView(view: AppView) {
-  menuOpen.value = false
-  emit('switchView', view)
-}
 </script>
 
 <template>
@@ -89,38 +55,14 @@ function selectView(view: AppView) {
     <!-- Toolbar row — sits beside traffic lights -->
     <div class="sidebar-toolbar drag-region">
       <BondButton
-        ref="menuBtnRef"
         variant="ghost"
         size="sm"
         icon
-        title="Menu"
-        @click.stop="toggleMenu"
+        title="Settings"
+        @click.stop="openSettings"
       >
         <PhGear :size="16" weight="bold" />
       </BondButton>
-
-      <Teleport to="body">
-        <div
-          v-if="menuOpen"
-          ref="menuRef"
-          class="sidebar-flyout"
-          :style="{ top: menuPos.top, left: menuPos.left }"
-        >
-          <button
-            v-for="item in ([
-              { id: 'about', label: 'About Bond' },
-              { id: 'design-system', label: 'Design System' },
-              { id: 'components', label: 'Components' },
-              { id: 'settings', label: 'Settings' },
-            ] as const)"
-            :key="item.id"
-            :class="['flyout-item', { active: activeView === item.id }]"
-            @click="selectView(item.id)"
-          >
-            {{ item.label }}
-          </button>
-        </div>
-      </Teleport>
       <BondButton
         variant="ghost"
         size="sm"
@@ -460,35 +402,3 @@ button.sidebar-section-header:hover {
 
 </style>
 
-<style>
-.sidebar-flyout {
-  position: fixed;
-  min-width: 10rem;
-  padding: 0.25rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  z-index: 100;
-}
-
-.flyout-item {
-  all: unset;
-  cursor: pointer;
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.4rem 0.625rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--color-text-primary);
-  transition: background var(--transition-fast);
-}
-.flyout-item:hover {
-  background: var(--sidebar-hover-bg);
-}
-.flyout-item.active {
-  color: var(--color-accent);
-}
-</style>
