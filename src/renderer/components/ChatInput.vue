@@ -356,7 +356,7 @@ function handleKeyDown(e: KeyboardEvent) {
 
 <style scoped>
 .chat-box {
-  border: 1px solid var(--color-border);
+  /* border: 1px solid var(--color-border); */
   border-radius: 18px 18px 22px 12px;
   padding: 6px;
   background: var(--color-tint);

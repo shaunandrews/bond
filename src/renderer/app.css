@@ -11,7 +11,7 @@
   --color-accent: #7a5c3b;
   --color-err: #e57373;
   --color-ok: #81c784;
-  --color-tint: rgba(255,255,255,0.65);
+  --color-tint: rgba(0,0,0,0.08);
 }
 
 @theme {
@@ -43,7 +43,7 @@
   --color-accent: #7a5c3b;
   --color-err: #e57373;
   --color-ok: #81c784;
-  --color-tint: rgba(255,255,255,0.65);
+  --color-tint: rgba(0,0,0,0.08);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
   --shadow-md: 0 2px 8px rgba(0,0,0,0.08);
   --shadow-lg: 0 4px 16px rgba(0,0,0,0.12);
