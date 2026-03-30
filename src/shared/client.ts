@@ -109,8 +109,8 @@ export class BondClient {
 
   // --- Chat ---
 
-  async send(text: string, sessionId?: string, images?: AttachedImage[]): Promise<{ ok: boolean; error?: string }> {
-    return await this.call('bond.send', { text, sessionId, images }) as { ok: boolean; error?: string }
+  async send(text: string, sessionId?: string, images?: AttachedImage[]): Promise<{ ok: boolean; error?: string; imageIds?: string[] }> {
+    return await this.call('bond.send', { text, sessionId, images }) as { ok: boolean; error?: string; imageIds?: string[] }
   }
 
   async cancel(sessionId?: string): Promise<{ ok: boolean }> {
@@ -178,6 +178,16 @@ export class BondClient {
 
   async generateTitle(sessionId: string): Promise<{ title: string; summary: string }> {
     return await this.call('session.generateTitle', { sessionId }) as { title: string; summary: string }
+  }
+
+  // --- Images ---
+
+  async getImage(imageId: string): Promise<AttachedImage | null> {
+    return await this.call('image.get', { id: imageId }) as AttachedImage | null
+  }
+
+  async getImages(ids: string[]): Promise<(AttachedImage | null)[]> {
+    return await this.call('image.getMultiple', { ids }) as (AttachedImage | null)[]
   }
 
   // --- Shell (client-side only, not proxied through daemon) ---

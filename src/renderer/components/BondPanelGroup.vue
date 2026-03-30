@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, provide, computed, watch } from 'vue'
-import { PANEL_GROUP_KEY, type PanelDirection, type PanelRegistration, type PanelGroupContext } from './panelTypes'
+import { PANEL_GROUP_KEY, type PanelDirection, type PanelRegistration, type PanelGroupContext, type PanelUnit } from './panelTypes'
 
 const props = withDefaults(defineProps<{
   direction?: PanelDirection
@@ -18,11 +18,11 @@ const emit = defineEmits<{
 
 // Ordered panel registrations
 const panels = ref<PanelRegistration[]>([])
-// Current sizes as percentages keyed by panel id
+// Current sizes keyed by panel id — in each panel's own unit (px or %)
 const sizes = ref<Record<string, number>>({})
 // Track collapsed state separately
 const collapsed = ref<Set<string>>(new Set())
-// Sizes saved before collapse, for restore
+// Sizes saved before collapse, for restore (in panel's own unit)
 const preCollapseSize = ref<Record<string, number>>({})
 
 // Active resize state
@@ -31,23 +31,73 @@ let resizeStartSizes: Record<string, number> = {}
 
 const groupEl = ref<HTMLElement | null>(null)
 
+// --- Unit helpers ---
+function getPanelReg(id: string): PanelRegistration | undefined {
+  return panels.value.find((p) => p.id === id)
+}
+
+function getPanelUnit(id: string): PanelUnit {
+  return getPanelReg(id)?.constraints.unit ?? '%'
+}
+
+function getGroupPx(): number {
+  if (!groupEl.value) return 1
+  return props.direction === 'horizontal'
+    ? groupEl.value.offsetWidth
+    : groupEl.value.offsetHeight
+}
+
+/** Convert a percentage-of-group-width delta to pixels */
+function percentToPx(pct: number): number {
+  return (pct / 100) * getGroupPx()
+}
+
+/** Convert a pixel delta to percentage-of-group-width */
+function pxToPercent(px: number): number {
+  const g = getGroupPx()
+  return g > 0 ? (px / g) * 100 : 0
+}
+
+// --- Flex style ---
+function getFlexStyle(id: string): string {
+  const size = sizes.value[id] ?? 0
+  const unit = getPanelUnit(id)
+  if (unit === 'px') {
+    return `0 0 ${size}px`
+  }
+  // Percentage panels use flex-grow to distribute remaining space
+  return `${size} 0 0`
+}
+
 // --- Persistence ---
 function storageKey() {
   return props.autoSaveId ? `bond:panels:${props.autoSaveId}` : null
 }
 
+interface SavedLayout {
+  sizes: Record<string, number>
+  units?: Record<string, PanelUnit>
+  collapsed: string[]
+  preCollapseSize?: Record<string, number>
+}
+
 function saveLayout() {
   const key = storageKey()
   if (key) {
+    const units: Record<string, PanelUnit> = {}
+    for (const r of panels.value) {
+      units[r.id] = r.constraints.unit
+    }
     localStorage.setItem(key, JSON.stringify({
       sizes: sizes.value,
+      units,
       collapsed: [...collapsed.value],
       preCollapseSize: preCollapseSize.value,
     }))
   }
 }
 
-function loadLayout(): { sizes: Record<string, number>; collapsed: string[]; preCollapseSize?: Record<string, number> } | null {
+function loadLayout(): SavedLayout | null {
   const key = storageKey()
   if (!key) return null
   try {
@@ -66,67 +116,71 @@ function distributeDefaults() {
 
   const saved = loadLayout()
   if (saved && regs.every((r) => saved.sizes[r.id] !== undefined)) {
-    // Clamp saved sizes against current constraints so stale layouts
-    // respect updated minSize / maxSize values.
-    const collapsedSet = new Set(saved.collapsed.filter((id) => regs.some((r) => r.id === id)))
-    const clamped: Record<string, number> = {}
-    for (const r of regs) {
-      const s = saved.sizes[r.id]
-      if (collapsedSet.has(r.id)) {
-        clamped[r.id] = s
-      } else {
-        clamped[r.id] = Math.min(r.constraints.maxSize, Math.max(r.constraints.minSize, s))
+    // Check units match — if a panel changed units, discard saved data for it
+    const unitsMatch = regs.every((r) => {
+      const savedUnit = saved.units?.[r.id] ?? '%'
+      return savedUnit === r.constraints.unit
+    })
+
+    if (unitsMatch) {
+      const collapsedSet = new Set(saved.collapsed.filter((id) => regs.some((r) => r.id === id)))
+      const clamped: Record<string, number> = {}
+      for (const r of regs) {
+        const s = saved.sizes[r.id]
+        if (collapsedSet.has(r.id)) {
+          clamped[r.id] = s
+        } else {
+          clamped[r.id] = Math.min(r.constraints.maxSize, Math.max(r.constraints.minSize, s))
+        }
       }
-    }
-    // Normalize so sizes still sum to 100
-    const total = Object.values(clamped).reduce((a, b) => a + b, 0)
-    if (total > 0 && Math.abs(total - 100) > 0.1) {
-      const scale = 100 / total
-      for (const id of Object.keys(clamped)) {
-        clamped[id] *= scale
+      // Normalize % panels so their flex-grow weights sum correctly
+      normalizePercentPanels(clamped, regs)
+      sizes.value = clamped
+      collapsed.value = collapsedSet
+      if (saved.preCollapseSize) {
+        preCollapseSize.value = { ...saved.preCollapseSize }
       }
+      return
     }
-    sizes.value = clamped
-    collapsed.value = collapsedSet
-    if (saved.preCollapseSize) {
-      preCollapseSize.value = { ...saved.preCollapseSize }
-    }
-    return
+    // Units changed — fall through to defaults
   }
 
-  // Use defaultSizes, normalize to sum to 100
-  const total = regs.reduce((s, r) => s + r.constraints.defaultSize, 0)
+  // Use defaultSizes
   const newSizes: Record<string, number> = {}
   for (const r of regs) {
-    newSizes[r.id] = (r.constraints.defaultSize / total) * 100
+    newSizes[r.id] = r.constraints.defaultSize
   }
+  // Normalize % panels
+  normalizePercentPanels(newSizes, regs)
   sizes.value = newSizes
 }
 
-function getEffectiveMinSize(reg: PanelRegistration): number {
-  const { minSize, minSizePx } = reg.constraints
-  if (!minSizePx || !groupEl.value) return minSize
-  const groupPx = props.direction === 'horizontal'
-    ? groupEl.value.offsetWidth
-    : groupEl.value.offsetHeight
-  if (groupPx <= 0) return minSize
-  const pxAsPercent = (minSizePx / groupPx) * 100
-  return Math.max(minSize, pxAsPercent)
+/** Normalize percentage panels so their flex-grow weights sum to 100 */
+function normalizePercentPanels(sizeMap: Record<string, number>, regs: PanelRegistration[]) {
+  const pctRegs = regs.filter((r) => r.constraints.unit === '%')
+  if (pctRegs.length === 0) return
+
+  const total = pctRegs.reduce((s, r) => s + (sizeMap[r.id] ?? 0), 0)
+  if (total > 0 && Math.abs(total - 100) > 0.1) {
+    const scale = 100 / total
+    for (const r of pctRegs) {
+      sizeMap[r.id] *= scale
+    }
+  }
 }
 
 function clampSize(id: string, size: number): number {
-  const reg = panels.value.find((p) => p.id === id)
+  const reg = getPanelReg(id)
   if (!reg) return size
-  const { maxSize, collapsible, collapsedSize } = reg.constraints
+  const { minSize, maxSize, collapsible, collapsedSize } = reg.constraints
   if (collapsible && collapsed.value.has(id)) {
     return collapsedSize
   }
-  return Math.min(maxSize, Math.max(getEffectiveMinSize(reg), size))
+  return Math.min(maxSize, Math.max(minSize, size))
 }
 
 // --- Panel registration ---
 function registerPanel(reg: PanelRegistration) {
-  // Insert in DOM order — we rely on component mount order which follows template order
   const existing = panels.value.findIndex((p) => p.id === reg.id)
   if (existing !== -1) {
     panels.value[existing] = reg
@@ -153,7 +207,6 @@ function getPanelIds(): string[] {
 
 // --- Handle helpers ---
 function getHandlePanels(handleId: string): { before: string; after: string } | null {
-  // Handle ID format: "handle-{index}" where index is the handle's position (0-based)
   const match = handleId.match(/^handle-(\d+)$/)
   if (!match) return null
   const idx = parseInt(match[1], 10)
@@ -194,67 +247,126 @@ function applyResizeDelta(handleId: string, deltaPercent: number) {
   if (!pair) return
 
   const { before, after } = pair
-  const beforeReg = panels.value.find((p) => p.id === before)
-  const afterReg = panels.value.find((p) => p.id === after)
+  const beforeReg = getPanelReg(before)
+  const afterReg = getPanelReg(after)
   if (!beforeReg || !afterReg) return
 
-  const beforeMin = getEffectiveMinSize(beforeReg)
-  const afterMin = getEffectiveMinSize(afterReg)
+  const beforeUnit = beforeReg.constraints.unit
+  const afterUnit = afterReg.constraints.unit
 
-  const currentBefore = sizes.value[before] ?? 0
-  const currentAfter = sizes.value[after] ?? 0
+  if (beforeUnit === 'px' && afterUnit !== 'px') {
+    // Pixel panel before, flex panel after — only adjust pixel panel
+    applyPxFlexDelta(before, beforeReg, deltaPercent)
+  } else if (beforeUnit !== 'px' && afterUnit === 'px') {
+    // Flex panel before, pixel panel after — adjust pixel panel (inverted delta)
+    applyPxFlexDelta(after, afterReg, -deltaPercent)
+  } else if (beforeUnit === 'px' && afterUnit === 'px') {
+    // Both pixel — adjust both in pixels
+    applyPxPxDelta(before, beforeReg, after, afterReg, deltaPercent)
+  } else {
+    // Both percentage — existing logic
+    applyPctPctDelta(before, beforeReg, after, afterReg, deltaPercent)
+  }
+}
+
+/** Resize a pixel panel against a flex neighbor. Only the pixel panel's size changes. */
+function applyPxFlexDelta(pxId: string, pxReg: PanelRegistration, deltaPercent: number) {
+  const deltaPx = percentToPx(deltaPercent)
+  const current = sizes.value[pxId] ?? 0
+  let newSize = current + deltaPx
+  const { minSize, maxSize, collapsible, collapsedSize } = pxReg.constraints
+
+  // Collapse threshold
+  if (collapsible && newSize < minSize) {
+    const threshold = collapsedSize + (minSize - collapsedSize) / 2
+    if (newSize <= threshold) {
+      collapsed.value.add(pxId)
+      newSize = collapsedSize
+    } else {
+      newSize = minSize
+    }
+  } else if (collapsed.value.has(pxId) && deltaPx > 0) {
+    collapsed.value.delete(pxId)
+    newSize = minSize
+  } else {
+    newSize = Math.max(minSize, Math.min(maxSize, newSize))
+  }
+
+  sizes.value = { ...sizes.value, [pxId]: newSize }
+}
+
+/** Resize two pixel panels against each other. */
+function applyPxPxDelta(beforeId: string, beforeReg: PanelRegistration, afterId: string, afterReg: PanelRegistration, deltaPercent: number) {
+  const deltaPx = percentToPx(deltaPercent)
+  const currentBefore = sizes.value[beforeId] ?? 0
+  const currentAfter = sizes.value[afterId] ?? 0
+
+  let newBefore = currentBefore + deltaPx
+  let newAfter = currentAfter - deltaPx
+
+  newBefore = Math.max(beforeReg.constraints.minSize, Math.min(beforeReg.constraints.maxSize, newBefore))
+  newAfter = Math.max(afterReg.constraints.minSize, Math.min(afterReg.constraints.maxSize, newAfter))
+
+  sizes.value = { ...sizes.value, [beforeId]: newBefore, [afterId]: newAfter }
+}
+
+/** Resize two percentage panels against each other (original logic). */
+function applyPctPctDelta(beforeId: string, beforeReg: PanelRegistration, afterId: string, afterReg: PanelRegistration, deltaPercent: number) {
+  const beforeMin = beforeReg.constraints.minSize
+  const afterMin = afterReg.constraints.minSize
+
+  const currentBefore = sizes.value[beforeId] ?? 0
+  const currentAfter = sizes.value[afterId] ?? 0
   const combined = currentBefore + currentAfter
 
-  // Calculate proposed sizes
   let newBefore = currentBefore + deltaPercent
   let newAfter = currentAfter - deltaPercent
 
   // Handle collapse thresholds
   if (beforeReg.constraints.collapsible && newBefore < beforeMin) {
     if (newBefore <= beforeReg.constraints.collapsedSize + (beforeMin - beforeReg.constraints.collapsedSize) / 2) {
-      collapsed.value.add(before)
+      collapsed.value.add(beforeId)
       newBefore = beforeReg.constraints.collapsedSize
       newAfter = combined - newBefore
     } else {
       newBefore = beforeMin
       newAfter = combined - newBefore
     }
-  } else if (collapsed.value.has(before) && deltaPercent > 0) {
-    // Expanding from collapsed
-    collapsed.value.delete(before)
+  } else if (collapsed.value.has(beforeId) && deltaPercent > 0) {
+    collapsed.value.delete(beforeId)
     newBefore = beforeMin
     newAfter = combined - newBefore
   }
 
   if (afterReg.constraints.collapsible && newAfter < afterMin) {
     if (newAfter <= afterReg.constraints.collapsedSize + (afterMin - afterReg.constraints.collapsedSize) / 2) {
-      collapsed.value.add(after)
+      collapsed.value.add(afterId)
       newAfter = afterReg.constraints.collapsedSize
       newBefore = combined - newAfter
     } else {
       newAfter = afterMin
       newBefore = combined - newAfter
     }
-  } else if (collapsed.value.has(after) && deltaPercent < 0) {
-    collapsed.value.delete(after)
+  } else if (collapsed.value.has(afterId) && deltaPercent < 0) {
+    collapsed.value.delete(afterId)
     newAfter = afterMin
     newBefore = combined - newAfter
   }
 
-  // Clamp both sides (unless collapsed, which is handled above)
-  if (!collapsed.value.has(before)) {
+  // Clamp both sides (unless collapsed)
+  if (!collapsed.value.has(beforeId)) {
     newBefore = Math.max(beforeMin, Math.min(beforeReg.constraints.maxSize, newBefore))
     newAfter = combined - newBefore
   }
-  if (!collapsed.value.has(after)) {
+  if (!collapsed.value.has(afterId)) {
     newAfter = Math.max(afterMin, Math.min(afterReg.constraints.maxSize, newAfter))
     newBefore = combined - newAfter
   }
 
   sizes.value = {
     ...sizes.value,
-    [before]: newBefore,
-    [after]: newAfter,
+    [beforeId]: newBefore,
+    [afterId]: newAfter,
   }
 }
 
@@ -300,7 +412,7 @@ function animateSizes(
 
 // --- Collapse / expand ---
 function collapsePanel(id: string) {
-  const reg = panels.value.find((p) => p.id === id)
+  const reg = getPanelReg(id)
   if (!reg || !reg.constraints.collapsible || collapsed.value.has(id)) return
 
   preCollapseSize.value[id] = sizes.value[id] ?? reg.constraints.defaultSize
@@ -313,46 +425,66 @@ function collapsePanel(id: string) {
   const currentSize = sizes.value[id] ?? 0
   const neighborSize = sizes.value[neighbor.id] ?? 0
   const targetEnd = reg.constraints.collapsedSize
-  const neighborEnd = neighborSize + (currentSize - targetEnd)
 
   collapsed.value = new Set([...collapsed.value, id])
 
-  animateSizes(id, neighbor.id, targetEnd, neighborEnd, () => {
-    emit('layoutChanged', { ...sizes.value })
-    saveLayout()
-  })
+  if (reg.constraints.unit === 'px' && neighbor.constraints.unit !== 'px') {
+    // Pixel panel collapsing with flex neighbor — neighbor auto-fills, keep its value
+    animateSizes(id, neighbor.id, targetEnd, neighborSize, () => {
+      emit('layoutChanged', { ...sizes.value })
+      saveLayout()
+    })
+  } else {
+    // Same-unit panels — neighbor absorbs freed space
+    const neighborEnd = neighborSize + (currentSize - targetEnd)
+    animateSizes(id, neighbor.id, targetEnd, neighborEnd, () => {
+      emit('layoutChanged', { ...sizes.value })
+      saveLayout()
+    })
+  }
 }
 
 function expandPanel(id: string) {
-  const reg = panels.value.find((p) => p.id === id)
+  const reg = getPanelReg(id)
   if (!reg || !collapsed.value.has(id)) return
 
   const restoreTo = preCollapseSize.value[id] ?? reg.constraints.defaultSize
   const currentSize = sizes.value[id] ?? 0
-  const needed = restoreTo - currentSize
 
   const idx = panels.value.findIndex((p) => p.id === id)
   const neighborIdx = idx < panels.value.length - 1 ? idx + 1 : idx - 1
   if (neighborIdx < 0) return
   const neighbor = panels.value[neighborIdx]
+  const neighborSize = sizes.value[neighbor.id] ?? 0
 
   const newCollapsed = new Set(collapsed.value)
   newCollapsed.delete(id)
   collapsed.value = newCollapsed
 
-  const neighborSize = sizes.value[neighbor.id] ?? 0
-  const neighborMin = getEffectiveMinSize(neighbor)
-  const available = neighborSize - neighborMin
-  const take = Math.min(needed, available)
+  if (reg.constraints.unit === 'px' && neighbor.constraints.unit !== 'px') {
+    // Pixel panel expanding — just animate to restore size, neighbor auto-fills
+    const targetEnd = Math.min(restoreTo, reg.constraints.maxSize)
+    animateSizes(id, neighbor.id, targetEnd, neighborSize, () => {
+      delete preCollapseSize.value[id]
+      emit('layoutChanged', { ...sizes.value })
+      saveLayout()
+    })
+  } else {
+    // Same-unit panels — take space from neighbor
+    const needed = restoreTo - currentSize
+    const neighborMin = neighbor.constraints.minSize
+    const available = neighborSize - neighborMin
+    const take = Math.min(needed, available)
 
-  const targetEnd = currentSize + take
-  const neighborEnd = neighborSize - take
+    const targetEnd = currentSize + take
+    const neighborEnd = neighborSize - take
 
-  animateSizes(id, neighbor.id, targetEnd, neighborEnd, () => {
-    delete preCollapseSize.value[id]
-    emit('layoutChanged', { ...sizes.value })
-    saveLayout()
-  })
+    animateSizes(id, neighbor.id, targetEnd, neighborEnd, () => {
+      delete preCollapseSize.value[id]
+      emit('layoutChanged', { ...sizes.value })
+      saveLayout()
+    })
+  }
 }
 
 function isPanelCollapsed(id: string): boolean {
@@ -360,23 +492,27 @@ function isPanelCollapsed(id: string): boolean {
 }
 
 function resizePanel(id: string, size: number) {
-  const reg = panels.value.find((p) => p.id === id)
+  const reg = getPanelReg(id)
   if (!reg) return
 
   const clamped = clampSize(id, size)
   const delta = clamped - (sizes.value[id] ?? 0)
   if (Math.abs(delta) < 0.01) return
 
-  // Take/give space to neighbor
   const idx = panels.value.findIndex((p) => p.id === id)
   const neighborIdx = idx < panels.value.length - 1 ? idx + 1 : idx - 1
   if (neighborIdx < 0) return
   const neighbor = panels.value[neighborIdx]
 
-  sizes.value = {
-    ...sizes.value,
-    [id]: clamped,
-    [neighbor.id]: (sizes.value[neighbor.id] ?? 0) - delta,
+  if (reg.constraints.unit === 'px' && neighbor.constraints.unit !== 'px') {
+    // Pixel panel — just update its size, flex neighbor auto-fills
+    sizes.value = { ...sizes.value, [id]: clamped }
+  } else {
+    sizes.value = {
+      ...sizes.value,
+      [id]: clamped,
+      [neighbor.id]: (sizes.value[neighbor.id] ?? 0) - delta,
+    }
   }
   emit('layoutChanged', { ...sizes.value })
   saveLayout()
@@ -392,6 +528,8 @@ provide(PANEL_GROUP_KEY, {
   registerPanel,
   unregisterPanel,
   getPanelSize,
+  getPanelUnit,
+  getFlexStyle,
   getPanelIds,
   startResize,
   moveResize,

@@ -229,6 +229,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('session:saveMessages', (_e, sessionId: string, messages: unknown[]) => client.saveMessages(sessionId, messages as any))
   ipcMain.handle('session:generateTitle', (_e, sessionId: string) => client.generateTitle(sessionId))
 
+  // --- Images ---
+  ipcMain.handle('image:get', (_e, imageId: string) => client.getImage(imageId))
+  ipcMain.handle('image:getMultiple', (_e, ids: string[]) => client.getImages(ids))
+
   // --- Settings ---
   ipcMain.handle('settings:getSoul', () => client.getSoul())
   ipcMain.handle('settings:saveSoul', (_e, content: string) => client.saveSoul(content))

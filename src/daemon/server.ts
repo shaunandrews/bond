@@ -3,7 +3,7 @@ import { createServer, type Server as HttpServer } from 'node:http'
 import { existsSync, unlinkSync } from 'node:fs'
 import type { TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
-import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
+import type { SessionMessage, AttachedImage } from '../shared/session'
 import type { ModelId } from '../shared/models'
 import {
   makeResponse,
@@ -41,6 +41,11 @@ import {
   getAccentColor,
   saveAccentColor
 } from './settings'
+import {
+  saveImages,
+  getImage,
+  getImages
+} from './images'
 
 // --- State ---
 
@@ -157,6 +162,12 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           clearSessionApprovals(sessionId)
         }
 
+        // Save images to permanent storage before running the query
+        let imageIds: string[] | undefined
+        if (images?.length) {
+          imageIds = saveImages(sessionId, images)
+        }
+
         const ac = new AbortController()
         activeQueries.set(sessionId, ac)
         const resumeSession = knownSdkSessions.has(sessionId)
@@ -169,7 +180,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
             model: currentModel,
             sessionId,
             resumeSession,
-            images,
+            imageIds,
             editMode: session.editMode
           })
         } catch (e) {
@@ -184,7 +195,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
                 model: currentModel,
                 sessionId,
                 resumeSession: false,
-                images,
+                imageIds,
                 editMode: session.editMode
               })
             } catch (retryErr) {
@@ -213,7 +224,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
               model: currentModel,
               sessionId,
               resumeSession: false,
-              images,
+              imageIds,
               editMode: session.editMode
             })
           } catch (retryErr) {
@@ -228,7 +239,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           knownSdkSessions.delete(sessionId)
         }
         activeQueries.delete(sessionId)
-        return JSON.stringify(makeResponse(id, { ok: true }))
+        return JSON.stringify(makeResponse(id, { ok: true, imageIds }))
       }
 
       case 'bond.cancel': {
@@ -365,6 +376,19 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const hex = getStringParam(p, 'hex')
         if (!hex) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'hex is required'))
         return JSON.stringify(makeResponse(id, saveAccentColor(hex)))
+      }
+
+      // --- Images ---
+      case 'image.get': {
+        const imageId = getStringParam(p, 'id')
+        if (!imageId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        return JSON.stringify(makeResponse(id, getImage(imageId)))
+      }
+
+      case 'image.getMultiple': {
+        const ids = getParam(p, 'ids') as string[] | undefined
+        if (!ids || !Array.isArray(ids)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'ids is required'))
+        return JSON.stringify(makeResponse(id, getImages(ids)))
       }
 
       default:

@@ -1,6 +1,7 @@
 import type { Session, SessionMessage, EditMode } from '../shared/session'
 import { DEFAULT_EDIT_MODE } from '../shared/session'
 import { getDb } from './db'
+import { deleteSessionImages } from './images'
 
 function parseEditMode(raw: unknown): EditMode {
   if (typeof raw !== 'string') return DEFAULT_EDIT_MODE
@@ -40,7 +41,16 @@ function rowToMessage(row: Record<string, unknown>): SessionMessage {
   if (row.summary != null) msg.summary = row.summary as string
   if (row.status != null) msg.status = row.status as string
   if (row.images != null) {
-    try { msg.images = JSON.parse(row.images as string) } catch { /* ignore */ }
+    try {
+      const parsed = JSON.parse(row.images as string)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        if (typeof parsed[0] === 'string') {
+          msg.imageIds = parsed
+        } else {
+          msg.images = parsed
+        }
+      }
+    } catch { /* ignore */ }
   }
   return msg
 }
@@ -91,6 +101,8 @@ export function updateSession(id: string, updates: Partial<Pick<Session, 'title'
 }
 
 export function deleteSession(id: string): boolean {
+  // Delete image files before removing the session (CASCADE handles DB rows)
+  deleteSessionImages(id)
   const db = getDb()
   const result = db.prepare('DELETE FROM sessions WHERE id = ?').run(id)
   return result.changes > 0
@@ -126,7 +138,7 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
         m.name ?? null,
         m.summary ?? null,
         m.status ?? null,
-        m.images?.length ? JSON.stringify(m.images) : null
+        m.imageIds?.length ? JSON.stringify(m.imageIds) : m.images?.length ? JSON.stringify(m.images) : null
       )
     }
 

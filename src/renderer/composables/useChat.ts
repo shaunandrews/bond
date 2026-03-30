@@ -4,12 +4,13 @@ import type { SessionMessage, AttachedImage } from '../../shared/session'
 import type { Message } from '../types/message'
 
 export interface ChatDeps {
-  send: (text: string, sessionId?: string, images?: AttachedImage[]) => Promise<{ ok: boolean; error?: string }>
+  send: (text: string, sessionId?: string, images?: AttachedImage[]) => Promise<{ ok: boolean; error?: string; imageIds?: string[] }>
   cancel: (sessionId?: string) => Promise<{ ok: boolean }>
   onChunk: (fn: (chunk: TaggedChunk) => void) => () => void
   respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
   getMessages: (sessionId: string) => Promise<SessionMessage[]>
   saveMessages: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
+  getImages: (ids: string[]) => Promise<(AttachedImage | null)[]>
 }
 
 function uid(): string {
@@ -18,7 +19,12 @@ function uid(): string {
 
 function toSessionMessages(msgs: Message[]): SessionMessage[] {
   return msgs.map((m) => {
-    if (m.role === 'user') return { id: m.id, role: 'user', text: m.text, images: m.images?.map(i => ({ data: i.data, mediaType: i.mediaType })) }
+    if (m.role === 'user') {
+      const sm: SessionMessage = { id: m.id, role: 'user', text: m.text }
+      if (m.imageIds?.length) sm.imageIds = m.imageIds
+      else if (m.images?.length) sm.images = m.images.map(i => ({ data: i.data, mediaType: i.mediaType }))
+      return sm
+    }
     if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text, streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: m.name, summary: m.summary }
     if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', name: m.toolName, summary: m.description, status: m.status }
@@ -29,7 +35,7 @@ function toSessionMessages(msgs: Message[]): SessionMessage[] {
 
 function fromSessionMessages(msgs: SessionMessage[]): Message[] {
   return msgs.map((m) => {
-    if (m.role === 'user') return { id: m.id, role: 'user' as const, text: m.text ?? '', images: m.images }
+    if (m.role === 'user') return { id: m.id, role: 'user' as const, text: m.text ?? '', images: m.images, imageIds: m.imageIds }
     if (m.role === 'bond') return { id: m.id, role: 'bond' as const, text: m.text ?? '', streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta' as const, kind: 'tool' as const, name: m.name ?? '', summary: m.summary }
     if (m.kind === 'approval') return { id: m.id, role: 'meta' as const, kind: 'approval' as const, requestId: '', toolName: m.name ?? '', input: {}, description: m.summary, status: (m.status as 'approved' | 'denied') ?? 'denied' }
@@ -136,7 +142,22 @@ export function useChat(deps: ChatDeps = window.bond) {
     await persistMessages()
     currentSessionId.value = sessionId
     const saved = await deps.getMessages(sessionId)
-    messages.value = fromSessionMessages(saved)
+    const msgs = fromSessionMessages(saved)
+
+    // Resolve image IDs to displayable data
+    const allIds = saved.flatMap(m => m.imageIds ?? [])
+    if (allIds.length) {
+      const loaded = await deps.getImages(allIds)
+      const map = new Map<string, AttachedImage>()
+      allIds.forEach((id, i) => { if (loaded[i]) map.set(id, loaded[i]!) })
+      for (const msg of msgs) {
+        if (msg.role === 'user' && msg.imageIds?.length) {
+          msg.images = msg.imageIds.map(id => map.get(id)!).filter(Boolean)
+        }
+      }
+    }
+
+    messages.value = msgs
   }
 
   function clearMessages() {
@@ -157,6 +178,16 @@ export function useChat(deps: ChatDeps = window.bond) {
 
     try {
       const res = await deps.send(trimmed, currentSessionId.value ?? undefined, images)
+      if (res.ok && res.imageIds?.length) {
+        // Swap inline base64 for image IDs on the user message we just added
+        for (let i = messages.value.length - 1; i >= 0; i--) {
+          const m = messages.value[i]
+          if (m.role === 'user' && m.images?.length) {
+            m.imageIds = res.imageIds
+            break
+          }
+        }
+      }
       if (!res.ok && res.error) {
         addMessage({ id: uid(), role: 'meta', kind: 'error', text: res.error })
       }

@@ -15,6 +15,18 @@ async function flushPanelAnimation() {
   vi.restoreAllMocks()
 }
 
+/** Extract flex-grow value from a panel's inline style */
+function getFlexGrow(style: string): number {
+  const match = style.match(/flex-grow:\s*([\d.]+)/)
+  return match ? parseFloat(match[1]) : NaN
+}
+
+/** Extract flex-basis pixel value from a panel's inline style (for px-unit panels) */
+function getFlexBasisPx(style: string): number {
+  const match = style.match(/flex-basis:\s*([\d.]+)px/)
+  return match ? parseFloat(match[1]) : NaN
+}
+
 // Helper: mount a basic two-panel horizontal layout
 function mountTwoPanels(opts: {
   direction?: 'horizontal' | 'vertical'
@@ -122,8 +134,8 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      expect(panels[0].attributes('style')).toContain('flex-basis: 50%')
-      expect(panels[1].attributes('style')).toContain('flex-basis: 50%')
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(50)
+      expect(getFlexGrow(panels[1].attributes('style') ?? '')).toBe(50)
       w.unmount()
     })
 
@@ -135,8 +147,8 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      expect(panels[0].attributes('style')).toContain('flex-basis: 30%')
-      expect(panels[1].attributes('style')).toContain('flex-basis: 70%')
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(30)
+      expect(getFlexGrow(panels[1].attributes('style') ?? '')).toBe(70)
       w.unmount()
     })
 
@@ -148,8 +160,8 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      expect(panels[0].attributes('style')).toContain('flex-basis: 25%')
-      expect(panels[1].attributes('style')).toContain('flex-basis: 75%')
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(25)
+      expect(getFlexGrow(panels[1].attributes('style') ?? '')).toBe(75)
       w.unmount()
     })
 
@@ -163,12 +175,8 @@ describe('BondPanelGroup', () => {
 
       const panels = w.findAll('.bond-panel')
       expect(panels).toHaveLength(3)
-      // All should be approximately 33%
       for (const p of panels) {
-        const style = p.attributes('style') ?? ''
-        const match = style.match(/flex-basis:\s*([\d.]+)%/)
-        expect(match).not.toBeNull()
-        const val = parseFloat(match![1])
+        const val = getFlexGrow(p.attributes('style') ?? '')
         expect(val).toBeGreaterThan(30)
         expect(val).toBeLessThan(40)
       }
@@ -281,13 +289,8 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const leftStyle = panels[0].attributes('style') ?? ''
-      const leftMatch = leftStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(leftMatch![1])).toBe(55)
-
-      const rightStyle = panels[1].attributes('style') ?? ''
-      const rightMatch = rightStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(rightMatch![1])).toBe(45)
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(55)
+      expect(getFlexGrow(panels[1].attributes('style') ?? '')).toBe(45)
       w.unmount()
     })
 
@@ -304,9 +307,7 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const leftStyle = panels[0].attributes('style') ?? ''
-      const leftMatch = leftStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(leftMatch![1])).toBe(45)
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(45)
       w.unmount()
     })
 
@@ -323,9 +324,7 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const topStyle = panels[0].attributes('style') ?? ''
-      const topMatch = topStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(topMatch![1])).toBe(55)
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(55)
       w.unmount()
     })
 
@@ -342,9 +341,7 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const leftStyle = panels[0].attributes('style') ?? ''
-      const leftMatch = leftStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(leftMatch![1])).toBeGreaterThanOrEqual(10)
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBeGreaterThanOrEqual(10)
       w.unmount()
     })
 
@@ -369,9 +366,7 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const style = panels[0].attributes('style') ?? ''
-      const match = style.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(match![1])).toBe(50)
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(50)
       w.unmount()
     })
   })
@@ -407,12 +402,10 @@ describe('BondPanelGroup', () => {
 
       const panels = w.findAll('.bond-panel')
       expect(panels[0].attributes('data-state')).toBe('collapsed')
-      expect(panels[0].attributes('style')).toContain('flex-basis: 0%')
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(0)
 
       // Right panel should absorb the freed space
-      const rightStyle = panels[1].attributes('style') ?? ''
-      const rightMatch = rightStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(rightMatch![1])).toBe(100)
+      expect(getFlexGrow(panels[1].attributes('style') ?? '')).toBe(100)
       w.unmount()
     })
 
@@ -449,10 +442,8 @@ describe('BondPanelGroup', () => {
 
       const panels = w.findAll('.bond-panel')
       expect(panels[0].attributes('data-state')).toBe('expanded')
-      const leftStyle = panels[0].attributes('style') ?? ''
-      const leftMatch = leftStyle.match(/flex-basis:\s*([\d.]+)%/)
-      // Should restore to original 30%
-      expect(parseFloat(leftMatch![1])).toBe(30)
+      // Should restore to original 30
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(30)
       w.unmount()
     })
   })
@@ -486,13 +477,8 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const leftStyle = panels[0].attributes('style') ?? ''
-      const leftMatch = leftStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(leftMatch![1])).toBe(70)
-
-      const rightStyle = panels[1].attributes('style') ?? ''
-      const rightMatch = rightStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(rightMatch![1])).toBe(30)
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(70)
+      expect(getFlexGrow(panels[1].attributes('style') ?? '')).toBe(30)
       w.unmount()
     })
 
@@ -524,9 +510,7 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const leftStyle = panels[0].attributes('style') ?? ''
-      const leftMatch = leftStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(leftMatch![1])).toBe(60)
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(60)
       w.unmount()
     })
 
@@ -622,6 +606,8 @@ describe('BondPanelGroup', () => {
       const parsed = JSON.parse(stored!)
       expect(parsed.sizes.left).toBe(55)
       expect(parsed.sizes.right).toBe(45)
+      expect(parsed.units.left).toBe('%')
+      expect(parsed.units.right).toBe('%')
       w.unmount()
     })
 
@@ -629,7 +615,7 @@ describe('BondPanelGroup', () => {
       // Pre-set a saved layout
       localStorage.setItem(
         'bond:panels:restore-test',
-        JSON.stringify({ sizes: { left: 25, right: 75 }, collapsed: [] }),
+        JSON.stringify({ sizes: { left: 25, right: 75 }, units: { left: '%', right: '%' }, collapsed: [] }),
       )
 
       const w = mount(
@@ -652,13 +638,8 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const leftStyle = panels[0].attributes('style') ?? ''
-      const leftMatch = leftStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(leftMatch![1])).toBe(25)
-
-      const rightStyle = panels[1].attributes('style') ?? ''
-      const rightMatch = rightStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(rightMatch![1])).toBe(75)
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(25)
+      expect(getFlexGrow(panels[1].attributes('style') ?? '')).toBe(75)
       w.unmount()
     })
 
@@ -688,9 +669,113 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const leftStyle = panels[0].attributes('style') ?? ''
-      const leftMatch = leftStyle.match(/flex-basis:\s*([\d.]+)%/)
-      expect(parseFloat(leftMatch![1])).toBe(40)
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(40)
+      w.unmount()
+    })
+
+    it('discards saved layout when panel unit changes', async () => {
+      // Saved with percentage unit
+      localStorage.setItem(
+        'bond:panels:unit-change-test',
+        JSON.stringify({ sizes: { left: 20, right: 80 }, units: { left: '%', right: '%' }, collapsed: [] }),
+      )
+
+      const w = mount(
+        defineComponent({
+          components: { BondPanelGroup, BondPanel, BondPanelHandle },
+          template: `
+            <BondPanelGroup direction="horizontal" autoSaveId="unit-change-test">
+              <BondPanel id="left" unit="px" :defaultSize="260" :minSize="220" :maxSize="400">
+                <div>Left</div>
+              </BondPanel>
+              <BondPanelHandle id="handle-0" />
+              <BondPanel id="right" :defaultSize="80">
+                <div>Right</div>
+              </BondPanel>
+            </BondPanelGroup>
+          `,
+        }),
+        { attachTo: document.body },
+      )
+      await nextTick()
+
+      const panels = w.findAll('.bond-panel')
+      // Should use defaults, not saved values
+      expect(getFlexBasisPx(panels[0].attributes('style') ?? '')).toBe(260)
+      w.unmount()
+    })
+  })
+
+  describe('pixel-unit panels', () => {
+    it('renders pixel panel with flex: 0 0 Npx', async () => {
+      const w = mount(
+        defineComponent({
+          components: { BondPanelGroup, BondPanel, BondPanelHandle },
+          template: `
+            <BondPanelGroup direction="horizontal">
+              <BondPanel id="sidebar" unit="px" :defaultSize="260" :minSize="220" :maxSize="400">
+                <div>Sidebar</div>
+              </BondPanel>
+              <BondPanelHandle id="handle-0" />
+              <BondPanel id="main" :defaultSize="80">
+                <div>Main</div>
+              </BondPanel>
+            </BondPanelGroup>
+          `,
+        }),
+        { attachTo: document.body },
+      )
+      await nextTick()
+
+      const panels = w.findAll('.bond-panel')
+      const sidebarStyle = panels[0].attributes('style') ?? ''
+      expect(sidebarStyle).toContain('flex-grow: 0')
+      expect(sidebarStyle).toContain('flex-shrink: 0')
+      expect(getFlexBasisPx(sidebarStyle)).toBe(260)
+
+      // Main panel should use flex-grow (normalized to 100 as the only % panel)
+      expect(getFlexGrow(panels[1].attributes('style') ?? '')).toBe(100)
+      w.unmount()
+    })
+
+    it('pixel panel collapse and expand works', async () => {
+      const w = mount(
+        defineComponent({
+          components: { BondPanelGroup, BondPanel, BondPanelHandle },
+          template: `
+            <BondPanelGroup direction="horizontal">
+              <BondPanel id="sidebar" ref="sidebarPanel" unit="px" :defaultSize="260" :minSize="220" :maxSize="400" collapsible :collapsedSize="0">
+                <div>Sidebar</div>
+              </BondPanel>
+              <BondPanelHandle id="handle-0" />
+              <BondPanel id="main" :defaultSize="80">
+                <div>Main</div>
+              </BondPanel>
+            </BondPanelGroup>
+          `,
+          setup() {
+            const sidebarPanel = ref()
+            return { sidebarPanel }
+          },
+        }),
+        { attachTo: document.body },
+      )
+      await nextTick()
+
+      // Collapse
+      w.vm.sidebarPanel.collapse()
+      await flushPanelAnimation()
+
+      const panels = w.findAll('.bond-panel')
+      expect(panels[0].attributes('data-state')).toBe('collapsed')
+      expect(getFlexBasisPx(panels[0].attributes('style') ?? '')).toBe(0)
+
+      // Expand
+      w.vm.sidebarPanel.expand()
+      await flushPanelAnimation()
+
+      expect(panels[0].attributes('data-state')).toBe('expanded')
+      expect(getFlexBasisPx(panels[0].attributes('style') ?? '')).toBe(260)
       w.unmount()
     })
   })
@@ -746,8 +831,7 @@ describe('BondPanelGroup', () => {
       await nextTick()
 
       const panels = w.findAll('.bond-panel')
-      const leftStyle = panels[0].attributes('style') ?? ''
-      expect(leftStyle).toContain('flex-basis: 20%')
+      expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(20)
       w.unmount()
     })
   })

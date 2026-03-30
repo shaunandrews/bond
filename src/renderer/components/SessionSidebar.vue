@@ -164,7 +164,6 @@ function selectView(view: AppView) {
 <style scoped>
 .session-sidebar {
   height: 100%;
-  min-width: 220px; /* prevent content reflow during sidebar collapse animation */
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--sidebar-border);

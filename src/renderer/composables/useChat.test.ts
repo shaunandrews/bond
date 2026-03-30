@@ -10,6 +10,7 @@ function mockDeps(): ChatDeps {
     respondToApproval: vi.fn().mockResolvedValue({ ok: true }),
     getMessages: vi.fn().mockResolvedValue([]),
     saveMessages: vi.fn().mockResolvedValue(true),
+    getImages: vi.fn().mockResolvedValue([]),
   }
 }
 
@@ -89,6 +90,19 @@ describe('useChat', () => {
 
       expect(deps.send).toHaveBeenCalledTimes(1)
       await promise
+    })
+
+    it('swaps images for imageIds after send returns', async () => {
+      const images = [{ data: 'abc123', mediaType: 'image/png' as const }]
+      ;(deps.send as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, imageIds: ['img-1'] })
+
+      await chat.submit('look at this', images)
+
+      const userMsg = chat.messages.value[0]
+      expect(userMsg.role).toBe('user')
+      if (userMsg.role === 'user') {
+        expect(userMsg.imageIds).toEqual(['img-1'])
+      }
     })
   })
 
@@ -187,6 +201,24 @@ describe('useChat', () => {
       expect(deps.getMessages).toHaveBeenCalledWith('sess-1')
       expect(chat.messages.value).toHaveLength(2)
       expect(chat.currentSessionId.value).toBe('sess-1')
+    })
+
+    it('loadSession resolves imageIds to images', async () => {
+      const img = { data: 'abc123', mediaType: 'image/png' as const }
+      ;(deps.getMessages as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: '1', role: 'user', text: 'hi', imageIds: ['img-1'] },
+      ])
+      ;(deps.getImages as ReturnType<typeof vi.fn>).mockResolvedValue([img])
+
+      await chat.loadSession('sess-1')
+
+      expect(deps.getImages).toHaveBeenCalledWith(['img-1'])
+      const userMsg = chat.messages.value[0]
+      expect(userMsg.role).toBe('user')
+      if (userMsg.role === 'user') {
+        expect(userMsg.images).toEqual([img])
+        expect(userMsg.imageIds).toEqual(['img-1'])
+      }
     })
 
     it('submit persists messages', async () => {

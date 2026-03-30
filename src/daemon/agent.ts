@@ -1,36 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { join, resolve, normalize } from 'node:path'
-import { writeFileSync, mkdirSync, unlinkSync } from 'node:fs'
+import { resolve, normalize } from 'node:path'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { BondStreamChunk } from '../shared/stream'
-import type { AttachedImage, EditMode } from '../shared/session'
+import type { EditMode } from '../shared/session'
 import { getSoul } from './settings'
-
-const MIME_TO_EXT: Record<string, string> = {
-  'image/jpeg': '.jpg',
-  'image/png': '.png',
-  'image/gif': '.gif',
-  'image/webp': '.webp'
-}
-
-const TEMP_IMAGE_DIR = join(homedir(), '.bond', 'tmp-images')
-
-function saveImagesToTemp(images: AttachedImage[]): string[] {
-  mkdirSync(TEMP_IMAGE_DIR, { recursive: true })
-  return images.map((img) => {
-    const ext = MIME_TO_EXT[img.mediaType] ?? '.png'
-    const filePath = join(TEMP_IMAGE_DIR, `${randomUUID()}${ext}`)
-    writeFileSync(filePath, Buffer.from(img.data, 'base64'))
-    return filePath
-  })
-}
-
-function cleanupTempImages(paths: string[]): void {
-  for (const p of paths) {
-    try { unlinkSync(p) } catch { /* ignore */ }
-  }
-}
+import { getImagePaths } from './images'
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'Bash'])
 const READ_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch']
@@ -156,7 +131,7 @@ export async function runBondQuery(
     model?: string
     sessionId?: string
     resumeSession?: boolean
-    images?: AttachedImage[]
+    imageIds?: string[]
     editMode?: EditMode
   }
 ): Promise<boolean> {
@@ -229,6 +204,9 @@ export async function runBondQuery(
         pendingApprovals.set(requestId, { resolve, sessionId: options.sessionId ?? '' })
       })
     },
+    stderr: (text: string) => {
+      console.error('[bond] sdk stderr:', text.trimEnd())
+    },
     env: {
       ...process.env,
       CLAUDE_AGENT_SDK_CLIENT_APP: 'bond-electron/0.1.0'
@@ -243,14 +221,15 @@ export async function runBondQuery(
     }
   }
 
-  let tempImagePaths: string[] = []
   let effectivePrompt = prompt
 
-  if (options.images?.length) {
-    tempImagePaths = saveImagesToTemp(options.images)
-    const imageList = tempImagePaths.map(p => `  - ${p}`).join('\n')
-    const imageNote = `<attached-images>\nThe user attached ${tempImagePaths.length} image(s) to this message. You MUST read each file with the Read tool before responding:\n${imageList}\n</attached-images>`
-    effectivePrompt = prompt ? `${imageNote}\n\n${prompt}` : imageNote
+  if (options.imageIds?.length) {
+    const imagePaths = getImagePaths(options.imageIds)
+    if (imagePaths.length) {
+      const imageList = imagePaths.map(p => `  - ${p}`).join('\n')
+      const imageNote = `<attached-images>\nThe user attached ${imagePaths.length} image(s) to this message. You MUST read each file with the Read tool before responding:\n${imageList}\n</attached-images>`
+      effectivePrompt = prompt ? `${imageNote}\n\n${prompt}` : imageNote
+    }
   }
 
   const q = query({
@@ -292,10 +271,6 @@ export async function runBondQuery(
   }
   if (chunkCount === 0) {
     console.warn('[bond] query completed with no chunks emitted')
-  }
-
-  if (tempImagePaths.length) {
-    cleanupTempImages(tempImagePaths)
   }
 
   return succeeded

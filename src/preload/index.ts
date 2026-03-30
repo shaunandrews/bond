@@ -1,9 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
-import type { Session, SessionMessage, AttachedImage } from '../shared/session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord } from '../shared/session'
 
 contextBridge.exposeInMainWorld('bond', {
-  send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string }>,
+  send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
   cancel: (sessionId?: string) => ipcRenderer.invoke('bond:cancel', sessionId) as Promise<{ ok: boolean }>,
   respondToApproval: (requestId: string, approved: boolean) =>
     ipcRenderer.invoke('bond:approvalResponse', requestId, approved) as Promise<{ ok: boolean }>,
@@ -29,6 +29,10 @@ contextBridge.exposeInMainWorld('bond', {
     ipcRenderer.invoke('session:saveMessages', sessionId, messages) as Promise<boolean>,
   generateTitle: (sessionId: string, userMessage?: string) =>
     ipcRenderer.invoke('session:generateTitle', sessionId, userMessage) as Promise<{ title: string; summary: string }>,
+
+  // Images
+  getImage: (imageId: string) => ipcRenderer.invoke('image:get', imageId) as Promise<AttachedImage | null>,
+  getImages: (ids: string[]) => ipcRenderer.invoke('image:getMultiple', ids) as Promise<(AttachedImage | null)[]>,
 
   // Dev
   captureScreenshot: (outputPath: string) => ipcRenderer.invoke('dev:captureScreenshot', outputPath) as Promise<string>,

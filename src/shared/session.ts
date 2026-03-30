@@ -27,6 +27,15 @@ export interface Session {
   updatedAt: string   // ISO 8601
 }
 
+export interface ImageRecord {
+  id: string
+  sessionId: string
+  filename: string
+  mediaType: ImageMediaType
+  sizeBytes: number
+  createdAt: string
+}
+
 export interface SessionMessage {
   id: string
   role: string
@@ -37,4 +46,5 @@ export interface SessionMessage {
   summary?: string
   status?: string
   images?: AttachedImage[]
+  imageIds?: string[]
 }

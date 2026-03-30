@@ -1,14 +1,15 @@
 import type { InjectionKey, Ref } from 'vue'
 
 export type PanelDirection = 'horizontal' | 'vertical'
+export type PanelUnit = 'px' | '%'
 
 export interface PanelConstraints {
-  minSize: number // percentage
-  maxSize: number // percentage
-  defaultSize: number // percentage
+  minSize: number // in unit
+  maxSize: number // in unit
+  defaultSize: number // in unit
   collapsible: boolean
-  collapsedSize: number // percentage
-  minSizePx?: number // pixel-based minimum, takes precedence over percentage when larger
+  collapsedSize: number // in unit
+  unit: PanelUnit
 }
 
 export interface PanelRegistration {
@@ -21,6 +22,8 @@ export interface PanelGroupContext {
   registerPanel: (reg: PanelRegistration) => void
   unregisterPanel: (id: string) => void
   getPanelSize: (id: string) => number
+  getPanelUnit: (id: string) => PanelUnit
+  getFlexStyle: (id: string) => string
   getPanelIds: () => string[]
   startResize: (handleId: string) => void
   moveResize: (delta: number) => void

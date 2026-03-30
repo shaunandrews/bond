@@ -34,9 +34,10 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | File | Purpose |
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `settings.*`) |
+| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`) |
 | `agent.ts` | Runs `query()` from Claude Agent SDK, streams chunks, handles tool approvals |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
+| `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
 | `db.ts` | Database init, migrations, WAL mode |
 | `settings.ts` | Key-value settings storage (soul, model, accent color) |
 | `generate-title.ts` | Auto-generates session titles via Haiku |
@@ -74,6 +75,7 @@ src/
     server.ts                        # WebSocket JSON-RPC server
     agent.ts                         # Claude Agent SDK integration
     sessions.ts                      # Session CRUD (SQLite)
+    images.ts                        # Image file storage + images table
     db.ts                            # Database management + migrations
     settings.ts                      # Settings storage
     generate-title.ts                # Auto title generation
@@ -84,7 +86,7 @@ src/
     protocol.ts                      # JSON-RPC 2.0 types
     stream.ts                        # BondStreamChunk types
     client.ts                        # BondClient WebSocket client
-    session.ts                       # Session & message types
+    session.ts                       # Session, message, ImageRecord types
     models.ts                        # ModelId type
   renderer/
     App.vue                          # Root shell — panel layout + view routing
@@ -311,7 +313,7 @@ Colors are defined in `app.css` via Tailwind v4's `@theme` directive. Dark mode 
 
 ```typescript
 type Message =
-  | { id, role: 'user', text, images?: AttachedImage[] }
+  | { id, role: 'user', text, images?: AttachedImage[], imageIds?: string[] }
   | { id, role: 'bond', text, streaming: boolean }
   | { id, role: 'meta', kind: 'tool', name, summary? }
   | { id, role: 'meta', kind: 'error', text }
@@ -331,3 +333,17 @@ type EditMode =
 ```
 
 The edit mode selector appears in ChatInput's toolbar. The daemon's `agent.ts` maps these to tool configurations and system prompt suffixes.
+
+## Image Storage
+
+Attached images are stored as permanent files in `~/Library/Application Support/bond/images/{uuid}.{ext}`. Metadata lives in the `images` SQLite table.
+
+```sql
+images (id TEXT PK, session_id TEXT FK, filename TEXT, media_type TEXT, size_bytes INT, created_at TEXT)
+```
+
+**Flow**: Renderer sends `AttachedImage[]` (base64) → daemon's `bond.send` handler saves files via `images.ts`, returns `imageIds` → renderer swaps inline images for IDs → `messages.images` column stores `["uuid-1", "uuid-2"]` (ID array, not base64).
+
+**Retrieval**: `image.get` and `image.getMultiple` JSON-RPC methods read files from disk and return base64. The renderer resolves IDs on session load via `window.bond.getImages()`.
+
+**Cleanup**: `deleteSession()` calls `deleteSessionImages()` to remove files before CASCADE deletes DB rows.

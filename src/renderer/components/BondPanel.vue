@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { inject, ref, onMounted, onUnmounted, computed } from 'vue'
 import { PhCaretRight } from '@phosphor-icons/vue'
-import { PANEL_GROUP_KEY } from './panelTypes'
+import { PANEL_GROUP_KEY, type PanelUnit } from './panelTypes'
 
 const props = withDefaults(defineProps<{
   id: string
   defaultSize?: number
   minSize?: number
   maxSize?: number
-  minSizePx?: number
+  unit?: PanelUnit
   collapsible?: boolean
   collapsedSize?: number
   header?: string
@@ -16,6 +16,7 @@ const props = withDefaults(defineProps<{
   defaultSize: 50,
   minSize: 10,
   maxSize: 100,
+  unit: '%',
   collapsible: false,
   collapsedSize: 0,
 })
@@ -26,10 +27,11 @@ if (!group) {
 }
 
 const size = computed(() => group.getPanelSize(props.id))
+const flexStyle = computed(() => group.getFlexStyle(props.id))
 
 // When header is present, collapse is handled locally (content hidden, panel
 // shrinks to header height). When header is absent, collapse is handled by the
-// group (panel shrinks to collapsedSize %).
+// group (panel shrinks to collapsedSize).
 const localCollapsed = ref(false)
 const isCollapsed = computed(() =>
   props.header ? localCollapsed.value : group.isPanelCollapsed(props.id)
@@ -52,7 +54,7 @@ onMounted(() => {
       defaultSize: props.defaultSize,
       minSize: props.minSize,
       maxSize: props.maxSize,
-      minSizePx: props.minSizePx,
+      unit: props.unit,
       collapsible: props.header ? false : props.collapsible,
       collapsedSize: props.collapsedSize,
     },
@@ -81,7 +83,7 @@ defineExpose({
     class="bond-panel"
     :data-panel-id="id"
     :data-state="isCollapsed ? 'collapsed' : 'expanded'"
-    :style="localCollapsed && header ? { flex: '0 0 auto' } : { flex: `1 0 ${size}%` }"
+    :style="localCollapsed && header ? { flex: '0 0 auto' } : { flex: flexStyle }"
   >
     <button
       v-if="header && collapsible"

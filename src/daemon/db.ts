@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
-import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getDataDir, getDbPath } from './paths'
 
@@ -15,7 +16,9 @@ export function getDb(): Database.Database {
   createSchema(_db)
   migrateAddImagesColumn(_db)
   migrateAddEditModeColumn(_db)
+  migrateCreateImagesTable(_db)
   migrateFromFiles(_db)
+  migrateInlineImages(_db)
 
   return _db
 }
@@ -72,6 +75,83 @@ function migrateAddEditModeColumn(db: Database.Database): void {
   if (!columns.some(c => c.name === 'edit_mode')) {
     db.exec("ALTER TABLE sessions ADD COLUMN edit_mode TEXT NOT NULL DEFAULT '{\"type\":\"full\"}'")
   }
+}
+
+function migrateCreateImagesTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS images (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_images_session ON images(session_id);
+  `)
+}
+
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp'
+}
+
+function migrateInlineImages(db: Database.Database): void {
+  // Check if already migrated
+  const flag = db.prepare('SELECT value FROM settings WHERE key = ?').get('images_migrated') as { value: string } | undefined
+  if (flag?.value === '1') return
+
+  const rows = db.prepare('SELECT id, session_id, images FROM messages WHERE images IS NOT NULL').all() as
+    { id: string; session_id: string; images: string }[]
+  if (rows.length === 0) {
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('images_migrated', '1')
+    return
+  }
+
+  const imagesDir = join(getDataDir(), 'images')
+  mkdirSync(imagesDir, { recursive: true })
+
+  const insertImage = db.prepare(
+    'INSERT INTO images (id, session_id, filename, media_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  )
+  const updateMsg = db.prepare('UPDATE messages SET images = ? WHERE id = ?')
+
+  const migrate = db.transaction(() => {
+    const now = new Date().toISOString()
+
+    for (const row of rows) {
+      let parsed: unknown
+      try { parsed = JSON.parse(row.images) } catch { continue }
+      if (!Array.isArray(parsed) || parsed.length === 0) continue
+
+      // Skip if already migrated (array of strings = image IDs)
+      if (typeof parsed[0] === 'string') continue
+
+      // Old format: array of { data, mediaType } objects
+      const imageIds: string[] = []
+      for (const img of parsed) {
+        if (!img || typeof img.data !== 'string' || typeof img.mediaType !== 'string') continue
+        const id = randomUUID()
+        const ext = MIME_TO_EXT[img.mediaType] ?? '.png'
+        const filename = `${id}${ext}`
+        const buf = Buffer.from(img.data, 'base64')
+
+        writeFileSync(join(imagesDir, filename), buf)
+        insertImage.run(id, row.session_id, filename, img.mediaType, buf.length, now)
+        imageIds.push(id)
+      }
+
+      if (imageIds.length > 0) {
+        updateMsg.run(JSON.stringify(imageIds), row.id)
+      }
+    }
+
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('images_migrated', '1')
+  })
+
+  migrate()
 }
 
 // --- One-time migration from file-based storage ---

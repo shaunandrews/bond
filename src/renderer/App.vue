@@ -142,7 +142,7 @@ onUnmounted(() => {
 
 <template>
   <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChanged="() => { sidebarCollapsed = sidebarPanelRef?.isCollapsed() ?? false }">
-    <BondPanel ref="sidebarPanelRef" id="sidebar" :defaultSize="20" :minSize="16" :maxSize="45" :minSizePx="220" collapsible :collapsedSize="0">
+    <BondPanel ref="sidebarPanelRef" id="sidebar" unit="px" :defaultSize="260" :minSize="220" :maxSize="400" collapsible :collapsedSize="0">
       <SessionSidebar
         :sessions="sessions.activeSessions.value"
         :archivedSessions="sessions.archivedSessions.value"
@@ -160,7 +160,7 @@ onUnmounted(() => {
 
     <BondPanelHandle id="handle-0" />
 
-    <BondPanel id="main" :defaultSize="80" :minSize="40">
+    <BondPanel id="main" :defaultSize="80" :minSize="30">
       <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
       <ViewShell
         v-if="activeView === 'chat'"
