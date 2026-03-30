@@ -48,7 +48,7 @@ describe('SessionSidebar', () => {
 
     it('shows archive count in header', () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-      const header = w.find('.sidebar-section-title')
+      const header = w.find('.sidebar-archives .sidebar-section-title')
       expect(header.text()).toContain('Archives (2)')
       w.unmount()
     })
@@ -63,7 +63,7 @@ describe('SessionSidebar', () => {
     it('clicking header toggles the collapsible wrapper closed', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
 
-      await w.find('.sidebar-section-header').trigger('click')
+      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
       await nextTick()
 
       const collapsible = w.find('.archives-collapsible')
@@ -74,8 +74,8 @@ describe('SessionSidebar', () => {
     it('clicking header twice reopens the collapsible wrapper', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
 
-      await w.find('.sidebar-section-header').trigger('click')
-      await w.find('.sidebar-section-header').trigger('click')
+      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
+      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
       await nextTick()
 
       const collapsible = w.find('.archives-collapsible')
@@ -87,7 +87,7 @@ describe('SessionSidebar', () => {
       const w = mount(SessionSidebar, { props: defaultProps })
 
       // Collapse
-      await w.find('.sidebar-section-header').trigger('click')
+      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
       await nextTick()
 
       // Items should still be in the DOM for animation purposes
@@ -98,7 +98,7 @@ describe('SessionSidebar', () => {
 
     it('chevron rotates when open', () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-      const chevron = w.find('.collapse-chevron')
+      const chevron = w.find('.sidebar-archives .collapse-chevron')
       expect(chevron.classes()).toContain('open')
       w.unmount()
     })
@@ -106,10 +106,10 @@ describe('SessionSidebar', () => {
     it('chevron is not rotated when closed', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
 
-      await w.find('.sidebar-section-header').trigger('click')
+      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
       await nextTick()
 
-      const chevron = w.find('.collapse-chevron')
+      const chevron = w.find('.sidebar-archives .collapse-chevron')
       expect(chevron.classes()).not.toContain('open')
       w.unmount()
     })
@@ -117,7 +117,7 @@ describe('SessionSidebar', () => {
     it('persists open/close state to localStorage', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
 
-      await w.find('.sidebar-section-header').trigger('click')
+      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
       await nextTick()
 
       expect(localStorage.getItem('bond:archives-open')).toBe('false')

@@ -34,17 +34,38 @@ const selectedModel = ref<ModelId>('sonnet')
 
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
+const settingsRef = ref<InstanceType<typeof SettingsView> | null>(null)
 const sidebarPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
-const sidebarCollapsed = ref(false)
+function getInitialSidebarWidth(): number {
+  try {
+    const raw = localStorage.getItem('bond:panels:app-layout')
+    if (raw) {
+      const layout = JSON.parse(raw)
+      if (layout.sizes?.sidebar != null) return layout.sizes.sidebar
+    }
+  } catch {}
+  return 260
+}
+
+const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === '1')
+const sidebarWidth = ref(getInitialSidebarWidth())
+
+const sidebarStyle = computed(() => ({
+  marginLeft: sidebarCollapsed.value ? `-${sidebarWidth.value}px` : '0',
+  transition: 'margin-left 0.15s ease',
+}))
 
 function handleToggleSidebar() {
-  if (sidebarPanelRef.value?.isCollapsed()) {
-    sidebarPanelRef.value?.expand()
-    sidebarCollapsed.value = false
-  } else {
-    sidebarPanelRef.value?.collapse()
-    sidebarCollapsed.value = true
-  }
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('bond:sidebar-collapsed', sidebarCollapsed.value ? '1' : '0')
+}
+
+function handleLayoutChange(layout: Record<string, number>) {
+  if (layout.sidebar != null) sidebarWidth.value = layout.sidebar
+}
+
+function handleLayoutChanged(layout: Record<string, number>) {
+  if (layout.sidebar != null) sidebarWidth.value = layout.sidebar
 }
 const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
 const { isAtBottom, scrollToBottom } = useAutoScroll(scrollEl)
@@ -142,8 +163,6 @@ onMounted(async () => {
   chat.subscribe()
   loadAccent()
   wordpress.load()
-  nextTick(() => { sidebarCollapsed.value = sidebarPanelRef.value?.isCollapsed() ?? false })
-
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
 
@@ -177,8 +196,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChanged="() => { sidebarCollapsed = sidebarPanelRef?.isCollapsed() ?? false }">
-    <BondPanel ref="sidebarPanelRef" id="sidebar" unit="px" :defaultSize="260" :minSize="220" :maxSize="400" collapsible :collapsedSize="0">
+  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
+    <BondPanel ref="sidebarPanelRef" id="sidebar" unit="px" :defaultSize="260" :minSize="220" :maxSize="400" :style="sidebarStyle">
       <SessionSidebar
         :sessions="sessions.activeSessions.value"
         :archivedSessions="sessions.archivedSessions.value"
@@ -202,7 +221,7 @@ onUnmounted(() => {
       />
     </BondPanel>
 
-    <BondPanelHandle id="handle-0" />
+    <BondPanelHandle v-show="!sidebarCollapsed" id="handle-0" />
 
     <BondPanel id="main" :defaultSize="80" :minSize="30">
       <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
@@ -260,7 +279,12 @@ onUnmounted(() => {
             <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
-        <SettingsView @createSkill="handleCreateSkill" />
+        <template #header-right>
+          <BondButton variant="primary" size="sm" @click="settingsRef?.handleSave()">
+            {{ settingsRef?.saved ? 'Saved' : 'Save' }}
+          </BondButton>
+        </template>
+        <SettingsView ref="settingsRef" @createSkill="handleCreateSkill" />
       </ViewShell>
 
       <ViewShell v-else-if="activeView === 'about'" title="About Bond">

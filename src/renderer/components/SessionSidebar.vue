@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear, PhArrowSquareOut, PhGlobe } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import type { WordPressSite } from '../../shared/wordpress'
 import type { AppView } from '../composables/useAppView'
 import SessionItem from './SessionItem.vue'
 import BondButton from './BondButton.vue'
+
+const CHATS_KEY = 'bond:chats-open'
+const chatsOpen = ref(localStorage.getItem(CHATS_KEY) !== 'false')
+watch(chatsOpen, (v) => localStorage.setItem(CHATS_KEY, String(v)))
 
 const ARCHIVES_KEY = 'bond:archives-open'
 const archivesOpen = ref(localStorage.getItem(ARCHIVES_KEY) !== 'false')
@@ -15,7 +19,7 @@ const WP_KEY = 'bond:wordpress-open'
 const wpOpen = ref(localStorage.getItem(WP_KEY) !== 'false')
 watch(wpOpen, (v) => localStorage.setItem(WP_KEY, String(v)))
 
-defineProps<{
+const props = defineProps<{
   sessions: Session[]
   archivedSessions: Session[]
   activeSessionId: string | null
@@ -27,6 +31,8 @@ defineProps<{
   selectedWpSiteId: string | null
   togglingSiteId: string | null
 }>()
+
+const chatCount = computed(() => props.sessions.length)
 
 const emit = defineEmits<{
   select: [id: string]
@@ -126,6 +132,67 @@ function selectView(view: AppView) {
       </BondButton>
     </div>
 
+    <!-- Chats list -->
+    <div class="sidebar-chats">
+      <button class="sidebar-section-header" @click="chatsOpen = !chatsOpen">
+        <span class="sidebar-section-title">Chats ({{ chatCount }})</span>
+        <span class="collapse-icon">
+          <PhCaretRight :class="['collapse-chevron', { open: chatsOpen }]" :size="12" weight="bold" />
+        </span>
+      </button>
+
+      <div :class="['chats-collapsible', { open: chatsOpen }]">
+        <div class="chats-collapsible-inner">
+          <nav class="sidebar-list">
+            <SessionItem
+              v-for="s in sessions"
+              :key="s.id"
+              :session="s"
+              :active="s.id === activeSessionId && activeView === 'chat'"
+              :generating="generatingTitleId === s.id"
+              actionTitle="Archive"
+              @select="emit('select', s.id)"
+              @action="emit('archive', s.id)"
+            >
+              <PhArchive :size="14" weight="bold" />
+            </SessionItem>
+
+            <p v-if="sessions.length === 0" class="text-sm text-muted px-3 py-4">
+              No chats yet. Start a new one!
+            </p>
+          </nav>
+        </div>
+      </div>
+    </div>
+
+    <!-- Archives (only when there are archived sessions) -->
+    <div v-if="archivedSessions.length" class="sidebar-archives">
+      <button class="sidebar-section-header" @click="archivesOpen = !archivesOpen">
+        <span class="sidebar-section-title">Archives ({{ archivedSessions.length }})</span>
+        <span class="collapse-icon">
+          <PhCaretRight :class="['collapse-chevron', { open: archivesOpen }]" :size="12" weight="bold" />
+        </span>
+      </button>
+
+      <div :class="['archives-collapsible', { open: archivesOpen }]">
+        <div class="archives-collapsible-inner">
+          <nav class="sidebar-list">
+            <SessionItem
+              v-for="s in archivedSessions"
+              :key="s.id"
+              :session="s"
+              archived
+              actionTitle="Unarchive"
+              @select="emit('select', s.id)"
+              @action="emit('unarchive', s.id)"
+            >
+              <PhArrowLineUp :size="14" weight="bold" />
+            </SessionItem>
+          </nav>
+        </div>
+      </div>
+    </div>
+
     <!-- WordPress sites -->
     <div v-if="wordPressAvailable" class="sidebar-wordpress">
       <button class="sidebar-section-header" @click="wpOpen = !wpOpen">
@@ -176,57 +243,6 @@ function selectView(view: AppView) {
       </div>
     </div>
 
-    <!-- Chats list -->
-    <div class="sidebar-chats">
-      <nav class="sidebar-list">
-        <SessionItem
-          v-for="s in sessions"
-          :key="s.id"
-          :session="s"
-          :active="s.id === activeSessionId && activeView === 'chat'"
-          :generating="generatingTitleId === s.id"
-          actionTitle="Archive"
-          @select="emit('select', s.id)"
-          @action="emit('archive', s.id)"
-        >
-          <PhArchive :size="14" weight="bold" />
-        </SessionItem>
-
-        <p v-if="sessions.length === 0" class="text-sm text-muted px-3 py-4">
-          No chats yet. Start a new one!
-        </p>
-
-      </nav>
-    </div>
-
-    <!-- Archives (only when there are archived sessions) -->
-    <div v-if="archivedSessions.length" class="sidebar-archives">
-      <button class="sidebar-section-header" @click="archivesOpen = !archivesOpen">
-        <span class="sidebar-section-title">Archives ({{ archivedSessions.length }})</span>
-        <span class="collapse-icon">
-          <PhCaretRight :class="['collapse-chevron', { open: archivesOpen }]" :size="12" weight="bold" />
-        </span>
-      </button>
-
-      <div :class="['archives-collapsible', { open: archivesOpen }]">
-        <div class="archives-collapsible-inner">
-          <nav class="sidebar-list">
-            <SessionItem
-              v-for="s in archivedSessions"
-              :key="s.id"
-              :session="s"
-              archived
-              actionTitle="Unarchive"
-              @select="emit('select', s.id)"
-              @action="emit('unarchive', s.id)"
-            >
-              <PhArrowLineUp :size="14" weight="bold" />
-            </SessionItem>
-          </nav>
-        </div>
-      </div>
-    </div>
-
   </aside>
 </template>
 
@@ -257,9 +273,23 @@ function selectView(view: AppView) {
   flex-direction: column;
 }
 
+.chats-collapsible {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--transition-base);
+  flex: 1;
+  min-height: 0;
+}
+.chats-collapsible.open {
+  grid-template-rows: 1fr;
+}
+.chats-collapsible-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
 .sidebar-archives {
   flex-shrink: 0;
-  margin-top: auto;
   border-top: 1px solid var(--sidebar-border);
   max-height: 40%;
   display: flex;
@@ -340,7 +370,7 @@ button.sidebar-section-header:hover {
 /* WordPress section */
 .sidebar-wordpress {
   flex-shrink: 0;
-  border-bottom: 1px solid var(--sidebar-border);
+  border-top: 1px solid var(--sidebar-border);
 }
 
 .wp-collapsible {
