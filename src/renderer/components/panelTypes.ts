@@ -8,6 +8,7 @@ export interface PanelConstraints {
   defaultSize: number // percentage
   collapsible: boolean
   collapsedSize: number // percentage
+  minSizePx?: number // pixel-based minimum, takes precedence over percentage when larger
 }
 
 export interface PanelRegistration {

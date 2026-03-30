@@ -8,6 +8,7 @@ const props = withDefaults(defineProps<{
   defaultSize?: number
   minSize?: number
   maxSize?: number
+  minSizePx?: number
   collapsible?: boolean
   collapsedSize?: number
   header?: string
@@ -51,6 +52,7 @@ onMounted(() => {
       defaultSize: props.defaultSize,
       minSize: props.minSize,
       maxSize: props.maxSize,
+      minSizePx: props.minSizePx,
       collapsible: props.header ? false : props.collapsible,
       collapsedSize: props.collapsedSize,
     },
@@ -95,7 +97,12 @@ defineExpose({
       <span class="bond-panel__header-label">{{ header }}</span>
       <slot name="header-extra" />
     </div>
-    <div v-show="!isCollapsed" class="bond-panel__content">
+    <div v-if="header" class="bond-panel__content" :class="{ 'bond-panel__content--collapsed': localCollapsed }">
+      <div class="bond-panel__content-inner">
+        <slot :size="size" :collapsed="isCollapsed" />
+      </div>
+    </div>
+    <div v-else class="bond-panel__body">
       <slot :size="size" :collapsed="isCollapsed" />
     </div>
   </div>
@@ -152,6 +159,24 @@ defineExpose({
 }
 
 .bond-panel__content {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--transition-base);
+  min-height: 0;
+}
+
+.bond-panel__content--collapsed {
+  grid-template-rows: 0fr;
+}
+
+.bond-panel__content-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Non-header panels: simple flex child, no grid transition.
+   Group-managed collapse handles animation via animateSizes(). */
+.bond-panel__body {
   flex: 1;
   min-height: 0;
   overflow: hidden;

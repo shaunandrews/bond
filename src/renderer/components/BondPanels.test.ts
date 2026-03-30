@@ -5,6 +5,16 @@ import BondPanelGroup from './BondPanelGroup.vue'
 import BondPanel from './BondPanel.vue'
 import BondPanelHandle from './BondPanelHandle.vue'
 
+// Flush rAF-based panel animations by fast-forwarding performance.now()
+async function flushPanelAnimation() {
+  const original = performance.now.bind(performance)
+  const start = original()
+  vi.spyOn(performance, 'now').mockReturnValue(start + 200)
+  await new Promise((r) => requestAnimationFrame(r))
+  await nextTick()
+  vi.restoreAllMocks()
+}
+
 // Helper: mount a basic two-panel horizontal layout
 function mountTwoPanels(opts: {
   direction?: 'horizontal' | 'vertical'
@@ -393,7 +403,7 @@ describe('BondPanelGroup', () => {
 
       const leftPanel = w.vm.leftPanel
       leftPanel.collapse()
-      await nextTick()
+      await flushPanelAnimation()
 
       const panels = w.findAll('.bond-panel')
       expect(panels[0].attributes('data-state')).toBe('collapsed')
@@ -432,10 +442,10 @@ describe('BondPanelGroup', () => {
 
       const leftPanel = w.vm.leftPanel
       leftPanel.collapse()
-      await nextTick()
+      await flushPanelAnimation()
 
       leftPanel.expand()
-      await nextTick()
+      await flushPanelAnimation()
 
       const panels = w.findAll('.bond-panel')
       expect(panels[0].attributes('data-state')).toBe('expanded')
