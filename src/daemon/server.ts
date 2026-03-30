@@ -42,7 +42,9 @@ import {
   getModelSetting,
   saveModelSetting,
   getAccentColor,
-  saveAccentColor
+  saveAccentColor,
+  getWindowOpacity,
+  saveWindowOpacity
 } from './settings'
 import {
   saveImages,
@@ -393,6 +395,15 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const hex = getStringParam(p, 'hex')
         if (!hex) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'hex is required'))
         return JSON.stringify(makeResponse(id, saveAccentColor(hex)))
+      }
+
+      case 'settings.getWindowOpacity':
+        return JSON.stringify(makeResponse(id, getWindowOpacity()))
+
+      case 'settings.saveWindowOpacity': {
+        const opacity = getParam(p, 'opacity')
+        if (typeof opacity !== 'number') return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'opacity is required'))
+        return JSON.stringify(makeResponse(id, saveWindowOpacity(opacity)))
       }
 
       // --- Skills ---

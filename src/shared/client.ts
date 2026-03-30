@@ -230,6 +230,14 @@ export class BondClient {
     return await this.call('settings.saveAccentColor', { hex }) as boolean
   }
 
+  async getWindowOpacity(): Promise<number> {
+    return await this.call('settings.getWindowOpacity') as number
+  }
+
+  async saveWindowOpacity(opacity: number): Promise<boolean> {
+    return await this.call('settings.saveWindowOpacity', { opacity }) as boolean
+  }
+
   // --- WordPress ---
 
   async listWordPressSites(): Promise<{ available: boolean; sites: WordPressSite[] }> {

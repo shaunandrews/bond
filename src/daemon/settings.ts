@@ -38,3 +38,17 @@ export function getAccentColor(): string {
 export function saveAccentColor(hex: string): boolean {
   return setSetting('accent_color', hex.trim())
 }
+
+export function getWindowOpacity(): number {
+  const raw = getSetting('window_opacity')
+  if (raw !== null) {
+    const n = parseFloat(raw)
+    if (!isNaN(n) && n >= 0 && n <= 1) return n
+  }
+  return 1
+}
+
+export function saveWindowOpacity(opacity: number): boolean {
+  const clamped = Math.max(0, Math.min(1, opacity))
+  return setSetting('window_opacity', String(clamped))
+}

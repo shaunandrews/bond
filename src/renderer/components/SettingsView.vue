@@ -23,6 +23,18 @@ let saveTimeout: ReturnType<typeof setTimeout> | undefined
 
 const { accent, defaultAccent, setAccent, reset: resetAccent } = useAccentColor()
 
+const windowOpacity = ref(1)
+
+async function loadWindowOpacity() {
+  windowOpacity.value = await window.bond.getWindowOpacity()
+}
+
+function handleOpacityInput(e: Event) {
+  const val = parseFloat((e.target as HTMLInputElement).value)
+  windowOpacity.value = val
+  window.bond.saveWindowOpacity(val)
+}
+
 const modelOptions = MODEL_IDS.map(id => ({
   value: id,
   label: id.charAt(0).toUpperCase() + id.slice(1)
@@ -43,7 +55,8 @@ onMounted(async () => {
   const [s, m, sk] = await Promise.all([
     window.bond.getSoul(),
     window.bond.getModel(),
-    window.bond.listSkills()
+    window.bond.listSkills(),
+    loadWindowOpacity()
   ])
   soul.value = s
   defaultModel.value = m as ModelId
@@ -129,6 +142,26 @@ function handleModelChange(model: string) {
 
         <div v-if="accent !== defaultAccent" class="section-footer">
           <button type="button" class="reset-btn" @click="resetAccent">Reset to default</button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="section-header">
+          <h2 class="text-sm font-semibold text-text-primary">Transparency</h2>
+        </div>
+
+        <div class="opacity-slider-row">
+          <span class="text-xs text-muted">More</span>
+          <input
+            type="range"
+            class="opacity-slider"
+            min="0"
+            max="1"
+            step="0.01"
+            :value="windowOpacity"
+            @input="handleOpacityInput"
+          />
+          <span class="text-xs text-muted">Less</span>
         </div>
       </section>
 
@@ -320,6 +353,38 @@ function handleModelChange(model: string) {
   cursor: pointer;
   position: absolute;
   inset: 0;
+}
+
+.opacity-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.opacity-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border);
+  outline: none;
+  cursor: pointer;
+}
+.opacity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: 2px solid var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+}
+.opacity-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
 }
 
 .reset-btn {
