@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('bond', {
   generateTitle: (sessionId: string, userMessage?: string) =>
     ipcRenderer.invoke('session:generateTitle', sessionId, userMessage) as Promise<{ title: string; summary: string }>,
 
+  // Dev
+  captureScreenshot: (outputPath: string) => ipcRenderer.invoke('dev:captureScreenshot', outputPath) as Promise<string>,
+
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url) as Promise<void>,
 

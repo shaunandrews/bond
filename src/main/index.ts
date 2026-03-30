@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
-import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
@@ -163,6 +163,32 @@ app.whenReady().then(async () => {
   await connectClient()
 
   createWindow()
+
+  // --- Dev: capture screenshot via file trigger ---
+  // Touch /tmp/bond-capture to trigger, result lands at /tmp/bond-screenshot.png
+  const captureTrigger = '/tmp/bond-capture'
+  const captureOutput = '/tmp/bond-screenshot.png'
+  const { watch } = await import('node:fs')
+  // Clean up stale trigger on startup
+  try { unlinkSync(captureTrigger) } catch { /* ignore */ }
+  watch('/tmp', (_eventType, filename) => {
+    if (filename !== 'bond-capture') return
+    if (!existsSync(captureTrigger)) return
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return
+    win.webContents.capturePage().then((image) => {
+      writeFileSync(captureOutput, image.toPNG())
+      try { unlinkSync(captureTrigger) } catch { /* ignore */ }
+    })
+  })
+
+  ipcMain.handle('dev:captureScreenshot', async (_e, outputPath: string) => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    if (!win) throw new Error('No window available')
+    const image = await win.webContents.capturePage()
+    writeFileSync(outputPath, image.toPNG())
+    return outputPath
+  })
 
   // --- External links (stays client-side) ---
   ipcMain.handle('shell:openExternal', (_e, url: string) => {
