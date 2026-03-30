@@ -105,12 +105,13 @@ Displays the current chat title. Rendered inside the app-header layout shell in 
 - **Props:** `title: string`
 
 ### ChatInput
-Textarea with Send/Stop buttons. Auto-focuses after response completes.
-- **Props:** `busy: boolean` — disables input, enables Stop button
-- **Events:** `submit(text: string)`, `cancel()`
+Unified chat box combining textarea, model selector, attach button, and a single contextual action button. Auto-focuses after response completes.
+- **Props:** `busy: boolean` — swaps action button between send/stop, `model: ModelId`
+- **Events:** `submit(text: string, images: AttachedImage[])`, `cancel()`, `update:model(value: ModelId)`
+- Single bordered container with textarea on top and a toolbar row below (model select, attach, action button). Action button shows send (arrow-up, accent) when idle, stop (stop icon) when busy. Attach button opens native file picker for jpeg/png/gif/webp. Image thumbnails appear above textarea inside the box.
 
 ### MessageBubble
-Renders all message variants based on the `Message` union type. Delegates markdown to MarkdownMessage.
+Renders all message variants based on the `Message` union type. Delegates markdown to MarkdownMessage. User messages render attached images above text.
 - **Props:** `msg: Message` — role/kind determines which variant renders
 
 ### MarkdownMessage
