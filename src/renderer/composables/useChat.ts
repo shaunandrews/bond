@@ -93,6 +93,9 @@ export function useChat(deps: ChatDeps = window.bond) {
           const last = messages.value[messages.value.length - 1]
           if (last?.role === 'bond' && last.streaming) {
             last.streaming = false
+          } else if (chunk.result && (!last || last.role !== 'bond')) {
+            // Fallback: if no streaming message was created, use the result text
+            addMessage({ id: uid(), role: 'bond', text: chunk.result, streaming: false })
           }
         }
         // Auto-save after each completed turn

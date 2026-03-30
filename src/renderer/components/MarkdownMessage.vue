@@ -77,7 +77,18 @@ watch(
 const rootEl = ref<HTMLElement | null>(null)
 
 function handleClick(e: MouseEvent) {
-  const btn = (e.target as HTMLElement).closest('.code-block-copy') as HTMLElement | null
+  const target = e.target as HTMLElement
+
+  // Open links in default browser
+  const anchor = target.closest('a') as HTMLAnchorElement | null
+  if (anchor?.href) {
+    e.preventDefault()
+    window.bond.openExternal(anchor.href)
+    return
+  }
+
+  // Copy code block
+  const btn = target.closest('.code-block-copy') as HTMLElement | null
   if (!btn) return
   const code = btn.dataset.code ?? ''
   navigator.clipboard.writeText(code)

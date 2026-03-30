@@ -11,7 +11,7 @@ const props = withDefaults(defineProps<{
   hitArea: 8,
 })
 
-const group = inject(PANEL_GROUP_KEY)
+const group = inject(PANEL_GROUP_KEY)!
 if (!group) {
   throw new Error('BondPanelHandle must be used inside BondPanelGroup')
 }
@@ -149,13 +149,17 @@ onUnmounted(() => {
 
 .bond-panel-handle--horizontal {
   width: 8px;
+  height: 100%;
   cursor: col-resize;
+  margin: 0 -4px;
   padding: 0 2px;
 }
 
 .bond-panel-handle--vertical {
   height: 8px;
+  width: 100%;
   cursor: row-resize;
+  margin: -4px 0;
   padding: 2px 0;
 }
 
@@ -165,7 +169,7 @@ onUnmounted(() => {
 }
 
 .bond-panel-handle__bar {
-  border-radius: 2px;
+  position: absolute;
   transition: background var(--transition-fast), opacity var(--transition-fast);
   background: var(--color-border);
   opacity: 0;
@@ -173,12 +177,14 @@ onUnmounted(() => {
 
 .bond-panel-handle--horizontal .bond-panel-handle__bar {
   width: 2px;
-  height: 24px;
+  top: 0;
+  bottom: 0;
 }
 
 .bond-panel-handle--vertical .bond-panel-handle__bar {
   height: 2px;
-  width: 24px;
+  left: 0;
+  right: 0;
 }
 
 .bond-panel-handle[data-state='hover'] .bond-panel-handle__bar,
@@ -195,6 +201,5 @@ onUnmounted(() => {
 .bond-panel-handle:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: -2px;
-  border-radius: 2px;
 }
 </style>

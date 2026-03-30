@@ -69,7 +69,7 @@ const classes = computed(() => {
 </script>
 
 <template>
-  <component :is="tag" :class="classes">
+  <component :is="tag" :class="classes" style="text-wrap: pretty;">
     <slot />
   </component>
 </template>
