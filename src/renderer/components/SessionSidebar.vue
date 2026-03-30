@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { PhPlus, PhCaretRight, PhArrowDown, PhArrowUp } from '@phosphor-icons/vue'
+import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhSidebarSimple, PhGear } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import type { AppView } from '../composables/useAppView'
 import SessionItem from './SessionItem.vue'
 
-const archivesOpen = ref(true)
+const ARCHIVES_KEY = 'bond:archives-open'
+const archivesOpen = ref(localStorage.getItem(ARCHIVES_KEY) !== 'false')
+watch(archivesOpen, (v) => localStorage.setItem(ARCHIVES_KEY, String(v)))
 
 defineProps<{
   sessions: Session[]
@@ -22,7 +24,44 @@ const emit = defineEmits<{
   unarchive: [id: string]
   remove: [id: string]
   switchView: [view: AppView]
+  toggleSidebar: []
 }>()
+
+const menuOpen = ref(false)
+const menuRef = ref<HTMLElement | null>(null)
+const menuBtnRef = ref<HTMLElement | null>(null)
+const menuPos = ref({ top: '0px', left: '0px' })
+
+async function toggleMenu() {
+  menuOpen.value = !menuOpen.value
+  if (menuOpen.value && menuBtnRef.value) {
+    const rect = (menuBtnRef.value as HTMLElement).getBoundingClientRect()
+    menuPos.value = {
+      top: `${rect.bottom + 4}px`,
+      left: `${rect.left}px`,
+    }
+  }
+}
+
+function handleClickOutside(e: MouseEvent) {
+  if (
+    menuOpen.value &&
+    menuRef.value &&
+    !menuRef.value.contains(e.target as Node) &&
+    menuBtnRef.value &&
+    !menuBtnRef.value.contains(e.target as Node)
+  ) {
+    menuOpen.value = false
+  }
+}
+
+onMounted(() => document.addEventListener('pointerdown', handleClickOutside))
+onBeforeUnmount(() => document.removeEventListener('pointerdown', handleClickOutside))
+
+function selectView(view: AppView) {
+  menuOpen.value = false
+  emit('switchView', view)
+}
 </script>
 
 <template>
@@ -30,12 +69,43 @@ const emit = defineEmits<{
     <!-- Toolbar row — sits beside traffic lights -->
     <div class="sidebar-toolbar drag-region">
       <button
+        ref="menuBtnRef"
         type="button"
-        @click.stop="emit('create')"
-        class="sidebar-btn no-drag"
-        title="New chat"
+        :class="['sidebar-btn no-drag', { active: menuOpen }]"
+        title="Menu"
+        @click.stop="toggleMenu"
       >
-        <PhPlus :size="16" weight="bold" />
+        <PhGear :size="16" weight="bold" />
+      </button>
+
+      <Teleport to="body">
+        <div
+          v-if="menuOpen"
+          ref="menuRef"
+          class="sidebar-flyout"
+          :style="{ top: menuPos.top, left: menuPos.left }"
+        >
+          <button
+            v-for="item in ([
+              { id: 'design-system', label: 'Design System' },
+              { id: 'components', label: 'Components' },
+              { id: 'settings', label: 'Settings' },
+            ] as const)"
+            :key="item.id"
+            :class="['flyout-item', { active: activeView === item.id }]"
+            @click="selectView(item.id)"
+          >
+            {{ item.label }}
+          </button>
+        </div>
+      </Teleport>
+      <button
+        type="button"
+        @click.stop="emit('toggleSidebar')"
+        class="sidebar-btn no-drag"
+        title="Toggle sidebar"
+      >
+        <PhSidebarSimple :size="16" weight="bold" />
       </button>
     </div>
 
@@ -52,12 +122,23 @@ const emit = defineEmits<{
           @select="emit('select', s.id)"
           @action="emit('archive', s.id)"
         >
-          <PhArrowDown :size="14" weight="bold" />
+          <PhArchive :size="14" weight="bold" />
         </SessionItem>
 
         <p v-if="sessions.length === 0" class="text-sm text-muted px-3 py-4">
           No chats yet. Start a new one!
         </p>
+
+        <button
+          type="button"
+          class="new-chat-btn"
+          @click.stop="emit('create')"
+        >
+          <span class="new-chat-label">New chat</span>
+          <span class="new-chat-icon">
+            <PhPlus :size="14" weight="bold" />
+          </span>
+        </button>
       </nav>
     </div>
 
@@ -65,10 +146,12 @@ const emit = defineEmits<{
     <div v-if="archivedSessions.length" class="sidebar-archives">
       <button class="sidebar-section-header" @click="archivesOpen = !archivesOpen">
         <span class="sidebar-section-title">Archives ({{ archivedSessions.length }})</span>
-        <PhCaretRight :class="['collapse-chevron', { open: archivesOpen }]" :size="12" weight="bold" />
+        <span class="collapse-icon">
+          <PhCaretRight :class="['collapse-chevron', { open: archivesOpen }]" :size="12" weight="bold" />
+        </span>
       </button>
 
-      <nav v-if="archivesOpen" class="sidebar-list">
+      <nav v-show="archivesOpen" class="sidebar-list">
         <SessionItem
           v-for="s in archivedSessions"
           :key="s.id"
@@ -78,38 +161,18 @@ const emit = defineEmits<{
           @select="emit('select', s.id)"
           @action="emit('unarchive', s.id)"
         >
-          <PhArrowUp :size="14" weight="bold" />
+          <PhArrowLineUp :size="14" weight="bold" />
         </SessionItem>
       </nav>
     </div>
 
-    <!-- Nav links — not in a panel, just fits content -->
-    <div class="sidebar-nav">
-      <button
-        :class="['sidebar-nav-item', { active: activeView === 'design-system' }]"
-        @click="emit('switchView', 'design-system')"
-      >
-        Design System
-      </button>
-      <button
-        :class="['sidebar-nav-item', { active: activeView === 'components' }]"
-        @click="emit('switchView', 'components')"
-      >
-        Components
-      </button>
-      <button
-        :class="['sidebar-nav-item', { active: activeView === 'settings' }]"
-        @click="emit('switchView', 'settings')"
-      >
-        Settings
-      </button>
-    </div>
   </aside>
 </template>
 
 <style scoped>
 .session-sidebar {
   height: 100%;
+  min-width: 220px; /* prevent content reflow during sidebar collapse animation */
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--sidebar-border);
@@ -122,7 +185,7 @@ const emit = defineEmits<{
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  padding: 0.75rem 0.5rem 0.25rem;
+  padding: 0.75rem 0.75rem 0.25rem;
   /* macOS traffic lights need ~70px horizontal + some vertical space */
   min-height: 2rem;
 }
@@ -136,6 +199,7 @@ const emit = defineEmits<{
 
 .sidebar-archives {
   flex-shrink: 0;
+  margin-top: auto;
   border-top: 1px solid var(--sidebar-border);
   max-height: 40%;
   display: flex;
@@ -146,7 +210,7 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 0.75rem;
+  padding: 0.625rem 0.75rem 0.625rem 1rem;
   flex-shrink: 0;
 }
 
@@ -156,10 +220,22 @@ button.sidebar-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 0.75rem;
+  padding: 0.625rem 0.75rem 0.625rem 1rem;
   flex-shrink: 0;
   width: 100%;
   box-sizing: border-box;
+  transition: background var(--transition-fast);
+}
+button.sidebar-section-header:hover {
+  background: var(--sidebar-hover-bg);
+}
+
+.collapse-icon {
+  flex-shrink: 0;
+  width: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .collapse-chevron {
@@ -172,40 +248,9 @@ button.sidebar-section-header {
 }
 
 .sidebar-section-title {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--sidebar-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.sidebar-nav {
-  flex-shrink: 0;
-  padding: 0.5rem 0.75rem;
-  padding-bottom: 1rem;
-  border-top: 1px solid var(--sidebar-border);
-}
-
-.sidebar-nav-item {
-  all: unset;
-  cursor: pointer;
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.45rem 0.5rem;
-  border-radius: var(--radius-md);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 500;
   color: var(--sidebar-text-muted);
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-.sidebar-nav-item:hover {
-  background: var(--sidebar-hover-bg);
-  color: var(--sidebar-text);
-}
-.sidebar-nav-item.active {
-  background: var(--sidebar-active-bg);
-  color: var(--sidebar-text);
 }
 
 .sidebar-btn {
@@ -223,7 +268,8 @@ button.sidebar-section-header {
   color: var(--sidebar-text-muted);
   transition: background var(--transition-base), color var(--transition-base);
 }
-.sidebar-btn:hover {
+.sidebar-btn:hover,
+.sidebar-btn.active {
   background: var(--sidebar-hover-bg);
   color: var(--sidebar-text);
 }
@@ -232,5 +278,72 @@ button.sidebar-section-header {
   overflow-y: auto;
   height: 100%;
   padding: 0.375rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.new-chat-btn {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.25rem 0.5rem 0.5rem;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--sidebar-text);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.new-chat-btn:hover {
+  background: var(--sidebar-hover-bg);
+}
+.new-chat-label {
+  flex: 1;
+  min-width: 0;
+}
+.new-chat-icon {
+  flex-shrink: 0;
+  width: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sidebar-text-muted);
+}
+</style>
+
+<style>
+.sidebar-flyout {
+  position: fixed;
+  min-width: 10rem;
+  padding: 0.25rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 100;
+}
+
+.flyout-item {
+  all: unset;
+  cursor: pointer;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.625rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  transition: background var(--transition-fast);
+}
+.flyout-item:hover {
+  background: var(--sidebar-hover-bg);
+}
+.flyout-item.active {
+  color: var(--color-accent);
 }
 </style>
