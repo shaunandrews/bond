@@ -40,10 +40,10 @@ describe('useChat', () => {
   })
 
   describe('submit', () => {
-    it('adds a user message and calls send', async () => {
+    it('adds a user message and thinking placeholder, then calls send', async () => {
       await chat.submit('hello')
 
-      expect(chat.messages.value).toHaveLength(1)
+      // user message + thinking placeholder (removed after since no thinking text)
       expect(chat.messages.value[0]).toMatchObject({ role: 'user', text: 'hello' })
       expect(deps.send).toHaveBeenCalledWith('hello', undefined, undefined)
     })
@@ -59,12 +59,15 @@ describe('useChat', () => {
       expect(chat.busy.value).toBe(false)
     })
 
-    it('sets thinking during send and resets after', async () => {
+    it('adds thinking message during send and removes empty one after', async () => {
       const promise = chat.submit('hello')
-      expect(chat.thinking.value).toBe(true)
+      // Should have user message + thinking placeholder
+      expect(chat.messages.value).toHaveLength(2)
+      expect(chat.messages.value[1]).toMatchObject({ role: 'meta', kind: 'thinking', streaming: true })
 
       await promise
-      expect(chat.thinking.value).toBe(false)
+      // Empty thinking placeholder gets removed
+      expect(chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'thinking')).toBeUndefined()
     })
 
     it('adds error message when send fails', async () => {
@@ -72,8 +75,8 @@ describe('useChat', () => {
 
       await chat.submit('hello')
 
-      expect(chat.messages.value).toHaveLength(2)
-      expect(chat.messages.value[1]).toMatchObject({ role: 'meta', kind: 'error', text: 'boom' })
+      // user + error (thinking placeholder removed)
+      expect(chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'error')).toMatchObject({ text: 'boom' })
     })
 
     it('ignores empty text', async () => {
@@ -181,11 +184,40 @@ describe('useChat', () => {
       expect(chat.messages.value[0]).toMatchObject({ text: 'init' })
     })
 
-    it('clears thinking on any chunk', () => {
+    it('removes empty thinking placeholder on non-thinking chunk', () => {
       const handler = getChunkHandler()
-      chat.thinking.value = true
+      // Simulate submit adding a thinking placeholder
+      chat.messages.value.push({ id: '1', role: 'meta', kind: 'thinking', text: '', streaming: true } as any)
       handler({ kind: 'assistant_text', text: 'hi' })
-      expect(chat.thinking.value).toBe(false)
+
+      // Empty thinking removed, only bond message remains
+      expect(chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'thinking')).toBeUndefined()
+      expect(chat.messages.value[chat.messages.value.length - 1]).toMatchObject({ role: 'bond', text: 'hi' })
+    })
+
+    it('accumulates thinking text into a thinking message', () => {
+      const handler = getChunkHandler()
+      // Simulate submit adding a thinking placeholder
+      chat.messages.value.push({ id: '1', role: 'meta', kind: 'thinking', text: '', streaming: true } as any)
+      handler({ kind: 'thinking_text', text: 'Let me ' })
+      handler({ kind: 'thinking_text', text: 'think...' })
+
+      const thinking = chat.messages.value[chat.messages.value.length - 1]
+      expect(thinking).toMatchObject({
+        role: 'meta', kind: 'thinking', text: 'Let me think...', streaming: true
+      })
+    })
+
+    it('finalizes thinking message when assistant text arrives', () => {
+      const handler = getChunkHandler()
+      // Simulate submit adding a thinking placeholder
+      chat.messages.value.push({ id: '1', role: 'meta', kind: 'thinking', text: '', streaming: true } as any)
+      handler({ kind: 'thinking_text', text: 'reasoning' })
+      handler({ kind: 'assistant_text', text: 'hi' })
+
+      const thinking = chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'thinking')
+      expect(thinking).toMatchObject({ role: 'meta', kind: 'thinking', streaming: false, text: 'reasoning' })
+      expect(chat.messages.value[chat.messages.value.length - 1]).toMatchObject({ role: 'bond', text: 'hi' })
     })
   })
 

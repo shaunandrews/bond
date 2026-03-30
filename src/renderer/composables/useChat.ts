@@ -28,6 +28,7 @@ function toSessionMessages(msgs: Message[]): SessionMessage[] {
     if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text, streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: m.name, summary: m.summary }
     if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: m.name, summary: m.args }
+    if (m.kind === 'thinking') return { id: m.id, role: 'meta', kind: 'thinking', text: m.text, summary: m.durationSec != null ? String(m.durationSec) : undefined }
     if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', name: m.toolName, summary: m.description, status: m.status }
     if (m.kind === 'error') return { id: m.id, role: 'meta', kind: 'error', text: m.text }
     return { id: m.id, role: 'meta', kind: 'system', text: m.text }
@@ -40,6 +41,7 @@ function fromSessionMessages(msgs: SessionMessage[]): Message[] {
     if (m.role === 'bond') return { id: m.id, role: 'bond' as const, text: m.text ?? '', streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta' as const, kind: 'tool' as const, name: m.name ?? '', summary: m.summary }
     if (m.kind === 'skill') return { id: m.id, role: 'meta' as const, kind: 'skill' as const, name: m.name ?? '', args: m.summary }
+    if (m.kind === 'thinking') return { id: m.id, role: 'meta' as const, kind: 'thinking' as const, text: m.text ?? '', durationSec: m.summary ? parseInt(m.summary, 10) : undefined, streaming: false }
     if (m.kind === 'approval') return { id: m.id, role: 'meta' as const, kind: 'approval' as const, requestId: '', toolName: m.name ?? '', input: {}, description: m.summary, status: (m.status as 'approved' | 'denied') ?? 'denied' }
     if (m.kind === 'error') return { id: m.id, role: 'meta' as const, kind: 'error' as const, text: m.text ?? '' }
     return { id: m.id, role: 'meta' as const, kind: 'system' as const, text: m.text ?? '' }
@@ -49,26 +51,63 @@ function fromSessionMessages(msgs: SessionMessage[]): Message[] {
 // Preserve chat state across HMR reloads so in-flight streaming
 // isn't lost when Vite hot-updates a module during a response.
 const _hmr = import.meta.hot?.data as
-  | { messages?: Message[]; busy?: boolean; thinking?: boolean; sessionId?: string | null }
+  | { messages?: Message[]; busy?: boolean; sessionId?: string | null }
   | undefined
 
 export function useChat(deps: ChatDeps = window.bond) {
   const messages = ref<Message[]>(_hmr?.messages ?? [])
   const busy = ref(_hmr?.busy ?? false)
-  const thinking = ref(_hmr?.thinking ?? false)
   const currentSessionId = ref<string | null>(_hmr?.sessionId ?? null)
 
   let unsub: (() => void) | undefined
+  let thinkingStartedAt = 0
 
   function addMessage(msg: Message) {
     messages.value.push(msg)
+  }
+
+  function finalizeThinking() {
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const m = messages.value[i]
+      if (m.role === 'meta' && m.kind === 'thinking' && m.streaming) {
+        if (!m.text) {
+          // No thinking text arrived — remove the placeholder
+          messages.value.splice(i, 1)
+        } else {
+          m.streaming = false
+          m.durationSec = thinkingStartedAt
+            ? Math.round((Date.now() - thinkingStartedAt) / 1000)
+            : undefined
+        }
+        thinkingStartedAt = 0
+        break
+      }
+    }
   }
 
   function handleChunk(chunk: TaggedChunk) {
     // Ignore chunks for other sessions
     if (chunk.sessionId !== currentSessionId.value) return
 
-    thinking.value = false
+    // Thinking deltas accumulate into the current thinking message
+    if (chunk.kind === 'thinking_text') {
+      // Find the streaming thinking message (may not be last due to interleaved tool messages)
+      for (let i = messages.value.length - 1; i >= 0; i--) {
+        const m = messages.value[i]
+        if (m.role === 'meta' && m.kind === 'thinking' && m.streaming) {
+          if (!m.text && !thinkingStartedAt) thinkingStartedAt = Date.now()
+          m.text += chunk.text
+          return
+        }
+      }
+      // No streaming thinking message exists — create one (e.g. mid-turn thinking)
+      thinkingStartedAt = Date.now()
+      addMessage({ id: uid(), role: 'meta', kind: 'thinking', text: chunk.text, streaming: true })
+      return
+    }
+
+    // Any non-thinking chunk finalizes the thinking message
+    finalizeThinking()
 
     switch (chunk.kind) {
       case 'assistant_text': {
@@ -179,10 +218,11 @@ export function useChat(deps: ChatDeps = window.bond) {
       addMessage({ id: uid(), role: 'meta', kind: 'skill', name: skillMatch[1], args: skillMatch[2] })
     }
     busy.value = true
-    thinking.value = true
+    thinkingStartedAt = Date.now()
+    addMessage({ id: uid(), role: 'meta', kind: 'thinking', text: '', streaming: true })
 
-    // Persist user message immediately
-    await persistMessages()
+    // Persist user message in background — don't block the send
+    persistMessages()
 
     try {
       const res = await deps.send(trimmed, currentSessionId.value ?? undefined, images)
@@ -201,7 +241,7 @@ export function useChat(deps: ChatDeps = window.bond) {
       }
     } finally {
       busy.value = false
-      thinking.value = false
+      finalizeThinking()
       endStreaming()
       await persistMessages()
     }
@@ -234,7 +274,6 @@ export function useChat(deps: ChatDeps = window.bond) {
     import.meta.hot.dispose((data) => {
       data.messages = messages.value
       data.busy = busy.value
-      data.thinking = thinking.value
       data.sessionId = currentSessionId.value
     })
   }
@@ -242,7 +281,6 @@ export function useChat(deps: ChatDeps = window.bond) {
   return {
     messages,
     busy,
-    thinking,
     currentSessionId,
     submit,
     cancel,

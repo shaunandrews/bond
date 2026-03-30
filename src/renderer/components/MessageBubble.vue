@@ -1,10 +1,14 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+import { PhCaretRight } from '@phosphor-icons/vue'
 import type { Message } from '../types/message'
 import { imageDataUri } from '../../shared/session'
 import MarkdownMessage from './MarkdownMessage.vue'
 
 defineProps<{ msg: Message }>()
 defineEmits<{ approve: [requestId: string, approved: boolean] }>()
+
+const thinkingExpanded = ref(false)
 
 function formatApprovalInput(input: Record<string, unknown>): string {
   const filePath = input.file_path ?? input.path
@@ -15,6 +19,14 @@ function formatApprovalInput(input: Record<string, unknown>): string {
   }
   if (typeof input.command === 'string') return input.command
   return JSON.stringify(input, null, 2).slice(0, 300)
+}
+
+function formatDuration(sec: number | undefined): string {
+  if (sec == null || sec < 1) return 'briefly'
+  if (sec < 60) return `for ${sec}s`
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return s > 0 ? `for ${m}m ${s}s` : `for ${m}m`
 }
 </script>
 
@@ -68,6 +80,36 @@ function formatApprovalInput(input: Record<string, unknown>): string {
     </div>
   </div>
 
+  <!-- Thinking: single element transitions Working → Thinking → Thought -->
+  <div
+    v-else-if="msg.kind === 'thinking'"
+    class="self-start w-full text-xs text-muted"
+  >
+    <!-- Working (no text yet) or Thinking (text streaming) -->
+    <div v-if="msg.streaming" class="px-1 py-1 italic opacity-70">
+      <template v-if="msg.text">Thinking<span class="thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></template>
+      <template v-else>Bond is working<span class="thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></template>
+    </div>
+    <!-- Thought: collapsed accordion -->
+    <template v-else>
+      <button
+        class="flex items-center gap-1 px-1 py-1 text-left cursor-pointer opacity-70 hover:opacity-100 transition-opacity"
+        @click="thinkingExpanded = !thinkingExpanded"
+      >
+        <span>Thought {{ formatDuration(msg.durationSec) }}</span>
+        <PhCaretRight
+          :size="10"
+          weight="bold"
+          class="thinking-chevron"
+          :class="{ 'rotate-90': thinkingExpanded }"
+        />
+      </button>
+      <div v-if="thinkingExpanded" class="px-1 pb-1">
+        <pre class="thinking-content text-[11px] text-muted whitespace-pre-wrap font-sans leading-relaxed">{{ msg.text }}</pre>
+      </div>
+    </template>
+  </div>
+
   <!-- Skill invocation -->
   <div
     v-else-if="msg.kind === 'skill'"
@@ -102,3 +144,25 @@ function formatApprovalInput(input: Record<string, unknown>): string {
     {{ msg.text }}
   </div>
 </template>
+
+<style scoped>
+.thinking-chevron {
+  transition: transform var(--transition-fast);
+}
+
+.thinking-content {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.thinking-dots span {
+  animation: blink 1.4s infinite both;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
+}
+</style>

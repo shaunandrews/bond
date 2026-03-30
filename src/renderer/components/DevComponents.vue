@@ -4,7 +4,6 @@ import { PhCaretRight, PhGear, PhPlus, PhTrash } from '@phosphor-icons/vue'
 import ChatHeader from './ChatHeader.vue'
 import ChatInput from './ChatInput.vue'
 import MessageBubble from './MessageBubble.vue'
-import ThinkingIndicator from './ThinkingIndicator.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
@@ -217,14 +216,6 @@ const components = [
       { name: 'text', type: 'string', description: 'Raw markdown string' },
       { name: 'streaming', type: 'boolean', description: 'Whether the message is still streaming' },
     ],
-    events: [],
-  },
-  {
-    name: 'ThinkingIndicator',
-    file: 'components/ThinkingIndicator.vue',
-    category: 'Composed',
-    description: 'Animated "Bond is working..." with blinking dots.',
-    props: [],
     events: [],
   },
   {
@@ -522,8 +513,6 @@ const categories = ['Primitives', 'Layout', 'Composed'] as const
                   />
                 </template>
 
-                <!-- ThinkingIndicator -->
-                <ThinkingIndicator v-if="comp.name === 'ThinkingIndicator'" />
 
                 <!-- BondPanelGroup / BondPanel / BondPanelHandle -->
                 <template v-if="comp.name === 'BondPanelGroup'">
