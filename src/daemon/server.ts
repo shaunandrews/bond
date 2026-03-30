@@ -49,6 +49,12 @@ import {
   getImage,
   getImages
 } from './images'
+import {
+  listSites as listWordPressSites,
+  createSite as createWordPressSite,
+  startSite as startWordPressSite,
+  stopSite as stopWordPressSite
+} from './wordpress'
 
 // --- State ---
 
@@ -407,6 +413,28 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const ids = getParam(p, 'ids') as string[] | undefined
         if (!ids || !Array.isArray(ids)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'ids is required'))
         return JSON.stringify(makeResponse(id, getImages(ids)))
+      }
+
+      // --- WordPress ---
+      case 'wordpress.list':
+        return JSON.stringify(makeResponse(id, listWordPressSites()))
+
+      case 'wordpress.create': {
+        const name = getStringParam(p, 'name')
+        if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
+        return JSON.stringify(makeResponse(id, createWordPressSite(name)))
+      }
+
+      case 'wordpress.start': {
+        const sitePath = getStringParam(p, 'path')
+        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
+        return JSON.stringify(makeResponse(id, startWordPressSite(sitePath)))
+      }
+
+      case 'wordpress.stop': {
+        const sitePath = getStringParam(p, 'path')
+        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
+        return JSON.stringify(makeResponse(id, stopWordPressSite(sitePath)))
       }
 
       default:

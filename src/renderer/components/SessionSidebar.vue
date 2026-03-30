@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear } from '@phosphor-icons/vue'
+import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear, PhArrowSquareOut, PhGlobe } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
+import type { WordPressSite } from '../../shared/wordpress'
 import type { AppView } from '../composables/useAppView'
 import SessionItem from './SessionItem.vue'
 import BondButton from './BondButton.vue'
@@ -10,12 +11,21 @@ const ARCHIVES_KEY = 'bond:archives-open'
 const archivesOpen = ref(localStorage.getItem(ARCHIVES_KEY) !== 'false')
 watch(archivesOpen, (v) => localStorage.setItem(ARCHIVES_KEY, String(v)))
 
+const WP_KEY = 'bond:wordpress-open'
+const wpOpen = ref(localStorage.getItem(WP_KEY) !== 'false')
+watch(wpOpen, (v) => localStorage.setItem(WP_KEY, String(v)))
+
 defineProps<{
   sessions: Session[]
   archivedSessions: Session[]
   activeSessionId: string | null
   activeView: AppView
   generatingTitleId: string | null
+  wordPressSites: WordPressSite[]
+  wordPressAvailable: boolean | null
+  wordPressCreating: boolean
+  selectedWpSiteId: string | null
+  togglingSiteId: string | null
 }>()
 
 const emit = defineEmits<{
@@ -25,6 +35,9 @@ const emit = defineEmits<{
   unarchive: [id: string]
   remove: [id: string]
   switchView: [view: AppView]
+  wpSelect: [site: WordPressSite]
+  wpOpen: [site: WordPressSite]
+  wpCreate: []
 }>()
 
 const menuOpen = ref(false)
@@ -111,6 +124,56 @@ function selectView(view: AppView) {
       >
         <PhPlus :size="16" weight="bold" />
       </BondButton>
+    </div>
+
+    <!-- WordPress sites -->
+    <div v-if="wordPressAvailable" class="sidebar-wordpress">
+      <button class="sidebar-section-header" @click="wpOpen = !wpOpen">
+        <span class="sidebar-section-title">WordPress ({{ wordPressSites.length }})</span>
+        <span class="collapse-icon">
+          <PhCaretRight :class="['collapse-chevron', { open: wpOpen }]" :size="12" weight="bold" />
+        </span>
+      </button>
+
+      <div :class="['wp-collapsible', { open: wpOpen }]">
+        <div class="wp-collapsible-inner">
+          <div class="wp-site-list">
+            <div
+              v-for="site in wordPressSites"
+              :key="site.id"
+              :class="['wp-site-row', { active: site.id === selectedWpSiteId && activeView === 'wordpress' }]"
+              @click="emit('wpSelect', site)"
+            >
+              <span :class="['wp-status-dot', { running: site.running, toggling: togglingSiteId === site.id }]" />
+              <span class="wp-site-name">{{ site.name }}</span>
+              <BondButton
+                class="wp-open-btn"
+                variant="ghost"
+                size="sm"
+                icon
+                title="Open in browser"
+                @click.stop="emit('wpOpen', site)"
+              >
+                <PhArrowSquareOut :size="12" weight="bold" />
+              </BondButton>
+            </div>
+
+            <p v-if="wordPressSites.length === 0" class="wp-empty">No sites yet</p>
+          </div>
+
+          <div class="wp-actions">
+            <BondButton
+              variant="ghost"
+              size="sm"
+              :disabled="wordPressCreating"
+              @click.stop="emit('wpCreate')"
+            >
+              <PhPlus :size="14" weight="bold" />
+              {{ wordPressCreating ? 'Creating...' : 'New site' }}
+            </BondButton>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Chats list -->
@@ -272,6 +335,97 @@ button.sidebar-section-header:hover {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+}
+
+/* WordPress section */
+.sidebar-wordpress {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--sidebar-border);
+}
+
+.wp-collapsible {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--transition-base);
+}
+.wp-collapsible.open {
+  grid-template-rows: 1fr;
+}
+.wp-collapsible-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.wp-site-list {
+  padding: 0 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.wp-site-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.wp-site-row:hover {
+  background: var(--sidebar-hover-bg);
+}
+.wp-site-row.active {
+  background: var(--sidebar-active-bg);
+}
+
+.wp-status-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sidebar-text-faint);
+}
+.wp-status-dot.running {
+  background: var(--color-ok);
+}
+.wp-status-dot.toggling {
+  background: var(--color-accent);
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.wp-site-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8125rem;
+  color: var(--sidebar-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wp-open-btn {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.wp-site-row:hover .wp-open-btn {
+  opacity: 1;
+}
+
+.wp-empty {
+  font-size: 0.75rem;
+  color: var(--sidebar-text-muted);
+  padding: 0.5rem;
+}
+
+.wp-actions {
+  padding: 0.25rem 0.5rem 0.5rem;
 }
 
 </style>

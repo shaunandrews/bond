@@ -5,19 +5,21 @@ import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
+import { useWordPress } from './composables/useWordPress'
 import type { ModelId, AttachedImage } from './types/message'
+import type { WordPressSite } from '../shared/wordpress'
 import type { EditMode } from '../shared/session'
 import { PhSidebarSimple, PhArrowDown } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
-import ThinkingIndicator from './components/ThinkingIndicator.vue'
 import ChatInput from './components/ChatInput.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import DesignSystemView from './components/DesignSystemView.vue'
 import DevComponents from './components/DevComponents.vue'
 import SettingsView from './components/SettingsView.vue'
 import AboutView from './components/AboutView.vue'
+import WordPressSiteView from './components/WordPressSiteView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
@@ -27,6 +29,7 @@ const chat = useChat()
 const sessions = useSessions()
 const { activeView } = useAppView()
 const { load: loadAccent } = useAccentColor()
+const wordpress = useWordPress()
 const selectedModel = ref<ModelId>('sonnet')
 
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
@@ -107,6 +110,15 @@ async function handleSelectSession(id: string) {
   nextTick(scrollToBottom)
 }
 
+function handleSelectWpSite(site: WordPressSite) {
+  wordpress.selectSite(site.id)
+  activeView.value = 'wordpress'
+}
+
+function handleOpenWpSite(site: WordPressSite) {
+  window.bond.openExternal(site.url)
+}
+
 function onKeyDown(e: KeyboardEvent) {
   if (e.metaKey && e.key === 'b') {
     e.preventDefault()
@@ -122,10 +134,14 @@ function onKeyDown(e: KeyboardEvent) {
   }
 }
 
+function handleWpRefresh() { wordpress.load() }
+
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('focus', handleWpRefresh)
   chat.subscribe()
   loadAccent()
+  wordpress.load()
   nextTick(() => { sidebarCollapsed.value = sidebarPanelRef.value?.isCollapsed() ?? false })
 
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
@@ -155,6 +171,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('focus', handleWpRefresh)
   chat.unsubscribe()
 })
 </script>
@@ -168,12 +185,20 @@ onUnmounted(() => {
         :activeSessionId="sessions.activeSessionId.value"
         :activeView="activeView"
         :generatingTitleId="sessions.generatingTitleId.value"
+        :wordPressSites="wordpress.sites.value"
+        :wordPressAvailable="wordpress.available.value"
+        :wordPressCreating="wordpress.creating.value"
+        :selectedWpSiteId="wordpress.selectedSiteId.value"
+        :togglingSiteId="wordpress.togglingSiteId.value"
         @select="handleSelectSession"
         @create="handleNewSession"
         @archive="sessions.archive"
         @unarchive="sessions.unarchive"
         @remove="sessions.remove"
         @switchView="(v) => activeView = v"
+        @wpSelect="handleSelectWpSite"
+        @wpOpen="handleOpenWpSite"
+        @wpCreate="wordpress.createSite"
       />
     </BondPanel>
 
@@ -194,7 +219,6 @@ onUnmounted(() => {
 
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
           <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" @approve="chat.respondToApproval" />
-          <ThinkingIndicator v-if="chat.thinking.value" />
         </div>
 
         <template #footer>
@@ -246,6 +270,22 @@ onUnmounted(() => {
           </BondButton>
         </template>
         <AboutView />
+      </ViewShell>
+
+      <ViewShell v-else-if="activeView === 'wordpress'" :title="wordpress.selectedSite.value?.name ?? 'WordPress'">
+        <template #header-left>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+            <PhSidebarSimple :size="16" weight="bold" />
+          </BondButton>
+        </template>
+        <WordPressSiteView
+          v-if="wordpress.selectedSite.value"
+          :site="wordpress.selectedSite.value"
+          :toggling="wordpress.togglingSiteId.value === wordpress.selectedSite.value.id"
+          @open="handleOpenWpSite(wordpress.selectedSite.value!)"
+          @start="wordpress.startSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
+          @stop="wordpress.stopSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
+        />
       </ViewShell>
       </div>
     </BondPanel>

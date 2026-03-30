@@ -79,18 +79,23 @@ function* flattenToolBlocks(msg: SDKMessage): Generator<BondStreamChunk> {
   }
 }
 
-function extractTextDelta(msg: SDKMessage): BondStreamChunk | null {
+function extractStreamDelta(msg: SDKMessage): BondStreamChunk | null {
   if (msg.type !== 'stream_event') return null
-  const evt = msg.event as { type: string; delta?: { type: string; text?: string } }
-  if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
-    return { kind: 'assistant_text', text: evt.delta.text }
+  const evt = msg.event as { type: string; delta?: { type: string; text?: string; thinking?: string } }
+  if (evt.type === 'content_block_delta') {
+    if (evt.delta?.type === 'text_delta' && evt.delta.text) {
+      return { kind: 'assistant_text', text: evt.delta.text }
+    }
+    if (evt.delta?.type === 'thinking_delta' && evt.delta.thinking) {
+      return { kind: 'thinking_text', text: evt.delta.thinking }
+    }
   }
   return null
 }
 
 export function* bondMessageToChunks(message: SDKMessage): Generator<BondStreamChunk> {
   if (message.type === 'stream_event') {
-    const delta = extractTextDelta(message)
+    const delta = extractStreamDelta(message)
     if (delta) yield delta
     return
   }
@@ -162,7 +167,60 @@ export async function runBondQuery(
     'Each SKILL.md has YAML frontmatter (name, description, argument-hint) and a body with instructions. ' +
     'You can create, edit, list, and remove skills by reading/writing files in ~/.bond/skills/. ' +
     'To create a skill: mkdir the directory, write a SKILL.md with frontmatter and instructions. ' +
-    'The user invokes skills by typing /skill-name in chat. After creating or modifying skills, tell the user to restart the daemon for changes to take effect.'
+    'The user invokes skills by typing /skill-name in chat. After creating or modifying skills, tell the user to restart the daemon for changes to take effect.\n\n' +
+    'You are an expert with WordPress and the `studio` CLI (WordPress Studio).\n\n' +
+    'STUDIO CLI REFERENCE:\n' +
+    'All sites live in ~/Studio/. Always pass --path to target a site.\n\n' +
+    'Site management:\n' +
+    '  studio site list --format json          # Returns [{id, name, path, port, url, running}, ...]\n' +
+    '  studio site create --name "Name" --path ~/Studio/slug --start true --skip-browser true\n' +
+    '  studio site start --path PATH\n' +
+    '  studio site stop --path PATH\n' +
+    '  studio site status --path PATH          # URL, PHP/WP version, admin creds\n' +
+    '  studio site delete --path PATH\n' +
+    '  studio site set --path PATH --php 8.4   # Also: --domain, --https, --wp, --xdebug, --admin-username, --admin-password\n\n' +
+    'WP-CLI (via studio wp <command> --path PATH):\n' +
+    '  IMPORTANT: Site must be running before WP-CLI commands work. Start it first if needed.\n\n' +
+    '  Content:\n' +
+    '    studio wp post list --post_type=post --fields=ID,post_title,post_status --path PATH\n' +
+    '    studio wp post create --post_type=post --post_title="Title" --post_content="<p>HTML</p>" --post_status=publish --path PATH\n' +
+    '    studio wp post update POST_ID --post_title="New" --path PATH\n' +
+    '    studio wp post get POST_ID --field=post_content --path PATH\n' +
+    '    studio wp post delete POST_ID --path PATH\n' +
+    '    studio wp post meta get/update POST_ID key [value] --path PATH\n\n' +
+    '  Plugins:\n' +
+    '    studio wp plugin list --path PATH\n' +
+    '    studio wp plugin install SLUG --activate --path PATH\n' +
+    '    studio wp plugin activate/deactivate SLUG --path PATH\n' +
+    '    studio wp plugin update SLUG --path PATH\n' +
+    '    studio wp plugin delete SLUG --path PATH\n' +
+    '    studio wp plugin search "term" --fields=name,slug,rating --path PATH\n\n' +
+    '  Themes:\n' +
+    '    studio wp theme list --path PATH\n' +
+    '    studio wp theme install SLUG --activate --path PATH\n' +
+    '    studio wp theme activate SLUG --path PATH\n' +
+    '    studio wp theme search "term" --fields=name,slug,rating --path PATH\n\n' +
+    '  Options:\n' +
+    '    studio wp option get OPTION --path PATH\n' +
+    '    studio wp option update OPTION "value" --path PATH\n' +
+    '    Common: blogname, blogdescription, siteurl, home, permalink_structure\n\n' +
+    '  Users:\n' +
+    '    studio wp user list --fields=ID,user_login,user_email,roles --path PATH\n' +
+    '    studio wp user create USERNAME EMAIL --role=editor --path PATH\n\n' +
+    '  Database:\n' +
+    '    studio wp db export ~/Desktop/backup.sql --path PATH\n' +
+    '    studio wp db import file.sql --path PATH\n' +
+    '    studio wp search-replace "old" "new" --path PATH\n\n' +
+    '  Menus:\n' +
+    '    studio wp menu list/create --path PATH\n' +
+    '    studio wp menu item add-post MENU_ID POST_ID --path PATH\n' +
+    '    studio wp menu item add-custom MENU_ID "Label" "url" --path PATH\n\n' +
+    '  Other: wp core version/update, wp transient delete --all, wp cache flush, wp scaffold block\n\n' +
+    'Preview sites (push local to WordPress.com):\n' +
+    '  studio preview create --path PATH\n' +
+    '  studio preview list/update/delete --path PATH\n\n' +
+    'File editing: Site files at ~/Studio/site-name/wp-content/{themes,plugins,uploads}/. ' +
+    'You can directly Read/Edit/Write theme and plugin PHP, CSS, JS, JSON, and template files.'
 
   const editMode = options.editMode ?? { type: 'full' }
   const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS

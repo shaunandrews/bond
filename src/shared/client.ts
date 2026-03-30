@@ -1,6 +1,7 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
 import type { Session, SessionMessage, AttachedImage } from './session'
+import type { WordPressSite } from './wordpress'
 import {
   makeRequest,
   isResponse,
@@ -227,5 +228,23 @@ export class BondClient {
 
   async saveAccentColor(hex: string): Promise<boolean> {
     return await this.call('settings.saveAccentColor', { hex }) as boolean
+  }
+
+  // --- WordPress ---
+
+  async listWordPressSites(): Promise<{ available: boolean; sites: WordPressSite[] }> {
+    return await this.call('wordpress.list') as { available: boolean; sites: WordPressSite[] }
+  }
+
+  async createWordPressSite(name: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
+    return await this.call('wordpress.create', { name }) as { available: boolean; sites: WordPressSite[] }
+  }
+
+  async startWordPressSite(path: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
+    return await this.call('wordpress.start', { path }) as { available: boolean; sites: WordPressSite[] }
+  }
+
+  async stopWordPressSite(path: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
+    return await this.call('wordpress.stop', { path }) as { available: boolean; sites: WordPressSite[] }
   }
 }

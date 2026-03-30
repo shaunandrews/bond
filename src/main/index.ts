@@ -238,6 +238,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('image:get', (_e, imageId: string) => client.getImage(imageId))
   ipcMain.handle('image:getMultiple', (_e, ids: string[]) => client.getImages(ids))
 
+  // --- WordPress ---
+  ipcMain.handle('wordpress:list', () => client.listWordPressSites())
+  ipcMain.handle('wordpress:create', (_e, name: string) => client.createWordPressSite(name))
+  ipcMain.handle('wordpress:start', (_e, path: string) => client.startWordPressSite(path))
+  ipcMain.handle('wordpress:stop', (_e, path: string) => client.stopWordPressSite(path))
+
   // --- Settings ---
   ipcMain.handle('settings:getSoul', () => client.getSoul())
   ipcMain.handle('settings:saveSoul', (_e, content: string) => client.saveSoul(content))

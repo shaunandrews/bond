@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
 import type { Session, SessionMessage, AttachedImage, ImageRecord } from '../shared/session'
+import type { WordPressSite } from '../shared/wordpress'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
@@ -49,5 +50,11 @@ contextBridge.exposeInMainWorld('bond', {
   getSoul: () => ipcRenderer.invoke('settings:getSoul') as Promise<string>,
   saveSoul: (content: string) => ipcRenderer.invoke('settings:saveSoul', content) as Promise<boolean>,
   getAccentColor: () => ipcRenderer.invoke('settings:getAccentColor') as Promise<string>,
-  saveAccentColor: (hex: string) => ipcRenderer.invoke('settings:saveAccentColor', hex) as Promise<boolean>
+  saveAccentColor: (hex: string) => ipcRenderer.invoke('settings:saveAccentColor', hex) as Promise<boolean>,
+
+  // WordPress
+  listWordPressSites: () => ipcRenderer.invoke('wordpress:list') as Promise<{ available: boolean; sites: WordPressSite[] }>,
+  createWordPressSite: (name: string) => ipcRenderer.invoke('wordpress:create', name) as Promise<{ available: boolean; sites: WordPressSite[] }>,
+  startWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:start', path) as Promise<{ available: boolean; sites: WordPressSite[] }>,
+  stopWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:stop', path) as Promise<{ available: boolean; sites: WordPressSite[] }>
 })
