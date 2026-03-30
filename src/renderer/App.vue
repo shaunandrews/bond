@@ -5,7 +5,9 @@ import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
-import type { ModelId } from './types/message'
+import type { ModelId, AttachedImage } from './types/message'
+import type { EditMode } from '../shared/session'
+import { PhSidebarSimple } from '@phosphor-icons/vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ThinkingIndicator from './components/ThinkingIndicator.vue'
 import ChatInput from './components/ChatInput.vue'
@@ -24,15 +26,28 @@ const { activeView } = useAppView()
 const { load: loadAccent } = useAccentColor()
 const selectedModel = ref<ModelId>('sonnet')
 
+const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
+const sidebarPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
+const sidebarCollapsed = ref(false)
+
+function handleToggleSidebar() {
+  if (sidebarPanelRef.value?.isCollapsed()) {
+    sidebarPanelRef.value?.expand()
+    sidebarCollapsed.value = false
+  } else {
+    sidebarPanelRef.value?.collapse()
+    sidebarCollapsed.value = true
+  }
+}
 const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
 const { scrollToBottom } = useAutoScroll(scrollEl)
 
 let titleGenPending = false
 
-async function handleSubmit(text: string) {
+async function handleSubmit(text: string, images: AttachedImage[]) {
   nextTick(scrollToBottom)
-  await chat.submit(text)
+  await chat.submit(text, images?.length ? images : undefined)
 
   if (
     sessions.activeSessionId.value &&
@@ -46,9 +61,20 @@ async function handleSubmit(text: string) {
   }
 }
 
+const currentEditMode = computed<EditMode>(() =>
+  sessions.activeSession.value?.editMode ?? { type: 'full' }
+)
+
 function handleModelChange(model: ModelId) {
   selectedModel.value = model
   window.bond.setModel(model)
+}
+
+async function handleEditModeChange(mode: EditMode) {
+  const id = sessions.activeSessionId.value
+  if (!id) return
+  await window.bond.updateSession(id, { editMode: mode })
+  sessions.updateLocal(id, { editMode: mode })
 }
 
 async function handleNewSession() {
@@ -56,6 +82,7 @@ async function handleNewSession() {
   await chat.loadSession(session.id)
   const model = await window.bond.getModel() as ModelId
   selectedModel.value = model
+  nextTick(() => chatInputRef.value?.focus())
 }
 
 async function handleSelectSession(id: string) {
@@ -66,9 +93,18 @@ async function handleSelectSession(id: string) {
   nextTick(scrollToBottom)
 }
 
+function onKeyDown(e: KeyboardEvent) {
+  if (e.metaKey && e.key === 'b') {
+    e.preventDefault()
+    handleToggleSidebar()
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener('keydown', onKeyDown)
   chat.subscribe()
   loadAccent()
+  nextTick(() => { sidebarCollapsed.value = sidebarPanelRef.value?.isCollapsed() ?? false })
 
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
@@ -78,14 +114,17 @@ onMounted(async () => {
     ? sessions.activeSessions.value.find((s) => s.id === savedId)
     : null
 
+  // Skip DB reload if chat state survived HMR (prevents clobbering in-flight streaming)
+  const hasHmrState = chat.messages.value.length > 0 && chat.currentSessionId.value
+
   if (savedSession) {
     sessions.select(savedSession.id)
-    await chat.loadSession(savedSession.id)
+    if (!hasHmrState) await chat.loadSession(savedSession.id)
     nextTick(scrollToBottom)
   } else if (sessions.activeSessions.value.length > 0) {
     const first = sessions.activeSessions.value[0]
     sessions.select(first.id)
-    await chat.loadSession(first.id)
+    if (!hasHmrState) await chat.loadSession(first.id)
     nextTick(scrollToBottom)
   } else {
     await handleNewSession()
@@ -93,13 +132,14 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', onKeyDown)
   chat.unsubscribe()
 })
 </script>
 
 <template>
-  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;">
-    <BondPanel id="sidebar" :defaultSize="20" :minSize="12" :maxSize="35" collapsible :collapsedSize="0">
+  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChanged="() => { sidebarCollapsed = sidebarPanelRef?.isCollapsed() ?? false }">
+    <BondPanel ref="sidebarPanelRef" id="sidebar" :defaultSize="20" :minSize="16" :maxSize="45" :minSizePx="220" collapsible :collapsedSize="0">
       <SessionSidebar
         :sessions="sessions.activeSessions.value"
         :archivedSessions="sessions.archivedSessions.value"
@@ -112,12 +152,23 @@ onUnmounted(() => {
         @unarchive="sessions.unarchive"
         @remove="sessions.remove"
         @switchView="(v) => activeView = v"
+        @toggleSidebar="handleToggleSidebar"
       />
     </BondPanel>
 
     <BondPanelHandle id="handle-0" />
 
     <BondPanel id="main" :defaultSize="80" :minSize="40">
+      <div class="main-panel-wrap">
+      <button
+        v-if="sidebarCollapsed"
+        type="button"
+        class="sidebar-expand-btn no-drag"
+        @click.stop="handleToggleSidebar"
+        title="Show sidebar"
+      >
+        <PhSidebarSimple :size="16" weight="bold" />
+      </button>
       <ViewShell
         v-if="activeView === 'chat'"
         ref="chatShellRef"
@@ -129,7 +180,7 @@ onUnmounted(() => {
         </div>
 
         <template #footer>
-          <ChatInput :busy="chat.busy.value" :model="selectedModel" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" />
+          <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
         </template>
       </ViewShell>
 
@@ -144,6 +195,7 @@ onUnmounted(() => {
       <ViewShell v-else-if="activeView === 'settings'" title="Settings">
         <SettingsView />
       </ViewShell>
+      </div>
     </BondPanel>
   </BondPanelGroup>
 </template>
@@ -162,6 +214,7 @@ onUnmounted(() => {
   --color-accent: #7a5c3b;
   --color-err: #e57373;
   --color-ok: #81c784;
+  --color-tint: rgba(255,255,255,0.65);
 }
 
 @theme {
@@ -193,6 +246,7 @@ onUnmounted(() => {
   --color-accent: #7a5c3b;
   --color-err: #e57373;
   --color-ok: #81c784;
+  --color-tint: rgba(255,255,255,0.65);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
   --shadow-md: 0 2px 8px rgba(0,0,0,0.08);
   --shadow-lg: 0 4px 16px rgba(0,0,0,0.12);
@@ -217,6 +271,7 @@ onUnmounted(() => {
     --color-accent: #c4a07c;
     --color-err: #ef9a9a;
     --color-ok: #a5d6a7;
+    --color-tint: rgba(255,255,255,0.08);
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
     --shadow-md: 0 2px 8px rgba(0,0,0,0.3);
     --shadow-lg: 0 4px 16px rgba(0,0,0,0.4);
@@ -244,5 +299,34 @@ html, body, #app {
 }
 .no-drag {
   -webkit-app-region: no-drag;
+}
+
+.main-panel-wrap {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-expand-btn {
+  all: unset;
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+  position: absolute;
+  top: 0.75rem;
+  left: 5.5rem;
+  z-index: 20;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  color: var(--color-muted);
+  transition: background var(--transition-base), color var(--transition-base);
+}
+.sidebar-expand-btn:hover {
+  background: var(--sidebar-hover-bg);
+  color: var(--color-text-primary);
 }
 </style>
