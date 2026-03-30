@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, toRefs, nextTick, onMounted } from 'vue'
-import { PhArrowUp, PhCaretDown, PhPaperclip, PhStop, PhX } from '@phosphor-icons/vue'
+import { PhArrowUp, PhPaperclip, PhStop, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode } from '../../shared/session'
+import BondSelect from './BondSelect.vue'
 
 interface SkillInfo {
   name: string
@@ -34,8 +35,8 @@ watch(() => props.editMode, (mode) => {
   }
 }, { immediate: true })
 
-function handleEditModeChange(e: Event) {
-  const type = (e.target as HTMLSelectElement).value as 'full' | 'readonly' | 'scoped'
+function handleEditModeChange(value: string) {
+  const type = value as 'full' | 'readonly' | 'scoped'
   if (type === 'scoped') {
     scopedPathsInput.value = ''
     emit('update:editMode', { type: 'scoped', allowedPaths: [] })
@@ -51,7 +52,8 @@ function handleScopedPathsChange(e: Event) {
   emit('update:editMode', { type: 'scoped', allowedPaths: paths })
 }
 
-const models = MODEL_IDS.map(id => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) }))
+const modelOptions = MODEL_IDS.map(id => ({ value: id, label: id.charAt(0).toUpperCase() + id.slice(1) }))
+const editModeOptions = EDIT_MODE_OPTIONS.map(o => ({ value: o.value, label: o.label }))
 
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
@@ -297,26 +299,18 @@ function handleKeyDown(e: KeyboardEvent) {
       <!-- Toolbar -->
       <div class="flex items-center justify-between pt-2">
         <div class="flex items-center gap-2">
-          <div class="relative inline-block">
-            <select
-              :value="model"
-              class="toolbar-select"
-              @change="emit('update:model', ($event.target as HTMLSelectElement).value as ModelId)"
-            >
-              <option v-for="m in models" :key="m.id" :value="m.id">{{ m.label }}</option>
-            </select>
-            <PhCaretDown class="absolute right-2 top-1/2 -translate-y-1/2 text-muted pointer-events-none" :size="12" weight="bold" />
-          </div>
-          <div class="relative inline-block">
-            <select
-              :value="editMode.type"
-              class="toolbar-select"
-              @change="handleEditModeChange"
-            >
-              <option v-for="opt in EDIT_MODE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-            </select>
-            <PhCaretDown class="absolute right-2 top-1/2 -translate-y-1/2 text-muted pointer-events-none" :size="12" weight="bold" />
-          </div>
+          <BondSelect
+            :modelValue="model"
+            :options="modelOptions"
+            placement="top"
+            @update:modelValue="emit('update:model', $event as ModelId)"
+          />
+          <BondSelect
+            :modelValue="editMode.type"
+            :options="editModeOptions"
+            placement="top"
+            @update:modelValue="handleEditModeChange"
+          />
           <button
             type="button"
             :disabled="busy"
@@ -400,22 +394,6 @@ function handleKeyDown(e: KeyboardEvent) {
   margin-left: 1px;
   margin-bottom: 0.5rem;
   outline: none;
-}
-
-.toolbar-select {
-  appearance: none;
-  background: transparent;
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 0.3em 2em 0.3em 0.6em;
-  font-size: 0.85rem;
-  font-family: inherit;
-  cursor: pointer;
-}
-.toolbar-select:focus {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -1px;
 }
 
 .skill-menu {
