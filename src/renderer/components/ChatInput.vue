@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, toRefs, nextTick } from 'vue'
+import { PhCaretDown } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 
 const props = defineProps<{ busy: boolean; model: ModelId }>()
@@ -45,7 +46,7 @@ function handleKeyDown(e: KeyboardEvent) {
 
 <template>
   <div>
-    <div class="px-5 pt-3 pb-4">
+    <div class="px-5 pt-3 pb-5">
       <textarea
         ref="inputEl"
         rows="3"
@@ -56,13 +57,16 @@ function handleKeyDown(e: KeyboardEvent) {
         class="w-full resize-y min-h-[4.5rem] max-h-48 px-3 py-2.5 rounded-lg border border-border bg-surface text-text-primary font-[inherit] text-base focus:outline-2 focus:outline-accent focus:outline-offset-1"
       />
       <div class="flex items-center justify-between mt-2">
-        <select
-          :value="model"
-          class="model-select"
-          @change="emit('update:model', ($event.target as HTMLSelectElement).value as ModelId)"
-        >
-          <option v-for="m in models" :key="m.id" :value="m.id">{{ m.label }}</option>
-        </select>
+        <div class="model-select-wrap">
+          <select
+            :value="model"
+            class="model-select"
+            @change="emit('update:model', ($event.target as HTMLSelectElement).value as ModelId)"
+          >
+            <option v-for="m in models" :key="m.id" :value="m.id">{{ m.label }}</option>
+          </select>
+          <PhCaretDown class="model-select-icon" :size="12" weight="bold" />
+        </div>
         <div class="flex gap-2">
           <button
             type="button"
@@ -87,6 +91,11 @@ function handleKeyDown(e: KeyboardEvent) {
 </template>
 
 <style scoped>
+.model-select-wrap {
+  position: relative;
+  display: inline-block;
+}
+
 .model-select {
   appearance: none;
   background: var(--color-surface);
@@ -97,12 +106,18 @@ function handleKeyDown(e: KeyboardEvent) {
   font-size: 0.85rem;
   font-family: inherit;
   cursor: pointer;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%235c6570' d='M3 4.5l3 3 3-3'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0.5em center;
 }
 .model-select:focus {
   outline: 2px solid var(--color-accent);
   outline-offset: -1px;
+}
+
+.model-select-icon {
+  position: absolute;
+  right: 0.5em;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-muted);
+  pointer-events: none;
 }
 </style>

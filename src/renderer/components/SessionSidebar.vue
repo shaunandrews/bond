@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+import { PhPlus, PhCaretRight, PhArrowDown, PhArrowUp } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import type { AppView } from '../composables/useAppView'
-import BondPanelGroup from './BondPanelGroup.vue'
-import BondPanel from './BondPanel.vue'
-import BondPanelHandle from './BondPanelHandle.vue'
+import SessionItem from './SessionItem.vue'
+
+const archivesOpen = ref(true)
 
 defineProps<{
   sessions: Session[]
@@ -21,17 +23,6 @@ const emit = defineEmits<{
   remove: [id: string]
   switchView: [view: AppView]
 }>()
-
-function formatDate(iso: string): string {
-  const d = new Date(iso)
-  const now = new Date()
-  const diff = now.getTime() - d.getTime()
-  if (diff < 60_000) return 'Just now'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
-  if (diff < 604_800_000) return `${Math.floor(diff / 86_400_000)}d ago`
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
 </script>
 
 <template>
@@ -44,83 +35,53 @@ function formatDate(iso: string): string {
         class="sidebar-btn no-drag"
         title="New chat"
       >
-        +
+        <PhPlus :size="16" weight="bold" />
       </button>
     </div>
 
-    <!-- Resizable chats + archives area -->
-    <BondPanelGroup direction="vertical" autoSaveId="sidebar-panels" class="sidebar-panels">
-      <!-- Chats -->
-      <BondPanel id="chats" :defaultSize="65" :minSize="20">
-        <nav class="sidebar-list">
-          <div
-            v-for="s in sessions"
-            :key="s.id"
-            role="button"
-            tabindex="0"
-            :class="['session-item', { active: s.id === activeSessionId && activeView === 'chat' }]"
-            @click="emit('select', s.id)"
-            @keydown.enter="emit('select', s.id)"
-            @keydown.space.prevent="emit('select', s.id)"
-          >
-            <span :class="['session-title', { 'generating': generatingTitleId === s.id }]">
-              {{ generatingTitleId === s.id ? 'Naming...' : s.title }}
-            </span>
-            <span class="session-meta">{{ formatDate(s.updatedAt) }}</span>
-            <button
-              type="button"
-              class="session-action"
-              title="Archive"
-              @click.stop="emit('archive', s.id)"
-            >
-              &darr;
-            </button>
-          </div>
-
-          <p v-if="sessions.length === 0" class="text-sm text-muted px-3 py-4">
-            No chats yet. Start a new one!
-          </p>
-        </nav>
-      </BondPanel>
-
-      <!-- Archives (collapsible, only when there are archived sessions) -->
-      <template v-if="archivedSessions.length">
-        <BondPanelHandle id="handle-0" />
-
-        <BondPanel
-          id="archives"
-          :defaultSize="35"
-          :minSize="10"
-          collapsible
-          :collapsedSize="0"
-          :header="`Archives (${archivedSessions.length})`"
+    <!-- Chats list -->
+    <div class="sidebar-chats">
+      <nav class="sidebar-list">
+        <SessionItem
+          v-for="s in sessions"
+          :key="s.id"
+          :session="s"
+          :active="s.id === activeSessionId && activeView === 'chat'"
+          :generating="generatingTitleId === s.id"
+          actionTitle="Archive"
+          @select="emit('select', s.id)"
+          @action="emit('archive', s.id)"
         >
-          <nav class="sidebar-list">
-            <div
-              v-for="s in archivedSessions"
-              :key="s.id"
-              role="button"
-              tabindex="0"
-              class="session-item archived"
-              @click="emit('select', s.id)"
-              @keydown.enter="emit('select', s.id)"
-              @keydown.space.prevent="emit('select', s.id)"
-            >
-              <span class="session-title">{{ s.title }}</span>
-              <span class="session-meta">{{ formatDate(s.updatedAt) }}</span>
-              <button
-                type="button"
-                class="session-action"
-                title="Unarchive"
-                @click.stop="emit('unarchive', s.id)"
-              >
-                &uarr;
-              </button>
-            </div>
-          </nav>
-        </BondPanel>
-      </template>
-    </BondPanelGroup>
+          <PhArrowDown :size="14" weight="bold" />
+        </SessionItem>
+
+        <p v-if="sessions.length === 0" class="text-sm text-muted px-3 py-4">
+          No chats yet. Start a new one!
+        </p>
+      </nav>
+    </div>
+
+    <!-- Archives (only when there are archived sessions) -->
+    <div v-if="archivedSessions.length" class="sidebar-archives">
+      <button class="sidebar-section-header" @click="archivesOpen = !archivesOpen">
+        <span class="sidebar-section-title">Archives ({{ archivedSessions.length }})</span>
+        <PhCaretRight :class="['collapse-chevron', { open: archivesOpen }]" :size="12" weight="bold" />
+      </button>
+
+      <nav v-if="archivesOpen" class="sidebar-list">
+        <SessionItem
+          v-for="s in archivedSessions"
+          :key="s.id"
+          :session="s"
+          archived
+          actionTitle="Unarchive"
+          @select="emit('select', s.id)"
+          @action="emit('unarchive', s.id)"
+        >
+          <PhArrowUp :size="14" weight="bold" />
+        </SessionItem>
+      </nav>
+    </div>
 
     <!-- Nav links — not in a panel, just fits content -->
     <div class="sidebar-nav">
@@ -151,8 +112,8 @@ function formatDate(iso: string): string {
   height: 100%;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border-right: 1px solid var(--sidebar-border);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -161,21 +122,68 @@ function formatDate(iso: string): string {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  padding: 0.5rem 0.5rem 0;
+  padding: 0.75rem 0.5rem 0.25rem;
   /* macOS traffic lights need ~70px horizontal + some vertical space */
   min-height: 2rem;
 }
 
-.sidebar-panels {
+.sidebar-chats {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-archives {
+  flex-shrink: 0;
+  border-top: 1px solid var(--sidebar-border);
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  flex-shrink: 0;
+}
+
+button.sidebar-section-header {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.collapse-chevron {
+  color: var(--sidebar-text-faint);
+  transition: transform var(--transition-fast);
+  transform: rotate(0deg);
+}
+.collapse-chevron.open {
+  transform: rotate(90deg);
+}
+
+.sidebar-section-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--sidebar-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .sidebar-nav {
   flex-shrink: 0;
   padding: 0.5rem 0.75rem;
   padding-bottom: 1rem;
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--sidebar-border);
 }
 
 .sidebar-nav-item {
@@ -188,20 +196,21 @@ function formatDate(iso: string): string {
   border-radius: var(--radius-md);
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--color-muted);
+  color: var(--sidebar-text-muted);
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .sidebar-nav-item:hover {
-  background: color-mix(in srgb, var(--color-border) 40%, transparent);
-  color: var(--color-text-primary);
+  background: var(--sidebar-hover-bg);
+  color: var(--sidebar-text);
 }
 .sidebar-nav-item.active {
-  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
-  color: var(--color-text-primary);
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-text);
 }
 
 .sidebar-btn {
   all: unset;
+  -webkit-app-region: no-drag;
   cursor: pointer;
   width: 24px;
   height: 24px;
@@ -211,83 +220,17 @@ function formatDate(iso: string): string {
   border-radius: var(--radius-md);
   font-size: 1.1rem;
   font-weight: 600;
-  color: var(--color-muted);
+  color: var(--sidebar-text-muted);
   transition: background var(--transition-base), color var(--transition-base);
 }
 .sidebar-btn:hover {
-  background: color-mix(in srgb, var(--color-border) 60%, transparent);
-  color: var(--color-text-primary);
+  background: var(--sidebar-hover-bg);
+  color: var(--sidebar-text);
 }
 
 .sidebar-list {
   overflow-y: auto;
   height: 100%;
-  padding: 0.25rem 0.5rem;
-}
-
-.session-item {
-  all: unset;
-  cursor: pointer;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.5rem 0.5rem;
-  border-radius: var(--radius-md);
-  transition: background var(--transition-fast);
-  position: relative;
-}
-.session-item:hover {
-  background: color-mix(in srgb, var(--color-border) 40%, transparent);
-}
-.session-item.active {
-  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
-}
-
-.session-title {
-  flex: 1;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--color-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.session-item.archived .session-title {
-  color: var(--color-muted);
-}
-.session-title.generating {
-  color: var(--color-muted);
-  font-style: italic;
-}
-
-.session-meta {
-  font-size: 0.7rem;
-  color: var(--color-muted);
-  flex-shrink: 0;
-}
-
-.session-action {
-  all: unset;
-  cursor: pointer;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  font-size: 0.75rem;
-  color: var(--color-muted);
-  opacity: 0;
-  transition: opacity var(--transition-fast), background var(--transition-fast);
-}
-.session-item:hover .session-action {
-  opacity: 1;
-}
-.session-action:hover {
-  background: color-mix(in srgb, var(--color-border) 60%, transparent);
-  color: var(--color-text-primary);
+  padding: 0.375rem 0.5rem;
 }
 </style>

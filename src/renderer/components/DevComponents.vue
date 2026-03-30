@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { PhCaretRight } from '@phosphor-icons/vue'
 import ChatHeader from './ChatHeader.vue'
 import ChatInput from './ChatInput.vue'
 import MessageBubble from './MessageBubble.vue'
@@ -260,7 +261,7 @@ const categories = ['Primitives', 'Layout', 'Composed'] as const
               <span class="dev-card-name">{{ comp.name }}</span>
               <span class="dev-card-file">{{ comp.file }}</span>
             </div>
-            <span class="dev-card-chevron" :class="{ open: expandedSections.has(comp.name) }">&#9654;</span>
+            <PhCaretRight class="dev-card-chevron" :class="{ open: expandedSections.has(comp.name) }" :size="12" weight="bold" />
           </button>
 
           <div v-if="expandedSections.has(comp.name)" class="dev-card-body">
@@ -640,7 +641,6 @@ const categories = ['Primitives', 'Layout', 'Composed'] as const
 }
 
 .dev-card-chevron {
-  font-size: 0.65rem;
   color: var(--color-muted);
   transition: transform var(--transition-base);
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { inject, ref, onMounted, onUnmounted, computed } from 'vue'
+import { PhCaretRight } from '@phosphor-icons/vue'
 import { PANEL_GROUP_KEY } from './panelTypes'
 
 const props = withDefaults(defineProps<{
@@ -18,7 +19,7 @@ const props = withDefaults(defineProps<{
   collapsedSize: 0,
 })
 
-const group = inject(PANEL_GROUP_KEY)
+const group = inject(PANEL_GROUP_KEY)!
 if (!group) {
   throw new Error('BondPanel must be used inside BondPanelGroup')
 }
@@ -88,7 +89,7 @@ defineExpose({
     >
       <span class="bond-panel__header-label">{{ header }}</span>
       <slot name="header-extra" />
-      <span class="bond-panel__chevron" :class="{ collapsed: isCollapsed }">&#9654;</span>
+      <PhCaretRight class="bond-panel__chevron" :class="{ collapsed: isCollapsed }" :size="12" weight="bold" />
     </button>
     <div v-if="header && !collapsible" class="bond-panel__header bond-panel__header--static">
       <span class="bond-panel__header-label">{{ header }}</span>
@@ -142,7 +143,6 @@ defineExpose({
 }
 
 .bond-panel__chevron {
-  font-size: 0.55rem;
   transition: transform var(--transition-base);
   transform: rotate(90deg);
 }
