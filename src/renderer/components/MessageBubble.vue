@@ -68,6 +68,15 @@ function formatApprovalInput(input: Record<string, unknown>): string {
     </div>
   </div>
 
+  <!-- Skill invocation -->
+  <div
+    v-else-if="msg.kind === 'skill'"
+    class="self-center max-w-[96%] px-3.5 py-2.5 rounded-[10px] text-xs text-muted border border-dashed border-accent/40"
+  >
+    <span class="text-accent font-medium">/{{ msg.name }}</span>
+    <span v-if="msg.args"> — {{ msg.args }}</span>
+  </div>
+
   <!-- Tool call -->
   <div
     v-else-if="msg.kind === 'tool'"

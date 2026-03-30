@@ -20,8 +20,11 @@ import { MODEL_IDS } from '../shared/models'
 import {
   runBondQuery,
   resolvePendingApproval,
-  clearSessionApprovals
+  clearSessionApprovals,
+  getCachedSkills,
+  refreshSkillsCache
 } from './agent'
+import { removeSkill } from './skills'
 import { closeDb } from './db'
 import {
   listSessions,
@@ -376,6 +379,21 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const hex = getStringParam(p, 'hex')
         if (!hex) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'hex is required'))
         return JSON.stringify(makeResponse(id, saveAccentColor(hex)))
+      }
+
+      // --- Skills ---
+      case 'skills.list':
+        return JSON.stringify(makeResponse(id, getCachedSkills()))
+
+      case 'skills.refresh':
+        return JSON.stringify(makeResponse(id, refreshSkillsCache()))
+
+      case 'skills.remove': {
+        const name = getStringParam(p, 'name')
+        if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
+        const removed = removeSkill(name)
+        if (removed) refreshSkillsCache()
+        return JSON.stringify(makeResponse(id, { ok: removed }))
       }
 
       // --- Images ---

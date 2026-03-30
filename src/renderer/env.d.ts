@@ -13,6 +13,9 @@ declare global {
       getMessages: (sessionId: string) => Promise<import('../../shared/session').SessionMessage[]>
       saveMessages: (sessionId: string, messages: import('../../shared/session').SessionMessage[]) => Promise<boolean>
       generateTitle: (sessionId: string) => Promise<{ title: string; summary: string }>
+      listSkills: () => Promise<{ name: string; description: string; argumentHint: string }[]>
+      refreshSkills: () => Promise<{ name: string; description: string; argumentHint: string }[]>
+      removeSkill: (name: string) => Promise<{ ok: boolean }>
       openExternal: (url: string) => Promise<void>
       setModel: (model: string) => Promise<{ ok: boolean }>
       getModel: () => Promise<string>

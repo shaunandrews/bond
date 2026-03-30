@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import { ref, watch, toRefs, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, toRefs, nextTick, onMounted } from 'vue'
 import { PhArrowUp, PhCaretDown, PhPaperclip, PhStop, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode } from '../../shared/session'
+
+interface SkillInfo {
+  name: string
+  description: string
+  argumentHint: string
+}
 
 const props = defineProps<{ busy: boolean; model: ModelId; editMode: EditMode }>()
 const { busy } = toRefs(props)
@@ -81,13 +87,6 @@ function autoResize() {
   el.style.height = el.scrollHeight + 'px'
 }
 
-function handleKeyDown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    handleSubmit()
-  }
-}
-
 function addImageFile(file: File) {
   if (!ACCEPTED_IMAGE_TYPES.includes(file.type as any)) return
   const reader = new FileReader()
@@ -148,10 +147,102 @@ function handleImageKeyDown(e: KeyboardEvent) {
     removeImage(selectedImageIndex.value)
   }
 }
+
+// --- Skill autocomplete ---
+const skills = ref<SkillInfo[]>([])
+const showSkillMenu = ref(false)
+const skillMenuIndex = ref(0)
+const skillFilter = ref('')
+
+const filteredSkills = computed(() => {
+  if (!skillFilter.value) return skills.value
+  const q = skillFilter.value.toLowerCase()
+  return skills.value.filter(s => s.name.toLowerCase().startsWith(q))
+})
+
+onMounted(async () => {
+  try {
+    skills.value = await window.bond.listSkills()
+  } catch { /* skills not available yet */ }
+})
+
+function updateSkillMenu() {
+  const el = inputEl.value
+  if (!el) return
+  const text = el.value
+  const cursor = el.selectionStart ?? text.length
+
+  // Only show menu when text starts with / and cursor is in the first word
+  if (text.startsWith('/') && (!text.includes(' ') || cursor <= text.indexOf(' ', 1))) {
+    const partial = text.slice(1, cursor)
+    if (/^[a-z0-9-]*$/.test(partial)) {
+      skillFilter.value = partial
+      skillMenuIndex.value = 0
+      showSkillMenu.value = filteredSkills.value.length > 0
+      return
+    }
+  }
+  showSkillMenu.value = false
+}
+
+function selectSkill(skill: SkillInfo) {
+  const el = inputEl.value
+  if (!el) return
+  el.value = `/${skill.name} `
+  showSkillMenu.value = false
+  el.focus()
+  nextTick(autoResize)
+}
+
+function handleKeyDown(e: KeyboardEvent) {
+  if (showSkillMenu.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      skillMenuIndex.value = Math.min(skillMenuIndex.value + 1, filteredSkills.value.length - 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      skillMenuIndex.value = Math.max(skillMenuIndex.value - 1, 0)
+      return
+    }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      e.preventDefault()
+      const skill = filteredSkills.value[skillMenuIndex.value]
+      if (skill) selectSkill(skill)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      showSkillMenu.value = false
+      return
+    }
+  }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    handleSubmit()
+  }
+}
 </script>
 
 <template>
-  <div class="px-5 pt-3 pb-5">
+  <div class="px-5 pt-3 pb-5 relative">
+    <!-- Skill autocomplete menu -->
+    <div v-if="showSkillMenu" class="skill-menu">
+      <button
+        v-for="(skill, i) in filteredSkills"
+        :key="skill.name"
+        type="button"
+        class="skill-menu-item"
+        :class="{ 'is-selected': i === skillMenuIndex }"
+        @mousedown.prevent="selectSkill(skill)"
+        @mouseenter="skillMenuIndex = i"
+      >
+        <span class="text-text-primary text-sm font-medium">/{{ skill.name }}</span>
+        <span class="text-muted text-xs truncate">{{ skill.description }}</span>
+      </button>
+    </div>
+
     <div class="chat-box" @click="deselectImage">
       <!-- Image preview strip -->
       <div
@@ -187,7 +278,7 @@ function handleImageKeyDown(e: KeyboardEvent) {
         :spellcheck="false"
         :disabled="busy"
         @keydown="handleKeyDown"
-        @input="autoResize"
+        @input="autoResize(); updateSkillMenu()"
         @paste="handlePaste"
         class="chat-textarea"
       />
@@ -325,5 +416,39 @@ function handleImageKeyDown(e: KeyboardEvent) {
 .toolbar-select:focus {
   outline: 2px solid var(--color-accent);
   outline-offset: -1px;
+}
+
+.skill-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 20px;
+  right: 20px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  margin-bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+
+.skill-menu-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+.skill-menu-item.is-selected {
+  background: var(--color-tint);
 }
 </style>

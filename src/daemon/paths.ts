@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 
 /**
  * Returns the data directory for Bond.
@@ -20,4 +21,19 @@ export function getDataDir(): string {
 
 export function getDbPath(): string {
   return join(getDataDir(), 'bond.db')
+}
+
+/**
+ * Skills directory — ~/.bond/skills/
+ * Skills are SKILL.md files loaded by the Agent SDK via the plugins system.
+ */
+export function getSkillsDir(): string {
+  return join(homedir(), '.bond', 'skills')
+}
+
+/**
+ * Ensure the skills directory exists so users have a place to put skills.
+ */
+export function ensureSkillsDir(): void {
+  mkdirSync(getSkillsDir(), { recursive: true })
 }

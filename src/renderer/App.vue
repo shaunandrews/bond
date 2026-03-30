@@ -83,9 +83,20 @@ async function handleEditModeChange(mode: EditMode) {
 async function handleNewSession() {
   const session = await sessions.create()
   await chat.loadSession(session.id)
+  activeView.value = 'chat'
   const model = await window.bond.getModel() as ModelId
   selectedModel.value = model
   nextTick(() => chatInputRef.value?.focus())
+}
+
+async function handleCreateSkill(description: string) {
+  const session = await sessions.create()
+  await chat.loadSession(session.id)
+  activeView.value = 'chat'
+  nextTick(() => {
+    const prompt = `Create a new Bond skill based on this description:\n\n${description}\n\nWrite the SKILL.md file to ~/.bond/skills/ with a good name, clear description, and useful instructions. After creating it, tell me the skill name so I know how to use it.`
+    chat.submit(prompt)
+  })
 }
 
 async function handleSelectSession(id: string) {
@@ -100,6 +111,14 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.metaKey && e.key === 'b') {
     e.preventDefault()
     handleToggleSidebar()
+  }
+  if (e.metaKey && e.key === ',') {
+    e.preventDefault()
+    activeView.value = 'settings'
+  }
+  if (e.metaKey && e.key === 'n') {
+    e.preventDefault()
+    handleNewSession()
   }
 }
 
@@ -168,14 +187,9 @@ onUnmounted(() => {
         :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
       >
         <template #header-left>
-          <button
-            type="button"
-            class="sidebar-toggle-btn"
-            @click.stop="handleToggleSidebar"
-            :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'"
-          >
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
             <PhSidebarSimple :size="16" weight="bold" />
-          </button>
+          </BondButton>
         </template>
 
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
@@ -200,36 +214,36 @@ onUnmounted(() => {
 
       <ViewShell v-else-if="activeView === 'design-system'" title="Design System">
         <template #header-left>
-          <button type="button" class="sidebar-toggle-btn" @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
             <PhSidebarSimple :size="16" weight="bold" />
-          </button>
+          </BondButton>
         </template>
         <DesignSystemView />
       </ViewShell>
 
       <ViewShell v-else-if="activeView === 'components'" title="Components">
         <template #header-left>
-          <button type="button" class="sidebar-toggle-btn" @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
             <PhSidebarSimple :size="16" weight="bold" />
-          </button>
+          </BondButton>
         </template>
         <DevComponents />
       </ViewShell>
 
       <ViewShell v-else-if="activeView === 'settings'" title="Settings">
         <template #header-left>
-          <button type="button" class="sidebar-toggle-btn" @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
             <PhSidebarSimple :size="16" weight="bold" />
-          </button>
+          </BondButton>
         </template>
-        <SettingsView />
+        <SettingsView @createSkill="handleCreateSkill" />
       </ViewShell>
 
       <ViewShell v-else-if="activeView === 'about'" title="About Bond">
         <template #header-left>
-          <button type="button" class="sidebar-toggle-btn" @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
             <PhSidebarSimple :size="16" weight="bold" />
-          </button>
+          </BondButton>
         </template>
         <AboutView />
       </ViewShell>
@@ -378,22 +392,6 @@ html, body, #app {
   margin-inline: auto;
 }
 
-.sidebar-toggle-btn {
-  all: unset;
-  cursor: pointer;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  color: var(--color-muted);
-  transition: background var(--transition-base), color var(--transition-base);
-}
-.sidebar-toggle-btn:hover {
-  background: var(--sidebar-hover-bg);
-  color: var(--color-text-primary);
-}
 
 /* When sidebar is collapsed the main panel starts at the window edge —
    push the toggle right to clear macOS traffic lights (~70px). */

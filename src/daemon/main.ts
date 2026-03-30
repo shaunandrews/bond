@@ -10,7 +10,7 @@
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs'
-import { setDataDir } from './paths'
+import { setDataDir, ensureSkillsDir } from './paths'
 import { startServer } from './server'
 
 const runtimeDir = join(homedir(), '.bond')
@@ -36,6 +36,7 @@ function main(): void {
   ensureDir(runtimeDir)
   ensureDir(dataDir)
   setDataDir(dataDir)
+  ensureSkillsDir()
 
   const server = startServer(socketPath)
   writePid()

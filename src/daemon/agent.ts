@@ -6,6 +6,16 @@ import type { BondStreamChunk } from '../shared/stream'
 import type { EditMode } from '../shared/session'
 import { getSoul } from './settings'
 import { getImagePaths } from './images'
+import { getSkillsDir } from './paths'
+import { scanSkills, type SkillInfo } from './skills'
+
+export function getCachedSkills(): SkillInfo[] {
+  return scanSkills()
+}
+
+export function refreshSkillsCache(): SkillInfo[] {
+  return scanSkills()
+}
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'Bash'])
 const READ_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch']
@@ -147,7 +157,12 @@ export async function runBondQuery(
     'You can read files with Read, search with Glob and Grep, edit files with Edit and Write, and run shell commands with Bash. ' +
     'You can search the web with WebSearch and fetch page content with WebFetch. ' +
     'Write operations require user approval before they execute. Stay concise. ' +
-    'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.'
+    'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.\n\n' +
+    'Skills extend your capabilities. They live in ~/.bond/skills/<name>/SKILL.md. ' +
+    'Each SKILL.md has YAML frontmatter (name, description, argument-hint) and a body with instructions. ' +
+    'You can create, edit, list, and remove skills by reading/writing files in ~/.bond/skills/. ' +
+    'To create a skill: mkdir the directory, write a SKILL.md with frontmatter and instructions. ' +
+    'The user invokes skills by typing /skill-name in chat. After creating or modifying skills, tell the user to restart the daemon for changes to take effect.'
 
   const editMode = options.editMode ?? { type: 'full' }
   const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS
@@ -207,6 +222,9 @@ export async function runBondQuery(
     stderr: (text: string) => {
       console.error('[bond] sdk stderr:', text.trimEnd())
     },
+    plugins: [
+      { type: 'local', path: resolve(getSkillsDir(), '..') }
+    ],
     env: {
       ...process.env,
       CLAUDE_AGENT_SDK_CLIENT_APP: 'bond-electron/0.1.0'

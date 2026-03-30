@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { PhCaretRight } from '@phosphor-icons/vue'
+import { PhCaretRight, PhGear, PhPlus, PhTrash } from '@phosphor-icons/vue'
 import ChatHeader from './ChatHeader.vue'
 import ChatInput from './ChatInput.vue'
 import MessageBubble from './MessageBubble.vue'
@@ -69,6 +69,7 @@ const components = [
     props: [
       { name: 'variant', type: "'primary' | 'secondary' | 'ghost' | 'danger'", description: "Visual style (default: 'secondary')" },
       { name: 'size', type: "'sm' | 'md'", description: "Size (default: 'md')" },
+      { name: 'icon', type: 'boolean', description: 'Icon-only mode — square with equal padding' },
       { name: 'disabled', type: 'boolean', description: 'Disables the button' },
     ],
     events: [],
@@ -380,6 +381,16 @@ const categories = ['Primitives', 'Layout', 'Composed'] as const
                       <BondButton variant="primary" size="sm">Primary</BondButton>
                       <BondButton variant="secondary" size="sm">Secondary</BondButton>
                       <BondButton variant="ghost" size="sm">Ghost</BondButton>
+                    </div>
+                  </div>
+                  <div class="dev-preview-row">
+                    <span class="dev-preview-label">icon</span>
+                    <div class="flex flex-wrap gap-2 items-center">
+                      <BondButton variant="ghost" size="sm" icon><PhGear :size="16" weight="bold" /></BondButton>
+                      <BondButton variant="ghost" size="sm" icon><PhPlus :size="16" weight="bold" /></BondButton>
+                      <BondButton variant="ghost" icon><PhGear :size="16" weight="bold" /></BondButton>
+                      <BondButton variant="secondary" icon><PhPlus :size="16" weight="bold" /></BondButton>
+                      <BondButton variant="danger" icon><PhTrash :size="16" weight="bold" /></BondButton>
                     </div>
                   </div>
                   <div class="dev-preview-row">

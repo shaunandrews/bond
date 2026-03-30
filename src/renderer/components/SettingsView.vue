@@ -1,12 +1,24 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
+import { PhTrash, PhPlus } from '@phosphor-icons/vue'
 import { useAccentColor } from '../composables/useAccentColor'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 import BondSelect from './BondSelect.vue'
+import BondButton from './BondButton.vue'
+
+interface SkillInfo { name: string; description: string; argumentHint: string }
+
+const emit = defineEmits<{
+  createSkill: [description: string]
+}>()
 
 const soul = ref('')
 const saved = ref(false)
 const defaultModel = ref<ModelId>('sonnet')
+const skills = ref<SkillInfo[]>([])
+const showNewSkillModal = ref(false)
+const newSkillDescription = ref('')
+const newSkillInputEl = ref<HTMLTextAreaElement | null>(null)
 let saveTimeout: ReturnType<typeof setTimeout> | undefined
 
 const { accent, defaultAccent, setAccent, reset: resetAccent } = useAccentColor()
@@ -28,10 +40,42 @@ const presetColors = [
 ]
 
 onMounted(async () => {
-  const [s, m] = await Promise.all([window.bond.getSoul(), window.bond.getModel()])
+  const [s, m, sk] = await Promise.all([
+    window.bond.getSoul(),
+    window.bond.getModel(),
+    window.bond.listSkills()
+  ])
   soul.value = s
   defaultModel.value = m as ModelId
+  skills.value = sk
 })
+
+async function handleRemoveSkill(name: string) {
+  await window.bond.removeSkill(name)
+  skills.value = skills.value.filter(s => s.name !== name)
+}
+
+function openNewSkillModal() {
+  newSkillDescription.value = ''
+  showNewSkillModal.value = true
+  nextTick(() => newSkillInputEl.value?.focus())
+}
+
+function submitNewSkill() {
+  const desc = newSkillDescription.value.trim()
+  if (!desc) return
+  showNewSkillModal.value = false
+  emit('createSkill', desc)
+}
+
+function handleModalKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    showNewSkillModal.value = false
+  } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault()
+    submitNewSkill()
+  }
+}
 
 async function handleSave() {
   await window.bond.saveSoul(soul.value)
@@ -126,6 +170,65 @@ function handleModelChange(model: string) {
           </button>
         </div>
       </section>
+
+      <section class="settings-section">
+        <div class="section-header">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-text-primary">Skills</h2>
+            <BondButton variant="ghost" size="sm" @click="openNewSkillModal">
+              <PhPlus :size="14" weight="bold" />
+              New skill
+            </BondButton>
+          </div>
+          <p class="text-xs text-muted mt-1">
+            Skills extend what Bond can do. Type <code class="text-accent">/skill-name</code> in chat to invoke one.
+          </p>
+        </div>
+
+        <div v-if="skills.length" class="skill-list">
+          <div v-for="skill in skills" :key="skill.name" class="skill-row">
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span class="text-sm font-medium text-text-primary">/{{ skill.name }}</span>
+              <span class="text-xs text-muted truncate">{{ skill.description }}</span>
+            </div>
+            <button
+              type="button"
+              class="skill-remove-btn"
+              title="Remove skill"
+              @click="handleRemoveSkill(skill.name)"
+            >
+              <PhTrash :size="14" weight="regular" />
+            </button>
+          </div>
+        </div>
+        <p v-else class="text-xs text-muted">
+          No skills installed yet.
+        </p>
+      </section>
+
+      <!-- New Skill Modal -->
+      <Teleport to="body">
+        <Transition name="modal">
+          <div v-if="showNewSkillModal" class="modal-backdrop" @mousedown.self="showNewSkillModal = false">
+            <div class="modal-content" @keydown="handleModalKeyDown">
+              <h3 class="text-sm font-semibold text-text-primary">New Skill</h3>
+              <p class="text-xs text-muted mt-1">Describe what this skill should do. Bond will create it for you.</p>
+              <textarea
+                ref="newSkillInputEl"
+                v-model="newSkillDescription"
+                class="modal-textarea"
+                placeholder="e.g. Summarize a webpage URL into bullet points"
+                :spellcheck="false"
+                rows="3"
+              />
+              <div class="flex justify-end gap-2 mt-3">
+                <BondButton variant="secondary" size="sm" @click="showNewSkillModal = false">Cancel</BondButton>
+                <BondButton variant="primary" size="sm" @click="submitNewSkill" :disabled="!newSkillDescription.trim()">Create</BondButton>
+              </div>
+            </div>
+          </div>
+        </Transition>
+      </Teleport>
   </main>
 </template>
 
@@ -248,5 +351,103 @@ function handleModelChange(model: string) {
 }
 .reset-btn:hover {
   color: var(--color-text-primary);
+}
+
+.skill-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.skill-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.625rem 0.75rem;
+}
+.skill-row + .skill-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.skill-remove-btn {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  color: var(--color-muted);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.skill-remove-btn:hover {
+  color: var(--color-err);
+  background: var(--color-tint);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  width: 420px;
+  max-width: 90vw;
+  padding: 1.25rem;
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-textarea {
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.875rem;
+  resize: none;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+.modal-textarea::placeholder {
+  color: var(--color-muted);
+}
+.modal-textarea:focus {
+  border-color: var(--color-accent);
+}
+
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity var(--transition-base);
+}
+.modal-enter-active .modal-content,
+.modal-leave-active .modal-content {
+  transition: transform var(--transition-base);
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-enter-from .modal-content {
+  transform: scale(0.96);
+}
+.modal-leave-to .modal-content {
+  transform: scale(0.96);
 }
 </style>

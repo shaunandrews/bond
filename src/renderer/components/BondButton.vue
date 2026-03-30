@@ -2,6 +2,7 @@
 defineProps<{
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger'
   size?: 'sm' | 'md'
+  icon?: boolean
   disabled?: boolean
 }>()
 </script>
@@ -10,7 +11,12 @@ defineProps<{
   <button
     type="button"
     :disabled="disabled"
-    :class="['bond-btn', `bond-btn--${variant ?? 'secondary'}`, `bond-btn--${size ?? 'md'}`]"
+    :class="[
+      'bond-btn',
+      `bond-btn--${variant ?? 'secondary'}`,
+      `bond-btn--${size ?? 'md'}`,
+      { 'bond-btn--icon': icon },
+    ]"
   >
     <slot />
   </button>
@@ -19,6 +25,7 @@ defineProps<{
 <style scoped>
 .bond-btn {
   all: unset;
+  -webkit-app-region: no-drag;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -45,6 +52,18 @@ defineProps<{
 .bond-btn--md {
   font-size: 0.875rem;
   padding: 0.425rem 1rem;
+}
+
+/* Icon-only — square with equal padding */
+.bond-btn--icon.bond-btn--sm {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
+.bond-btn--icon.bond-btn--md {
+  width: 30px;
+  height: 30px;
+  padding: 0;
 }
 
 /* Primary — filled accent */

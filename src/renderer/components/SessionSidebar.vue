@@ -4,6 +4,7 @@ import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear } from '@phospho
 import type { Session } from '../../shared/session'
 import type { AppView } from '../composables/useAppView'
 import SessionItem from './SessionItem.vue'
+import BondButton from './BondButton.vue'
 
 const ARCHIVES_KEY = 'bond:archives-open'
 const archivesOpen = ref(localStorage.getItem(ARCHIVES_KEY) !== 'false')
@@ -34,7 +35,8 @@ const menuPos = ref({ top: '0px', left: '0px' })
 async function toggleMenu() {
   menuOpen.value = !menuOpen.value
   if (menuOpen.value && menuBtnRef.value) {
-    const rect = (menuBtnRef.value as HTMLElement).getBoundingClientRect()
+    const el = (menuBtnRef.value as any).$el as HTMLElement
+    const rect = el.getBoundingClientRect()
     menuPos.value = {
       top: `${rect.bottom + 4}px`,
       left: `${rect.left}px`,
@@ -48,7 +50,7 @@ function handleClickOutside(e: MouseEvent) {
     menuRef.value &&
     !menuRef.value.contains(e.target as Node) &&
     menuBtnRef.value &&
-    !menuBtnRef.value.contains(e.target as Node)
+    !(menuBtnRef.value as any).$el.contains(e.target as Node)
   ) {
     menuOpen.value = false
   }
@@ -67,15 +69,16 @@ function selectView(view: AppView) {
   <aside class="session-sidebar">
     <!-- Toolbar row — sits beside traffic lights -->
     <div class="sidebar-toolbar drag-region">
-      <button
+      <BondButton
         ref="menuBtnRef"
-        type="button"
-        :class="['sidebar-btn no-drag', { active: menuOpen }]"
+        variant="ghost"
+        size="sm"
+        icon
         title="Menu"
         @click.stop="toggleMenu"
       >
         <PhGear :size="16" weight="bold" />
-      </button>
+      </BondButton>
 
       <Teleport to="body">
         <div
@@ -99,14 +102,15 @@ function selectView(view: AppView) {
           </button>
         </div>
       </Teleport>
-      <button
-        type="button"
-        @click.stop="emit('create')"
-        class="sidebar-btn no-drag"
+      <BondButton
+        variant="ghost"
+        size="sm"
+        icon
         title="New chat"
+        @click.stop="emit('create')"
       >
         <PhPlus :size="16" weight="bold" />
-      </button>
+      </BondButton>
     </div>
 
     <!-- Chats list -->
@@ -142,19 +146,21 @@ function selectView(view: AppView) {
       </button>
 
       <div :class="['archives-collapsible', { open: archivesOpen }]">
-        <nav class="sidebar-list">
-          <SessionItem
-            v-for="s in archivedSessions"
-            :key="s.id"
-            :session="s"
-            archived
-            actionTitle="Unarchive"
-            @select="emit('select', s.id)"
-            @action="emit('unarchive', s.id)"
-          >
-            <PhArrowLineUp :size="14" weight="bold" />
-          </SessionItem>
-        </nav>
+        <div class="archives-collapsible-inner">
+          <nav class="sidebar-list">
+            <SessionItem
+              v-for="s in archivedSessions"
+              :key="s.id"
+              :session="s"
+              archived
+              actionTitle="Unarchive"
+              @select="emit('select', s.id)"
+              @action="emit('unarchive', s.id)"
+            >
+              <PhArrowLineUp :size="14" weight="bold" />
+            </SessionItem>
+          </nav>
+        </div>
       </div>
     </div>
 
@@ -244,26 +250,6 @@ button.sidebar-section-header:hover {
   color: var(--sidebar-text-muted);
 }
 
-.sidebar-btn {
-  all: unset;
-  -webkit-app-region: no-drag;
-  cursor: pointer;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--sidebar-text-muted);
-  transition: background var(--transition-base), color var(--transition-base);
-}
-.sidebar-btn:hover,
-.sidebar-btn.active {
-  background: var(--sidebar-hover-bg);
-  color: var(--sidebar-text);
-}
 
 .archives-collapsible {
   display: grid;
@@ -274,7 +260,7 @@ button.sidebar-section-header:hover {
 .archives-collapsible.open {
   grid-template-rows: 1fr;
 }
-.archives-collapsible > .sidebar-list {
+.archives-collapsible-inner {
   overflow: hidden;
   min-height: 0;
 }

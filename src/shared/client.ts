@@ -190,6 +190,20 @@ export class BondClient {
     return await this.call('image.getMultiple', { ids }) as (AttachedImage | null)[]
   }
 
+  // --- Skills ---
+
+  async listSkills(): Promise<{ name: string; description: string; argumentHint: string }[]> {
+    return await this.call('skills.list') as { name: string; description: string; argumentHint: string }[]
+  }
+
+  async refreshSkills(): Promise<{ name: string; description: string; argumentHint: string }[]> {
+    return await this.call('skills.refresh') as { name: string; description: string; argumentHint: string }[]
+  }
+
+  async removeSkill(name: string): Promise<{ ok: boolean }> {
+    return await this.call('skills.remove', { name }) as { ok: boolean }
+  }
+
   // --- Shell (client-side only, not proxied through daemon) ---
 
   async openExternal(_url: string): Promise<void> {

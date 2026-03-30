@@ -229,6 +229,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('session:saveMessages', (_e, sessionId: string, messages: unknown[]) => client.saveMessages(sessionId, messages as any))
   ipcMain.handle('session:generateTitle', (_e, sessionId: string) => client.generateTitle(sessionId))
 
+  // --- Skills ---
+  ipcMain.handle('skills:list', () => client.listSkills())
+  ipcMain.handle('skills:refresh', () => client.refreshSkills())
+  ipcMain.handle('skills:remove', (_e, name: string) => client.removeSkill(name))
+
   // --- Images ---
   ipcMain.handle('image:get', (_e, imageId: string) => client.getImage(imageId))
   ipcMain.handle('image:getMultiple', (_e, ids: string[]) => client.getImages(ids))

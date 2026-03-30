@@ -27,6 +27,7 @@ function toSessionMessages(msgs: Message[]): SessionMessage[] {
     }
     if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text, streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: m.name, summary: m.summary }
+    if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: m.name, summary: m.args }
     if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', name: m.toolName, summary: m.description, status: m.status }
     if (m.kind === 'error') return { id: m.id, role: 'meta', kind: 'error', text: m.text }
     return { id: m.id, role: 'meta', kind: 'system', text: m.text }
@@ -38,6 +39,7 @@ function fromSessionMessages(msgs: SessionMessage[]): Message[] {
     if (m.role === 'user') return { id: m.id, role: 'user' as const, text: m.text ?? '', images: m.images, imageIds: m.imageIds }
     if (m.role === 'bond') return { id: m.id, role: 'bond' as const, text: m.text ?? '', streaming: false }
     if (m.kind === 'tool') return { id: m.id, role: 'meta' as const, kind: 'tool' as const, name: m.name ?? '', summary: m.summary }
+    if (m.kind === 'skill') return { id: m.id, role: 'meta' as const, kind: 'skill' as const, name: m.name ?? '', args: m.summary }
     if (m.kind === 'approval') return { id: m.id, role: 'meta' as const, kind: 'approval' as const, requestId: '', toolName: m.name ?? '', input: {}, description: m.summary, status: (m.status as 'approved' | 'denied') ?? 'denied' }
     if (m.kind === 'error') return { id: m.id, role: 'meta' as const, kind: 'error' as const, text: m.text ?? '' }
     return { id: m.id, role: 'meta' as const, kind: 'system' as const, text: m.text ?? '' }
@@ -170,6 +172,12 @@ export function useChat(deps: ChatDeps = window.bond) {
     if ((!trimmed && !images?.length) || busy.value) return
 
     addMessage({ id: uid(), role: 'user', text: trimmed, images: images?.length ? images : undefined })
+
+    // Detect skill invocation: /skill-name [args]
+    const skillMatch = trimmed.match(/^\/([a-z0-9-]+)(?:\s+(.*))?$/s)
+    if (skillMatch) {
+      addMessage({ id: uid(), role: 'meta', kind: 'skill', name: skillMatch[1], args: skillMatch[2] })
+    }
     busy.value = true
     thinking.value = true
 

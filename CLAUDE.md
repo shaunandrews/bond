@@ -135,9 +135,9 @@ Polymorphic text component for all UI text. Renders any HTML element via `as` pr
 - **Slot:** default — text content
 
 ### BondButton
-Button with variant and size options.
-- **Props:** `variant?: 'primary' | 'secondary' | 'ghost' | 'danger'`, `size?: 'sm' | 'md'`, `disabled?: boolean`
-- **Slot:** default — button label
+Button with variant and size options. Supports icon-only mode for toolbar buttons.
+- **Props:** `variant?: 'primary' | 'secondary' | 'ghost' | 'danger'`, `size?: 'sm' | 'md'`, `icon?: boolean` (square with equal padding), `disabled?: boolean`
+- **Slot:** default — button label (or icon when `icon` is true)
 
 ### BondInput
 Text input with v-model support.
