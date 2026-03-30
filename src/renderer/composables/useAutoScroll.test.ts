@@ -70,4 +70,36 @@ describe('useAutoScroll', () => {
     scrollToBottom()
     expect(container.scrollTop).toBe(1000)
   })
+
+  it('ignores scroll event after programmatic scrollToBottom', () => {
+    Object.defineProperty(container, 'scrollHeight', { value: 1000 })
+    const { isAtBottom, scrollToBottom } = mountWithAutoScroll(container)
+
+    scrollToBottom()
+    expect(isAtBottom.value).toBe(true)
+
+    // Simulate the browser firing a scroll event after our programmatic scroll,
+    // but scrollHeight has grown (streaming content arrived) so we're no longer
+    // geometrically at the bottom.
+    Object.defineProperty(container, 'scrollHeight', { value: 1200, configurable: true })
+    container.dispatchEvent(new Event('scroll'))
+
+    // isAtBottom should still be true — the scroll event was from our code
+    expect(isAtBottom.value).toBe(true)
+  })
+
+  it('resumes user scroll detection after one programmatic skip', () => {
+    Object.defineProperty(container, 'scrollHeight', { value: 1000 })
+    const { isAtBottom, scrollToBottom } = mountWithAutoScroll(container)
+
+    scrollToBottom()
+    // First scroll event is skipped
+    container.dispatchEvent(new Event('scroll'))
+    expect(isAtBottom.value).toBe(true)
+
+    // Second scroll event (user scrolls up) should be honored
+    container.scrollTop = 200
+    container.dispatchEvent(new Event('scroll'))
+    expect(isAtBottom.value).toBe(false)
+  })
 })

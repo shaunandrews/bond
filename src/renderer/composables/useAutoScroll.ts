@@ -6,12 +6,19 @@ export function useAutoScroll(containerRef: Ref<HTMLElement | null>) {
   const isAtBottom = ref(true)
   let mutationObserver: MutationObserver | null = null
   let resizeObserver: ResizeObserver | null = null
+  let skipNextScroll = false
 
   function checkIfAtBottom(el: HTMLElement): boolean {
     return el.scrollHeight - (el.scrollTop + el.clientHeight) <= THRESHOLD
   }
 
   function onScroll() {
+    // Ignore scroll events triggered by our own programmatic scrolls,
+    // so streaming content doesn't flip isAtBottom to false mid-stream.
+    if (skipNextScroll) {
+      skipNextScroll = false
+      return
+    }
     const el = containerRef.value
     if (!el) return
     isAtBottom.value = checkIfAtBottom(el)
@@ -20,6 +27,7 @@ export function useAutoScroll(containerRef: Ref<HTMLElement | null>) {
   function scrollToBottom() {
     const el = containerRef.value
     if (!el) return
+    skipNextScroll = true
     el.scrollTop = el.scrollHeight
     isAtBottom.value = true
   }
@@ -30,25 +38,41 @@ export function useAutoScroll(containerRef: Ref<HTMLElement | null>) {
     }
   }
 
+  function observeChild(child: Element) {
+    resizeObserver?.observe(child)
+  }
+
   onMounted(() => {
     const el = containerRef.value
     if (!el) return
 
     el.addEventListener('scroll', onScroll, { passive: true })
 
-    // Watch for any DOM changes inside the container (new messages, streaming text)
-    mutationObserver = new MutationObserver(autoScroll)
-    mutationObserver.observe(el, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    })
-
     // Watch direct children for size changes (images loading, content reflowing)
     resizeObserver = new ResizeObserver(autoScroll)
     for (const child of el.children) {
       resizeObserver.observe(child)
     }
+
+    // Watch for any DOM changes inside the container (new messages, streaming text)
+    mutationObserver = new MutationObserver((mutations) => {
+      // Register any newly-added direct children with the ResizeObserver
+      for (const m of mutations) {
+        if (m.type === 'childList' && m.target === el) {
+          for (const node of m.addedNodes) {
+            if (node instanceof Element) {
+              observeChild(node)
+            }
+          }
+        }
+      }
+      autoScroll()
+    })
+    mutationObserver.observe(el, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    })
   })
 
   onUnmounted(() => {
