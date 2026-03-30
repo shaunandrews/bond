@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhSidebarSimple, PhGear } from '@phosphor-icons/vue'
+import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import type { AppView } from '../composables/useAppView'
 import SessionItem from './SessionItem.vue'
@@ -24,7 +24,6 @@ const emit = defineEmits<{
   unarchive: [id: string]
   remove: [id: string]
   switchView: [view: AppView]
-  toggleSidebar: []
 }>()
 
 const menuOpen = ref(false)
@@ -87,6 +86,7 @@ function selectView(view: AppView) {
         >
           <button
             v-for="item in ([
+              { id: 'about', label: 'About Bond' },
               { id: 'design-system', label: 'Design System' },
               { id: 'components', label: 'Components' },
               { id: 'settings', label: 'Settings' },
@@ -101,11 +101,11 @@ function selectView(view: AppView) {
       </Teleport>
       <button
         type="button"
-        @click.stop="emit('toggleSidebar')"
+        @click.stop="emit('create')"
         class="sidebar-btn no-drag"
-        title="Toggle sidebar"
+        title="New chat"
       >
-        <PhSidebarSimple :size="16" weight="bold" />
+        <PhPlus :size="16" weight="bold" />
       </button>
     </div>
 
@@ -129,16 +129,6 @@ function selectView(view: AppView) {
           No chats yet. Start a new one!
         </p>
 
-        <button
-          type="button"
-          class="new-chat-btn"
-          @click.stop="emit('create')"
-        >
-          <span class="new-chat-label">New chat</span>
-          <span class="new-chat-icon">
-            <PhPlus :size="14" weight="bold" />
-          </span>
-        </button>
       </nav>
     </div>
 
@@ -283,36 +273,6 @@ button.sidebar-section-header:hover {
   gap: 0.125rem;
 }
 
-.new-chat-btn {
-  all: unset;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.5rem 0.25rem 0.5rem 0.5rem;
-  border-radius: var(--radius-md);
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--sidebar-text);
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-.new-chat-btn:hover {
-  background: var(--sidebar-hover-bg);
-}
-.new-chat-label {
-  flex: 1;
-  min-width: 0;
-}
-.new-chat-icon {
-  flex-shrink: 0;
-  width: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--sidebar-text-muted);
-}
 </style>
 
 <style>

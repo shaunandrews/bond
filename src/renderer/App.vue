@@ -7,7 +7,9 @@ import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId, AttachedImage } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown } from '@phosphor-icons/vue'
+import BondButton from './components/BondButton.vue'
+import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ThinkingIndicator from './components/ThinkingIndicator.vue'
 import ChatInput from './components/ChatInput.vue'
@@ -15,6 +17,7 @@ import SessionSidebar from './components/SessionSidebar.vue'
 import DesignSystemView from './components/DesignSystemView.vue'
 import DevComponents from './components/DevComponents.vue'
 import SettingsView from './components/SettingsView.vue'
+import AboutView from './components/AboutView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
@@ -41,7 +44,7 @@ function handleToggleSidebar() {
   }
 }
 const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
-const { scrollToBottom } = useAutoScroll(scrollEl)
+const { isAtBottom, scrollToBottom } = useAutoScroll(scrollEl)
 
 let titleGenPending = false
 
@@ -152,48 +155,83 @@ onUnmounted(() => {
         @unarchive="sessions.unarchive"
         @remove="sessions.remove"
         @switchView="(v) => activeView = v"
-        @toggleSidebar="handleToggleSidebar"
       />
     </BondPanel>
 
     <BondPanelHandle id="handle-0" />
 
     <BondPanel id="main" :defaultSize="80" :minSize="40">
-      <div class="main-panel-wrap">
-      <button
-        v-if="sidebarCollapsed"
-        type="button"
-        class="sidebar-expand-btn no-drag"
-        @click.stop="handleToggleSidebar"
-        title="Show sidebar"
-      >
-        <PhSidebarSimple :size="16" weight="bold" />
-      </button>
+      <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
       <ViewShell
         v-if="activeView === 'chat'"
         ref="chatShellRef"
         :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
       >
-        <div class="px-5 pb-10 flex flex-col gap-2.5 flex-1">
+        <template #header-left>
+          <button
+            type="button"
+            class="sidebar-toggle-btn"
+            @click.stop="handleToggleSidebar"
+            :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'"
+          >
+            <PhSidebarSimple :size="16" weight="bold" />
+          </button>
+        </template>
+
+        <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
           <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" @approve="chat.respondToApproval" />
           <ThinkingIndicator v-if="chat.thinking.value" />
         </div>
 
         <template #footer>
-          <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
+          <div class="chat-content-wrap px-5 relative">
+            <Transition name="scroll-btn">
+              <div v-if="!isAtBottom" class="scroll-to-bottom-wrap" @click="scrollToBottom">
+                <BondButton variant="ghost" size="sm">
+                  <PhArrowDown :size="14" />
+                  <BondText size="xs" color="inherit">Bottom</BondText>
+                </BondButton>
+              </div>
+            </Transition>
+            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
+          </div>
         </template>
       </ViewShell>
 
       <ViewShell v-else-if="activeView === 'design-system'" title="Design System">
+        <template #header-left>
+          <button type="button" class="sidebar-toggle-btn" @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+            <PhSidebarSimple :size="16" weight="bold" />
+          </button>
+        </template>
         <DesignSystemView />
       </ViewShell>
 
       <ViewShell v-else-if="activeView === 'components'" title="Components">
+        <template #header-left>
+          <button type="button" class="sidebar-toggle-btn" @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+            <PhSidebarSimple :size="16" weight="bold" />
+          </button>
+        </template>
         <DevComponents />
       </ViewShell>
 
       <ViewShell v-else-if="activeView === 'settings'" title="Settings">
+        <template #header-left>
+          <button type="button" class="sidebar-toggle-btn" @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+            <PhSidebarSimple :size="16" weight="bold" />
+          </button>
+        </template>
         <SettingsView />
+      </ViewShell>
+
+      <ViewShell v-else-if="activeView === 'about'" title="About Bond">
+        <template #header-left>
+          <button type="button" class="sidebar-toggle-btn" @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+            <PhSidebarSimple :size="16" weight="bold" />
+          </button>
+        </template>
+        <AboutView />
       </ViewShell>
       </div>
     </BondPanel>
@@ -308,14 +346,41 @@ html, body, #app {
   flex-direction: column;
 }
 
-.sidebar-expand-btn {
-  all: unset;
-  -webkit-app-region: no-drag;
-  cursor: pointer;
+.scroll-to-bottom-wrap {
   position: absolute;
-  top: 0.75rem;
-  left: 5.5rem;
-  z-index: 20;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-40%);
+  z-index: 5;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: box-shadow var(--transition-base);
+}
+.scroll-to-bottom-wrap:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.scroll-btn-enter-active,
+.scroll-btn-leave-active {
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+.scroll-btn-enter-from,
+.scroll-btn-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(calc(-10% + 4px));
+}
+
+.chat-content-wrap {
+  width: 100%;
+  max-width: 720px;
+  margin-inline: auto;
+}
+
+.sidebar-toggle-btn {
+  all: unset;
+  cursor: pointer;
   width: 24px;
   height: 24px;
   display: flex;
@@ -325,8 +390,14 @@ html, body, #app {
   color: var(--color-muted);
   transition: background var(--transition-base), color var(--transition-base);
 }
-.sidebar-expand-btn:hover {
+.sidebar-toggle-btn:hover {
   background: var(--sidebar-hover-bg);
   color: var(--color-text-primary);
+}
+
+/* When sidebar is collapsed the main panel starts at the window edge —
+   push the toggle right to clear macOS traffic lights (~70px). */
+.main-panel-wrap.sidebar-collapsed .view-header-left {
+  left: 5.5rem;
 }
 </style>

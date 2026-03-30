@@ -14,6 +14,9 @@ defineExpose({ scrollAreaEl })
   <div class="view-shell">
     <div ref="scrollAreaEl" class="view-scroll-area">
       <header class="view-header drag-region">
+        <div v-if="$slots['header-left']" class="view-header-left no-drag">
+          <slot name="header-left" />
+        </div>
         <h1 class="view-title">{{ title }}</h1>
       </header>
 
@@ -65,6 +68,15 @@ defineExpose({ scrollAreaEl })
   -webkit-backdrop-filter: blur(12px);
   mask-image: linear-gradient(to bottom, black 40%, transparent);
   -webkit-mask-image: linear-gradient(to bottom, black 40%, transparent);
+}
+
+.view-header-left {
+  position: absolute;
+  left: 0.75rem;
+  top: 0.8rem;
+  display: flex;
+  align-items: center;
+  z-index: 1;
 }
 
 .view-title {
