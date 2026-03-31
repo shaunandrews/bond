@@ -6,14 +6,7 @@ import type { WordPressSite } from '../../shared/wordpress'
 import type { AppView } from '../composables/useAppView'
 import SessionItem from './SessionItem.vue'
 import BondButton from './BondButton.vue'
-
-const CHATS_KEY = 'bond:chats-open'
-const chatsOpen = ref(localStorage.getItem(CHATS_KEY) !== 'false')
-watch(chatsOpen, (v) => localStorage.setItem(CHATS_KEY, String(v)))
-
-const ARCHIVES_KEY = 'bond:archives-open'
-const archivesOpen = ref(localStorage.getItem(ARCHIVES_KEY) !== 'false')
-watch(archivesOpen, (v) => localStorage.setItem(ARCHIVES_KEY, String(v)))
+import BondFlyoutMenu from './BondFlyoutMenu.vue'
 
 const WP_KEY = 'bond:wordpress-open'
 const wpOpen = ref(localStorage.getItem(WP_KEY) !== 'false')
@@ -34,8 +27,21 @@ const props = defineProps<{
 
 const chatCount = computed(() => props.sessions.length)
 
+/* Archive flyout */
+const archiveFlyoutOpen = ref(false)
+const archiveBtnRef = ref<HTMLElement | null>(null)
+
+function toggleArchiveFlyout() {
+  archiveFlyoutOpen.value = !archiveFlyoutOpen.value
+}
+
 function openSettings() {
   window.bond.openSettings()
+}
+
+function handleArchiveSelect(id: string) {
+  emit('select', id)
+  archiveFlyoutOpen.value = false
 }
 
 const emit = defineEmits<{
@@ -63,76 +69,75 @@ const emit = defineEmits<{
       >
         <PhGear :size="16" weight="bold" />
       </BondButton>
-      <BondButton
-        variant="ghost"
-        size="sm"
-        icon
-        title="New chat"
-        @click.stop="emit('create')"
-      >
-        <PhPlus :size="16" weight="bold" />
-      </BondButton>
     </div>
 
     <!-- Chats list -->
     <div class="sidebar-chats">
-      <button class="sidebar-section-header" @click="chatsOpen = !chatsOpen">
+      <div class="sidebar-section-header">
         <span class="sidebar-section-title">Chats ({{ chatCount }})</span>
-        <span class="collapse-icon">
-          <PhCaretRight :class="['collapse-chevron', { open: chatsOpen }]" :size="12" weight="bold" />
-        </span>
-      </button>
-
-      <div :class="['chats-collapsible', { open: chatsOpen }]">
-        <div class="chats-collapsible-inner">
-          <nav class="sidebar-list">
-            <SessionItem
-              v-for="s in sessions"
-              :key="s.id"
-              :session="s"
-              :active="s.id === activeSessionId && activeView === 'chat'"
-              :generating="generatingTitleId === s.id"
-              actionTitle="Archive"
-              @select="emit('select', s.id)"
-              @action="emit('archive', s.id)"
-            >
-              <PhArchive :size="14" weight="bold" />
-            </SessionItem>
-
-            <p v-if="sessions.length === 0" class="text-sm text-muted px-3 py-4">
-              No chats yet. Start a new one!
-            </p>
-          </nav>
+        <div class="chats-header-actions">
+          <BondButton
+            ref="archiveBtnRef"
+            variant="ghost"
+            size="sm"
+            icon
+            title="Archived chats"
+            @click.stop="toggleArchiveFlyout"
+          >
+            <PhArchive :size="14" weight="bold" />
+          </BondButton>
+          <BondFlyoutMenu
+            :open="archiveFlyoutOpen"
+            :anchor="archiveBtnRef?.$el"
+            :width="260"
+            @close="archiveFlyoutOpen = false"
+          >
+            <div class="archive-flyout-header">Archived ({{ archivedSessions.length }})</div>
+            <nav v-if="archivedSessions.length" class="archive-flyout-list sidebar-list">
+              <SessionItem
+                v-for="s in archivedSessions"
+                :key="s.id"
+                :session="s"
+                archived
+                actionTitle="Unarchive"
+                @select="handleArchiveSelect(s.id)"
+                @action="emit('unarchive', s.id)"
+              >
+                <PhArrowLineUp :size="14" weight="bold" />
+              </SessionItem>
+            </nav>
+            <p v-else class="archive-flyout-empty">No archived chats</p>
+          </BondFlyoutMenu>
+          <BondButton
+            variant="ghost"
+            size="sm"
+            icon
+            title="New chat"
+            @click.stop="emit('create')"
+          >
+            <PhPlus :size="16" weight="bold" />
+          </BondButton>
         </div>
       </div>
-    </div>
 
-    <!-- Archives (only when there are archived sessions) -->
-    <div v-if="archivedSessions.length" class="sidebar-archives">
-      <button class="sidebar-section-header" @click="archivesOpen = !archivesOpen">
-        <span class="sidebar-section-title">Archives ({{ archivedSessions.length }})</span>
-        <span class="collapse-icon">
-          <PhCaretRight :class="['collapse-chevron', { open: archivesOpen }]" :size="12" weight="bold" />
-        </span>
-      </button>
+      <nav class="sidebar-list chats-list">
+        <SessionItem
+          v-for="s in sessions"
+          :key="s.id"
+          :session="s"
+          :active="s.id === activeSessionId && activeView === 'chat'"
+          :generating="generatingTitleId === s.id"
+          actionTitle="Archive"
+          @select="emit('select', s.id)"
+          @action="emit('archive', s.id)"
+        >
+          <PhArchive :size="14" weight="bold" />
+        </SessionItem>
 
-      <div :class="['archives-collapsible', { open: archivesOpen }]">
-        <div class="archives-collapsible-inner">
-          <nav class="sidebar-list">
-            <SessionItem
-              v-for="s in archivedSessions"
-              :key="s.id"
-              :session="s"
-              archived
-              actionTitle="Unarchive"
-              @select="emit('select', s.id)"
-              @action="emit('unarchive', s.id)"
-            >
-              <PhArrowLineUp :size="14" weight="bold" />
-            </SessionItem>
-          </nav>
-        </div>
-      </div>
+        <p v-if="sessions.length === 0" class="text-sm text-muted px-3 py-4">
+          No chats yet. Start a new one!
+        </p>
+      </nav>
     </div>
 
     <!-- WordPress sites -->
@@ -215,29 +220,6 @@ const emit = defineEmits<{
   flex-direction: column;
 }
 
-.chats-collapsible {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows var(--transition-base);
-  flex: 1;
-  min-height: 0;
-}
-.chats-collapsible.open {
-  grid-template-rows: 1fr;
-}
-.chats-collapsible-inner {
-  overflow: hidden;
-  min-height: 0;
-}
-
-.sidebar-archives {
-  flex-shrink: 0;
-  border-top: 1px solid var(--sidebar-border);
-  max-height: 40%;
-  display: flex;
-  flex-direction: column;
-}
-
 .sidebar-section-header {
   display: flex;
   align-items: center;
@@ -285,19 +267,30 @@ button.sidebar-section-header:hover {
   color: var(--sidebar-text-muted);
 }
 
+.chats-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
 
-.archives-collapsible {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows var(--transition-base);
-  min-height: 0;
+.archive-flyout-header {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-muted);
+  padding: 0.5rem 0.75rem 0.25rem;
+  flex-shrink: 0;
 }
-.archives-collapsible.open {
-  grid-template-rows: 1fr;
+
+.archive-flyout-list {
+  max-height: 280px;
+  overflow-y: auto;
 }
-.archives-collapsible-inner {
-  overflow: hidden;
-  min-height: 0;
+
+.archive-flyout-empty {
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+  padding: 0.75rem;
+  text-align: center;
 }
 
 .sidebar-list {
@@ -307,6 +300,11 @@ button.sidebar-section-header:hover {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+}
+
+.chats-list {
+  flex: 1;
+  min-height: 0;
 }
 
 /* WordPress section */

@@ -26,110 +26,89 @@ const defaultProps = {
   generatingTitleId: null,
 }
 
+async function openFlyout(w: ReturnType<typeof mount>) {
+  const archiveBtn = w.findAll('.chats-header-actions button').find(
+    (b) => b.attributes('title') === 'Archived chats'
+  )
+  await archiveBtn!.trigger('click')
+  await nextTick()
+}
+
 describe('SessionSidebar', () => {
   beforeEach(() => {
     localStorage.clear()
+    // Clean up any teleported elements from previous tests
+    document.body.querySelectorAll('.bond-flyout-menu').forEach((el) => el.remove())
   })
 
-  describe('archives section', () => {
-    it('renders archives section when there are archived sessions', () => {
+  describe('chats header', () => {
+    it('renders chat count in header', () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-      expect(w.find('.sidebar-archives').exists()).toBe(true)
+      expect(w.find('.sidebar-section-title').text()).toContain('Chats (1)')
       w.unmount()
     })
 
-    it('does not render archives section when there are no archived sessions', () => {
-      const w = mount(SessionSidebar, {
-        props: { ...defaultProps, archivedSessions: [] },
-      })
+    it('chats list is always visible (no collapsible wrapper)', () => {
+      const w = mount(SessionSidebar, { props: defaultProps })
+      expect(w.find('.chats-collapsible').exists()).toBe(false)
+      expect(w.find('.chats-list').exists()).toBe(true)
+      w.unmount()
+    })
+
+    it('no standalone archives section exists', () => {
+      const w = mount(SessionSidebar, { props: defaultProps })
       expect(w.find('.sidebar-archives').exists()).toBe(false)
       w.unmount()
     })
 
-    it('shows archive count in header', () => {
+    it('new chat button emits create', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-      const header = w.find('.sidebar-archives .sidebar-section-title')
-      expect(header.text()).toContain('Archives (2)')
+      const newChatBtn = w.findAll('.chats-header-actions button').find(
+        (b) => b.attributes('title') === 'New chat'
+      )
+      expect(newChatBtn).toBeTruthy()
+      await newChatBtn!.trigger('click')
+      expect(w.emitted('create')).toBeTruthy()
+      w.unmount()
+    })
+  })
+
+  describe('archive flyout', () => {
+    it('flyout is closed by default', () => {
+      const w = mount(SessionSidebar, { props: defaultProps })
+      expect(document.body.querySelector('.bond-flyout-menu')).toBeNull()
       w.unmount()
     })
 
-    it('archives list is open by default', () => {
+    it('clicking archive button opens flyout', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-      const collapsible = w.find('.archives-collapsible')
-      expect(collapsible.classes()).toContain('open')
+      await openFlyout(w)
+      expect(document.body.querySelector('.bond-flyout-menu')).not.toBeNull()
       w.unmount()
     })
 
-    it('clicking header toggles the collapsible wrapper closed', async () => {
+    it('flyout shows archived session count', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-
-      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
-      await nextTick()
-
-      const collapsible = w.find('.archives-collapsible')
-      expect(collapsible.classes()).not.toContain('open')
+      await openFlyout(w)
+      const header = document.body.querySelector('.archive-flyout-header')
+      expect(header?.textContent).toContain('Archived (2)')
       w.unmount()
     })
 
-    it('clicking header twice reopens the collapsible wrapper', async () => {
+    it('flyout renders archived sessions', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-
-      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
-      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
-      await nextTick()
-
-      const collapsible = w.find('.archives-collapsible')
-      expect(collapsible.classes()).toContain('open')
+      await openFlyout(w)
+      expect(document.body.querySelector('.archive-flyout-list')).not.toBeNull()
       w.unmount()
     })
 
-    it('archived session items are always in DOM (not removed on collapse)', async () => {
-      const w = mount(SessionSidebar, { props: defaultProps })
-
-      // Collapse
-      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
-      await nextTick()
-
-      // Items should still be in the DOM for animation purposes
-      const items = w.findAll('.sidebar-archives .sidebar-list')
-      expect(items.length).toBe(1)
-      w.unmount()
-    })
-
-    it('chevron rotates when open', () => {
-      const w = mount(SessionSidebar, { props: defaultProps })
-      const chevron = w.find('.sidebar-archives .collapse-chevron')
-      expect(chevron.classes()).toContain('open')
-      w.unmount()
-    })
-
-    it('chevron is not rotated when closed', async () => {
-      const w = mount(SessionSidebar, { props: defaultProps })
-
-      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
-      await nextTick()
-
-      const chevron = w.find('.sidebar-archives .collapse-chevron')
-      expect(chevron.classes()).not.toContain('open')
-      w.unmount()
-    })
-
-    it('persists open/close state to localStorage', async () => {
-      const w = mount(SessionSidebar, { props: defaultProps })
-
-      await w.find('.sidebar-archives .sidebar-section-header').trigger('click')
-      await nextTick()
-
-      expect(localStorage.getItem('bond:archives-open')).toBe('false')
-      w.unmount()
-    })
-
-    it('restores closed state from localStorage', () => {
-      localStorage.setItem('bond:archives-open', 'false')
-      const w = mount(SessionSidebar, { props: defaultProps })
-
-      const collapsible = w.find('.archives-collapsible')
-      expect(collapsible.classes()).not.toContain('open')
+    it('flyout shows empty state when no archives', async () => {
+      const w = mount(SessionSidebar, {
+        props: { ...defaultProps, archivedSessions: [] },
+      })
+      await openFlyout(w)
+      const empty = document.body.querySelector('.archive-flyout-empty')
+      expect(empty?.textContent).toBe('No archived chats')
       w.unmount()
     })
   })
