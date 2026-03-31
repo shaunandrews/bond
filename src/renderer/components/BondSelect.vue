@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed } from 'vue'
 import { PhCaretDown, PhCheck } from '@phosphor-icons/vue'
+import BondFlyoutMenu from './BondFlyoutMenu.vue'
 
 const props = defineProps<{
   modelValue?: string
   disabled?: boolean
   options: { value: string; label: string }[]
   placement?: 'top' | 'bottom'
+  variant?: 'default' | 'minimal'
+  size?: 'sm' | 'md'
 }>()
 
 const emit = defineEmits<{
@@ -14,8 +17,7 @@ const emit = defineEmits<{
 }>()
 
 const open = ref(false)
-const wrapEl = ref<HTMLElement | null>(null)
-const menuEl = ref<HTMLElement | null>(null)
+const triggerEl = ref<HTMLElement | null>(null)
 const focusedIndex = ref(-1)
 
 const selectedLabel = computed(() => {
@@ -23,24 +25,21 @@ const selectedLabel = computed(() => {
   return opt?.label ?? props.modelValue ?? ''
 })
 
+const flyoutPlacement = computed(() =>
+  props.placement === 'top' ? 'top-start' as const : 'bottom-start' as const
+)
+
 function toggle() {
   if (props.disabled) return
   open.value = !open.value
   if (open.value) {
     focusedIndex.value = props.options.findIndex(o => o.value === props.modelValue)
-    nextTick(() => menuEl.value?.focus())
   }
 }
 
 function select(value: string) {
   emit('update:modelValue', value)
   open.value = false
-}
-
-function handleClickOutside(e: MouseEvent) {
-  if (open.value && wrapEl.value && !wrapEl.value.contains(e.target as Node)) {
-    open.value = false
-  }
 }
 
 function handleKeyDown(e: KeyboardEvent) {
@@ -64,16 +63,15 @@ function handleKeyDown(e: KeyboardEvent) {
     }
   }
 }
-
-onMounted(() => document.addEventListener('mousedown', handleClickOutside))
-onUnmounted(() => document.removeEventListener('mousedown', handleClickOutside))
 </script>
 
 <template>
-  <div ref="wrapEl" class="bond-select-wrap">
+  <div class="bond-select-wrap">
     <button
+      ref="triggerEl"
       type="button"
       class="bond-select-trigger"
+      :class="{ 'is-minimal': variant === 'minimal', 'is-sm': size === 'sm' }"
       :disabled="disabled"
       @click="toggle"
       @keydown="handleKeyDown"
@@ -81,43 +79,39 @@ onUnmounted(() => document.removeEventListener('mousedown', handleClickOutside))
       <span class="bond-select-label">{{ selectedLabel }}</span>
       <PhCaretDown
         class="bond-select-icon"
-        :class="{ 'rotate-180': open }"
+        :style="{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }"
         :size="12"
         weight="bold"
       />
     </button>
 
-    <Transition name="select-menu">
-      <div
-        v-if="open"
-        ref="menuEl"
-        class="bond-select-menu"
-        :class="placement === 'top' ? 'placement-top' : 'placement-bottom'"
-        tabindex="-1"
-        @keydown="handleKeyDown"
+    <BondFlyoutMenu
+      :open="open"
+      :anchor="triggerEl"
+      :placement="flyoutPlacement"
+      padding
+      @close="open = false"
+    >
+      <button
+        v-for="(opt, i) in options"
+        :key="opt.value"
+        type="button"
+        class="bond-select-option"
+        :class="{ selected: opt.value === modelValue, focused: i === focusedIndex }"
+        @click="select(opt.value)"
+        @mouseenter="focusedIndex = i"
       >
-        <button
-          v-for="(opt, i) in options"
-          :key="opt.value"
-          type="button"
-          class="bond-select-option"
-          :class="{ selected: opt.value === modelValue, focused: i === focusedIndex }"
-          @click="select(opt.value)"
-          @mouseenter="focusedIndex = i"
-        >
-          <span class="bond-select-check-slot">
-            <PhCheck v-if="opt.value === modelValue" :size="12" weight="bold" />
-          </span>
-          <span>{{ opt.label }}</span>
-        </button>
-      </div>
-    </Transition>
+        <span class="bond-select-check-slot">
+          <PhCheck v-if="opt.value === modelValue" :size="12" weight="bold" />
+        </span>
+        <span>{{ opt.label }}</span>
+      </button>
+    </BondFlyoutMenu>
   </div>
 </template>
 
 <style scoped>
 .bond-select-wrap {
-  position: relative;
   display: inline-block;
 }
 
@@ -136,6 +130,25 @@ onUnmounted(() => document.removeEventListener('mousedown', handleClickOutside))
   cursor: pointer;
   transition: border-color var(--transition-base);
   white-space: nowrap;
+}
+
+.bond-select-trigger.is-sm {
+  padding: 0.25rem 0.375rem 0.25rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.bond-select-trigger.is-minimal {
+  background: transparent;
+  border-color: transparent;
+}
+
+.bond-select-trigger.is-minimal:hover {
+  border-color: transparent;
+  color: var(--color-accent);
+}
+
+.bond-select-trigger.is-minimal:hover .bond-select-icon {
+  color: var(--color-accent);
 }
 
 .bond-select-trigger:hover {
@@ -161,33 +174,6 @@ onUnmounted(() => document.removeEventListener('mousedown', handleClickOutside))
   color: var(--color-muted);
   flex-shrink: 0;
   transition: transform var(--transition-fast);
-}
-
-.bond-select-icon.rotate-180 {
-  transform: rotate(180deg);
-}
-
-.bond-select-menu {
-  position: absolute;
-  left: 0;
-  min-width: 100%;
-  padding: 4px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-  z-index: 50;
-  outline: none;
-  display: flex;
-  flex-direction: column;
-}
-
-.placement-bottom {
-  top: calc(100% + 4px);
-}
-
-.placement-top {
-  bottom: calc(100% + 4px);
 }
 
 .bond-select-option {
@@ -225,13 +211,4 @@ onUnmounted(() => document.removeEventListener('mousedown', handleClickOutside))
   color: var(--color-accent);
 }
 
-.select-menu-enter-active,
-.select-menu-leave-active {
-  transition: opacity var(--transition-fast), transform var(--transition-fast);
-}
-.select-menu-enter-from,
-.select-menu-leave-to {
-  opacity: 0;
-  transform: scale(0.96);
-}
 </style>

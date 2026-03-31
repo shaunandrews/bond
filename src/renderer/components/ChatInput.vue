@@ -313,18 +313,22 @@ function handleKeyDown(e: KeyboardEvent) {
       </div>
 
       <!-- Toolbar -->
-      <div class="flex items-center justify-between pt-2">
-        <div class="flex items-center gap-2">
+      <div class="flex items-center justify-between pt-1">
+        <div class="flex items-center gap-s">
           <BondSelect
             :modelValue="model"
             :options="modelOptions"
             placement="top"
+            variant="minimal"
+            size="sm"
             @update:modelValue="emit('update:model', $event as ModelId)"
           />
           <BondSelect
             :modelValue="editMode.type"
             :options="editModeOptions"
             placement="top"
+            variant="minimal"
+            size="sm"
             @update:modelValue="handleEditModeChange"
           />
           <BondSelect
@@ -332,6 +336,8 @@ function handleKeyDown(e: KeyboardEvent) {
             :modelValue="siteId ?? ''"
             :options="siteOptions"
             placement="top"
+            variant="minimal"
+            size="sm"
             @update:modelValue="handleSiteChange"
           />
           <button
@@ -379,10 +385,12 @@ function handleKeyDown(e: KeyboardEvent) {
 
 <style scoped>
 .chat-box {
-  /* border: 1px solid var(--color-border); */
+  border-top: 1px solid rgba(255,255,255,0.1);
+  /* box-shadow: 0 1px 0 rgba(255,255,255,0.15); */
   border-radius: 18px 18px 22px 12px;
   padding: 6px;
   background: var(--color-tint);
+  backdrop-filter: blur(12px);
   transition: border-color var(--transition-fast);
 }
 

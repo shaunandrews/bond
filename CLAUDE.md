@@ -159,7 +159,7 @@ Multi-line textarea with v-model support.
 
 ### BondSelect
 Dropdown select with custom chevron.
-- **Props:** `modelValue?: string`, `options: { value, label }[]`, `disabled?: boolean`
+- **Props:** `modelValue?: string`, `options: { value, label }[]`, `disabled?: boolean`, `placement?: 'top' | 'bottom'`, `variant?: 'default' | 'minimal'` (minimal removes background and border), `size?: 'sm' | 'md'` (default: `'md'`)
 - **Events:** `update:modelValue(value: string)`
 
 ### BondTab
