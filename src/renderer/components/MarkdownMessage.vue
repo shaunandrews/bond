@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import hljs from '../lib/highlight'
@@ -37,14 +37,37 @@ renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
 const sanitizedHtml = ref('')
 let rafId: number | null = null
 
+// Encode spaces in markdown image paths so marked.js doesn't break on them
+// ![alt](/path/with spaces/file.png) → ![alt](/path/with%20spaces/file.png)
+function encodeImagePaths(md: string): string {
+  return md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) => {
+    if (url.startsWith('http') || url.startsWith('data:')) return _match
+    return `![${alt}](${url.replace(/ /g, '%20')})`
+  })
+}
+
 function renderMarkdown() {
-  const raw = marked.parse(props.text, {
+  const raw = marked.parse(encodeImagePaths(props.text), {
     async: false,
     gfm: true,
     breaks: true,
     renderer,
   }) as string
   sanitizedHtml.value = DOMPurify.sanitize(raw, { ADD_ATTR: ['data-code'] })
+  nextTick(resolveLocalImages)
+}
+
+async function resolveLocalImages() {
+  if (!rootEl.value) return
+  const imgs = rootEl.value.querySelectorAll('img') as NodeListOf<HTMLImageElement>
+  for (const img of imgs) {
+    const src = img.getAttribute('src')
+    if (!src || !src.startsWith('/') || src.startsWith('data:')) continue
+    if (!/\.(png|jpe?g|gif|webp)$/i.test(src)) continue
+    const filePath = decodeURIComponent(src)
+    const dataUri = await window.bond.readLocalImage(filePath)
+    if (dataUri) img.src = dataUri
+  }
 }
 
 // Re-render when text changes, throttled during streaming
@@ -75,6 +98,7 @@ watch(
 )
 
 const rootEl = ref<HTMLElement | null>(null)
+const lightboxSrc = ref<string | null>(null)
 
 function handleClick(e: MouseEvent) {
   const target = e.target as HTMLElement
@@ -96,18 +120,80 @@ function handleClick(e: MouseEvent) {
   setTimeout(() => { btn.textContent = 'Copy' }, 1500)
 }
 
-onMounted(() => rootEl.value?.addEventListener('click', handleClick))
+function handleDblClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (target.tagName === 'IMG') {
+    e.preventDefault()
+    e.stopPropagation()
+    lightboxSrc.value = (target as HTMLImageElement).src
+  }
+}
+
+function closeLightbox() {
+  lightboxSrc.value = null
+}
+
+onMounted(() => {
+  rootEl.value?.addEventListener('click', handleClick)
+  rootEl.value?.addEventListener('dblclick', handleDblClick)
+})
 onUnmounted(() => {
   rootEl.value?.removeEventListener('click', handleClick)
+  rootEl.value?.removeEventListener('dblclick', handleDblClick)
   if (rafId !== null) cancelAnimationFrame(rafId)
 })
 </script>
 
 <template>
   <div ref="rootEl" class="bond-message" v-html="sanitizedHtml" />
+  <Teleport to="body">
+    <Transition name="lightbox">
+      <div v-if="lightboxSrc" class="lightbox-overlay" @click="closeLightbox">
+        <img :src="lightboxSrc" class="lightbox-img" @click.stop />
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <style>
+.bond-message img {
+  max-width: min(100%, 480px);
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: var(--radius-lg);
+  margin: 0.5em 0;
+  border: 1px solid var(--color-border);
+  cursor: zoom-in;
+}
+
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+  padding: 2rem;
+}
+
+.lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.lightbox-enter-active,
+.lightbox-leave-active {
+  transition: opacity 0.15s ease;
+}
+.lightbox-enter-from,
+.lightbox-leave-to {
+  opacity: 0;
+}
 .bond-message p { margin: 0; }
 .bond-message p + p { margin-top: 0.5em; }
 .bond-message strong { font-weight: 600; }
