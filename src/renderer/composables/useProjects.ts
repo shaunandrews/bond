@@ -1,9 +1,11 @@
 import { ref, computed, watch } from 'vue'
-import type { WordPressSite, WordPressSiteDetails } from '../../shared/wordpress'
+import type { WordPressSite, WordPressSiteDetails, WpSiteMap, WpThemeJson } from '../../shared/wordpress'
 
 export interface ProjectsDeps {
   listProjects: () => Promise<{ available: boolean; sites: WordPressSite[] }>
   getProjectDetails: (path: string) => Promise<WordPressSiteDetails | null>
+  getProjectSiteMap: (path: string) => Promise<WpSiteMap | null>
+  getProjectThemeJson: (path: string) => Promise<WpThemeJson | null>
   createProject: (name: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
   deleteProject: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
   startProject: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
@@ -13,6 +15,8 @@ export interface ProjectsDeps {
 const defaultDeps: ProjectsDeps = {
   listProjects: () => window.bond.listWordPressSites(),
   getProjectDetails: (path) => window.bond.getWordPressSiteDetails(path),
+  getProjectSiteMap: (path) => window.bond.getWordPressSiteMap(path),
+  getProjectThemeJson: (path) => window.bond.getWordPressThemeJson(path),
   createProject: (name) => window.bond.createWordPressSite(name),
   deleteProject: (path) => window.bond.deleteWordPressSite(path),
   startProject: (path) => window.bond.startWordPressSite(path),
@@ -33,6 +37,12 @@ export function useProjects(deps: ProjectsDeps = defaultDeps) {
   const siteDetails = ref<WordPressSiteDetails | null>(null)
   const loadingDetails = ref(false)
 
+  const siteMap = ref<WpSiteMap | null>(null)
+  const loadingSiteMap = ref(false)
+
+  const themeJson = ref<WpThemeJson | null>(null)
+  const loadingThemeJson = ref(false)
+
   async function loadDetails(path: string) {
     loadingDetails.value = true
     siteDetails.value = null
@@ -40,6 +50,24 @@ export function useProjects(deps: ProjectsDeps = defaultDeps) {
       siteDetails.value = await deps.getProjectDetails(path)
     } finally {
       loadingDetails.value = false
+    }
+  }
+
+  async function loadSiteMap(path: string) {
+    loadingSiteMap.value = true
+    try {
+      siteMap.value = await deps.getProjectSiteMap(path)
+    } finally {
+      loadingSiteMap.value = false
+    }
+  }
+
+  async function loadThemeJson(path: string) {
+    loadingThemeJson.value = true
+    try {
+      themeJson.value = await deps.getProjectThemeJson(path)
+    } finally {
+      loadingThemeJson.value = false
     }
   }
 
@@ -52,6 +80,8 @@ export function useProjects(deps: ProjectsDeps = defaultDeps) {
     (key) => {
       if (!key) {
         siteDetails.value = null
+        siteMap.value = null
+        themeJson.value = null
         return
       }
       const site = selectedSite.value
@@ -59,6 +89,8 @@ export function useProjects(deps: ProjectsDeps = defaultDeps) {
         loadDetails(site.path)
       } else {
         siteDetails.value = null
+        siteMap.value = null
+        themeJson.value = null
       }
     }
   )
@@ -132,5 +164,5 @@ export function useProjects(deps: ProjectsDeps = defaultDeps) {
     }
   }
 
-  return { sites, available, loading, creating, deleting, selectedSiteId, selectedSite, siteDetails, loadingDetails, togglingSiteId, load, createSite, selectSite, startSite, stopSite, deleteSite }
+  return { sites, available, loading, creating, deleting, selectedSiteId, selectedSite, siteDetails, loadingDetails, siteMap, loadingSiteMap, themeJson, loadingThemeJson, togglingSiteId, load, createSite, selectSite, startSite, stopSite, deleteSite, loadSiteMap, loadThemeJson }
 }

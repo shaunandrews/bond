@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
 import type { Session, SessionMessage, AttachedImage, ImageRecord } from '../shared/session'
-import type { WordPressSite, WordPressSiteDetails } from '../shared/wordpress'
+import type { WordPressSite, WordPressSiteDetails, WpSiteMap, WpThemeJson } from '../shared/wordpress'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
@@ -86,6 +86,8 @@ contextBridge.exposeInMainWorld('bond', {
   // WordPress
   listWordPressSites: () => ipcRenderer.invoke('wordpress:list') as Promise<{ available: boolean; sites: WordPressSite[] }>,
   getWordPressSiteDetails: (path: string) => ipcRenderer.invoke('wordpress:details', path) as Promise<WordPressSiteDetails | null>,
+  getWordPressSiteMap: (path: string) => ipcRenderer.invoke('wordpress:siteMap', path) as Promise<WpSiteMap | null>,
+  getWordPressThemeJson: (path: string) => ipcRenderer.invoke('wordpress:themeJson', path) as Promise<WpThemeJson | null>,
   createWordPressSite: (name: string) => ipcRenderer.invoke('wordpress:create', name) as Promise<{ available: boolean; sites: WordPressSite[] }>,
   deleteWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:delete', path) as Promise<{ available: boolean; sites: WordPressSite[] }>,
   startWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:start', path) as Promise<{ available: boolean; sites: WordPressSite[] }>,

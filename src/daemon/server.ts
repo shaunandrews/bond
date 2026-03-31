@@ -56,6 +56,10 @@ import {
   listSites as listWordPressSites,
   getCachedSiteDetails,
   refreshSiteDetails,
+  getCachedSiteMap,
+  refreshSiteMap,
+  getCachedThemeJson,
+  refreshThemeJson,
   createSite as createWordPressSite,
   deleteSite as deleteWordPressSite,
   startSite as startWordPressSite,
@@ -465,6 +469,24 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (cached) return JSON.stringify(makeResponse(id, cached))
         const fresh = await refreshSiteDetails(sitePath)
         return JSON.stringify(makeResponse(id, fresh))
+      }
+
+      case 'wordpress.siteMap': {
+        const sitePath = getStringParam(p, 'path')
+        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
+        const cachedMap = getCachedSiteMap(sitePath)
+        if (cachedMap) return JSON.stringify(makeResponse(id, cachedMap))
+        const freshMap = await refreshSiteMap(sitePath)
+        return JSON.stringify(makeResponse(id, freshMap))
+      }
+
+      case 'wordpress.themeJson': {
+        const sitePath = getStringParam(p, 'path')
+        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
+        const cachedTheme = getCachedThemeJson(sitePath)
+        if (cachedTheme) return JSON.stringify(makeResponse(id, cachedTheme))
+        const freshTheme = await refreshThemeJson(sitePath)
+        return JSON.stringify(makeResponse(id, freshTheme))
       }
 
       case 'wordpress.create': {

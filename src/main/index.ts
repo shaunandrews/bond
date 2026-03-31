@@ -358,6 +358,8 @@ app.whenReady().then(async () => {
   // --- WordPress ---
   ipcMain.handle('wordpress:list', () => client.listWordPressSites())
   ipcMain.handle('wordpress:details', (_e, path: string) => client.getWordPressSiteDetails(path))
+  ipcMain.handle('wordpress:siteMap', (_e, path: string) => client.getWordPressSiteMap(path))
+  ipcMain.handle('wordpress:themeJson', (_e, path: string) => client.getWordPressThemeJson(path))
   ipcMain.handle('wordpress:create', (_e, name: string) => client.createWordPressSite(name))
   ipcMain.handle('wordpress:delete', (_e, path: string) => client.deleteWordPressSite(path))
   ipcMain.handle('wordpress:start', (_e, path: string) => client.startWordPressSite(path))

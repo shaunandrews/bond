@@ -26,6 +26,8 @@ declare global {
       saveAccentColor: (hex: string) => Promise<boolean>
       listWordPressSites: () => Promise<{ available: boolean; sites: import('../../shared/wordpress').WordPressSite[] }>
       getWordPressSiteDetails: (path: string) => Promise<import('../../shared/wordpress').WordPressSiteDetails | null>
+      getWordPressSiteMap: (path: string) => Promise<import('../../shared/wordpress').WpSiteMap | null>
+      getWordPressThemeJson: (path: string) => Promise<import('../../shared/wordpress').WpThemeJson | null>
       createWordPressSite: (name: string) => Promise<{ available: boolean; sites: import('../../shared/wordpress').WordPressSite[] }>
       deleteWordPressSite: (path: string) => Promise<{ available: boolean; sites: import('../../shared/wordpress').WordPressSite[] }>
       startWordPressSite: (path: string) => Promise<{ available: boolean; sites: import('../../shared/wordpress').WordPressSite[] }>

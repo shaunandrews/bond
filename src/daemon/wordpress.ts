@@ -2,7 +2,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import type { WordPressSite, WordPressSiteDetails, WpContent } from '../shared/wordpress'
+import type { WordPressSite, WordPressSiteDetails, WpContent, WpSiteMap, WpSiteMapNode, WpThemeJson } from '../shared/wordpress'
 
 const execFileAsync = promisify(execFile)
 
@@ -32,10 +32,20 @@ interface CacheEntry {
 const detailsCache = new Map<string, CacheEntry>()
 // Track in-flight fetches to avoid duplicate work
 const inflightFetches = new Map<string, Promise<WordPressSiteDetails | null>>()
+
+// Site map cache
+interface SiteMapCacheEntry { siteMap: WpSiteMap; fetchedAt: number }
+const siteMapCache = new Map<string, SiteMapCacheEntry>()
+const inflightSiteMapFetches = new Map<string, Promise<WpSiteMap | null>>()
+
+// Theme JSON cache
+interface ThemeJsonCacheEntry { themeJson: WpThemeJson; fetchedAt: number }
+const themeJsonCache = new Map<string, ThemeJsonCacheEntry>()
+const inflightThemeJsonFetches = new Map<string, Promise<WpThemeJson | null>>()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let lastSites: WordPressSite[] = []
 
-function isCacheFresh(entry: CacheEntry): boolean {
+function isCacheFresh(entry: { fetchedAt: number }): boolean {
   return Date.now() - entry.fetchedAt < CACHE_TTL_MS
 }
 
@@ -81,6 +91,8 @@ export function refreshSiteDetails(path: string): Promise<WordPressSiteDetails |
 /** Invalidate cache for a path (e.g. after stop/delete) */
 function invalidateDetails(path: string): void {
   detailsCache.delete(path)
+  siteMapCache.delete(path)
+  themeJsonCache.delete(path)
 }
 
 /** Refresh details for all currently running sites */
@@ -182,7 +194,7 @@ async function fetchSiteDetails(path: string): Promise<WordPressSiteDetails | nu
       for (const postType of ['page', 'post'] as const) {
         const listRaw = await wpCliAsync(bin, path, [
           'post', 'list', `--post_type=${postType}`, '--post_status=publish',
-          '--fields=ID,post_title,post_name', '--format=json'
+          '--fields=ID,post_title,post_name,post_parent', '--format=json'
         ])
         const items = JSON.parse(listRaw)
         if (!Array.isArray(items)) continue
@@ -195,7 +207,8 @@ async function fetchSiteDetails(path: string): Promise<WordPressSiteDetails | nu
               title: String(item.post_title ?? ''),
               slug: String(item.post_name ?? ''),
               type: postType,
-              content: body
+              content: body,
+              parent: Number(item.post_parent ?? 0)
             })
           } catch { /* skip individual posts that fail */ }
         }
@@ -207,6 +220,217 @@ async function fetchSiteDetails(path: string): Promise<WordPressSiteDetails | nu
     console.error('[wordpress] fetchSiteDetails failed:', e instanceof Error ? e.message : e)
     return null
   }
+}
+
+// --- Site Map ---
+
+async function fetchSiteMap(path: string): Promise<WpSiteMap | null> {
+  const bin = findStudioBinary()
+  if (!bin) return null
+
+  try {
+    // Fetch pages with parent info
+    const pagesRaw = JSON.parse(await wpCliAsync(bin, path, [
+      'post', 'list', '--post_type=page', '--post_status=publish',
+      '--fields=ID,post_title,post_name,post_parent', '--format=json'
+    ]))
+
+    // Fetch posts (flat)
+    const postsRaw = JSON.parse(await wpCliAsync(bin, path, [
+      'post', 'list', '--post_type=post', '--post_status=publish',
+      '--fields=ID,post_title,post_name', '--format=json'
+    ]))
+
+    // Check front page settings
+    let showOnFront = 'posts'
+    let pageOnFront = 0
+    try { showOnFront = (await wpCliAsync(bin, path, ['option', 'get', 'show_on_front'])).trim() } catch { /* */ }
+    try { pageOnFront = parseInt((await wpCliAsync(bin, path, ['option', 'get', 'page_on_front'])).trim(), 10) || 0 } catch { /* */ }
+
+    // Get site URL for building page URLs
+    let siteUrl = ''
+    try { siteUrl = (await wpCliAsync(bin, path, ['option', 'get', 'siteurl'])).trim() } catch { /* */ }
+
+    const homePageId = showOnFront === 'page' ? pageOnFront : null
+
+    // Build page nodes
+    const pageNodes: WpSiteMapNode[] = (Array.isArray(pagesRaw) ? pagesRaw : []).map((p: Record<string, unknown>) => ({
+      id: Number(p.ID),
+      title: String(p.post_title ?? ''),
+      slug: String(p.post_name ?? ''),
+      type: 'page' as const,
+      parent: Number(p.post_parent ?? 0),
+      url: `${siteUrl}/${String(p.post_name ?? '')}`,
+      children: []
+    }))
+
+    // Build tree from flat list
+    const nodeMap = new Map<number, WpSiteMapNode>()
+    for (const node of pageNodes) nodeMap.set(node.id, node)
+
+    const roots: WpSiteMapNode[] = []
+    for (const node of pageNodes) {
+      const parentNode = node.parent ? nodeMap.get(node.parent) : null
+      if (parentNode) {
+        parentNode.children.push(node)
+      } else {
+        roots.push(node)
+      }
+    }
+
+    // Build post nodes (flat)
+    const postNodes: WpSiteMapNode[] = (Array.isArray(postsRaw) ? postsRaw : []).map((p: Record<string, unknown>) => ({
+      id: Number(p.ID),
+      title: String(p.post_title ?? ''),
+      slug: String(p.post_name ?? ''),
+      type: 'post' as const,
+      parent: 0,
+      url: `${siteUrl}/${String(p.post_name ?? '')}`,
+      children: []
+    }))
+
+    return { pages: roots, posts: postNodes, homePageId }
+  } catch (e) {
+    console.error('[wordpress] fetchSiteMap failed:', e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
+export function getCachedSiteMap(path: string): WpSiteMap | null {
+  const entry = siteMapCache.get(path)
+  if (entry && isCacheFresh(entry)) return entry.siteMap
+  return null
+}
+
+export function refreshSiteMap(path: string): Promise<WpSiteMap | null> {
+  const existing = inflightSiteMapFetches.get(path)
+  if (existing) return existing
+
+  const promise = fetchSiteMap(path).then(siteMap => {
+    if (siteMap) {
+      siteMapCache.set(path, { siteMap, fetchedAt: Date.now() })
+    } else {
+      siteMapCache.delete(path)
+    }
+    inflightSiteMapFetches.delete(path)
+    return siteMap
+  }).catch(e => {
+    console.error('[wordpress] refreshSiteMap failed:', e instanceof Error ? e.message : e)
+    inflightSiteMapFetches.delete(path)
+    return null
+  })
+
+  inflightSiteMapFetches.set(path, promise)
+  return promise
+}
+
+// --- Theme JSON ---
+
+async function fetchThemeJson(path: string): Promise<WpThemeJson | null> {
+  const bin = findStudioBinary()
+  if (!bin) return null
+
+  try {
+    // Get merged theme data (theme defaults + user customizations)
+    let raw: string
+    try {
+      raw = await wpCliAsync(bin, path, [
+        'eval', 'echo json_encode(WP_Theme_JSON_Resolver::get_merged_data()->get_raw_data());'
+      ])
+    } catch {
+      // Fallback: read theme.json directly
+      try {
+        raw = await wpCliAsync(bin, path, [
+          'eval', "echo file_get_contents(get_template_directory() . '/theme.json');"
+        ])
+      } catch {
+        return null
+      }
+    }
+
+    const data = JSON.parse(raw)
+    if (!data) return null
+
+    // Extract colors from settings.color.palette (can be at theme or default level)
+    const palette = data.settings?.color?.palette
+    const colors = extractArray(palette?.theme) || extractArray(palette?.custom) || extractArray(palette?.default) || []
+
+    // Extract font families
+    const fontFamiliesRaw = data.settings?.typography?.fontFamilies
+    const fontFamilies = extractArray(fontFamiliesRaw?.theme) || extractArray(fontFamiliesRaw?.custom) || extractArray(fontFamiliesRaw?.default) || []
+
+    // Extract font sizes
+    const fontSizesRaw = data.settings?.typography?.fontSizes
+    const fontSizes = extractArray(fontSizesRaw?.theme) || extractArray(fontSizesRaw?.custom) || extractArray(fontSizesRaw?.default) || []
+
+    // Extract spacing sizes
+    const spacingRaw = data.settings?.spacing?.spacingSizes
+    const spacingSizes = extractArray(spacingRaw?.theme) || extractArray(spacingRaw?.custom) || extractArray(spacingRaw?.default) || []
+
+    // Extract layout dimensions
+    const contentWidth = data.settings?.layout?.contentSize || undefined
+    const wideWidth = data.settings?.layout?.wideSize || undefined
+
+    return {
+      colors: colors.map((c: Record<string, unknown>) => ({
+        slug: String(c.slug ?? ''),
+        name: String(c.name ?? ''),
+        color: String(c.color ?? '')
+      })),
+      fontFamilies: fontFamilies.map((f: Record<string, unknown>) => ({
+        slug: String(f.slug ?? ''),
+        name: String(f.name ?? ''),
+        fontFamily: String(f.fontFamily ?? '')
+      })),
+      fontSizes: fontSizes.map((f: Record<string, unknown>) => ({
+        slug: String(f.slug ?? ''),
+        name: String(f.name ?? ''),
+        size: String(f.size ?? '')
+      })),
+      spacingSizes: spacingSizes.map((s: Record<string, unknown>) => ({
+        slug: String(s.slug ?? ''),
+        name: String(s.name ?? ''),
+        size: String(s.size ?? '')
+      })),
+      contentWidth,
+      wideWidth
+    }
+  } catch (e) {
+    console.error('[wordpress] fetchThemeJson failed:', e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
+function extractArray(val: unknown): Record<string, unknown>[] | null {
+  return Array.isArray(val) && val.length > 0 ? val : null
+}
+
+export function getCachedThemeJson(path: string): WpThemeJson | null {
+  const entry = themeJsonCache.get(path)
+  if (entry && isCacheFresh(entry)) return entry.themeJson
+  return null
+}
+
+export function refreshThemeJson(path: string): Promise<WpThemeJson | null> {
+  const existing = inflightThemeJsonFetches.get(path)
+  if (existing) return existing
+
+  const promise = fetchThemeJson(path).then(themeJson => {
+    if (themeJson) {
+      themeJsonCache.set(path, { themeJson, fetchedAt: Date.now() })
+    } else {
+      themeJsonCache.delete(path)
+    }
+    inflightThemeJsonFetches.delete(path)
+    return themeJson
+  }).catch(e => {
+    console.error('[wordpress] refreshThemeJson failed:', e instanceof Error ? e.message : e)
+    inflightThemeJsonFetches.delete(path)
+    return null
+  })
+
+  inflightThemeJsonFetches.set(path, promise)
+  return promise
 }
 
 // --- Sync site management (these are fast, single CLI calls) ---

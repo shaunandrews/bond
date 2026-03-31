@@ -1,7 +1,7 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
 import type { Session, SessionMessage, AttachedImage } from './session'
-import type { WordPressSite, WordPressSiteDetails } from './wordpress'
+import type { WordPressSite, WordPressSiteDetails, WpSiteMap, WpThemeJson } from './wordpress'
 import {
   makeRequest,
   isResponse,
@@ -250,6 +250,14 @@ export class BondClient {
 
   async getWordPressSiteDetails(path: string): Promise<WordPressSiteDetails | null> {
     return await this.call('wordpress.details', { path }) as WordPressSiteDetails | null
+  }
+
+  async getWordPressSiteMap(path: string): Promise<WpSiteMap | null> {
+    return await this.call('wordpress.siteMap', { path }) as WpSiteMap | null
+  }
+
+  async getWordPressThemeJson(path: string): Promise<WpThemeJson | null> {
+    return await this.call('wordpress.themeJson', { path }) as WpThemeJson | null
   }
 
   async createWordPressSite(name: string): Promise<{ available: boolean; sites: WordPressSite[] }> {

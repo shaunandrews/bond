@@ -414,10 +414,16 @@ onUnmounted(() => {
           :loadingDetails="projects.loadingDetails.value"
           :toggling="projects.togglingSiteId.value === projects.selectedSite.value.id"
           :deleting="projects.deleting.value"
+          :siteMap="projects.siteMap.value"
+          :loadingSiteMap="projects.loadingSiteMap.value"
+          :themeJson="projects.themeJson.value"
+          :loadingThemeJson="projects.loadingThemeJson.value"
           @start="projects.startSite(projects.selectedSite.value!.id, projects.selectedSite.value!.path)"
           @stop="projects.stopSite(projects.selectedSite.value!.id, projects.selectedSite.value!.path)"
           @chat="handleChatAboutSite(projects.selectedSite.value!)"
           @delete="handleDeleteProject(projects.selectedSite.value!)"
+          @loadSiteMap="projects.loadSiteMap(projects.selectedSite.value!.path)"
+          @loadThemeJson="projects.loadThemeJson(projects.selectedSite.value!.path)"
         />
       </ViewShell>
       </div>

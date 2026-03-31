@@ -41,6 +41,7 @@ export interface WpContent {
   slug: string
   type: 'post' | 'page'
   content: string
+  parent: number
 }
 
 export interface WordPressSiteDetails {
@@ -55,4 +56,57 @@ export interface WordPressSiteDetails {
   pageCount: number
   userCount: number
   content: WpContent[]
+}
+
+// --- Site Map ---
+
+export interface WpSiteMapNode {
+  id: number
+  title: string
+  slug: string
+  type: 'page' | 'post'
+  parent: number
+  url: string
+  children: WpSiteMapNode[]
+}
+
+export interface WpSiteMap {
+  pages: WpSiteMapNode[]
+  posts: WpSiteMapNode[]
+  homePageId: number | null
+}
+
+// --- Theme JSON ---
+
+export interface WpThemeJsonColor {
+  slug: string
+  name: string
+  color: string
+}
+
+export interface WpThemeJsonFontFamily {
+  slug: string
+  name: string
+  fontFamily: string
+}
+
+export interface WpThemeJsonFontSize {
+  slug: string
+  name: string
+  size: string
+}
+
+export interface WpThemeJsonSpacing {
+  slug: string
+  name: string
+  size: string
+}
+
+export interface WpThemeJson {
+  colors: WpThemeJsonColor[]
+  fontFamilies: WpThemeJsonFontFamily[]
+  fontSizes: WpThemeJsonFontSize[]
+  spacingSizes: WpThemeJsonSpacing[]
+  contentWidth?: string
+  wideWidth?: string
 }
