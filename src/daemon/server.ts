@@ -193,7 +193,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
               sessionId,
               resumeSession,
               imageIds,
-              editMode: session.editMode
+              editMode: session.editMode,
+              siteId: session.siteId
             })
           } catch (e) {
             // If resume failed, retry with a fresh session automatically
@@ -333,8 +334,11 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'session.list':
         return JSON.stringify(makeResponse(id, listSessions()))
 
-      case 'session.create':
-        return JSON.stringify(makeResponse(id, createSession()))
+      case 'session.create': {
+        const siteId = getStringParam(p, 'siteId')
+        const sessionTitle = getStringParam(p, 'title')
+        return JSON.stringify(makeResponse(id, createSession({ siteId: siteId || undefined, title: sessionTitle || undefined })))
+      }
 
       case 'session.get': {
         const sid = getStringParam(p, 'id')

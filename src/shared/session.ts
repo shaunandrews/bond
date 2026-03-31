@@ -23,6 +23,7 @@ export interface Session {
   summary: string
   archived: boolean
   editMode: EditMode
+  siteId?: string     // WordPress Studio site ID
   createdAt: string   // ISO 8601
   updatedAt: string   // ISO 8601
 }

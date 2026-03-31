@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('bond', {
 
   // Sessions
   listSessions: () => ipcRenderer.invoke('session:list') as Promise<Session[]>,
-  createSession: () => ipcRenderer.invoke('session:create') as Promise<Session>,
+  createSession: (options?: { siteId?: string; title?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
   getSession: (id: string) => ipcRenderer.invoke('session:get', id) as Promise<Session | null>,
   updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) =>
     ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
@@ -39,6 +39,9 @@ contextBridge.exposeInMainWorld('bond', {
   listSkills: () => ipcRenderer.invoke('skills:list') as Promise<{ name: string; description: string; argumentHint: string }[]>,
   refreshSkills: () => ipcRenderer.invoke('skills:refresh') as Promise<{ name: string; description: string; argumentHint: string }[]>,
   removeSkill: (name: string) => ipcRenderer.invoke('skills:remove', name) as Promise<{ ok: boolean }>,
+
+  // Local images
+  readLocalImage: (filePath: string) => ipcRenderer.invoke('image:readLocal', filePath) as Promise<string | null>,
 
   // Dev
   captureScreenshot: (outputPath: string) => ipcRenderer.invoke('dev:captureScreenshot', outputPath) as Promise<string>,

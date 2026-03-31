@@ -6,9 +6,9 @@ declare global {
       respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
       onChunk: (fn: (chunk: import('../../shared/stream').TaggedChunk) => void) => () => void
       listSessions: () => Promise<import('../../shared/session').Session[]>
-      createSession: () => Promise<import('../../shared/session').Session>
+      createSession: (options?: { siteId?: string; title?: string }) => Promise<import('../../shared/session').Session>
       getSession: (id: string) => Promise<import('../../shared/session').Session | null>
-      updateSession: (id: string, updates: Partial<Pick<import('../../shared/session').Session, 'title' | 'summary' | 'archived'>>) => Promise<import('../../shared/session').Session | null>
+      updateSession: (id: string, updates: Partial<Pick<import('../../shared/session').Session, 'title' | 'summary' | 'archived' | 'siteId'>>) => Promise<import('../../shared/session').Session | null>
       deleteSession: (id: string) => Promise<boolean>
       getMessages: (sessionId: string) => Promise<import('../../shared/session').SessionMessage[]>
       saveMessages: (sessionId: string, messages: import('../../shared/session').SessionMessage[]) => Promise<boolean>
@@ -21,6 +21,7 @@ declare global {
       getModel: () => Promise<string>
       getSoul: () => Promise<string>
       saveSoul: (content: string) => Promise<boolean>
+      readLocalImage: (filePath: string) => Promise<string | null>
       getAccentColor: () => Promise<string>
       saveAccentColor: (hex: string) => Promise<boolean>
       listWordPressSites: () => Promise<{ available: boolean; sites: import('../../shared/wordpress').WordPressSite[] }>

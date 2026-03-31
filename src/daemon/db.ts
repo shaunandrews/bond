@@ -19,6 +19,7 @@ export function getDb(): Database.Database {
   migrateCreateImagesTable(_db)
   migrateFromFiles(_db)
   migrateInlineImages(_db)
+  migrateAddSiteIdColumn(_db)
 
   return _db
 }
@@ -152,6 +153,13 @@ function migrateInlineImages(db: Database.Database): void {
   })
 
   migrate()
+}
+
+function migrateAddSiteIdColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(sessions)') as { name: string }[]
+  if (!columns.some(c => c.name === 'site_id')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN site_id TEXT')
+  }
 }
 
 // --- One-time migration from file-based storage ---

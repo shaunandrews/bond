@@ -153,15 +153,15 @@ export class BondClient {
     return await this.call('session.list') as Session[]
   }
 
-  async createSession(): Promise<Session> {
-    return await this.call('session.create') as Session
+  async createSession(options?: { siteId?: string; title?: string }): Promise<Session> {
+    return await this.call('session.create', options) as Session
   }
 
   async getSession(id: string): Promise<Session | null> {
     return await this.call('session.get', { id }) as Session | null
   }
 
-  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>): Promise<Session | null> {
+  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode' | 'siteId'>>): Promise<Session | null> {
     return await this.call('session.update', { id, updates }) as Session | null
   }
 

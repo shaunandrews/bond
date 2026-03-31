@@ -291,7 +291,7 @@ app.whenReady().then(async () => {
 
   // --- Sessions ---
   ipcMain.handle('session:list', () => client.listSessions())
-  ipcMain.handle('session:create', () => client.createSession())
+  ipcMain.handle('session:create', (_e, options?: { siteId?: string; title?: string }) => client.createSession(options))
   ipcMain.handle('session:get', (_e, id: string) => client.getSession(id))
   ipcMain.handle('session:update', (_e, id: string, updates: Record<string, unknown>) => client.updateSession(id, updates))
   ipcMain.handle('session:delete', (_e, id: string) => client.deleteSession(id))
@@ -307,6 +307,15 @@ app.whenReady().then(async () => {
   // --- Images ---
   ipcMain.handle('image:get', (_e, imageId: string) => client.getImage(imageId))
   ipcMain.handle('image:getMultiple', (_e, ids: string[]) => client.getImages(ids))
+
+  ipcMain.handle('image:readLocal', (_e, filePath: string): string | null => {
+    const EXT_TO_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
+    const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase()
+    const mime = EXT_TO_MIME[ext]
+    if (!mime || !existsSync(filePath)) return null
+    const data = readFileSync(filePath).toString('base64')
+    return `data:${mime};base64,${data}`
+  })
 
   // --- WordPress ---
   ipcMain.handle('wordpress:list', () => client.listWordPressSites())
