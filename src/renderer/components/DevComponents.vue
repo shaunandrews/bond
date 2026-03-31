@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { PhCaretRight, PhGear, PhPlus, PhTrash } from '@phosphor-icons/vue'
-import ChatHeader from './ChatHeader.vue'
+import BondToolbar from './BondToolbar.vue'
 import ChatInput from './ChatInput.vue'
 import MessageBubble from './MessageBubble.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
@@ -43,6 +43,21 @@ const sampleMessages: Record<string, Message> = {
 }
 
 const components = [
+  // --- Directives ---
+  {
+    name: 'v-tooltip',
+    file: 'directives/tooltip.ts',
+    category: 'Directives',
+    description: 'Global directive for styled, positioned tooltips. Replaces native title attributes. Supports placement modifiers and skip-delay for rapid hovering.',
+    props: [
+      { name: 'value', type: "string | { content, placement? }", description: "Tooltip text, or object with content and placement ('top' | 'bottom' | 'left' | 'right')" },
+      { name: '.top', type: 'modifier', description: 'Place tooltip above (default)' },
+      { name: '.bottom', type: 'modifier', description: 'Place tooltip below' },
+      { name: '.left', type: 'modifier', description: 'Place tooltip to the left' },
+      { name: '.right', type: 'modifier', description: 'Place tooltip to the right' },
+    ],
+    events: [],
+  },
   // --- Primitives ---
   {
     name: 'BondText',
@@ -194,12 +209,15 @@ const components = [
   },
   // --- Composed ---
   {
-    name: 'ChatHeader',
-    file: 'components/ChatHeader.vue',
-    category: 'Composed',
-    description: 'Displays the current chat title. Rendered inside the app-header layout shell in App.vue.',
+    name: 'BondToolbar',
+    file: 'components/BondToolbar.vue',
+    category: 'Layout',
+    description: 'Standardized toolbar with true-center middle slot. Grid layout (1fr auto 1fr) with start/middle/end regions.',
     props: [
-      { name: 'title', type: 'string', description: 'The chat title to display' },
+      { name: 'label', type: 'string', description: 'Accessible aria-label for the toolbar (required)' },
+      { name: 'border', type: "'none' | 'bottom'", description: "Edge border (default: 'none')" },
+      { name: 'drag', type: 'boolean', description: 'Enable Electron drag region' },
+      { name: 'blur', type: 'boolean', description: 'Backdrop blur effect for sticky headers' },
     ],
     events: [],
   },
@@ -259,7 +277,7 @@ const components = [
   },
 ]
 
-const categories = ['Primitives', 'Layout', 'Composed'] as const
+const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
 </script>
 
 <template>
@@ -324,6 +342,27 @@ const categories = ['Primitives', 'Layout', 'Composed'] as const
             <div class="dev-preview">
               <h3 class="dev-section-title">Preview</h3>
               <div class="dev-preview-area">
+
+                <!-- v-tooltip -->
+                <template v-if="comp.name === 'v-tooltip'">
+                  <div class="dev-preview-row">
+                    <span class="dev-preview-label">placements</span>
+                    <div class="flex flex-wrap gap-2">
+                      <BondButton v-tooltip.top="'Top'" variant="secondary" size="sm">Top</BondButton>
+                      <BondButton v-tooltip.bottom="'Bottom'" variant="secondary" size="sm">Bottom</BondButton>
+                      <BondButton v-tooltip.left="'Left'" variant="secondary" size="sm">Left</BondButton>
+                      <BondButton v-tooltip.right="'Right'" variant="secondary" size="sm">Right</BondButton>
+                    </div>
+                  </div>
+                  <div class="dev-preview-row">
+                    <span class="dev-preview-label">on icon buttons (hover quickly between them to see skip-delay)</span>
+                    <div class="flex flex-wrap gap-2">
+                      <BondButton v-tooltip="'Settings'" variant="ghost" size="sm" icon><PhGear :size="16" weight="bold" /></BondButton>
+                      <BondButton v-tooltip="'Add'" variant="ghost" size="sm" icon><PhPlus :size="16" weight="bold" /></BondButton>
+                      <BondButton v-tooltip="'Delete'" variant="ghost" size="sm" icon><PhTrash :size="16" weight="bold" /></BondButton>
+                    </div>
+                  </div>
+                </template>
 
                 <!-- BondText -->
                 <template v-if="comp.name === 'BondText'">
@@ -482,15 +521,29 @@ const categories = ['Primitives', 'Layout', 'Composed'] as const
                   </div>
                 </template>
 
-                <!-- ChatHeader -->
-                <template v-if="comp.name === 'ChatHeader'">
+                <!-- BondToolbar -->
+                <template v-if="comp.name === 'BondToolbar'">
                   <div class="dev-preview-row">
-                    <span class="dev-preview-label">with title</span>
-                    <ChatHeader title="How do I center a div?" />
+                    <span class="dev-preview-label">with start/middle/end</span>
+                    <BondToolbar label="Demo toolbar" border="bottom">
+                      <template #start>
+                        <BondButton variant="ghost" size="sm" icon><PhGear :size="14" /></BondButton>
+                      </template>
+                      <template #middle>
+                        <BondText size="sm" color="muted">Page title</BondText>
+                      </template>
+                      <template #end>
+                        <BondButton variant="ghost" size="sm" icon><PhPlus :size="14" /></BondButton>
+                      </template>
+                    </BondToolbar>
                   </div>
                   <div class="dev-preview-row">
-                    <span class="dev-preview-label">new chat</span>
-                    <ChatHeader title="New chat" />
+                    <span class="dev-preview-label">middle only</span>
+                    <BondToolbar label="Simple toolbar">
+                      <template #middle>
+                        <BondText size="sm" color="muted">Centered title</BondText>
+                      </template>
+                    </BondToolbar>
                   </div>
                 </template>
 

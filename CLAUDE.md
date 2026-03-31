@@ -107,6 +107,8 @@ src/
       useAppView.ts                  # View routing state
       useWordPress.ts                # WordPress Studio site management
       useSitePreview.ts              # In-app browser panel state
+    directives/
+      tooltip.ts                     # v-tooltip directive (singleton, positioned tooltips)
     components/
       BondText.vue                   # Polymorphic text primitive
       BondButton.vue                 # Button primitive (primary/secondary/ghost/danger)
@@ -117,11 +119,10 @@ src/
       BondTab.vue                    # Segmented tab bar
       BondPanelGroup.vue             # Resizable panel container
       BondPanel.vue                  # Individual resizable panel
+      BondToolbar.vue                # Standardized toolbar (grid layout, start/middle/end slots)
       BondPanelHandle.vue            # Drag handle between panels
       panelTypes.ts                  # Panel system types + injection key
       ViewShell.vue                  # View wrapper (sticky header/footer, scroll area)
-      ViewHeader.vue                 # Simple title bar
-      ChatHeader.vue                 # Chat title display
       ChatInput.vue                  # Textarea + model/edit-mode selectors + attach + send/stop
       MessageBubble.vue              # Renders all message variants
       MarkdownMessage.vue            # Markdown with syntax highlighting + copy
@@ -140,6 +141,14 @@ src/
 ## Components
 
 **Always use existing components** before creating new ones. When you add a new component or change props/events on an existing one, update this section AND the `DevComponents.vue` catalog.
+
+### v-tooltip (directive)
+Global directive for tooltips. Replaces native `title` attributes with styled, animated, positioned tooltips. Singleton DOM element — only one tooltip visible at a time.
+- **Usage:** `v-tooltip="'text'"` (string), `v-tooltip="{ content: 'text', placement: 'right' }"` (object), `v-tooltip.bottom="'text'"` (modifier)
+- **Placements:** `top` (default), `bottom`, `left`, `right` — auto-flips at viewport edges
+- **Timing:** 400ms show delay, 80ms skip delay (when hovering between adjacent triggers quickly), 100ms hide delay
+- **Accessibility:** `role="tooltip"`, `aria-describedby`, Escape to dismiss, keyboard focus support
+- **Styling:** Inverted colors (dark bg on light mode, light bg on dark mode), arrow pointer, fade+scale animation
 
 ### BondText
 Polymorphic text component for all UI text. Renders any HTML element via `as` prop.
@@ -178,16 +187,22 @@ Segmented tab bar.
 - **Events:** `update:modelValue(value: string)`
 
 ### BondPanelGroup
-Flex container that manages resizable panel layout. Nest `BondPanel` and `BondPanelHandle` as direct children.
+Flex container that manages resizable panel layout. Nest `BondPanel` and `BondPanelHandle` as direct children. Pixel-unit panels use `flex-shrink: 1` so they participate in CSS flexbox shrinking when the container is too small, with CSS `min-width`/`min-height` enforcing minimums natively. JS state is synced to DOM at drag/animation start via `syncPxStateToDom()`.
 - **Props:** `direction?: 'horizontal' | 'vertical'`, `autoSaveId?: string` (localStorage key), `keyboardStep?: number` (default: 5)
 - **Events:** `layoutChange(layout)` (during drag), `layoutChanged(layout)` (after drag ends)
 - **Expose:** `getLayout()`, `setLayout(layout)`
 
 ### BondPanel
-Individual resizable panel. Must be a direct child of `BondPanelGroup`. Slot props: `{ size, collapsed }`.
-- **Props:** `id: string`, `defaultSize?: number` (%), `minSize?: number` (% default: 10), `maxSize?: number` (% default: 100), `minSizePx?: number` (optional, pixel-based minimum — takes precedence), `collapsible?: boolean`, `collapsedSize?: number` (% default: 0), `header?: string` (renders a section header with collapse/expand chevron when collapsible)
+Individual resizable panel. Must be a direct child of `BondPanelGroup`. Slot props: `{ size, collapsed }`. Applies CSS `min-width` (horizontal) or `min-height` (vertical) from the group's `getMinDimStyle()` — suppressed during collapse/expand animation.
+- **Props:** `id: string`, `defaultSize?: number` (%), `minSize?: number` (% default: 10), `maxSize?: number` (% default: 100), `minSizePx?: number` (optional, pixel-based minimum — enforced via CSS min-width), `unit?: 'px' | '%'` (default: `'%'`), `collapsible?: boolean`, `collapsedSize?: number` (% default: 0), `header?: string` (renders a section header with collapse/expand chevron when collapsible)
 - **Slots:** `default` (panel content), `header-extra` (extra controls in the header row, e.g. a + button)
 - **Expose:** `collapse()`, `expand()`, `getSize()`, `isCollapsed()`, `resize(size)`
+
+### BondToolbar
+Standardized toolbar with true-center middle slot. Uses CSS Grid (`1fr auto 1fr`) so the middle content is always visually centered regardless of start/end width. Fixed height via `--toolbar-height` token. Used by ViewShell (header) and SitePreview (browser toolbar).
+- **Props:** `label: string` (required, `aria-label`), `border?: 'none' | 'bottom'`, `drag?: boolean` (Electron drag region), `blur?: boolean` (backdrop blur for sticky headers)
+- **Slots:** `start` (left-aligned), `middle` (true-centered), `end` (right-aligned)
+- **Accessibility:** `role="toolbar"`, `aria-label`
 
 ### BondPanelHandle
 Drag handle placed between panels. Supports pointer drag, keyboard arrows, Home/End. Styled via `data-state` attribute (`inactive` | `hover` | `drag`).
@@ -195,18 +210,10 @@ Drag handle placed between panels. Supports pointer drag, keyboard arrows, Home/
 - **Accessibility:** `role="separator"`, arrow keys, `aria-orientation`
 
 ### ViewShell
-View wrapper with sticky header, scrollable content area, and optional sticky footer. Backdrop blur on both header and footer edges.
-- **Props:** `title: string`
-- **Slots:** `header-left` (optional left content in header row), `default` (main content), `footer` (optional sticky footer)
-- **Expose:** `scrollAreaEl` (the scrollable container element)
-
-### ViewHeader
-Simple title bar with optional subtitle. Legacy — prefer ViewShell for new views.
+View wrapper with sticky header (using BondToolbar), scrollable content area, and optional sticky footer. Backdrop blur on both header and footer edges.
 - **Props:** `title: string`, `subtitle?: string`
-
-### ChatHeader
-Displays the current chat title. Rendered inside the app-header layout shell in App.vue.
-- **Props:** `title: string`
+- **Slots:** `header-start` (optional start content in toolbar), `header-end` (optional end content in toolbar), `default` (main content), `footer` (optional sticky footer)
+- **Expose:** `scrollAreaEl` (the scrollable container element)
 
 ### ChatInput
 Unified chat box combining textarea, model selector, edit mode selector, attach button, and a single contextual action button. Auto-focuses after response completes.
@@ -239,7 +246,7 @@ Left sidebar with session list, archive flyout, and WordPress sites. Chats secti
 - **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `wpSelect(site: WordPressSite)`, `wpOpen(site: WordPressSite)`, `wpCreate()`
 
 ### SitePreview
-In-app browser panel using Electron's `<webview>` tag. Toolbar with back/forward/reload, URL display, and close button. Webview is conditionally rendered (`v-if="url"`) — removed from DOM when no URL is set. Listens to webview navigation events to sync URL and nav state.
+In-app browser panel using Electron's `<webview>` tag. Uses BondToolbar for navigation (back/forward/reload, URL display, close). Webview is conditionally rendered (`v-if="url"`) — removed from DOM when no URL is set. Listens to webview navigation events to sync URL and nav state.
 - **State:** Reads from `useSitePreview()` composable (url, loading, canGoBack, canGoForward)
 - **Events:** None — calls `useSitePreview().close()` directly
 
@@ -258,7 +265,7 @@ Interactive design token showcase. Displays color swatches, typography, radius, 
 In-app reference screen showing Bond's architecture (layered stack diagram), agent tools, edit modes, data paths, and CLI commands. Accessible from the sidebar gear menu.
 
 ### DevComponents
-Dev-only component catalog with live previews and prop/event documentation. Toggle with **Cmd+Shift+D**. Not rendered in production flows.
+Dev-only component catalog with live previews and prop/event documentation. Accessible from the Settings window Components tab. Not rendered in production flows.
 
 ## Composables
 
@@ -344,6 +351,7 @@ Colors are defined in `app.css` via Tailwind v4's `@theme` directive. Dark mode 
 - **Radius:** `--radius-sm` (4px), `--radius-md` (6px), `--radius-lg` (8px), `--radius-xl` (12px)
 - **Shadows:** `--shadow-sm`, `--shadow-md`, `--shadow-lg` (stronger in dark mode)
 - **Transitions:** `--transition-fast` (0.12s), `--transition-base` (0.15s)
+- **Layout:** `--toolbar-height` (2.25rem / 36px)
 - **Fonts:** `--font-sans` (Inter stack), `--font-mono` (SF Mono stack)
 - **Sidebar:** Separate token set (`--sidebar-border`, `--sidebar-text`, `--sidebar-hover-bg`, etc.) using rgba for transparency-based theming
 
