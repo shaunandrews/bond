@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { PhGlobe, PhArrowSquareOut, PhPlay, PhStop, PhChatCircle, PhTrash, PhCheck, PhX } from '@phosphor-icons/vue'
+import { PhPlay, PhStop, PhChatCircle, PhTrash, PhCheck, PhX } from '@phosphor-icons/vue'
 import { ref } from 'vue'
 import type { WordPressSite, WordPressSiteDetails } from '../../shared/wordpress'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
+import CopyButton from './CopyButton.vue'
 
 defineProps<{
   site: WordPressSite
@@ -14,8 +15,6 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
-  open: []
-  openExternal: []
   start: []
   stop: []
   chat: []
@@ -23,28 +22,29 @@ const emit = defineEmits<{
 }>()
 
 const confirmingDelete = ref(false)
+
+function openUrl(url: string) {
+  window.bond.openExternal(url)
+}
 </script>
 
 <template>
   <div class="wp-site-view">
     <!-- Site header -->
     <div class="wp-site-header">
-      <div class="wp-site-title-row">
-        <span :class="['wp-dot', { running: site.running }]" />
-        <BondText as="h2" size="xl" weight="semibold">{{ site.name }}</BondText>
+      <BondText as="h2" size="xl" weight="semibold">{{ site.name }}</BondText>
+      <div class="wp-site-url-row">
+        <BondText as="a" size="sm" color="accent" mono :href="site.url" @click.prevent="openUrl(site.url)">{{ site.url }}</BondText>
+        <CopyButton :value="site.url" />
       </div>
-      <BondText size="sm" color="muted" mono>{{ site.path }}</BondText>
+      <div class="wp-site-path-row">
+        <BondText size="sm" color="muted" mono>{{ site.path }}</BondText>
+        <CopyButton :value="site.path" />
+      </div>
     </div>
 
     <!-- Quick actions -->
     <div class="wp-site-actions">
-      <BondButton variant="primary" size="sm" :disabled="!site.running" @click="emit('open')">
-        <PhGlobe :size="16" weight="bold" />
-        Preview site
-      </BondButton>
-      <BondButton variant="ghost" size="sm" icon :disabled="!site.running" @click="emit('openExternal')" title="Open in external browser">
-        <PhArrowSquareOut :size="16" weight="bold" />
-      </BondButton>
       <BondButton v-if="!site.running" variant="secondary" size="sm" :disabled="toggling" @click="emit('start')">
         <PhPlay :size="14" weight="bold" />
         {{ toggling ? 'Starting...' : 'Start site' }}
@@ -253,21 +253,18 @@ const confirmingDelete = ref(false)
   gap: 0.25rem;
 }
 
-.wp-site-title-row {
+.wp-site-url-row,
+.wp-site-path-row {
   display: flex;
   align-items: center;
-  gap: 0.625rem;
+  gap: 0.25rem;
 }
 
-.wp-dot {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--color-muted);
+.wp-site-url-row a {
+  cursor: pointer;
 }
-.wp-dot.running {
-  background: var(--color-ok);
+.wp-site-url-row a:hover {
+  text-decoration: underline;
 }
 
 .wp-site-actions {
