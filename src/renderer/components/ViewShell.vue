@@ -71,10 +71,8 @@ defineExpose({ scrollAreaEl })
   right: 0;
   bottom: -24px;
   z-index: -1;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  mask-image: linear-gradient(to bottom, black 40%, transparent);
-  -webkit-mask-image: linear-gradient(to bottom, black 40%, transparent);
+  backdrop-filter: blur(8px);
+  mask-image: linear-gradient(to bottom, black 30%, transparent);
 }
 
 .view-header-left {
@@ -138,9 +136,7 @@ defineExpose({ scrollAreaEl })
   right: 0;
   bottom: 0;
   z-index: -1;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  mask-image: linear-gradient(to bottom, transparent, black 48px);
-  -webkit-mask-image: linear-gradient(to bottom, transparent, black 48px);
+  backdrop-filter: blur(8px);
+  mask-image: linear-gradient(to bottom, transparent, black 100px);
 }
 </style>
