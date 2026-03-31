@@ -3,35 +3,35 @@ import { mount } from '@vue/test-utils'
 import ViewShell from './ViewShell.vue'
 
 describe('ViewShell', () => {
-  it('always renders the header-left slot when provided', () => {
+  it('always renders the header-start slot when provided', () => {
     const wrapper = mount(ViewShell, {
       props: { title: 'Test' },
       slots: {
-        'header-left': '<button class="sidebar-toggle-btn">Toggle</button>',
+        'header-start': '<button class="sidebar-toggle-btn">Toggle</button>',
       },
     })
 
-    expect(wrapper.find('.view-header-left').exists()).toBe(true)
+    expect(wrapper.find('.bond-toolbar__start').exists()).toBe(true)
     expect(wrapper.find('.sidebar-toggle-btn').exists()).toBe(true)
   })
 
-  it('does not render header-left wrapper when slot is empty', () => {
+  it('does not render start wrapper when slot is empty', () => {
     const wrapper = mount(ViewShell, {
       props: { title: 'Test' },
     })
 
-    expect(wrapper.find('.view-header-left').exists()).toBe(false)
+    expect(wrapper.find('.bond-toolbar__start').exists()).toBe(false)
   })
 
-  it('header-left is inside the view-header', () => {
+  it('header-start is inside the toolbar which is inside view-header', () => {
     const wrapper = mount(ViewShell, {
       props: { title: 'Test' },
       slots: {
-        'header-left': '<button class="toggle">T</button>',
+        'header-start': '<button class="toggle">T</button>',
       },
     })
 
     const header = wrapper.find('.view-header')
-    expect(header.find('.view-header-left').exists()).toBe(true)
+    expect(header.find('.bond-toolbar__start').exists()).toBe(true)
   })
 })

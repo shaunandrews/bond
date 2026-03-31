@@ -4,7 +4,7 @@ import { defineComponent, ref } from 'vue'
 import ViewShell from './ViewShell.vue'
 
 /**
- * The sidebar toggle button lives in the main panel's ViewShell header-left slot.
+ * The sidebar toggle button lives in the main panel's ViewShell header-start slot.
  * When the sidebar is collapsed the main panel starts at the window edge, so the
  * wrapper needs a `sidebar-collapsed` class to push the button right and clear
  * macOS traffic lights (~70px / 5.5rem).
@@ -24,7 +24,7 @@ function createHost(collapsed: boolean) {
     template: `
       <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
         <ViewShell title="Chat">
-          <template #header-left>
+          <template #header-start>
             <button class="sidebar-toggle-btn">Toggle</button>
           </template>
         </ViewShell>
@@ -53,14 +53,14 @@ describe('Sidebar toggle positioning', () => {
     expect(collapsed.find('.sidebar-toggle-btn').exists()).toBe(true)
   })
 
-  it('toggle button is inside view-header-left which is inside view-header', () => {
+  it('toggle button is inside the toolbar which is inside view-header', () => {
     const wrapper = createHost(true)
     const header = wrapper.find('.view-header')
-    const headerLeft = header.find('.view-header-left')
-    const toggle = headerLeft.find('.sidebar-toggle-btn')
+    const start = header.find('.bond-toolbar__start')
+    const toggle = start.find('.sidebar-toggle-btn')
 
     expect(header.exists()).toBe(true)
-    expect(headerLeft.exists()).toBe(true)
+    expect(start.exists()).toBe(true)
     expect(toggle.exists()).toBe(true)
   })
 })
