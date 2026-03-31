@@ -187,6 +187,28 @@ export async function runBondQuery(
             `Content: ${details.postCount} posts, ${details.pageCount} pages, ${details.userCount} users\n` +
             (details.permalinkStructure ? `Permalinks: ${details.permalinkStructure}\n` : '') +
             `Templates: ${details.templates.map(t => t.title || t.name).join(', ')}`
+
+          // Inject actual page/post content so the agent understands what the site is about
+          if (details.content.length > 0) {
+            siteContext += '\n\nPublished content (you already have this — do NOT re-fetch with WP-CLI):'
+            for (const item of details.content) {
+              // Strip block delimiter comments for readability
+              const cleaned = item.content
+                .replace(/<!-- \/?wp:[^\s]+(?: \{[^}]*\})? -->/g, '')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim()
+              siteContext += `\n\n--- ${item.type.toUpperCase()}: "${item.title}" (/${item.slug}) ---\n${cleaned}`
+            }
+          }
+
+          // Redesign guidance — helps the agent ask smart questions instead of generic discovery
+          siteContext += '\n\n' +
+            'REDESIGN GUIDANCE (for when the user asks to redesign, restyle, or improve this site):\n' +
+            '- You already have the site\'s content above. Read it to understand what the site is about, who it\'s for, and what it does.\n' +
+            '- Do NOT ask the user basic questions you can answer from the content (e.g. "What is this site about?" or "Is this a band?").\n' +
+            '- Take a screenshot to see the current visual state.\n' +
+            '- Then ask 2-3 pointed design questions based on what you know: aesthetic direction, what\'s not working about the current design, specific goals (more bookings? sell merch? look more professional?). Frame questions around the content you\'ve already read.\n' +
+            '- Follow the design guidelines in the /wordpress skill for implementation.'
         }
       }
     }

@@ -35,6 +35,14 @@ export interface WpTemplate {
   name: string
 }
 
+export interface WpContent {
+  id: number
+  title: string
+  slug: string
+  type: 'post' | 'page'
+  content: string
+}
+
 export interface WordPressSiteDetails {
   wpVersion: string
   siteTitle: string
@@ -46,4 +54,5 @@ export interface WordPressSiteDetails {
   postCount: number
   pageCount: number
   userCount: number
+  content: WpContent[]
 }

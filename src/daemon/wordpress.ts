@@ -2,7 +2,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import type { WordPressSite, WordPressSiteDetails } from '../shared/wordpress'
+import type { WordPressSite, WordPressSiteDetails, WpContent } from '../shared/wordpress'
 
 const execFileAsync = promisify(execFile)
 
@@ -176,7 +176,33 @@ async function fetchSiteDetails(path: string): Promise<WordPressSiteDetails | nu
       userCount = parseInt((await wpCliAsync(bin, path, ['user', 'list', '--format=count'])).trim(), 10) || 0
     } catch { /* non-critical */ }
 
-    return { wpVersion, siteTitle, tagline, permalinkStructure, themes, plugins, templates, postCount, pageCount, userCount }
+    // Fetch published pages and posts with their content
+    const content: WpContent[] = []
+    try {
+      for (const postType of ['page', 'post'] as const) {
+        const listRaw = await wpCliAsync(bin, path, [
+          'post', 'list', `--post_type=${postType}`, '--post_status=publish',
+          '--fields=ID,post_title,post_name', '--format=json'
+        ])
+        const items = JSON.parse(listRaw)
+        if (!Array.isArray(items)) continue
+        for (const item of items.slice(0, 20)) {
+          try {
+            let body = (await wpCliAsync(bin, path, ['post', 'get', String(item.ID), '--field=post_content'])).trim()
+            if (body.length > 2000) body = body.substring(0, 2000) + '\n[...truncated]'
+            content.push({
+              id: Number(item.ID),
+              title: String(item.post_title ?? ''),
+              slug: String(item.post_name ?? ''),
+              type: postType,
+              content: body
+            })
+          } catch { /* skip individual posts that fail */ }
+        }
+      }
+    } catch { /* non-critical */ }
+
+    return { wpVersion, siteTitle, tagline, permalinkStructure, themes, plugins, templates, postCount, pageCount, userCount, content }
   } catch (e) {
     console.error('[wordpress] fetchSiteDetails failed:', e instanceof Error ? e.message : e)
     return null
