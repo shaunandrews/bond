@@ -41,6 +41,8 @@ bond help                # Show all commands
 | `npm run build`     | Production build (electron-vite + daemon)            |
 | `npm run build:daemon` | Build daemon only (esbuild → `out/daemon/main.mjs`) |
 | `npm run preview`   | Run electron-vite preview                            |
+| `npm run pack`      | Build + package as unpacked `.app` (`dist/mac-arm64/`) |
+| `npm run dist`      | Build + package as `.dmg`                             |
 | `npm run test:run`  | Run tests once (Vitest)                              |
 | `npm test`          | Run tests in watch mode (Vitest)                     |
 
@@ -140,13 +142,15 @@ Types and utilities shared across all layers:
 
 - **electron-vite** builds three targets: `out/main`, `out/preload` (ESM), `out/renderer`
 - **esbuild** bundles the daemon separately (`out/daemon/main.mjs`)
+- **electron-builder** packages the app as a macOS `.dmg` (arm64). Config in `electron-builder.yml`
 - **@vitejs/plugin-vue** for SFC compilation
 - **Tailwind CSS v4** via `@import "tailwindcss"` — no PostCSS config needed
 
-## Dependencies
+### Packaging
 
-- **Runtime**: `@anthropic-ai/claude-agent-sdk`, `better-sqlite3`, `vue`, `ws`
-- **Dev**: `electron`, `electron-vite`, `vite`, `typescript`, `@vitejs/plugin-vue`, `tailwindcss`, `vitest`, `@vue/test-utils`, `happy-dom`
+The daemon runs as a separate system Node.js process, so it lives outside the ASAR archive in `Contents/Resources/daemon/` alongside its native dependencies (`better-sqlite3`, `@anthropic-ai/claude-agent-sdk`). The ASAR contains only the Electron main/preload/renderer code and the `ws` module.
+
+Recipients need Node.js 20+ and Claude Code installed and authenticated. Unsigned builds require `xattr -cr Bond.app` before first launch.
 
 ## Repository layout
 
@@ -163,6 +167,8 @@ src/
     lib/                 # Utilities (highlight.js setup)
   shared/                # Protocol, stream chunks, client, session types, models
 electron.vite.config.ts
+electron-builder.yml             # Packaging config (macOS DMG, extraResources)
 vitest.config.ts
+build/icon.icns                  # macOS app icon
 package.json
 ```

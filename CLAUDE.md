@@ -46,7 +46,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 
 ### Main Process (`src/main/`)
 
-Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`.
+Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/` and finds Node.js via login shell + well-known paths.
 
 ### Preload (`src/preload/index.ts`)
 
@@ -136,6 +136,9 @@ src/
       DesignSystemView.vue           # Live design token browser
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
+electron.vite.config.ts                  # Build config (main, preload, renderer)
+electron-builder.yml                     # Packaging config (macOS DMG, extraResources for daemon)
+build/icon.icns                          # macOS app icon
 ```
 
 ## Components
