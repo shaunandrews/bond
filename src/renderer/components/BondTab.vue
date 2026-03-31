@@ -90,7 +90,7 @@ onMounted(updateIndicator)
   font-weight: 500;
   color: var(--color-muted);
   border-radius: var(--radius-md);
-  transition: color 0.2s ease;
+  transition: color var(--transition-base);
 }
 
 .bond-tab:hover:not(.active) {

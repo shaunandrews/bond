@@ -170,7 +170,7 @@ onUnmounted(() => {
   position: fixed;
   inset: 0;
   z-index: 9999;
-  background: rgba(0, 0, 0, 0.8);
+  background: var(--overlay-heavy);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -188,7 +188,7 @@ onUnmounted(() => {
 
 .lightbox-enter-active,
 .lightbox-leave-active {
-  transition: opacity 0.15s ease;
+  transition: opacity var(--transition-base);
 }
 .lightbox-enter-from,
 .lightbox-leave-to {

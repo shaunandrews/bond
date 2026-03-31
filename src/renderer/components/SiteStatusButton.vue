@@ -41,7 +41,7 @@ defineEmits<{
   width: 10px;
   height: 10px;
   display: block;
-  transition: clip-path 0.2s ease, background-color 0.2s ease;
+  transition: clip-path var(--transition-base), background-color var(--transition-base);
 }
 
 /* --- Stopped: grey dot → green play triangle on hover --- */

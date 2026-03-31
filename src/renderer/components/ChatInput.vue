@@ -382,7 +382,7 @@ function handleKeyDown(e: KeyboardEvent) {
   overflow-y: auto;
   padding: 0.75rem 0.75rem 0.5rem;
   /* border: 1px solid var(--color-border); */
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   /* background: var(--color-surface); */
   color: var(--color-text-primary);
   font: inherit;

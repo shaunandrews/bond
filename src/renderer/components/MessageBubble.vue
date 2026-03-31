@@ -232,7 +232,7 @@ function formatTime(ts: number | undefined): string {
 }
 
 .copy-toast-enter-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition: opacity var(--transition-base), transform var(--transition-base);
 }
 .copy-toast-leave-active {
   transition: opacity 0.3s ease, transform 0.3s ease;

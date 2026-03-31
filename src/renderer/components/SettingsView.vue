@@ -453,7 +453,7 @@ function handleModelChange(model: string) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--overlay);
   backdrop-filter: blur(4px);
 }
 
