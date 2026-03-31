@@ -66,6 +66,12 @@ function handleToggleSidebar() {
   localStorage.setItem('bond:sidebar-collapsed', sidebarCollapsed.value ? '1' : '0')
 }
 
+const chatSiteName = computed(() => {
+  const siteId = sessions.activeSession.value?.siteId
+  if (!siteId) return undefined
+  return wordpress.sites.value.find(s => s.id === siteId)?.name
+})
+
 function handleLayoutChange(layout: Record<string, number>) {
   if (layout.sidebar != null) sidebarWidth.value = layout.sidebar
 }
@@ -110,6 +116,13 @@ async function handleEditModeChange(mode: EditMode) {
   sessions.updateLocal(id, { editMode: mode })
 }
 
+async function handleSiteIdChange(siteId: string | undefined) {
+  const id = sessions.activeSessionId.value
+  if (!id) return
+  await window.bond.updateSession(id, { siteId: siteId || undefined })
+  sessions.updateLocal(id, { siteId: siteId || undefined })
+}
+
 async function handleNewSession() {
   const session = await sessions.create()
   await chat.loadSession(session.id)
@@ -143,6 +156,20 @@ async function handleSelectSession(id: string) {
 function handleSelectWpSite(site: WordPressSite) {
   wordpress.selectSite(site.id)
   activeView.value = 'wordpress'
+}
+
+async function handleChatAboutSite(site: WordPressSite) {
+  // Find existing session for this site
+  const existing = sessions.activeSessions.value.find(s => s.siteId === site.id)
+  if (existing) {
+    sessions.select(existing.id)
+    await chat.loadSession(existing.id)
+  } else {
+    const session = await sessions.create({ siteId: site.id, title: site.name })
+    await chat.loadSession(session.id)
+  }
+  activeView.value = 'chat'
+  nextTick(() => chatInputRef.value?.focus())
 }
 
 function handleOpenWpSite(site: WordPressSite) {
@@ -242,6 +269,7 @@ onUnmounted(() => {
         v-if="activeView === 'chat'"
         ref="chatShellRef"
         :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
+        :subtitle="chatSiteName"
       >
         <template #header-left>
           <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
@@ -263,7 +291,7 @@ onUnmounted(() => {
                 </BondButton>
               </div>
             </Transition>
-            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
+            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :wordPressSites="wordpress.sites.value" :siteId="sessions.activeSession.value?.siteId" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" @update:siteId="handleSiteIdChange" />
           </div>
         </template>
       </ViewShell>
@@ -281,6 +309,7 @@ onUnmounted(() => {
           @open="handleOpenWpSite(wordpress.selectedSite.value!)"
           @start="wordpress.startSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
           @stop="wordpress.stopSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
+          @chat="handleChatAboutSite(wordpress.selectedSite.value!)"
         />
       </ViewShell>
       </div>

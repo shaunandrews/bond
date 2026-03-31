@@ -81,6 +81,7 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   function addMessage(msg: Message) {
+    if (!msg.ts) msg.ts = Date.now()
     messages.value.push(msg)
   }
 

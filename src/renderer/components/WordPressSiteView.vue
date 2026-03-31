@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { PhGlobe, PhFolder, PhPlay, PhStop, PhTrash } from '@phosphor-icons/vue'
+import { PhGlobe, PhPlay, PhStop, PhChatCircle } from '@phosphor-icons/vue'
 import type { WordPressSite } from '../../shared/wordpress'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
@@ -13,6 +13,7 @@ const emit = defineEmits<{
   open: []
   start: []
   stop: []
+  chat: []
 }>()
 </script>
 
@@ -40,6 +41,10 @@ const emit = defineEmits<{
       <BondButton v-else variant="secondary" size="sm" :disabled="toggling" @click="emit('stop')">
         <PhStop :size="14" weight="bold" />
         {{ toggling ? 'Stopping...' : 'Stop site' }}
+      </BondButton>
+      <BondButton variant="secondary" size="sm" @click="emit('chat')">
+        <PhChatCircle :size="14" weight="bold" />
+        Chat about this site
       </BondButton>
     </div>
 

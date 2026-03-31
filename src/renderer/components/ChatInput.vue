@@ -3,6 +3,7 @@ import { ref, computed, watch, toRefs, nextTick, onMounted } from 'vue'
 import { PhArrowUp, PhPaperclip, PhStop, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode } from '../../shared/session'
+import type { WordPressSite } from '../../shared/wordpress'
 import BondSelect from './BondSelect.vue'
 
 interface SkillInfo {
@@ -11,7 +12,7 @@ interface SkillInfo {
   argumentHint: string
 }
 
-const props = defineProps<{ busy: boolean; model: ModelId; editMode: EditMode }>()
+const props = defineProps<{ busy: boolean; model: ModelId; editMode: EditMode; wordPressSites?: WordPressSite[]; siteId?: string }>()
 const { busy } = toRefs(props)
 
 const emit = defineEmits<{
@@ -19,6 +20,7 @@ const emit = defineEmits<{
   cancel: []
   'update:model': [value: ModelId]
   'update:editMode': [value: EditMode]
+  'update:siteId': [value: string | undefined]
 }>()
 
 const EDIT_MODE_OPTIONS = [
@@ -54,6 +56,20 @@ function handleScopedPathsChange(e: Event) {
 
 const modelOptions = MODEL_IDS.map(id => ({ value: id, label: id.charAt(0).toUpperCase() + id.slice(1) }))
 const editModeOptions = EDIT_MODE_OPTIONS.map(o => ({ value: o.value, label: o.label }))
+
+const siteOptions = computed(() => {
+  const opts = [{ value: '', label: 'No site' }]
+  if (props.wordPressSites?.length) {
+    for (const s of props.wordPressSites) {
+      opts.push({ value: s.id, label: s.name })
+    }
+  }
+  return opts
+})
+
+function handleSiteChange(value: string) {
+  emit('update:siteId', value || undefined)
+}
 
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
@@ -310,6 +326,13 @@ function handleKeyDown(e: KeyboardEvent) {
             :options="editModeOptions"
             placement="top"
             @update:modelValue="handleEditModeChange"
+          />
+          <BondSelect
+            v-if="wordPressSites && wordPressSites.length > 0"
+            :modelValue="siteId ?? ''"
+            :options="siteOptions"
+            placement="top"
+            @update:modelValue="handleSiteChange"
           />
           <button
             type="button"

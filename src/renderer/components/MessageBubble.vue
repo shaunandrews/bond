@@ -45,6 +45,11 @@ function formatDuration(sec: number | undefined): string {
   const s = sec % 60
   return s > 0 ? `for ${m}m ${s}s` : `for ${m}m`
 }
+
+function formatTime(ts: number | undefined): string {
+  if (!ts) return ''
+  return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
 </script>
 
 <template>
@@ -61,6 +66,7 @@ function formatDuration(sec: number | undefined): string {
     <div v-if="msg.text" class="px-3.5 py-2.5 rounded-[10px] text-sm leading-relaxed bg-surface border border-border whitespace-pre-wrap">
       {{ msg.text }}
     </div>
+    <span v-if="msg.ts" class="msg-timestamp">{{ formatTime(msg.ts) }}</span>
   </div>
 
   <!-- Bond message -->
@@ -145,6 +151,7 @@ function formatDuration(sec: number | undefined): string {
   >
     <span class="text-accent font-medium">{{ msg.name }}</span>
     <span v-if="msg.summary"> — {{ msg.summary }}</span>
+    <span v-if="msg.ts" class="msg-timestamp-inline">{{ formatTime(msg.ts) }}</span>
   </div>
 
   <!-- Error -->
@@ -192,6 +199,21 @@ function formatDuration(sec: number | undefined): string {
 @keyframes blink {
   0%, 80%, 100% { opacity: 0.2; }
   40% { opacity: 1; }
+}
+
+.msg-timestamp {
+  font-size: 0.625rem;
+  color: var(--color-muted);
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-timestamp-inline {
+  font-size: 0.625rem;
+  color: var(--color-muted);
+  opacity: 0.5;
+  margin-left: 0.5rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .copy-toast {

@@ -3,6 +3,7 @@ import { ref } from 'vue'
 
 defineProps<{
   title: string
+  subtitle?: string
 }>()
 
 const scrollAreaEl = ref<HTMLElement | null>(null)
@@ -17,7 +18,10 @@ defineExpose({ scrollAreaEl })
         <div v-if="$slots['header-left']" class="view-header-left no-drag">
           <slot name="header-left" />
         </div>
-        <h1 class="view-title">{{ title }}</h1>
+        <div class="view-title-group">
+          <h1 class="view-title">{{ title }}</h1>
+          <p v-if="subtitle" class="view-subtitle">{{ subtitle }}</p>
+        </div>
         <div v-if="$slots['header-right']" class="view-header-right no-drag">
           <slot name="header-right" />
         </div>
@@ -91,14 +95,24 @@ defineExpose({ scrollAreaEl })
   z-index: 1;
 }
 
+.view-title-group {
+  text-align: center;
+  user-select: none;
+  padding: 1rem 1.25rem 0.5rem;
+}
+
 .view-title {
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--color-muted);
   margin: 0;
-  text-align: center;
-  user-select: none;
-  padding: 1rem 1.25rem 0.5rem;
+}
+
+.view-subtitle {
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--color-accent);
+  margin: 0.125rem 0 0;
 }
 
 .view-content {
