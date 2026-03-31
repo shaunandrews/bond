@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { PhGlobe, PhPlay, PhStop, PhChatCircle, PhTrash, PhCheck, PhX } from '@phosphor-icons/vue'
+import { PhGlobe, PhArrowSquareOut, PhPlay, PhStop, PhChatCircle, PhTrash, PhCheck, PhX } from '@phosphor-icons/vue'
 import { ref } from 'vue'
 import type { WordPressSite, WordPressSiteDetails } from '../../shared/wordpress'
 import BondText from './BondText.vue'
@@ -15,6 +15,7 @@ defineProps<{
 
 const emit = defineEmits<{
   open: []
+  openExternal: []
   start: []
   stop: []
   chat: []
@@ -39,7 +40,10 @@ const confirmingDelete = ref(false)
     <div class="wp-site-actions">
       <BondButton variant="primary" size="sm" :disabled="!site.running" @click="emit('open')">
         <PhGlobe :size="16" weight="bold" />
-        Open in browser
+        Preview site
+      </BondButton>
+      <BondButton variant="ghost" size="sm" icon :disabled="!site.running" @click="emit('openExternal')" title="Open in external browser">
+        <PhArrowSquareOut :size="16" weight="bold" />
       </BondButton>
       <BondButton v-if="!site.running" variant="secondary" size="sm" :disabled="toggling" @click="emit('start')">
         <PhPlay :size="14" weight="bold" />

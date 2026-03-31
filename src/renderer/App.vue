@@ -1,21 +1,23 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useChat } from './composables/useChat'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
 import { useWordPress } from './composables/useWordPress'
+import { useSitePreview } from './composables/useSitePreview'
 import type { ModelId, AttachedImage } from './types/message'
 import type { WordPressSite } from '../shared/wordpress'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhBrowsers, PhArrowDown } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ChatInput from './components/ChatInput.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import WordPressSiteView from './components/WordPressSiteView.vue'
+import SitePreview from './components/SitePreview.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
@@ -26,6 +28,7 @@ const sessions = useSessions()
 const { activeView } = useAppView()
 const { load: loadAccent } = useAccentColor()
 const wordpress = useWordPress()
+const sitePreview = useSitePreview()
 
 function applyWindowOpacity(val: number) {
   document.documentElement.style.setProperty('--window-bg-opacity', `${Math.round(val * 100)}%`)
@@ -42,6 +45,17 @@ const selectedModel = ref<ModelId>('sonnet')
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
 const sidebarPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
+const browserPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
+
+watch(sitePreview.isOpen, (open) => {
+  nextTick(() => {
+    if (open) browserPanelRef.value?.expand()
+    else browserPanelRef.value?.collapse()
+  })
+}, { immediate: true })
+
+
+
 function getInitialSidebarWidth(): number {
   try {
     const raw = localStorage.getItem('bond:panels:app-layout')
@@ -121,12 +135,14 @@ async function handleSiteIdChange(siteId: string | undefined) {
   if (!id) return
   await window.bond.updateSession(id, { siteId: siteId || undefined })
   sessions.updateLocal(id, { siteId: siteId || undefined })
+  syncBrowserToContext()
 }
 
 async function handleNewSession() {
   const session = await sessions.create()
   await chat.loadSession(session.id)
   activeView.value = 'chat'
+  syncBrowserToContext()
   const model = await window.bond.getModel() as ModelId
   selectedModel.value = model
   nextTick(() => chatInputRef.value?.focus())
@@ -147,15 +163,20 @@ let removeOpacityListener: (() => void) | null = null
 
 async function handleSelectSession(id: string) {
   activeView.value = 'chat'
-  if (id === sessions.activeSessionId.value) return
+  if (id === sessions.activeSessionId.value) {
+    syncBrowserToContext()
+    return
+  }
   sessions.select(id)
   await chat.loadSession(id)
+  syncBrowserToContext()
   nextTick(scrollToBottom)
 }
 
 function handleSelectWpSite(site: WordPressSite) {
   wordpress.selectSite(site.id)
   activeView.value = 'wordpress'
+  syncBrowserToContext()
 }
 
 async function handleChatAboutSite(site: WordPressSite) {
@@ -169,16 +190,56 @@ async function handleChatAboutSite(site: WordPressSite) {
     await chat.loadSession(session.id)
   }
   activeView.value = 'chat'
+  syncBrowserToContext()
   nextTick(() => chatInputRef.value?.focus())
 }
 
 function handleOpenWpSite(site: WordPressSite) {
+  sitePreview.openSite(site)
+}
+
+function handleOpenWpSiteExternal(site: WordPressSite) {
   window.bond.openExternal(site.url)
 }
 
 async function handleDeleteWpSite(site: WordPressSite) {
   await wordpress.deleteSite(site.path)
   activeView.value = 'chat'
+}
+
+function getContextSite(): WordPressSite | undefined {
+  if (activeView.value === 'wordpress') {
+    return wordpress.selectedSite.value ?? undefined
+  }
+  const siteId = sessions.activeSession.value?.siteId
+  if (siteId) return wordpress.sites.value.find(s => s.id === siteId)
+  return undefined
+}
+
+function syncBrowserToContext() {
+  if (!sitePreview.isOpen.value) return
+  const site = getContextSite()
+  if (site?.running) {
+    sitePreview.openSite(site)
+  } else {
+    sitePreview.url.value = ''
+  }
+}
+
+function handleToggleBrowser() {
+  if (sitePreview.isOpen.value) {
+    sitePreview.close()
+  } else {
+    const site = getContextSite()
+    if (site?.running) {
+      sitePreview.openSite(site)
+    } else {
+      // Open empty browser
+      sitePreview.isOpen.value = true
+      sitePreview.url.value = ''
+      localStorage.setItem('bond:site-preview-open', '1')
+    }
+  }
 }
 
 function onKeyDown(e: KeyboardEvent) {
@@ -242,7 +303,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
+  <BondPanelGroup direction="horizontal" autoSaveId="app-layout-v2" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
     <BondPanel ref="sidebarPanelRef" id="sidebar" unit="px" :defaultSize="260" :minSize="220" :maxSize="400" :style="sidebarStyle">
       <SessionSidebar
         :sessions="sessions.activeSessions.value"
@@ -281,6 +342,11 @@ onUnmounted(() => {
             <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
+        <template #header-right>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleBrowser" :title="sitePreview.isOpen.value ? 'Hide browser' : 'Show browser'">
+            <PhBrowsers :size="16" weight="bold" />
+          </BondButton>
+        </template>
 
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
           <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" @approve="chat.respondToApproval" />
@@ -307,6 +373,11 @@ onUnmounted(() => {
             <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
+        <template #header-right>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleBrowser" :title="sitePreview.isOpen.value ? 'Hide browser' : 'Show browser'">
+            <PhBrowsers :size="16" weight="bold" />
+          </BondButton>
+        </template>
         <WordPressSiteView
           v-if="wordpress.selectedSite.value"
           :site="wordpress.selectedSite.value"
@@ -315,6 +386,7 @@ onUnmounted(() => {
           :toggling="wordpress.togglingSiteId.value === wordpress.selectedSite.value.id"
           :deleting="wordpress.deleting.value"
           @open="handleOpenWpSite(wordpress.selectedSite.value!)"
+          @openExternal="handleOpenWpSiteExternal(wordpress.selectedSite.value!)"
           @start="wordpress.startSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
           @stop="wordpress.stopSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
           @chat="handleChatAboutSite(wordpress.selectedSite.value!)"
@@ -322,6 +394,21 @@ onUnmounted(() => {
         />
       </ViewShell>
       </div>
+    </BondPanel>
+
+    <BondPanelHandle v-show="sitePreview.isOpen.value" id="handle-1" />
+
+    <BondPanel
+      ref="browserPanelRef"
+      id="browser"
+      unit="px"
+      :defaultSize="500"
+      :minSize="320"
+      :maxSize="800"
+      collapsible
+      :collapsedSize="0"
+    >
+      <SitePreview v-if="sitePreview.isOpen.value" />
     </BondPanel>
   </BondPanelGroup>
 </template>

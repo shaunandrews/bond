@@ -15,6 +15,12 @@ export default defineConfig({
         }
       }
     },
-    plugins: [tailwindcss(), vue()]
+    plugins: [tailwindcss(), vue({
+      template: {
+        compilerOptions: {
+          isCustomElement: (tag: string) => tag === 'webview'
+        }
+      }
+    })]
   }
 })

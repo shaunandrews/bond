@@ -98,6 +98,7 @@ src/
     App.vue                          # Root shell — panel layout + view routing
     app.css                          # Tailwind v4 theme tokens
     types/message.ts                 # Message union type
+    types/webview.d.ts               # Electron webview element types
     composables/
       useChat.ts                     # Chat state, streaming, message persistence
       useSessions.ts                 # Session CRUD, archive, title generation
@@ -105,6 +106,7 @@ src/
       useAccentColor.ts              # Dynamic accent color theming
       useAppView.ts                  # View routing state
       useWordPress.ts                # WordPress Studio site management
+      useSitePreview.ts              # In-app browser panel state
     components/
       BondText.vue                   # Polymorphic text primitive
       BondButton.vue                 # Button primitive (primary/secondary/ghost/danger)
@@ -126,6 +128,7 @@ src/
       ThinkingIndicator.vue          # Standalone "Bond is working..." dots (unused, kept for reference)
       SessionItem.vue                # Single session row
       SessionSidebar.vue             # Sidebar with session lists + nav
+      SitePreview.vue                # In-app browser panel (webview + toolbar)
       WordPressSiteView.vue          # WordPress site detail view (status, start/stop)
       SettingsView.vue               # Accent color, model, personality settings
       AboutView.vue                  # Architecture, tools, data paths, CLI reference
@@ -235,10 +238,15 @@ Left sidebar with session list, archive flyout, and WordPress sites. Chats secti
 - **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`, `wordPressSites: WordPressSite[]`, `wordPressAvailable: boolean | null`, `wordPressCreating: boolean`, `selectedWpSiteId: string | null`, `togglingSiteId: string | null`
 - **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `wpSelect(site: WordPressSite)`, `wpOpen(site: WordPressSite)`, `wpCreate()`
 
+### SitePreview
+In-app browser panel using Electron's `<webview>` tag. Toolbar with back/forward/reload, URL display, and close button. Webview is conditionally rendered (`v-if="url"`) — removed from DOM when no URL is set. Listens to webview navigation events to sync URL and nav state.
+- **State:** Reads from `useSitePreview()` composable (url, loading, canGoBack, canGoForward)
+- **Events:** None — calls `useSitePreview().close()` directly
+
 ### WordPressSiteView
 Detail view for a selected WordPress Studio site. Shows site config (status, URL, port, PHP, HTTPS, auto-start/update), WP-CLI details when running (WP version, site title, tagline, permalinks, content counts, themes, plugins, templates), admin info, and a delete action with confirmation.
 - **Props:** `site: WordPressSite`, `details: WordPressSiteDetails | null`, `loadingDetails: boolean`, `toggling: boolean`, `deleting: boolean`
-- **Events:** `open()`, `start()`, `stop()`, `chat()`, `delete()`
+- **Events:** `open()`, `openExternal()`, `start()`, `stop()`, `chat()`, `delete()`
 
 ### SettingsView
 Settings panel with accent color picker (8 presets + custom), default model selector, and personality/soul text editor. No props — reads/writes via `window.bond` directly.
@@ -278,6 +286,11 @@ Dynamic accent color theming. Derives a full palette from a single hex color (HS
 WordPress Studio site management. Lists, creates, deletes, starts, and stops sites via the daemon. Auto-fetches WP-CLI details (themes, plugins, templates, content counts) for running sites when selected — details come from a daemon-side cache with 2-minute TTL and background refresh.
 - **State:** `sites`, `available` (null until loaded, false if `studio` CLI not installed), `loading`, `creating`, `deleting`, `selectedSiteId`, `selectedSite`, `siteDetails`, `loadingDetails`, `togglingSiteId`
 - **Methods:** `load()`, `createSite()`, `selectSite(id)`, `startSite(id, path)`, `stopSite(id, path)`, `deleteSite(path)`
+
+### useSitePreview()
+In-app browser panel state. Module-level singleton managing the webview panel's URL, open/close state, and navigation capabilities. Persists open state to localStorage.
+- **State:** `url`, `isOpen`, `loading`, `title`, `canGoBack`, `canGoForward`
+- **Methods:** `openSite(site: WordPressSite)`, `close()`, `navigate(url: string)`
 
 ### useAppView()
 View routing state. Persists to localStorage.
