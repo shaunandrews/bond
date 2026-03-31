@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('bond', {
   updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) =>
     ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id) as Promise<boolean>,
+  deleteArchivedSessions: () => ipcRenderer.invoke('session:deleteArchived') as Promise<{ ok: boolean; count: number }>,
   getMessages: (sessionId: string) => ipcRenderer.invoke('session:getMessages', sessionId) as Promise<SessionMessage[]>,
   saveMessages: (sessionId: string, messages: SessionMessage[]) =>
     ipcRenderer.invoke('session:saveMessages', sessionId, messages) as Promise<boolean>,

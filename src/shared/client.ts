@@ -169,6 +169,10 @@ export class BondClient {
     return await this.call('session.delete', { id }) as boolean
   }
 
+  async deleteArchivedSessions(): Promise<{ ok: boolean; count: number }> {
+    return await this.call('session.deleteArchived') as { ok: boolean; count: number }
+  }
+
   async getMessages(sessionId: string): Promise<SessionMessage[]> {
     return await this.call('session.getMessages', { sessionId }) as SessionMessage[]
   }

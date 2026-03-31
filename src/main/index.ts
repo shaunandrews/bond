@@ -332,6 +332,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('session:get', (_e, id: string) => client.getSession(id))
   ipcMain.handle('session:update', (_e, id: string, updates: Record<string, unknown>) => client.updateSession(id, updates))
   ipcMain.handle('session:delete', (_e, id: string) => client.deleteSession(id))
+  ipcMain.handle('session:deleteArchived', () => client.deleteArchivedSessions())
   ipcMain.handle('session:getMessages', (_e, sessionId: string) => client.getMessages(sessionId))
   ipcMain.handle('session:saveMessages', (_e, sessionId: string, messages: unknown[]) => client.saveMessages(sessionId, messages as any))
   ipcMain.handle('session:generateTitle', (_e, sessionId: string) => client.generateTitle(sessionId))

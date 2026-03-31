@@ -112,6 +112,16 @@ export function deleteSession(id: string): boolean {
   return result.changes > 0
 }
 
+export function deleteArchivedSessions(): number {
+  const db = getDb()
+  const archived = db.prepare('SELECT id FROM sessions WHERE archived = 1').all() as { id: string }[]
+  for (const row of archived) {
+    deleteSessionImages(row.id)
+  }
+  const result = db.prepare('DELETE FROM sessions WHERE archived = 1').run()
+  return result.changes
+}
+
 export function getMessages(sessionId: string): SessionMessage[] {
   const db = getDb()
   const rows = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY position').all(sessionId)

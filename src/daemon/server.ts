@@ -32,6 +32,7 @@ import {
   getSession,
   updateSession,
   deleteSession,
+  deleteArchivedSessions,
   getMessages,
   saveMessages
 } from './sessions'
@@ -366,6 +367,11 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const sid = getStringParam(p, 'id')
         if (!sid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
         return JSON.stringify(makeResponse(id, deleteSession(sid)))
+      }
+
+      case 'session.deleteArchived': {
+        const count = deleteArchivedSessions()
+        return JSON.stringify(makeResponse(id, { ok: true, count }))
       }
 
       case 'session.getMessages': {

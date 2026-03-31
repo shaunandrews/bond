@@ -8,6 +8,7 @@ export interface SessionDeps {
   createSession: (options?: { siteId?: string; title?: string }) => Promise<Session>
   updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) => Promise<Session | null>
   deleteSession: (id: string) => Promise<boolean>
+  deleteArchivedSessions: () => Promise<{ ok: boolean; count: number }>
   generateTitle: (sessionId: string) => Promise<{ title: string; summary: string }>
 }
 
@@ -80,6 +81,11 @@ export function useSessions(deps: SessionDeps = window.bond) {
     }
   }
 
+  async function removeArchived() {
+    await deps.deleteArchivedSessions()
+    sessions.value = sessions.value.filter((s) => !s.archived)
+  }
+
   function updateLocal(id: string, updates: Partial<Session>) {
     const idx = sessions.value.findIndex((s) => s.id === id)
     if (idx !== -1) {
@@ -113,6 +119,7 @@ export function useSessions(deps: SessionDeps = window.bond) {
     archive,
     unarchive,
     remove,
+    removeArchived,
     updateLocal,
     generatingTitleId,
     refreshTitle
