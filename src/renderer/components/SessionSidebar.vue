@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear, PhArrowSquareOut } from '@phosphor-icons/vue'
+import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import type { WordPressSite } from '../../shared/wordpress'
 import type { AppView } from '../composables/useAppView'
 import SessionItem from './SessionItem.vue'
+import BondToolbar from './BondToolbar.vue'
 import BondButton from './BondButton.vue'
 import BondFlyoutMenu from './BondFlyoutMenu.vue'
+import SiteStatusButton from './SiteStatusButton.vue'
 
 const WP_KEY = 'bond:wordpress-open'
 const wpOpen = ref(localStorage.getItem(WP_KEY) !== 'false')
@@ -53,23 +55,27 @@ const emit = defineEmits<{
   wpSelect: [site: WordPressSite]
   wpOpen: [site: WordPressSite]
   wpCreate: []
+  wpStart: [site: WordPressSite]
+  wpStop: [site: WordPressSite]
 }>()
 </script>
 
 <template>
   <aside class="session-sidebar">
     <!-- Toolbar row — sits beside traffic lights -->
-    <div class="sidebar-toolbar drag-region">
-      <BondButton
-        variant="ghost"
-        size="sm"
-        icon
-        title="Settings"
-        @click.stop="openSettings"
-      >
-        <PhGear :size="16" weight="bold" />
-      </BondButton>
-    </div>
+    <BondToolbar label="Sidebar" drag class="sidebar-toolbar">
+      <template #end>
+        <BondButton
+          variant="ghost"
+          size="sm"
+          icon
+          v-tooltip="'Settings ⌘,'"
+          @click.stop="openSettings"
+        >
+          <PhGear :size="16" weight="bold" />
+        </BondButton>
+      </template>
+    </BondToolbar>
 
     <!-- Chats list -->
     <div class="sidebar-chats">
@@ -81,7 +87,7 @@ const emit = defineEmits<{
             variant="ghost"
             size="sm"
             icon
-            title="Archived chats"
+            v-tooltip="'Archived chats'"
             @click.stop="toggleArchiveFlyout"
           >
             <PhArchive :size="14" weight="bold" />
@@ -112,7 +118,7 @@ const emit = defineEmits<{
             variant="ghost"
             size="sm"
             icon
-            title="New chat"
+            v-tooltip="'New chat ⌘N'"
             @click.stop="emit('create')"
           >
             <PhPlus :size="16" weight="bold" />
@@ -142,12 +148,28 @@ const emit = defineEmits<{
 
     <!-- WordPress sites -->
     <div v-if="wordPressAvailable" class="sidebar-wordpress">
-      <button class="sidebar-section-header" @click="wpOpen = !wpOpen">
+      <div class="sidebar-section-header">
         <span class="sidebar-section-title">WordPress ({{ wordPressSites.length }})</span>
-        <span class="collapse-icon">
-          <PhCaretRight :class="['collapse-chevron', { open: wpOpen }]" :size="12" weight="bold" />
-        </span>
-      </button>
+        <div class="wp-header-actions">
+          <BondButton
+            variant="ghost"
+            size="sm"
+            :disabled="wordPressCreating"
+            @click.stop="emit('wpCreate')"
+          >
+            {{ wordPressCreating ? 'Adding...' : 'Add' }}
+          </BondButton>
+          <BondButton
+            variant="ghost"
+            size="sm"
+            icon
+            v-tooltip="wpOpen ? 'Collapse' : 'Expand'"
+            @click.stop="wpOpen = !wpOpen"
+          >
+            <PhCaretRight :class="['collapse-chevron', { open: wpOpen }]" :size="12" weight="bold" />
+          </BondButton>
+        </div>
+      </div>
 
       <div :class="['wp-collapsible', { open: wpOpen }]">
         <div class="wp-collapsible-inner">
@@ -158,33 +180,15 @@ const emit = defineEmits<{
               :class="['wp-site-row', { active: site.id === selectedWpSiteId && activeView === 'wordpress' }]"
               @click="emit('wpSelect', site)"
             >
-              <span :class="['wp-status-dot', { running: site.running, toggling: togglingSiteId === site.id }]" />
               <span class="wp-site-name">{{ site.name }}</span>
-              <BondButton
-                class="wp-open-btn"
-                variant="ghost"
-                size="sm"
-                icon
-                title="Open in browser"
-                @click.stop="emit('wpOpen', site)"
-              >
-                <PhArrowSquareOut :size="12" weight="bold" />
-              </BondButton>
+              <SiteStatusButton
+                :running="site.running"
+                :toggling="togglingSiteId === site.id"
+                @toggle="site.running ? emit('wpStop', site) : emit('wpStart', site)"
+              />
             </div>
 
             <p v-if="wordPressSites.length === 0" class="wp-empty">No sites yet</p>
-          </div>
-
-          <div class="wp-actions">
-            <BondButton
-              variant="ghost"
-              size="sm"
-              :disabled="wordPressCreating"
-              @click.stop="emit('wpCreate')"
-            >
-              <PhPlus :size="14" weight="bold" />
-              {{ wordPressCreating ? 'Creating...' : 'New site' }}
-            </BondButton>
           </div>
         </div>
       </div>
@@ -204,13 +208,7 @@ const emit = defineEmits<{
 }
 
 .sidebar-toolbar {
-  flex-shrink: 0;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  padding: 0.75rem 0.75rem 0.25rem;
-  /* macOS traffic lights need ~70px horizontal + some vertical space */
-  min-height: 2rem;
+  /* macOS traffic lights need the toolbar height for vertical clearance */
 }
 
 .sidebar-chats {
@@ -228,32 +226,7 @@ const emit = defineEmits<{
   flex-shrink: 0;
 }
 
-button.sidebar-section-header {
-  all: unset;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.625rem 0.75rem 0.625rem 1rem;
-  flex-shrink: 0;
-  width: 100%;
-  box-sizing: border-box;
-  transition: background var(--transition-fast);
-}
-button.sidebar-section-header:hover {
-  background: var(--sidebar-hover-bg);
-}
-
-.collapse-icon {
-  flex-shrink: 0;
-  width: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .collapse-chevron {
-  color: var(--sidebar-text-faint);
   transition: transform var(--transition-fast);
   transform: rotate(0deg);
 }
@@ -327,18 +300,23 @@ button.sidebar-section-header:hover {
 }
 
 .wp-site-list {
-  padding: 0 0.5rem;
+  padding: 0 0.5rem 0.375rem;
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
 }
 
+.wp-header-actions {
+  display: flex;
+  align-items: center;
+}
+
 .wp-site-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.375rem 0.5rem;
-  border-radius: var(--radius-sm);
+  gap: 0.25rem;
+  padding: 0.5rem 0.25rem 0.5rem 0.5rem;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--transition-fast);
 }
@@ -349,53 +327,21 @@ button.sidebar-section-header:hover {
   background: var(--sidebar-active-bg);
 }
 
-.wp-status-dot {
-  flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--sidebar-text-faint);
-}
-.wp-status-dot.running {
-  background: var(--color-ok);
-}
-.wp-status-dot.toggling {
-  background: var(--color-accent);
-  animation: dot-pulse 1s ease-in-out infinite;
-}
-
-@keyframes dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
 .wp-site-name {
   flex: 1;
   min-width: 0;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
+  font-weight: 500;
   color: var(--sidebar-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.wp-open-btn {
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-}
-.wp-site-row:hover .wp-open-btn {
-  opacity: 1;
-}
-
 .wp-empty {
   font-size: 0.75rem;
   color: var(--sidebar-text-muted);
   padding: 0.5rem;
-}
-
-.wp-actions {
-  padding: 0.25rem 0.5rem 0.5rem;
 }
 
 </style>

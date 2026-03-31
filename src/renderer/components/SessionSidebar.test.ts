@@ -27,10 +27,9 @@ const defaultProps = {
 }
 
 async function openFlyout(w: ReturnType<typeof mount>) {
-  const archiveBtn = w.findAll('.chats-header-actions button').find(
-    (b) => b.attributes('title') === 'Archived chats'
-  )
-  await archiveBtn!.trigger('click')
+  // Archive button is the first button in the chats header actions
+  const archiveBtn = w.find('.chats-header-actions button')
+  await archiveBtn.trigger('click')
   await nextTick()
 }
 
@@ -63,11 +62,11 @@ describe('SessionSidebar', () => {
 
     it('new chat button emits create', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-      const newChatBtn = w.findAll('.chats-header-actions button').find(
-        (b) => b.attributes('title') === 'New chat'
-      )
+      // New chat button is the last button in the chats header actions
+      const buttons = w.findAll('.chats-header-actions button')
+      const newChatBtn = buttons[buttons.length - 1]
       expect(newChatBtn).toBeTruthy()
-      await newChatBtn!.trigger('click')
+      await newChatBtn.trigger('click')
       expect(w.emitted('create')).toBeTruthy()
       w.unmount()
     })

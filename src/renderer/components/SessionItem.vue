@@ -43,7 +43,7 @@ function formatTime(iso: string): string {
       <button
         type="button"
         class="session-action"
-        :title="actionTitle"
+        v-tooltip="actionTitle"
         @click.stop="emit('action')"
       >
         <slot />
@@ -116,7 +116,6 @@ function formatTime(iso: string): string {
   border-radius: var(--radius-sm);
   font-size: 0.75rem;
   color: var(--sidebar-text-muted);
-  background: var(--sidebar-action-bg);
   transition: background var(--transition-fast);
 }
 .session-item:hover .session-action {
