@@ -107,14 +107,33 @@ const components = [
     name: 'BondSelect',
     file: 'components/BondSelect.vue',
     category: 'Primitives',
-    description: 'Dropdown select with custom chevron. Takes an options array.',
+    description: 'Dropdown select with custom chevron. Uses BondFlyoutMenu for viewport-aware positioning.',
     props: [
       { name: 'modelValue', type: 'string', description: 'Bound value (v-model)' },
       { name: 'options', type: '{ value, label }[]', description: 'Options to display' },
       { name: 'disabled', type: 'boolean', description: 'Disables the select' },
+      { name: 'placement', type: "'top' | 'bottom'", description: 'Menu placement (default: bottom)' },
+      { name: 'variant', type: "'default' | 'minimal'", description: 'Minimal removes background/border' },
+      { name: 'size', type: "'sm' | 'md'", description: 'Trigger size (default: md)' },
     ],
     events: [
       { name: 'update:modelValue', payload: 'value: string', description: 'Fired on selection change' },
+    ],
+  },
+  {
+    name: 'BondFlyoutMenu',
+    file: 'components/BondFlyoutMenu.vue',
+    category: 'Primitives',
+    description: 'Teleported flyout menu. Positions relative to an anchor element, auto-flips at viewport edges, repositions on scroll/resize.',
+    props: [
+      { name: 'open', type: 'boolean', description: 'Whether the flyout is visible' },
+      { name: 'anchor', type: 'HTMLElement | null', description: 'Element to position relative to' },
+      { name: 'placement', type: "'bottom-start' | 'bottom-end' | 'top-start' | 'top-end'", description: 'Preferred placement (default: bottom-start)' },
+      { name: 'width', type: 'number', description: 'Fixed width in px (optional)' },
+      { name: 'padding', type: 'boolean', description: 'Adds 4px inner padding' },
+    ],
+    events: [
+      { name: 'close', payload: '(none)', description: 'Fired on click-outside or Escape' },
     ],
   },
   {
@@ -222,12 +241,13 @@ const components = [
     name: 'SessionSidebar',
     file: 'components/SessionSidebar.vue',
     category: 'Composed',
-    description: 'Left sidebar with session list, create/archive/delete controls.',
+    description: 'Left sidebar with always-open session list, archive flyout, and WordPress sites.',
     props: [
       { name: 'sessions', type: 'Session[]', description: 'Active sessions to display' },
-      { name: 'archivedSessions', type: 'Session[]', description: 'Archived sessions' },
+      { name: 'archivedSessions', type: 'Session[]', description: 'Archived sessions (shown in flyout)' },
       { name: 'activeSessionId', type: 'string | null', description: 'Currently selected session ID' },
-      { name: 'showArchived', type: 'boolean', description: 'Whether archived section is expanded' },
+      { name: 'activeView', type: 'AppView', description: 'Current app view' },
+      { name: 'generatingTitleId', type: 'string | null', description: 'Session ID currently generating title' },
     ],
     events: [
       { name: 'select', payload: 'id: string', description: 'Session clicked' },
@@ -235,7 +255,6 @@ const components = [
       { name: 'archive', payload: 'id: string', description: 'Archive a session' },
       { name: 'unarchive', payload: 'id: string', description: 'Unarchive a session' },
       { name: 'remove', payload: 'id: string', description: 'Delete a session' },
-      { name: 'toggleArchived', payload: '(none)', description: 'Toggle archived section' },
     ],
   },
 ]

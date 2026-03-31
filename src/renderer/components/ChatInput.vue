@@ -385,13 +385,18 @@ function handleKeyDown(e: KeyboardEvent) {
 
 <style scoped>
 .chat-box {
-  border-top: 1px solid rgba(255,255,255,0.1);
+  /* border-top: 1px solid rgba(255,255,255,0.1); */
   /* box-shadow: 0 1px 0 rgba(255,255,255,0.15); */
   border-radius: 18px 18px 22px 12px;
   padding: 6px;
   background: var(--color-tint);
-  backdrop-filter: blur(12px);
-  transition: border-color var(--transition-fast);
+  backdrop-filter: blur(24px);
+  transition: all var(--transition-fast);
+}
+.chat-box:focus-within {
+  /* border-color: var(--color-accent); */
+  box-shadow: 0 0 0 2px var(--color-accent);
+  background: var(--color-surface);
 }
 
 .chat-textarea {
@@ -401,9 +406,9 @@ function handleKeyDown(e: KeyboardEvent) {
   max-height: 12rem;
   overflow-y: auto;
   padding: 0.75rem 0.75rem 0.5rem;
-  border: 1px solid var(--color-border);
+  /* border: 1px solid var(--color-border); */
   border-radius: 12px;
-  background: var(--color-surface);
+  /* background: var(--color-surface); */
   color: var(--color-text-primary);
   font: inherit;
   font-size: 1rem;
@@ -413,8 +418,9 @@ function handleKeyDown(e: KeyboardEvent) {
   color: var(--color-muted);
 }
 .chat-textarea:focus {
-  border-color: var(--color-accent);
+  /* border-color: var(--color-accent);
   box-shadow: 0 0 0 1px var(--color-accent);
+  background: var(--color-surface); */
 }
 
 .image-strip {
