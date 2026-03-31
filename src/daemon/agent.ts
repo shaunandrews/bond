@@ -8,7 +8,7 @@ import { getSoul } from './settings'
 import { getImagePaths } from './images'
 import { getSkillsDir } from './paths'
 import { scanSkills, type SkillInfo } from './skills'
-import { listSites } from './wordpress'
+import { listSites, getCachedSiteDetails } from './wordpress'
 
 export function getCachedSkills(): SkillInfo[] {
   return scanSkills()
@@ -161,9 +161,34 @@ export async function runBondQuery(
     const { sites } = listSites()
     const site = sites.find(s => s.id === options.siteId)
     if (site) {
+      // For screenshots, use the custom domain URL with the Studio port (e.g. http://my-site.wp.local:8882).
+      // bond-screenshot handles custom domains automatically via a local proxy.
+      // For sites without a custom domain, use localhost:port.
+      const screenshotUrl = site.customDomain
+        ? `http://${site.customDomain}:${site.port}`
+        : `http://localhost:${site.port}`
       siteContext = `\n\nYou are working on WordPress site "${site.name}" at ${site.path}.\n` +
-        `Site URL: ${site.url} | Status: ${site.running ? 'running' : 'stopped'} | Port: ${site.port}\n` +
-        `Use --path ${site.path} for all studio/wp commands. Use --url ${site.url} for bond-validate-blocks and bond-screenshot.`
+        `Site URL: ${site.url} | Status: ${site.running ? 'running' : 'stopped'} | Port: ${site.port}` +
+        (site.customDomain ? ` | Custom domain: ${site.customDomain}` : '') + '\n' +
+        `Use --path ${site.path} for all studio/wp commands.\n` +
+        `Use --url ${screenshotUrl} for bond-validate-blocks and bond-screenshot.`
+
+      // Append cached WP-CLI details if available (avoids the agent needing to run WP-CLI discovery commands)
+      if (site.running) {
+        const details = getCachedSiteDetails(site.path)
+        if (details) {
+          const activeTheme = details.themes.find(t => t.status === 'active')
+          const activePlugins = details.plugins.filter(p => p.status === 'active').map(p => p.name)
+          siteContext += `\n\nSite details (cached, no need to re-fetch):\n` +
+            `WordPress ${details.wpVersion} | PHP ${site.phpVersion}\n` +
+            (details.siteTitle ? `Title: ${details.siteTitle}` + (details.tagline ? ` — ${details.tagline}` : '') + '\n' : '') +
+            (activeTheme ? `Active theme: ${activeTheme.name} (${activeTheme.version})\n` : '') +
+            (activePlugins.length ? `Active plugins: ${activePlugins.join(', ')}\n` : '') +
+            `Content: ${details.postCount} posts, ${details.pageCount} pages, ${details.userCount} users\n` +
+            (details.permalinkStructure ? `Permalinks: ${details.permalinkStructure}\n` : '') +
+            `Templates: ${details.templates.map(t => t.title || t.name).join(', ')}`
+        }
+      }
     }
   }
 
