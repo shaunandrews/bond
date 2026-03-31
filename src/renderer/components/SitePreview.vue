@@ -1,11 +1,27 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
-import { PhArrowLeft, PhArrowRight, PhArrowClockwise, PhX } from '@phosphor-icons/vue'
+import { ref, watch, onUnmounted } from 'vue'
+import { PhArrowLeft, PhArrowRight, PhArrowClockwise, PhPlay } from '@phosphor-icons/vue'
 import { useSitePreview } from '../composables/useSitePreview'
+import BondToolbar from './BondToolbar.vue'
 import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
 
-const { url, loading, canGoBack, canGoForward, close } = useSitePreview()
+const emit = defineEmits<{
+  start: [site: import('../../shared/wordpress').WordPressSite]
+}>()
+
+const { url, loading, canGoBack, canGoForward, site, navigate } = useSitePreview()
+
+const urlInput = ref('')
+
+watch(url, (v) => { urlInput.value = v }, { immediate: true })
+
+function onUrlSubmit() {
+  let val = urlInput.value.trim()
+  if (!val) return
+  if (!/^https?:\/\//i.test(val)) val = 'http://' + val
+  navigate(val)
+}
 
 const webviewRef = ref<HTMLElement | null>(null)
 const ready = ref(false)
@@ -115,36 +131,49 @@ onUnmounted(() => {
 
 <template>
   <div class="site-preview">
-    <div class="site-preview-toolbar">
-      <div class="toolbar-nav">
-        <BondButton variant="ghost" size="sm" icon :disabled="!canGoBack" @click="goBack">
-          <PhArrowLeft :size="14" weight="bold" />
-        </BondButton>
-        <BondButton variant="ghost" size="sm" icon :disabled="!canGoForward" @click="goForward">
-          <PhArrowRight :size="14" weight="bold" />
-        </BondButton>
-        <BondButton variant="ghost" size="sm" icon @click="reload">
-          <PhArrowClockwise :size="14" weight="bold" :class="{ spinning: loading }" />
+    <template v-if="url">
+      <BondToolbar label="Browser navigation" border="bottom" drag>
+        <template #start>
+          <BondButton variant="ghost" size="sm" icon :disabled="!canGoBack" @click="goBack" v-tooltip="'Back'">
+            <PhArrowLeft :size="14" weight="bold" />
+          </BondButton>
+          <BondButton variant="ghost" size="sm" icon :disabled="!canGoForward" @click="goForward" v-tooltip="'Forward'">
+            <PhArrowRight :size="14" weight="bold" />
+          </BondButton>
+          <BondButton variant="ghost" size="sm" icon @click="reload" v-tooltip="'Reload'">
+            <PhArrowClockwise :size="14" weight="bold" :class="{ spinning: loading }" />
+          </BondButton>
+        </template>
+        <template #middle>
+          <input
+            class="toolbar-url-input"
+            v-model="urlInput"
+            @keydown.enter="onUrlSubmit"
+            @focus="($event.target as HTMLInputElement).select()"
+            spellcheck="false"
+          />
+        </template>
+      </BondToolbar>
+
+      <div v-if="loading" class="site-preview-loading-bar" />
+
+      <webview
+        ref="webviewRef"
+        :src="url"
+        class="site-preview-webview"
+      />
+    </template>
+
+    <div v-else-if="site && !site.running" class="site-preview-stopped">
+      <div class="site-preview-stopped-content">
+        <BondText size="sm" color="muted">{{ site.name }} is not running</BondText>
+        <BondButton variant="secondary" size="sm" @click="emit('start', site!)">
+          <PhPlay :size="14" weight="fill" />
+          Start site
         </BondButton>
       </div>
-
-      <div class="toolbar-url">
-        <BondText size="xs" color="muted" mono truncate>{{ url }}</BondText>
-      </div>
-
-      <BondButton variant="ghost" size="sm" icon @click="close" title="Close preview">
-        <PhX :size="14" weight="bold" />
-      </BondButton>
     </div>
 
-    <div v-if="loading" class="site-preview-loading-bar" />
-
-    <webview
-      v-if="url"
-      ref="webviewRef"
-      :src="url"
-      class="site-preview-webview"
-    />
     <div v-else class="site-preview-empty" />
   </div>
 </template>
@@ -158,34 +187,25 @@ onUnmounted(() => {
   border-left: 1px solid var(--color-border);
 }
 
-.site-preview-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.375rem 0.5rem;
-  border-bottom: 1px solid var(--color-border);
-  -webkit-app-region: drag;
-}
-
-.site-preview-toolbar > * {
+.toolbar-url-input {
+  width: 100%;
+  min-width: 0;
+  height: 1.625rem;
+  padding: 0.125rem 0.5rem;
+  background: var(--color-bg);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+  outline: none;
   -webkit-app-region: no-drag;
 }
 
-.toolbar-nav {
-  display: flex;
-  align-items: center;
-  gap: 0.125rem;
-  flex-shrink: 0;
-}
-
-.toolbar-url {
-  flex: 1;
-  min-width: 0;
-  height: 1.625rem;
-  padding: 0.25rem 0.5rem;
+.toolbar-url-input:focus {
+  color: var(--color-text-primary);
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--color-border);
 }
 
 .site-preview-loading-bar {
@@ -214,7 +234,24 @@ onUnmounted(() => {
   border: none;
 }
 
+.site-preview-stopped {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.site-preview-stopped-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .site-preview-empty {
   flex: 1;
+  position: relative;
+  -webkit-app-region: drag;
 }
 </style>
