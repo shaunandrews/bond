@@ -8,6 +8,7 @@ import { getSoul } from './settings'
 import { getImagePaths } from './images'
 import { getSkillsDir } from './paths'
 import { scanSkills, type SkillInfo } from './skills'
+import { listSites } from './wordpress'
 
 export function getCachedSkills(): SkillInfo[] {
   return scanSkills()
@@ -148,10 +149,23 @@ export async function runBondQuery(
     resumeSession?: boolean
     imageIds?: string[]
     editMode?: EditMode
+    siteId?: string
   }
 ): Promise<boolean> {
   const cwd = homedir()
   const ac = new AbortController()
+
+  // Resolve WordPress site context if session is scoped to a site
+  let siteContext = ''
+  if (options.siteId) {
+    const { sites } = listSites()
+    const site = sites.find(s => s.id === options.siteId)
+    if (site) {
+      siteContext = `\n\nYou are working on WordPress site "${site.name}" at ${site.path}.\n` +
+        `Site URL: ${site.url} | Status: ${site.running ? 'running' : 'stopped'} | Port: ${site.port}\n` +
+        `Use --path ${site.path} for all studio/wp commands. Use --url ${site.url} for bond-validate-blocks and bond-screenshot.`
+    }
+  }
 
   const basePrompt =
     'You are Bond, a standalone desktop assistant app for Mac. ' +
@@ -220,7 +234,15 @@ export async function runBondQuery(
     '  studio preview create --path PATH\n' +
     '  studio preview list/update/delete --path PATH\n\n' +
     'File editing: Site files at ~/Studio/site-name/wp-content/{themes,plugins,uploads}/. ' +
-    'You can directly Read/Edit/Write theme and plugin PHP, CSS, JS, JSON, and template files.'
+    'You can directly Read/Edit/Write theme and plugin PHP, CSS, JS, JSON, and template files.\n\n' +
+    'WordPress development tools (run via Bash with node):\n' +
+    '  node ~/Developer/Projects/bond/bin/bond-validate-blocks --url SITE_URL --file PATH\n' +
+    '  node ~/Developer/Projects/bond/bin/bond-screenshot --url SITE_URL --viewport desktop\n' +
+    'Screenshots are saved to ~/Library/Application Support/bond/screenshots/.\n' +
+    'To show a screenshot to the user, include it in your response as a markdown image: ![description](/absolute/path/to/screenshot.png)\n' +
+    'Paths with spaces work fine in markdown images — the app handles encoding automatically.\n' +
+    'After writing block content, always validate. After building a site, screenshot to verify.\n' +
+    'When creating a site from scratch, follow the design workflow in the /wordpress skill.'
 
   const editMode = options.editMode ?? { type: 'full' }
   const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS
@@ -233,7 +255,7 @@ export async function runBondQuery(
   }
 
   const soul = getSoul().trim()
-  const base = basePrompt + modePrompt
+  const base = basePrompt + modePrompt + siteContext
   const systemPrompt = soul
     ? `${base}\n\n<soul>\n${soul}\n</soul>`
     : base
