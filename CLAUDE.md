@@ -42,7 +42,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `settings.ts` | Key-value settings storage (soul, model, accent color) |
 | `generate-title.ts` | Auto-generates session titles via Haiku |
 | `paths.ts` | Data directory resolution |
-| `wordpress.ts` | WordPress Studio CLI integration (list/create/start/stop sites) |
+| `wordpress.ts` | WordPress Studio CLI integration (list/create/delete/start/stop sites, cached site details via WP-CLI) |
 
 ### Main Process (`src/main/`)
 
@@ -61,7 +61,7 @@ Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, sett
 | `client.ts` | `BondClient` WebSocket client class |
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage types |
 | `models.ts` | `ModelId` type (`'opus' | 'sonnet' | 'haiku'`) |
-| `wordpress.ts` | `WordPressSite` interface |
+| `wordpress.ts` | `WordPressSite`, `WordPressSiteDetails`, `WpTheme`, `WpPlugin`, `WpTemplate` types |
 
 ### CLI (`bin/bond`)
 
@@ -83,7 +83,7 @@ src/
     generate-title.ts                # Auto title generation
     paths.ts                         # Data directory paths
     skills.ts                        # Skill scanning from ~/.bond/skills/
-    wordpress.ts                     # WordPress Studio CLI integration
+    wordpress.ts                     # WordPress Studio CLI integration + cached WP-CLI details
   main/index.ts                      # Electron main process
   preload/index.ts                   # contextBridge API
   shared/
@@ -93,7 +93,7 @@ src/
     client.ts                        # BondClient WebSocket client
     session.ts                       # Session, message, ImageRecord types
     models.ts                        # ModelId type
-    wordpress.ts                     # WordPressSite type
+    wordpress.ts                     # WordPressSite, WordPressSiteDetails, WpTheme, WpPlugin, WpTemplate types
   renderer/
     App.vue                          # Root shell — panel layout + view routing
     app.css                          # Tailwind v4 theme tokens
@@ -111,6 +111,7 @@ src/
       BondInput.vue                  # Text input with v-model
       BondTextarea.vue               # Multi-line textarea with v-model
       BondSelect.vue                 # Dropdown select
+      BondFlyoutMenu.vue             # Teleported flyout menu primitive
       BondTab.vue                    # Segmented tab bar
       BondPanelGroup.vue             # Resizable panel container
       BondPanel.vue                  # Individual resizable panel
@@ -161,6 +162,12 @@ Multi-line textarea with v-model support.
 Dropdown select with custom chevron.
 - **Props:** `modelValue?: string`, `options: { value, label }[]`, `disabled?: boolean`, `placement?: 'top' | 'bottom'`, `variant?: 'default' | 'minimal'` (minimal removes background and border), `size?: 'sm' | 'md'` (default: `'md'`)
 - **Events:** `update:modelValue(value: string)`
+
+### BondFlyoutMenu
+Teleported flyout menu primitive. Renders via `<Teleport to="body">` with fixed positioning relative to an anchor element. Auto-flips when the menu would overflow the viewport, clamps horizontally, and repositions on scroll/resize. Used by BondSelect and SessionSidebar's archive flyout.
+- **Props:** `open: boolean`, `anchor: HTMLElement | null`, `placement?: 'bottom-start' | 'bottom-end' | 'top-start' | 'top-end'`, `width?: number`, `padding?: boolean`
+- **Events:** `close()`
+- **Slot:** default — menu content
 
 ### BondTab
 Segmented tab bar.
@@ -224,14 +231,14 @@ Single session row used in both active and archived lists inside SessionSidebar.
 - **Events:** `select()`, `action()`
 
 ### SessionSidebar
-Left sidebar with WordPress sites, session lists, and nav links. WordPress section (collapsible, above chats) shows Studio sites with status dots (pulsing during start/stop) and open-in-browser actions. Archives section has built-in collapse/expand.
+Left sidebar with session list, archive flyout, and WordPress sites. Chats section is always open (non-collapsible) with archive and new-chat buttons in the header. Archive button opens a BondFlyoutMenu listing archived sessions. WordPress section (collapsible) shows Studio sites with status dots and open-in-browser actions.
 - **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`, `wordPressSites: WordPressSite[]`, `wordPressAvailable: boolean | null`, `wordPressCreating: boolean`, `selectedWpSiteId: string | null`, `togglingSiteId: string | null`
-- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `switchView(view)`, `wpSelect(site: WordPressSite)`, `wpOpen(site: WordPressSite)`, `wpCreate()`
+- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `wpSelect(site: WordPressSite)`, `wpOpen(site: WordPressSite)`, `wpCreate()`
 
 ### WordPressSiteView
-Detail view for a selected WordPress Studio site. Shows site name, path, status, URL, port, and quick actions (open in browser, start/stop). Loading states on buttons and status row during start/stop.
-- **Props:** `site: WordPressSite`, `toggling: boolean`
-- **Events:** `open()`, `start()`, `stop()`
+Detail view for a selected WordPress Studio site. Shows site config (status, URL, port, PHP, HTTPS, auto-start/update), WP-CLI details when running (WP version, site title, tagline, permalinks, content counts, themes, plugins, templates), admin info, and a delete action with confirmation.
+- **Props:** `site: WordPressSite`, `details: WordPressSiteDetails | null`, `loadingDetails: boolean`, `toggling: boolean`, `deleting: boolean`
+- **Events:** `open()`, `start()`, `stop()`, `chat()`, `delete()`
 
 ### SettingsView
 Settings panel with accent color picker (8 presets + custom), default model selector, and personality/soul text editor. No props — reads/writes via `window.bond` directly.
@@ -268,9 +275,9 @@ Dynamic accent color theming. Derives a full palette from a single hex color (HS
 - **Methods:** `load()`, `setAccent()`, `reset()`
 
 ### useWordPress(deps?)
-WordPress Studio site management. Lists, creates, starts, and stops sites by shelling out to the `studio` CLI via the daemon. Refreshes on window focus. Tracks selected site and toggling state for loading indicators.
-- **State:** `sites`, `available` (null until loaded, false if `studio` CLI not installed), `loading`, `creating`, `selectedSiteId`, `selectedSite`, `togglingSiteId`
-- **Methods:** `load()`, `createSite()`, `selectSite(id)`, `startSite(id, path)`, `stopSite(id, path)`
+WordPress Studio site management. Lists, creates, deletes, starts, and stops sites via the daemon. Auto-fetches WP-CLI details (themes, plugins, templates, content counts) for running sites when selected — details come from a daemon-side cache with 2-minute TTL and background refresh.
+- **State:** `sites`, `available` (null until loaded, false if `studio` CLI not installed), `loading`, `creating`, `deleting`, `selectedSiteId`, `selectedSite`, `siteDetails`, `loadingDetails`, `togglingSiteId`
+- **Methods:** `load()`, `createSite()`, `selectSite(id)`, `startSite(id, path)`, `stopSite(id, path)`, `deleteSite(path)`
 
 ### useAppView()
 View routing state. Persists to localStorage.

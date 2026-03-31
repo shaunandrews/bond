@@ -85,7 +85,7 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `bond.approvalResponse` — tool approval flow
 - `session.*` — CRUD, messages, title generation
 - `settings.*` — soul, accent color
-- `wordpress.*` — list, create, start, and stop WordPress Studio sites
+- `wordpress.*` — list, details, create, delete, start, and stop WordPress Studio sites
 
 **Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
 
@@ -121,7 +121,7 @@ Types and utilities shared across all layers:
 - `client.ts` — `BondClient` WebSocket client class
 - `session.ts` — Session, SessionMessage, EditMode, AttachedImage types
 - `models.ts` — `ModelId` type (`'opus' | 'sonnet' | 'haiku'`)
-- `wordpress.ts` — `WordPressSite` interface
+- `wordpress.ts` — `WordPressSite`, `WordPressSiteDetails`, `WpTheme`, `WpPlugin`, `WpTemplate` types
 
 ## Data & Runtime
 
