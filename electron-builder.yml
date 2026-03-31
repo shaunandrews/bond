@@ -1,0 +1,105 @@
+appId: com.bond.app
+productName: Bond
+copyright: Copyright 2024-2026
+
+directories:
+  output: dist
+  buildResources: build
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: arm64
+  minimumSystemVersion: "12.0"
+  icon: build/icon.icns
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+dmg:
+  title: Bond
+  artifactName: Bond-${version}-arm64.dmg
+
+# Don't rebuild native modules — daemon runs under system Node, not Electron
+npmRebuild: false
+
+asar: true
+
+# Daemon runs as a separate system Node process, so it lives outside the ASAR.
+# Its external deps (better-sqlite3, claude-agent-sdk) go alongside it.
+extraResources:
+  # Daemon bundle
+  - from: out/daemon
+    to: daemon
+    filter:
+      - "**/*"
+
+  # @anthropic-ai/claude-agent-sdk (sdk.mjs + cli.js are self-contained bundles)
+  - from: node_modules/@anthropic-ai/claude-agent-sdk
+    to: daemon/node_modules/@anthropic-ai/claude-agent-sdk
+    filter:
+      - package.json
+      - sdk.mjs
+      - cli.js
+      - vendor/ripgrep/arm64-darwin/**
+      - vendor/audio-capture/arm64-darwin/**
+
+  # better-sqlite3 (native addon)
+  - from: node_modules/better-sqlite3
+    to: daemon/node_modules/better-sqlite3
+    filter:
+      - package.json
+      - "lib/**"
+      - build/Release/better_sqlite3.node
+
+  # better-sqlite3 runtime deps
+  - from: node_modules/bindings
+    to: daemon/node_modules/bindings
+    filter:
+      - "**/*"
+      - "!.github/**"
+  - from: node_modules/file-uri-to-path
+    to: daemon/node_modules/file-uri-to-path
+    filter:
+      - "**/*"
+      - "!test/**"
+
+  # ajv runtime files (required by sdk.mjs and cli.js via createRequire)
+  - from: node_modules/ajv
+    to: daemon/node_modules/ajv
+    filter:
+      - package.json
+      - "dist/runtime/**"
+  - from: node_modules/ajv-formats
+    to: daemon/node_modules/ajv-formats
+    filter:
+      - package.json
+      - dist/formats.js
+      - dist/formats.js.map
+
+  # ajv transitive deps
+  - from: node_modules/fast-deep-equal
+    to: daemon/node_modules/fast-deep-equal
+    filter:
+      - "**/*"
+      - "!benchmark/**"
+      - "!spec/**"
+  - from: node_modules/fast-uri
+    to: daemon/node_modules/fast-uri
+    filter:
+      - "**/*"
+      - "!test/**"
+      - "!benchmark/**"
+
+files:
+  - "!src/**"
+  - "!bin/**"
+  - "!build/**"
+  - "!out/daemon/**"
+  - "!.claude/**"
+  - "!CLAUDE.md"
+  - "!README.md"
+  - "!vitest.config.ts"
+  - "!tsconfig.json"
+  - "!electron-builder.yml"
+  - "!electron.vite.config.ts"

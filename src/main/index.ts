@@ -39,7 +39,12 @@ function isDaemonRunning(): boolean {
 }
 
 function getDaemonPath(): string {
-  // Daemon is always pre-built to out/daemon/main.mjs
+  // Packaged app: daemon is in Contents/Resources/daemon/
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'daemon', 'main.mjs')
+  }
+
+  // Dev mode: daemon is pre-built to out/daemon/main.mjs
   const fromMain = join(__dirname, '../daemon/main.mjs')
   if (existsSync(fromMain)) return fromMain
 
@@ -53,11 +58,29 @@ let daemonProcess: ChildProcess | null = null
 
 function findSystemNode(): string {
   // process.execPath is Electron, not Node. Find the real system node.
+  // When launched from Finder, PATH is minimal (/usr/bin:/bin:/usr/sbin:/sbin)
+  // so we use a login shell to pick up nvm/fnm/volta/brew paths from ~/.zshrc.
   try {
-    return execFileSync('/bin/sh', ['-c', 'which node'], { encoding: 'utf-8' }).trim()
-  } catch {
-    return 'node' // fall back to PATH lookup
+    const fromShell = execFileSync('/bin/zsh', ['-l', '-c', 'which node'], {
+      encoding: 'utf-8',
+      timeout: 3000,
+    }).trim()
+    if (fromShell && existsSync(fromShell)) return fromShell
+  } catch { /* fall through to well-known paths */ }
+
+  // Fallback: check common install locations directly
+  const candidates = [
+    '/opt/homebrew/bin/node',   // Homebrew on Apple Silicon
+    '/usr/local/bin/node',      // Homebrew on Intel / manual install
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
   }
+
+  throw new Error(
+    'Node.js not found. Bond requires Node.js to run.\n' +
+    'Install it from https://nodejs.org or via Homebrew: brew install node'
+  )
 }
 
 function spawnDaemon(): void {
@@ -66,10 +89,19 @@ function spawnDaemon(): void {
   ensureRuntimeDir()
   const logFd = openSync(logPath, 'a')
 
+  // In packaged mode, daemon deps live alongside daemon/main.mjs.
+  // NODE_PATH ensures CJS require() can find them as a fallback.
+  const daemonDir = join(daemonPath, '..')
+  const daemonNodeModules = join(daemonDir, 'node_modules')
+  const env: Record<string, string | undefined> = { ...process.env }
+  if (app.isPackaged && existsSync(daemonNodeModules)) {
+    env.NODE_PATH = daemonNodeModules
+  }
+
   daemonProcess = spawn(nodePath, [daemonPath], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
-    env: { ...process.env }
+    env
   })
 
   daemonProcess.unref()
