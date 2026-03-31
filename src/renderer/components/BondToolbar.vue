@@ -4,6 +4,7 @@ defineProps<{
   border?: 'none' | 'bottom'
   drag?: boolean
   blur?: boolean
+  insetStart?: boolean
 }>()
 </script>
 
@@ -14,6 +15,7 @@ defineProps<{
     :class="['bond-toolbar', {
       'bond-toolbar--border': border === 'bottom',
       'bond-toolbar--blur': blur,
+      'bond-toolbar--inset-start': insetStart,
       'drag-region': drag,
     }]"
   >
@@ -41,6 +43,10 @@ defineProps<{
 
 .bond-toolbar--border {
   border-bottom: 1px solid var(--color-border);
+}
+
+.bond-toolbar--inset-start {
+  padding-left: 4.5rem;
 }
 
 .bond-toolbar--blur::before {

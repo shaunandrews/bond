@@ -91,20 +91,15 @@ defineExpose({
     class="bond-panel"
     :data-panel-id="id"
     :data-state="isCollapsed ? 'collapsed' : 'expanded'"
-    :style="localCollapsed && header ? { flex: '0 0 auto' } : { flex: flexStyle, ...minDimStyle }"
+    :style="header && (localCollapsed || collapsible) ? { flex: '0 0 auto' } : { flex: flexStyle, ...minDimStyle }"
   >
-    <div v-if="header" class="bond-panel__header">
-      <span class="bond-panel__header-label" :class="{ clickable: collapsible }" @click="collapsible && toggleCollapse()">{{ header }}</span>
+    <div v-if="header" class="bond-panel__header" :class="{ 'bond-panel__header--clickable': collapsible }" @click="collapsible && toggleCollapse()">
+      <span class="bond-panel__header-label">
+        {{ header }}
+        <PhCaretRight v-if="collapsible" class="bond-panel__chevron" :class="{ collapsed: isCollapsed }" :size="12" weight="bold" />
+      </span>
       <div class="bond-panel__header-actions">
         <slot name="header-extra" />
-        <button
-          v-if="collapsible"
-          type="button"
-          class="bond-panel__chevron-btn"
-          @click="toggleCollapse"
-        >
-          <PhCaretRight class="bond-panel__chevron" :class="{ collapsed: isCollapsed }" :size="12" weight="bold" />
-        </button>
       </div>
     </div>
     <div v-if="header" class="bond-panel__content" :class="{ 'bond-panel__content--collapsed': localCollapsed }">
@@ -136,40 +131,27 @@ defineExpose({
   user-select: none;
 }
 
+.bond-panel__header--clickable {
+  cursor: pointer;
+}
+.bond-panel__header--clickable:hover .bond-panel__header-label {
+  color: var(--color-text-primary);
+}
+
 .bond-panel__header-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   font-size: 0.8125rem;
   font-weight: 500;
   color: var(--color-muted);
   transition: color var(--transition-base);
-}
-.bond-panel__header-label.clickable {
-  cursor: pointer;
-}
-.bond-panel__header-label.clickable:hover {
-  color: var(--color-text-primary);
 }
 
 .bond-panel__header-actions {
   display: flex;
   align-items: center;
   gap: 0.125rem;
-}
-
-.bond-panel__chevron-btn {
-  all: unset;
-  cursor: pointer;
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  color: var(--color-muted);
-  transition: background var(--transition-base), color var(--transition-base);
-}
-.bond-panel__chevron-btn:hover {
-  background: color-mix(in srgb, var(--color-border) 40%, transparent);
-  color: var(--color-text-primary);
 }
 
 .bond-panel__chevron {
@@ -182,6 +164,7 @@ defineExpose({
 }
 
 .bond-panel__content {
+  flex: 1;
   display: grid;
   grid-template-rows: 1fr;
   transition: grid-template-rows var(--transition-base);

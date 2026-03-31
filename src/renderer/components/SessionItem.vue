@@ -61,7 +61,7 @@ function formatTime(iso: string): string {
   gap: 0.25rem;
   width: 100%;
   box-sizing: border-box;
-  padding: 0.5rem 0.25rem 0.5rem 0.5rem;
+  padding: 0.5rem 0.3rem 0.5rem 0.5rem;
   border-radius: var(--radius-md);
   transition: background var(--transition-fast);
 }

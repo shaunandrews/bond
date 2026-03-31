@@ -4,6 +4,7 @@ import BondToolbar from './BondToolbar.vue'
 
 defineProps<{
   title: string
+  insetStart?: boolean
 }>()
 
 const scrollAreaEl = ref<HTMLElement | null>(null)
@@ -18,6 +19,7 @@ defineExpose({ scrollAreaEl })
         label="View navigation"
         drag
         blur
+        :insetStart="insetStart"
         class="view-header"
       >
         <template v-if="$slots['header-start']" #start>

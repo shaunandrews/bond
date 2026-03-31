@@ -973,13 +973,13 @@ describe('BondPanelGroup', () => {
       const panel = w.find('[data-panel-id="top"]')
       expect(panel.attributes('data-state')).toBe('expanded')
 
-      // Click chevron button to collapse
-      await w.find('.bond-panel__chevron-btn').trigger('click')
+      // Click header to collapse
+      await w.find('.bond-panel__header').trigger('click')
       await nextTick()
       expect(panel.attributes('data-state')).toBe('collapsed')
 
       // Click again to expand
-      await w.find('.bond-panel__chevron-btn').trigger('click')
+      await w.find('.bond-panel__header').trigger('click')
       await nextTick()
       expect(panel.attributes('data-state')).toBe('expanded')
       w.unmount()
@@ -1008,8 +1008,8 @@ describe('BondPanelGroup', () => {
       const header = w.find('.bond-panel__header')
       expect(header.exists()).toBe(true)
       expect(header.text()).toContain('Static')
-      // No chevron button on static header
-      expect(w.find('.bond-panel__chevron-btn').exists()).toBe(false)
+      // No chevron on static header
+      expect(w.find('.bond-panel__chevron').exists()).toBe(false)
       w.unmount()
     })
 
