@@ -22,9 +22,10 @@ defineExpose({ scrollAreaEl })
       >
         <template v-if="$slots['header-start']" #start>
           <slot name="header-start" />
+          <h1 class="view-title">{{ title }}</h1>
         </template>
         <template #middle>
-          <h1 class="view-title">{{ title }}</h1>
+          <!-- <h1 class="view-title">{{ title }}</h1> -->
         </template>
         <template v-if="$slots['header-end']" #end>
           <slot name="header-end" />
