@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+
+import { chromium } from 'playwright'
+import { writeFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+
+// --- Arg parsing ---
+
+const args = process.argv.slice(2)
+
+function getFlag(name) {
+  const idx = args.indexOf(`--${name}`)
+  if (idx === -1 || idx + 1 >= args.length) return undefined
+  return args[idx + 1]
+}
+
+const url = getFlag('url')
+const viewport = getFlag('viewport') || 'desktop'
+const screenshotDir = join(homedir(), 'Library', 'Application Support', 'bond', 'screenshots')
+mkdirSync(screenshotDir, { recursive: true })
+const output = getFlag('output') || join(screenshotDir, `screenshot-${Date.now()}.png`)
+
+if (!url) {
+  console.error('Usage: bond-screenshot --url <url> [--viewport desktop|mobile] [--output <path>]')
+  process.exit(1)
+}
+
+const VIEWPORTS = {
+  desktop: { width: 1040, height: 1248 },
+  mobile: { width: 390, height: 844 }
+}
+
+const vp = VIEWPORTS[viewport]
+if (!vp) {
+  console.error(`Invalid viewport "${viewport}". Use "desktop" or "mobile".`)
+  process.exit(1)
+}
+
+// --- Browser + screenshot ---
+
+let browser
+try {
+  browser = await chromium.launch({ headless: true })
+  const page = await browser.newPage({ viewport: vp })
+
+  // Reduce motion to avoid capturing mid-animation states
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+
+  // Navigate and wait for network idle
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 15_000 })
+
+  // Wait for all images to finish loading
+  await page.evaluate(() =>
+    Promise.all(
+      Array.from(document.images)
+        .filter(img => !img.complete)
+        .map(img => new Promise(resolve => {
+          img.addEventListener('load', () => resolve())
+          img.addEventListener('error', () => resolve())
+        }))
+    )
+  )
+
+  // Hide WP admin bar and scrollbars for clean screenshots
+  await page.addStyleTag({
+    content: `
+      #wpadminbar { display: none !important; }
+      html { margin-top: 0 !important; }
+      ::-webkit-scrollbar { display: none !important; }
+      html, body { scrollbar-width: none !important; }
+    `
+  })
+
+  // Capture full-page screenshot
+  const buffer = await page.screenshot({ fullPage: true, type: 'png' })
+  writeFileSync(output, buffer)
+
+  console.log(output)
+} catch (err) {
+  console.error(`Screenshot failed: ${err.message}`)
+  process.exit(1)
+} finally {
+  if (browser) await browser.close()
+}
