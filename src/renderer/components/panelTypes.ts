@@ -10,6 +10,7 @@ export interface PanelConstraints {
   collapsible: boolean
   collapsedSize: number // in unit
   unit: PanelUnit
+  minSizePx?: number // pixel-based minimum — takes precedence for flex panels during resize
 }
 
 export interface PanelRegistration {
@@ -24,6 +25,7 @@ export interface PanelGroupContext {
   getPanelSize: (id: string) => number
   getPanelUnit: (id: string) => PanelUnit
   getFlexStyle: (id: string) => string
+  getMinDimStyle: (id: string) => string
   getPanelIds: () => string[]
   startResize: (handleId: string) => void
   moveResize: (delta: number) => void

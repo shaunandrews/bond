@@ -43,6 +43,9 @@ function onPointerDown(e: PointerEvent) {
 
   group.startResize(props.id)
 
+  // Capture pointer so webviews/iframes don't steal events during drag
+  handleEl.value?.setPointerCapture(e.pointerId)
+
   document.addEventListener('pointermove', onPointerMove)
   document.addEventListener('pointerup', onPointerUp)
   document.body.style.cursor = isHorizontal.value ? 'col-resize' : 'row-resize'

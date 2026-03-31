@@ -730,7 +730,7 @@ describe('BondPanelGroup', () => {
       const panels = w.findAll('.bond-panel')
       const sidebarStyle = panels[0].attributes('style') ?? ''
       expect(sidebarStyle).toContain('flex-grow: 0')
-      expect(sidebarStyle).toContain('flex-shrink: 0')
+      expect(sidebarStyle).toContain('flex-shrink: 1')
       expect(getFlexBasisPx(sidebarStyle)).toBe(260)
 
       // Main panel should use flex-grow (normalized to 100 as the only % panel)
@@ -973,13 +973,13 @@ describe('BondPanelGroup', () => {
       const panel = w.find('[data-panel-id="top"]')
       expect(panel.attributes('data-state')).toBe('expanded')
 
-      // Click header to collapse
-      await w.find('.bond-panel__header').trigger('click')
+      // Click chevron button to collapse
+      await w.find('.bond-panel__chevron-btn').trigger('click')
       await nextTick()
       expect(panel.attributes('data-state')).toBe('collapsed')
 
       // Click again to expand
-      await w.find('.bond-panel__header').trigger('click')
+      await w.find('.bond-panel__chevron-btn').trigger('click')
       await nextTick()
       expect(panel.attributes('data-state')).toBe('expanded')
       w.unmount()
@@ -1005,11 +1005,11 @@ describe('BondPanelGroup', () => {
       )
       await nextTick()
 
-      const header = w.find('.bond-panel__header--static')
+      const header = w.find('.bond-panel__header')
       expect(header.exists()).toBe(true)
       expect(header.text()).toContain('Static')
-      // No chevron on static header
-      expect(w.find('.bond-panel__chevron').exists()).toBe(false)
+      // No chevron button on static header
+      expect(w.find('.bond-panel__chevron-btn').exists()).toBe(false)
       w.unmount()
     })
 

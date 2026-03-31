@@ -63,10 +63,33 @@ function getFlexStyle(id: string): string {
   const size = sizes.value[id] ?? 0
   const unit = getPanelUnit(id)
   if (unit === 'px') {
-    return `0 0 ${size}px`
+    // flex-shrink: 1 lets px panels participate in flexbox shrinking when the
+    // container is too small, working with CSS min-width to enforce minimums.
+    return `0 1 ${size}px`
   }
   // Percentage panels use flex-grow to distribute remaining space
   return `${size} 0 0`
+}
+
+// --- Min dimension style ---
+// Panels currently being animated need min-width suppressed so collapse/expand
+// can smoothly transition through sizes below the panel's normal minimum.
+const animatingPanels = ref<Set<string>>(new Set())
+
+function getMinDimStyle(id: string): string {
+  if (animatingPanels.value.has(id)) return '0px'
+  if (collapsed.value.has(id)) return '0px'
+
+  const reg = getPanelReg(id)
+  if (!reg) return '0px'
+
+  if (reg.constraints.unit === 'px') {
+    return `${reg.constraints.minSize}px`
+  }
+  if (reg.constraints.minSizePx != null) {
+    return `${reg.constraints.minSizePx}px`
+  }
+  return '0px'
 }
 
 // --- Persistence ---
@@ -215,8 +238,34 @@ function getHandlePanels(handleId: string): { before: string; after: string } | 
   return { before: ids[idx], after: ids[idx + 1] }
 }
 
+// --- DOM sync ---
+// When CSS flexbox shrinks px panels below their JS state (due to window resize),
+// sync JS state to the actual rendered sizes so drags/animations start correctly.
+function syncPxStateToDom() {
+  if (!groupEl.value) return
+  const isH = props.direction === 'horizontal'
+  const newSizes = { ...sizes.value }
+  let changed = false
+
+  for (const p of panels.value) {
+    if (p.constraints.unit !== 'px' || collapsed.value.has(p.id)) continue
+    const el = groupEl.value.querySelector(`[data-panel-id="${p.id}"]`) as HTMLElement | null
+    if (!el) continue
+    const rendered = isH ? el.offsetWidth : el.offsetHeight
+    if (rendered <= 0) continue // no layout info (e.g. test environment)
+    const jsState = newSizes[p.id] ?? 0
+    if (Math.abs(rendered - jsState) > 1) {
+      newSizes[p.id] = rendered
+      changed = true
+    }
+  }
+
+  if (changed) sizes.value = newSizes
+}
+
 // --- Resize logic ---
 function startResize(handleId: string) {
+  syncPxStateToDom()
   resizeHandleId = handleId
   resizeStartSizes = { ...sizes.value }
 }
@@ -290,6 +339,24 @@ function applyPxFlexDelta(pxId: string, pxReg: PanelRegistration, deltaPercent: 
     newSize = minSize
   } else {
     newSize = Math.max(minSize, Math.min(maxSize, newSize))
+  }
+
+  // Ensure flex panels retain their pixel-based minimums
+  if (!collapsed.value.has(pxId)) {
+    const groupPx = getGroupPx()
+    const otherPxTotal = panels.value.reduce((sum, p) => {
+      if (p.constraints.unit === 'px' && p.id !== pxId) {
+        return sum + (sizes.value[p.id] ?? 0)
+      }
+      return sum
+    }, 0)
+    const flexMinPx = panels.value
+      .filter((p) => p.constraints.unit !== 'px')
+      .reduce((sum, p) => sum + (p.constraints.minSizePx ?? 0), 0)
+    const maxPxSize = groupPx - otherPxTotal - flexMinPx
+    if (maxPxSize > 0) {
+      newSize = Math.min(newSize, maxPxSize)
+    }
   }
 
   sizes.value = { ...sizes.value, [pxId]: newSize }
@@ -383,6 +450,9 @@ function animateSizes(
 ) {
   if (animationFrame) cancelAnimationFrame(animationFrame)
 
+  // Suppress min-width during animation so panels can transition smoothly
+  animatingPanels.value = new Set([...animatingPanels.value, targetId, neighborId])
+
   const targetStart = sizes.value[targetId] ?? 0
   const neighborStart = sizes.value[neighborId] ?? 0
   const startTime = performance.now()
@@ -403,6 +473,10 @@ function animateSizes(
       animationFrame = requestAnimationFrame(tick)
     } else {
       animationFrame = null
+      const next = new Set(animatingPanels.value)
+      next.delete(targetId)
+      next.delete(neighborId)
+      animatingPanels.value = next
       onComplete()
     }
   }
@@ -415,6 +489,7 @@ function collapsePanel(id: string) {
   const reg = getPanelReg(id)
   if (!reg || !reg.constraints.collapsible || collapsed.value.has(id)) return
 
+  syncPxStateToDom()
   preCollapseSize.value[id] = sizes.value[id] ?? reg.constraints.defaultSize
 
   const idx = panels.value.findIndex((p) => p.id === id)
@@ -448,6 +523,7 @@ function expandPanel(id: string) {
   const reg = getPanelReg(id)
   if (!reg || !collapsed.value.has(id)) return
 
+  syncPxStateToDom()
   const restoreTo = preCollapseSize.value[id] ?? reg.constraints.defaultSize
   const currentSize = sizes.value[id] ?? 0
 
@@ -462,8 +538,9 @@ function expandPanel(id: string) {
   collapsed.value = newCollapsed
 
   if (reg.constraints.unit === 'px' && neighbor.constraints.unit !== 'px') {
-    // Pixel panel expanding — just animate to restore size, neighbor auto-fills
-    const targetEnd = Math.min(restoreTo, reg.constraints.maxSize)
+    // Pixel panel expanding — animate to restore size (CSS min-width handles flex constraints)
+    const targetEnd = Math.max(reg.constraints.minSize, Math.min(restoreTo, reg.constraints.maxSize))
+
     animateSizes(id, neighbor.id, targetEnd, neighborSize, () => {
       delete preCollapseSize.value[id]
       emit('layoutChanged', { ...sizes.value })
@@ -530,6 +607,7 @@ provide(PANEL_GROUP_KEY, {
   getPanelSize,
   getPanelUnit,
   getFlexStyle,
+  getMinDimStyle,
   getPanelIds,
   startResize,
   moveResize,

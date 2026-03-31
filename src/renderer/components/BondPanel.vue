@@ -8,6 +8,7 @@ const props = withDefaults(defineProps<{
   defaultSize?: number
   minSize?: number
   maxSize?: number
+  minSizePx?: number
   unit?: PanelUnit
   collapsible?: boolean
   collapsedSize?: number
@@ -28,6 +29,12 @@ if (!group) {
 
 const size = computed(() => group.getPanelSize(props.id))
 const flexStyle = computed(() => group.getFlexStyle(props.id))
+const minDimStyle = computed(() => {
+  const val = group.getMinDimStyle(props.id)
+  return group.direction.value === 'horizontal'
+    ? { minWidth: val }
+    : { minHeight: val }
+})
 
 // When header is present, collapse is handled locally (content hidden, panel
 // shrinks to header height). When header is absent, collapse is handled by the
@@ -54,6 +61,7 @@ onMounted(() => {
       defaultSize: props.defaultSize,
       minSize: props.minSize,
       maxSize: props.maxSize,
+      minSizePx: props.minSizePx,
       unit: props.unit,
       collapsible: props.header ? false : props.collapsible,
       collapsedSize: props.collapsedSize,
@@ -83,21 +91,21 @@ defineExpose({
     class="bond-panel"
     :data-panel-id="id"
     :data-state="isCollapsed ? 'collapsed' : 'expanded'"
-    :style="localCollapsed && header ? { flex: '0 0 auto' } : { flex: flexStyle }"
+    :style="localCollapsed && header ? { flex: '0 0 auto' } : { flex: flexStyle, ...minDimStyle }"
   >
-    <button
-      v-if="header && collapsible"
-      type="button"
-      class="bond-panel__header"
-      @click="toggleCollapse"
-    >
-      <span class="bond-panel__header-label">{{ header }}</span>
-      <slot name="header-extra" />
-      <PhCaretRight class="bond-panel__chevron" :class="{ collapsed: isCollapsed }" :size="12" weight="bold" />
-    </button>
-    <div v-if="header && !collapsible" class="bond-panel__header bond-panel__header--static">
-      <span class="bond-panel__header-label">{{ header }}</span>
-      <slot name="header-extra" />
+    <div v-if="header" class="bond-panel__header">
+      <span class="bond-panel__header-label" :class="{ clickable: collapsible }" @click="collapsible && toggleCollapse()">{{ header }}</span>
+      <div class="bond-panel__header-actions">
+        <slot name="header-extra" />
+        <button
+          v-if="collapsible"
+          type="button"
+          class="bond-panel__chevron-btn"
+          @click="toggleCollapse"
+        >
+          <PhCaretRight class="bond-panel__chevron" :class="{ collapsed: isCollapsed }" :size="12" weight="bold" />
+        </button>
+      </div>
     </div>
     <div v-if="header" class="bond-panel__content" :class="{ 'bond-panel__content--collapsed': localCollapsed }">
       <div class="bond-panel__content-inner">
@@ -120,35 +128,48 @@ defineExpose({
 }
 
 .bond-panel__header {
-  all: unset;
-  cursor: pointer;
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-muted);
-  transition: color var(--transition-base);
+  justify-content: space-between;
+  padding: 0.625rem 0.75rem 0.625rem 1rem;
   user-select: none;
 }
 
-.bond-panel__header:hover {
+.bond-panel__header-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-muted);
+  transition: color var(--transition-base);
+}
+.bond-panel__header-label.clickable {
+  cursor: pointer;
+}
+.bond-panel__header-label.clickable:hover {
   color: var(--color-text-primary);
 }
 
-.bond-panel__header--static {
-  cursor: default;
-}
-.bond-panel__header--static:hover {
-  color: var(--color-muted);
+.bond-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
 }
 
-.bond-panel__header-label {
-  flex: 1;
+.bond-panel__chevron-btn {
+  all: unset;
+  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  color: var(--color-muted);
+  transition: background var(--transition-base), color var(--transition-base);
+}
+.bond-panel__chevron-btn:hover {
+  background: color-mix(in srgb, var(--color-border) 40%, transparent);
+  color: var(--color-text-primary);
 }
 
 .bond-panel__chevron {
