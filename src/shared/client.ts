@@ -1,7 +1,7 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
 import type { Session, SessionMessage, AttachedImage } from './session'
-import type { WordPressSite } from './wordpress'
+import type { WordPressSite, WordPressSiteDetails } from './wordpress'
 import {
   makeRequest,
   isResponse,
@@ -244,6 +244,10 @@ export class BondClient {
     return await this.call('wordpress.list') as { available: boolean; sites: WordPressSite[] }
   }
 
+  async getWordPressSiteDetails(path: string): Promise<WordPressSiteDetails | null> {
+    return await this.call('wordpress.details', { path }) as WordPressSiteDetails | null
+  }
+
   async createWordPressSite(name: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
     return await this.call('wordpress.create', { name }) as { available: boolean; sites: WordPressSite[] }
   }
@@ -254,5 +258,9 @@ export class BondClient {
 
   async stopWordPressSite(path: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
     return await this.call('wordpress.stop', { path }) as { available: boolean; sites: WordPressSite[] }
+  }
+
+  async deleteWordPressSite(path: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
+    return await this.call('wordpress.delete', { path }) as { available: boolean; sites: WordPressSite[] }
   }
 }

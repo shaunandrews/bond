@@ -1,16 +1,20 @@
-import { ref, computed } from 'vue'
-import type { WordPressSite } from '../../shared/wordpress'
+import { ref, computed, watch } from 'vue'
+import type { WordPressSite, WordPressSiteDetails } from '../../shared/wordpress'
 
 export interface WordPressDeps {
   listWordPressSites: () => Promise<{ available: boolean; sites: WordPressSite[] }>
+  getWordPressSiteDetails: (path: string) => Promise<WordPressSiteDetails | null>
   createWordPressSite: (name: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
+  deleteWordPressSite: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
   startWordPressSite: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
   stopWordPressSite: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
 }
 
 const defaultDeps: WordPressDeps = {
   listWordPressSites: () => window.bond.listWordPressSites(),
+  getWordPressSiteDetails: (path) => window.bond.getWordPressSiteDetails(path),
   createWordPressSite: (name) => window.bond.createWordPressSite(name),
+  deleteWordPressSite: (path) => window.bond.deleteWordPressSite(path),
   startWordPressSite: (path) => window.bond.startWordPressSite(path),
   stopWordPressSite: (path) => window.bond.stopWordPressSite(path)
 }
@@ -25,6 +29,39 @@ export function useWordPress(deps: WordPressDeps = defaultDeps) {
     sites.value.find((s) => s.id === selectedSiteId.value) ?? null
   )
   const togglingSiteId = ref<string | null>(null)
+
+  const siteDetails = ref<WordPressSiteDetails | null>(null)
+  const loadingDetails = ref(false)
+
+  async function loadDetails(path: string) {
+    loadingDetails.value = true
+    siteDetails.value = null
+    try {
+      siteDetails.value = await deps.getWordPressSiteDetails(path)
+    } finally {
+      loadingDetails.value = false
+    }
+  }
+
+  // Auto-fetch details when selected site changes or its running state changes
+  watch(
+    () => {
+      const site = selectedSite.value
+      return site ? `${site.id}:${site.running}` : null
+    },
+    (key) => {
+      if (!key) {
+        siteDetails.value = null
+        return
+      }
+      const site = selectedSite.value
+      if (site?.running) {
+        loadDetails(site.path)
+      } else {
+        siteDetails.value = null
+      }
+    }
+  )
 
   async function load() {
     loading.value = true
@@ -83,5 +120,17 @@ export function useWordPress(deps: WordPressDeps = defaultDeps) {
     }
   }
 
-  return { sites, available, loading, creating, selectedSiteId, selectedSite, togglingSiteId, load, createSite, selectSite, startSite, stopSite }
+  const deleting = ref(false)
+
+  async function deleteSite(path: string) {
+    deleting.value = true
+    try {
+      applyResult(await deps.deleteWordPressSite(path))
+      selectedSiteId.value = null
+    } finally {
+      deleting.value = false
+    }
+  }
+
+  return { sites, available, loading, creating, deleting, selectedSiteId, selectedSite, siteDetails, loadingDetails, togglingSiteId, load, createSite, selectSite, startSite, stopSite, deleteSite }
 }

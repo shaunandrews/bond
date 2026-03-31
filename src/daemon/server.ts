@@ -53,9 +53,14 @@ import {
 } from './images'
 import {
   listSites as listWordPressSites,
+  getCachedSiteDetails,
+  refreshSiteDetails,
   createSite as createWordPressSite,
+  deleteSite as deleteWordPressSite,
   startSite as startWordPressSite,
-  stopSite as stopWordPressSite
+  stopSite as stopWordPressSite,
+  startBackgroundRefresh as startWpBackgroundRefresh,
+  stopBackgroundRefresh as stopWpBackgroundRefresh
 } from './wordpress'
 
 // --- State ---
@@ -442,6 +447,16 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'wordpress.list':
         return JSON.stringify(makeResponse(id, listWordPressSites()))
 
+      case 'wordpress.details': {
+        const sitePath = getStringParam(p, 'path')
+        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
+        // Return cached if available, otherwise await the background fetch
+        const cached = getCachedSiteDetails(sitePath)
+        if (cached) return JSON.stringify(makeResponse(id, cached))
+        const fresh = await refreshSiteDetails(sitePath)
+        return JSON.stringify(makeResponse(id, fresh))
+      }
+
       case 'wordpress.create': {
         const name = getStringParam(p, 'name')
         if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
@@ -458,6 +473,12 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const sitePath = getStringParam(p, 'path')
         if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
         return JSON.stringify(makeResponse(id, stopWordPressSite(sitePath)))
+      }
+
+      case 'wordpress.delete': {
+        const sitePath = getStringParam(p, 'path')
+        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
+        return JSON.stringify(makeResponse(id, deleteWordPressSite(sitePath)))
       }
 
       default:
@@ -513,6 +534,7 @@ export function startServer(socketPath: string): BondServer {
   })
 
   httpServer.listen(socketPath)
+  startWpBackgroundRefresh()
 
   return {
     wss,
@@ -525,6 +547,7 @@ export function startServer(socketPath: string): BondServer {
       activeQueries.clear()
       knownSdkSessions.clear()
 
+      stopWpBackgroundRefresh()
       wss.close(() => {
         httpServer.close(() => {
           // Clean up socket file

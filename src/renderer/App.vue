@@ -176,6 +176,11 @@ function handleOpenWpSite(site: WordPressSite) {
   window.bond.openExternal(site.url)
 }
 
+async function handleDeleteWpSite(site: WordPressSite) {
+  await wordpress.deleteSite(site.path)
+  activeView.value = 'chat'
+}
+
 function onKeyDown(e: KeyboardEvent) {
   if (e.metaKey && e.key === 'b') {
     e.preventDefault()
@@ -305,11 +310,15 @@ onUnmounted(() => {
         <WordPressSiteView
           v-if="wordpress.selectedSite.value"
           :site="wordpress.selectedSite.value"
+          :details="wordpress.siteDetails.value"
+          :loadingDetails="wordpress.loadingDetails.value"
           :toggling="wordpress.togglingSiteId.value === wordpress.selectedSite.value.id"
+          :deleting="wordpress.deleting.value"
           @open="handleOpenWpSite(wordpress.selectedSite.value!)"
           @start="wordpress.startSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
           @stop="wordpress.stopSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
           @chat="handleChatAboutSite(wordpress.selectedSite.value!)"
+          @delete="handleDeleteWpSite(wordpress.selectedSite.value!)"
         />
       </ViewShell>
       </div>
