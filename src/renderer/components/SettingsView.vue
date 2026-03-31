@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { PhTrash, PhPlus } from '@phosphor-icons/vue'
 import { useAccentColor } from '../composables/useAccentColor'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
@@ -13,13 +13,13 @@ const emit = defineEmits<{
 }>()
 
 const soul = ref('')
-const saved = ref(false)
+const originalSoul = ref('')
+const soulDirty = computed(() => soul.value !== originalSoul.value)
 const defaultModel = ref<ModelId>('sonnet')
 const skills = ref<SkillInfo[]>([])
 const showNewSkillModal = ref(false)
 const newSkillDescription = ref('')
 const newSkillInputEl = ref<HTMLTextAreaElement | null>(null)
-let saveTimeout: ReturnType<typeof setTimeout> | undefined
 
 const { accent, defaultAccent, setAccent, reset: resetAccent } = useAccentColor()
 
@@ -59,6 +59,7 @@ onMounted(async () => {
     loadWindowOpacity()
   ])
   soul.value = s
+  originalSoul.value = s
   defaultModel.value = m as ModelId
   skills.value = sk
 })
@@ -92,12 +93,12 @@ function handleModalKeyDown(e: KeyboardEvent) {
 
 async function handleSave() {
   await window.bond.saveSoul(soul.value)
-  saved.value = true
-  clearTimeout(saveTimeout)
-  saveTimeout = setTimeout(() => { saved.value = false }, 2000)
+  originalSoul.value = soul.value
 }
 
-defineExpose({ handleSave, saved })
+function handleDiscard() {
+  soul.value = originalSoul.value
+}
 
 function handleColorInput(e: Event) {
   const val = (e.target as HTMLInputElement).value
@@ -127,10 +128,10 @@ function handleModelChange(model: string) {
             type="button"
             :class="['color-swatch', { active: accent === preset.hex }]"
             :style="{ '--swatch-color': preset.hex }"
-            :title="preset.label"
+            v-tooltip="preset.label"
             @click="setAccent(preset.hex)"
           />
-          <label class="color-swatch custom-swatch" :style="{ '--swatch-color': accent }" title="Custom color">
+          <label class="color-swatch custom-swatch" :style="{ '--swatch-color': accent }" v-tooltip="'Custom color'">
             <input
               type="color"
               :value="accent"
@@ -194,6 +195,10 @@ function handleModelChange(model: string) {
           placeholder="e.g. You speak casually and use dry humor. Keep answers short unless asked to elaborate. You're encouraging but honest — don't sugarcoat things."
           spellcheck="false"
         />
+        <div v-if="soulDirty" class="soul-actions">
+          <BondButton variant="ghost" size="sm" @click="handleDiscard">Discard</BondButton>
+          <BondButton variant="primary" size="sm" @click="handleSave">Save</BondButton>
+        </div>
       </section>
 
       <section class="settings-section">
@@ -219,7 +224,7 @@ function handleModelChange(model: string) {
             <button
               type="button"
               class="skill-remove-btn"
-              title="Remove skill"
+              v-tooltip="'Remove skill'"
               @click="handleRemoveSkill(skill.name)"
             >
               <PhTrash :size="14" weight="regular" />
@@ -298,6 +303,12 @@ function handleModelChange(model: string) {
 }
 .soul-editor:focus {
   border-color: var(--color-accent);
+}
+
+.soul-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 
 .section-footer {

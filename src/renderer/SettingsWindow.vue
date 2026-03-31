@@ -2,7 +2,6 @@
 import { ref } from 'vue'
 import { useAccentColor } from './composables/useAccentColor'
 import BondTab from './components/BondTab.vue'
-import BondButton from './components/BondButton.vue'
 import SettingsView from './components/SettingsView.vue'
 import DesignSystemView from './components/DesignSystemView.vue'
 import DevComponents from './components/DevComponents.vue'
@@ -16,7 +15,6 @@ const tabs = [
 ]
 
 const activeTab = ref('settings')
-const settingsRef = ref<InstanceType<typeof SettingsView> | null>(null)
 
 const { load: loadAccent } = useAccentColor()
 loadAccent()
@@ -33,16 +31,11 @@ function handleCreateSkill(description: string) {
         <div class="sw-tab-wrap no-drag">
           <BondTab :tabs="tabs" v-model="activeTab" />
         </div>
-        <div v-if="activeTab === 'settings'" class="sw-header-right no-drag">
-          <BondButton variant="primary" size="sm" @click="settingsRef?.handleSave()">
-            {{ settingsRef?.saved ? 'Saved' : 'Save' }}
-          </BondButton>
-        </div>
       </header>
 
       <div class="sw-content">
         <div class="sw-content-inner">
-          <SettingsView v-if="activeTab === 'settings'" ref="settingsRef" @createSkill="handleCreateSkill" />
+          <SettingsView v-if="activeTab === 'settings'" @createSkill="handleCreateSkill" />
           <DesignSystemView v-else-if="activeTab === 'design'" />
           <DevComponents v-else-if="activeTab === 'components'" />
           <AboutView v-else-if="activeTab === 'about'" />
@@ -95,13 +88,6 @@ function handleCreateSkill(description: string) {
 
 .sw-tab-wrap {
   display: flex;
-}
-
-.sw-header-right {
-  position: absolute;
-  right: 1rem;
-  top: 50%;
-  transform: translateY(-50%);
 }
 
 .sw-content {

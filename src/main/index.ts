@@ -282,8 +282,12 @@ app.whenReady().then(async () => {
   })
 
   // --- Model ---
-  ipcMain.handle('bond:setModel', (_e, model: string) => {
-    return client.setModel(model)
+  ipcMain.handle('bond:setModel', async (_e, model: string) => {
+    const result = await client.setModel(model)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:modelChanged', model)
+    }
+    return result
   })
 
   ipcMain.handle('bond:getModel', () => {
@@ -330,7 +334,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('settings:getSoul', () => client.getSoul())
   ipcMain.handle('settings:saveSoul', (_e, content: string) => client.saveSoul(content))
   ipcMain.handle('settings:getAccentColor', () => client.getAccentColor())
-  ipcMain.handle('settings:saveAccentColor', (_e, hex: string) => client.saveAccentColor(hex))
+  ipcMain.handle('settings:saveAccentColor', async (_e, hex: string) => {
+    const result = await client.saveAccentColor(hex)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:accentColor', hex)
+    }
+    return result
+  })
   ipcMain.handle('settings:getWindowOpacity', () => client.getWindowOpacity())
   ipcMain.handle('settings:saveWindowOpacity', async (_e, opacity: number) => {
     const result = await client.saveWindowOpacity(opacity)

@@ -18,6 +18,12 @@ contextBridge.exposeInMainWorld('bond', {
   setModel: (model: string) => ipcRenderer.invoke('bond:setModel', model) as Promise<{ ok: boolean }>,
   getModel: () => ipcRenderer.invoke('bond:getModel') as Promise<string>,
 
+  onModelChanged: (fn: (model: string) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, model: string) => fn(model)
+    ipcRenderer.on('bond:modelChanged', listener)
+    return () => ipcRenderer.removeListener('bond:modelChanged', listener)
+  },
+
   // Sessions
   listSessions: () => ipcRenderer.invoke('session:list') as Promise<Session[]>,
   createSession: (options?: { siteId?: string; title?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
@@ -63,6 +69,11 @@ contextBridge.exposeInMainWorld('bond', {
   saveSoul: (content: string) => ipcRenderer.invoke('settings:saveSoul', content) as Promise<boolean>,
   getAccentColor: () => ipcRenderer.invoke('settings:getAccentColor') as Promise<string>,
   saveAccentColor: (hex: string) => ipcRenderer.invoke('settings:saveAccentColor', hex) as Promise<boolean>,
+  onAccentColor: (fn: (hex: string) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, hex: string) => fn(hex)
+    ipcRenderer.on('bond:accentColor', listener)
+    return () => ipcRenderer.removeListener('bond:accentColor', listener)
+  },
   getWindowOpacity: () => ipcRenderer.invoke('settings:getWindowOpacity') as Promise<number>,
   saveWindowOpacity: (opacity: number) => ipcRenderer.invoke('settings:saveWindowOpacity', opacity) as Promise<boolean>,
   onWindowOpacity: (fn: (opacity: number) => void) => {

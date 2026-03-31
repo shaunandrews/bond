@@ -10,8 +10,9 @@ import { useSitePreview } from './composables/useSitePreview'
 import type { ModelId, AttachedImage } from './types/message'
 import type { WordPressSite } from '../shared/wordpress'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhBrowsers, PhArrowDown } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhCompass, PhArrowDown } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
+import BondSelect from './components/BondSelect.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ChatInput from './components/ChatInput.vue'
@@ -26,7 +27,7 @@ import BondPanelHandle from './components/BondPanelHandle.vue'
 const chat = useChat()
 const sessions = useSessions()
 const { activeView } = useAppView()
-const { load: loadAccent } = useAccentColor()
+const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
 const wordpress = useWordPress()
 const sitePreview = useSitePreview()
 
@@ -80,10 +81,12 @@ function handleToggleSidebar() {
   localStorage.setItem('bond:sidebar-collapsed', sidebarCollapsed.value ? '1' : '0')
 }
 
-const chatSiteName = computed(() => {
-  const siteId = sessions.activeSession.value?.siteId
-  if (!siteId) return undefined
-  return wordpress.sites.value.find(s => s.id === siteId)?.name
+const siteOptions = computed(() => {
+  const opts = [{ value: '', label: 'No site' }]
+  for (const s of wordpress.sites.value) {
+    opts.push({ value: s.id, label: s.name })
+  }
+  return opts
 })
 
 function handleLayoutChange(layout: Record<string, number>) {
@@ -160,6 +163,8 @@ async function handleCreateSkill(description: string) {
 
 let removeCreateSkillListener: (() => void) | null = null
 let removeOpacityListener: (() => void) | null = null
+let removeAccentListener: (() => void) | null = null
+let removeModelListener: (() => void) | null = null
 
 async function handleSelectSession(id: string) {
   activeView.value = 'chat'
@@ -198,8 +203,9 @@ function handleOpenWpSite(site: WordPressSite) {
   sitePreview.openSite(site)
 }
 
-function handleOpenWpSiteExternal(site: WordPressSite) {
-  window.bond.openExternal(site.url)
+async function handleStartPreviewSite(site: WordPressSite) {
+  await wordpress.startSite(site.id, site.path)
+  syncBrowserToContext()
 }
 
 async function handleDeleteWpSite(site: WordPressSite) {
@@ -222,6 +228,7 @@ function syncBrowserToContext() {
   if (site?.running) {
     sitePreview.openSite(site)
   } else {
+    sitePreview.setSite(site ?? null)
     sitePreview.url.value = ''
   }
 }
@@ -234,7 +241,8 @@ function handleToggleBrowser() {
     if (site?.running) {
       sitePreview.openSite(site)
     } else {
-      // Open empty browser
+      // Open browser with site context (may be stopped or no site)
+      sitePreview.setSite(site ?? null)
       sitePreview.isOpen.value = true
       sitePreview.url.value = ''
       localStorage.setItem('bond:site-preview-open', '1')
@@ -243,7 +251,7 @@ function handleToggleBrowser() {
 }
 
 function onKeyDown(e: KeyboardEvent) {
-  if (e.metaKey && e.key === 'b') {
+  if (e.metaKey && !e.shiftKey && e.key === 'b') {
     e.preventDefault()
     handleToggleSidebar()
   }
@@ -255,6 +263,10 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault()
     handleNewSession()
   }
+  if (e.metaKey && e.shiftKey && e.key === 'b') {
+    e.preventDefault()
+    handleToggleBrowser()
+  }
 }
 
 function handleWpRefresh() { wordpress.load() }
@@ -264,6 +276,10 @@ onMounted(async () => {
   window.addEventListener('focus', handleWpRefresh)
   removeCreateSkillListener = window.bond.onCreateSkill(handleCreateSkill)
   removeOpacityListener = window.bond.onWindowOpacity(applyWindowOpacity)
+  removeAccentListener = window.bond.onAccentColor(applyExternalAccent)
+  removeModelListener = window.bond.onModelChanged((model: string) => {
+    selectedModel.value = model as ModelId
+  })
   chat.subscribe()
   loadAccent()
   loadWindowOpacity()
@@ -298,6 +314,8 @@ onUnmounted(() => {
   window.removeEventListener('focus', handleWpRefresh)
   removeCreateSkillListener?.()
   removeOpacityListener?.()
+  removeAccentListener?.()
+  removeModelListener?.()
   chat.unsubscribe()
 })
 </script>
@@ -324,27 +342,36 @@ onUnmounted(() => {
         @wpSelect="handleSelectWpSite"
         @wpOpen="handleOpenWpSite"
         @wpCreate="wordpress.createSite"
+        @wpStart="(site: WordPressSite) => wordpress.startSite(site.id, site.path)"
+        @wpStop="(site: WordPressSite) => wordpress.stopSite(site.id, site.path)"
       />
     </BondPanel>
 
     <BondPanelHandle v-show="!sidebarCollapsed" id="handle-0" />
 
-    <BondPanel id="main" :defaultSize="80" :minSize="30">
+    <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="420">
       <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
       <ViewShell
         v-if="activeView === 'chat'"
         ref="chatShellRef"
         :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
-        :subtitle="chatSiteName"
       >
-        <template #header-left>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+        <template #header-start>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
             <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
-        <template #header-right>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleBrowser" :title="sitePreview.isOpen.value ? 'Hide browser' : 'Show browser'">
-            <PhBrowsers :size="16" weight="bold" />
+        <template #header-end>
+          <BondSelect
+            v-if="wordpress.sites.value.length > 0"
+            :modelValue="sessions.activeSession.value?.siteId ?? ''"
+            :options="siteOptions"
+            variant="minimal"
+            size="sm"
+            @update:modelValue="handleSiteIdChange($event || undefined)"
+          />
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleBrowser" v-tooltip="(sitePreview.isOpen.value ? 'Hide browser' : 'Show browser') + ' ⌘⇧B'">
+            <PhCompass :size="16" weight="bold" />
           </BondButton>
         </template>
 
@@ -362,20 +389,20 @@ onUnmounted(() => {
                 </BondButton>
               </div>
             </Transition>
-            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :wordPressSites="wordpress.sites.value" :siteId="sessions.activeSession.value?.siteId" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" @update:siteId="handleSiteIdChange" />
+            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
           </div>
         </template>
       </ViewShell>
 
       <ViewShell v-else-if="activeView === 'wordpress'" :title="wordpress.selectedSite.value?.name ?? 'WordPress'">
-        <template #header-left>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'">
+        <template #header-start>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
             <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
-        <template #header-right>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleBrowser" :title="sitePreview.isOpen.value ? 'Hide browser' : 'Show browser'">
-            <PhBrowsers :size="16" weight="bold" />
+        <template #header-end>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleBrowser" v-tooltip="(sitePreview.isOpen.value ? 'Hide browser' : 'Show browser') + ' ⌘⇧B'">
+            <PhCompass :size="16" weight="bold" />
           </BondButton>
         </template>
         <WordPressSiteView
@@ -385,8 +412,6 @@ onUnmounted(() => {
           :loadingDetails="wordpress.loadingDetails.value"
           :toggling="wordpress.togglingSiteId.value === wordpress.selectedSite.value.id"
           :deleting="wordpress.deleting.value"
-          @open="handleOpenWpSite(wordpress.selectedSite.value!)"
-          @openExternal="handleOpenWpSiteExternal(wordpress.selectedSite.value!)"
           @start="wordpress.startSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
           @stop="wordpress.stopSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
           @chat="handleChatAboutSite(wordpress.selectedSite.value!)"
@@ -403,12 +428,12 @@ onUnmounted(() => {
       id="browser"
       unit="px"
       :defaultSize="500"
-      :minSize="320"
-      :maxSize="800"
+      :minSize="280"
+      :maxSize="9999"
       collapsible
       :collapsedSize="0"
     >
-      <SitePreview v-if="sitePreview.isOpen.value" />
+      <SitePreview v-if="sitePreview.isOpen.value" @start="handleStartPreviewSite" />
     </BondPanel>
   </BondPanelGroup>
 </template>

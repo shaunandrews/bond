@@ -3,7 +3,6 @@ import { ref, computed, watch, toRefs, nextTick, onMounted } from 'vue'
 import { PhArrowUp, PhPaperclip, PhStop, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode } from '../../shared/session'
-import type { WordPressSite } from '../../shared/wordpress'
 import BondSelect from './BondSelect.vue'
 
 interface SkillInfo {
@@ -12,7 +11,7 @@ interface SkillInfo {
   argumentHint: string
 }
 
-const props = defineProps<{ busy: boolean; model: ModelId; editMode: EditMode; wordPressSites?: WordPressSite[]; siteId?: string }>()
+const props = defineProps<{ busy: boolean; model: ModelId; editMode: EditMode }>()
 const { busy } = toRefs(props)
 
 const emit = defineEmits<{
@@ -20,7 +19,6 @@ const emit = defineEmits<{
   cancel: []
   'update:model': [value: ModelId]
   'update:editMode': [value: EditMode]
-  'update:siteId': [value: string | undefined]
 }>()
 
 const EDIT_MODE_OPTIONS = [
@@ -56,20 +54,6 @@ function handleScopedPathsChange(e: Event) {
 
 const modelOptions = MODEL_IDS.map(id => ({ value: id, label: id.charAt(0).toUpperCase() + id.slice(1) }))
 const editModeOptions = EDIT_MODE_OPTIONS.map(o => ({ value: o.value, label: o.label }))
-
-const siteOptions = computed(() => {
-  const opts = [{ value: '', label: 'No site' }]
-  if (props.wordPressSites?.length) {
-    for (const s of props.wordPressSites) {
-      opts.push({ value: s.id, label: s.name })
-    }
-  }
-  return opts
-})
-
-function handleSiteChange(value: string) {
-  emit('update:siteId', value || undefined)
-}
 
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
@@ -244,7 +228,7 @@ function handleKeyDown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="px-5 pt-3 pb-5 relative">
+  <div class="pt-2 pb-5 relative">
     <!-- Skill autocomplete menu -->
     <div v-if="showSkillMenu" class="skill-menu">
       <button
@@ -331,21 +315,12 @@ function handleKeyDown(e: KeyboardEvent) {
             size="sm"
             @update:modelValue="handleEditModeChange"
           />
-          <BondSelect
-            v-if="wordPressSites && wordPressSites.length > 0"
-            :modelValue="siteId ?? ''"
-            :options="siteOptions"
-            placement="top"
-            variant="minimal"
-            size="sm"
-            @update:modelValue="handleSiteChange"
-          />
           <button
             type="button"
             :disabled="busy"
             @click="handleAttachClick"
             class="flex items-center justify-center w-7 h-7 rounded-md border border-border bg-transparent text-muted cursor-pointer transition-colors duration-[var(--transition-fast)] hover:text-text-primary disabled:opacity-45 disabled:cursor-not-allowed"
-            title="Attach image"
+            v-tooltip="'Attach image'"
           >
             <PhPaperclip :size="16" weight="regular" />
           </button>

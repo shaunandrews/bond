@@ -115,11 +115,18 @@ export function useAccentColor() {
     return setAccent(DEFAULT_ACCENT)
   }
 
+  /** Apply an externally-changed accent (e.g. from settings window) without saving back */
+  function applyExternal(hex: string) {
+    currentAccent.value = hex
+    applyTheme(hex)
+  }
+
   return {
     accent: currentAccent,
     defaultAccent: DEFAULT_ACCENT,
     load,
     setAccent,
+    applyExternal,
     reset
   }
 }
