@@ -202,29 +202,33 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
               siteId: session.siteId
             })
           } catch (e) {
-            // If resume failed, retry with a fresh session automatically
-            if (resumeSession && !ac.signal.aborted) {
+            if (ac.signal.aborted) {
+              // Aborted by cancel — don't retry
+              return false
+            }
+            if (resumeSession) {
+              // Resume failed — retry with a fresh session
               console.warn('[bond] resume failed, retrying with fresh session:', sessionId)
               knownSdkSessions.delete(sessionId)
-              try {
-                succeeded = await runBondQuery(text ?? '', {
-                  abortSignal: ac.signal,
-                  onChunk: (chunk) => broadcastChunk(sessionId, chunk),
-                  model: currentModel,
-                  sessionId,
-                  resumeSession: false,
-                  imageIds,
-                  editMode: session.editMode
-                })
-              } catch (retryErr) {
-                const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
-                broadcastChunk(sessionId, { kind: 'raw_error', message })
-                return false
-              }
             } else {
-              const message = e instanceof Error ? e.message : String(e)
+              // Startup failure (e.g. "Session ID already in use" after a cancel) — retry after a delay
+              console.warn('[bond] startup failure, retrying after delay:', sessionId)
+              await new Promise(r => setTimeout(r, 500))
+            }
+            try {
+              succeeded = await runBondQuery(text ?? '', {
+                abortSignal: ac.signal,
+                onChunk: (chunk) => broadcastChunk(sessionId, chunk),
+                model: currentModel,
+                sessionId,
+                resumeSession: false,
+                imageIds,
+                editMode: session.editMode,
+                siteId: session.siteId
+              })
+            } catch (retryErr) {
+              const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
               broadcastChunk(sessionId, { kind: 'raw_error', message })
-              knownSdkSessions.delete(sessionId)
               return false
             }
           }

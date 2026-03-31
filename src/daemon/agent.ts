@@ -412,6 +412,11 @@ export async function runBondQuery(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[bond] query error:', msg)
+    // Startup failures (no chunks emitted) are re-thrown so the caller
+    // can retry — e.g. "Session ID already in use" after a cancel.
+    if (chunkCount === 0) {
+      throw e
+    }
     options.onChunk({ kind: 'raw_error', message: msg })
   }
   if (chunkCount === 0) {

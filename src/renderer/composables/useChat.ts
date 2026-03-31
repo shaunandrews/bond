@@ -284,7 +284,8 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   function cancel() {
-    deps.cancel(currentSessionId.value ?? undefined)
+    busy.value = false
+    deps.cancel(currentSessionId.value ?? undefined).catch(() => {})
     finalizeThinking()
     endStreaming()
     flushPersist()
