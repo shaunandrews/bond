@@ -1,25 +1,25 @@
 import { ref, computed, watch } from 'vue'
 import type { WordPressSite, WordPressSiteDetails } from '../../shared/wordpress'
 
-export interface WordPressDeps {
-  listWordPressSites: () => Promise<{ available: boolean; sites: WordPressSite[] }>
-  getWordPressSiteDetails: (path: string) => Promise<WordPressSiteDetails | null>
-  createWordPressSite: (name: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
-  deleteWordPressSite: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
-  startWordPressSite: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
-  stopWordPressSite: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
+export interface ProjectsDeps {
+  listProjects: () => Promise<{ available: boolean; sites: WordPressSite[] }>
+  getProjectDetails: (path: string) => Promise<WordPressSiteDetails | null>
+  createProject: (name: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
+  deleteProject: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
+  startProject: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
+  stopProject: (path: string) => Promise<{ available: boolean; sites: WordPressSite[] }>
 }
 
-const defaultDeps: WordPressDeps = {
-  listWordPressSites: () => window.bond.listWordPressSites(),
-  getWordPressSiteDetails: (path) => window.bond.getWordPressSiteDetails(path),
-  createWordPressSite: (name) => window.bond.createWordPressSite(name),
-  deleteWordPressSite: (path) => window.bond.deleteWordPressSite(path),
-  startWordPressSite: (path) => window.bond.startWordPressSite(path),
-  stopWordPressSite: (path) => window.bond.stopWordPressSite(path)
+const defaultDeps: ProjectsDeps = {
+  listProjects: () => window.bond.listWordPressSites(),
+  getProjectDetails: (path) => window.bond.getWordPressSiteDetails(path),
+  createProject: (name) => window.bond.createWordPressSite(name),
+  deleteProject: (path) => window.bond.deleteWordPressSite(path),
+  startProject: (path) => window.bond.startWordPressSite(path),
+  stopProject: (path) => window.bond.stopWordPressSite(path)
 }
 
-export function useWordPress(deps: WordPressDeps = defaultDeps) {
+export function useProjects(deps: ProjectsDeps = defaultDeps) {
   const sites = ref<WordPressSite[]>([])
   const available = ref<boolean | null>(null)
   const loading = ref(false)
@@ -37,7 +37,7 @@ export function useWordPress(deps: WordPressDeps = defaultDeps) {
     loadingDetails.value = true
     siteDetails.value = null
     try {
-      siteDetails.value = await deps.getWordPressSiteDetails(path)
+      siteDetails.value = await deps.getProjectDetails(path)
     } finally {
       loadingDetails.value = false
     }
@@ -66,7 +66,7 @@ export function useWordPress(deps: WordPressDeps = defaultDeps) {
   async function load() {
     loading.value = true
     try {
-      const result = await deps.listWordPressSites()
+      const result = await deps.listProjects()
       available.value = result.available
       sites.value = result.sites
     } catch {
@@ -83,9 +83,9 @@ export function useWordPress(deps: WordPressDeps = defaultDeps) {
       // Find next available number
       let n = 1
       const existingNames = new Set(sites.value.map((s) => s.name))
-      while (existingNames.has(`WordPress Site ${n}`)) n++
+      while (existingNames.has(`Project ${n}`)) n++
 
-      const result = await deps.createWordPressSite(`WordPress Site ${n}`)
+      const result = await deps.createProject(`Project ${n}`)
       available.value = result.available
       sites.value = result.sites
     } finally {
@@ -105,7 +105,7 @@ export function useWordPress(deps: WordPressDeps = defaultDeps) {
   async function startSite(id: string, path: string) {
     togglingSiteId.value = id
     try {
-      applyResult(await deps.startWordPressSite(path))
+      applyResult(await deps.startProject(path))
     } finally {
       togglingSiteId.value = null
     }
@@ -114,7 +114,7 @@ export function useWordPress(deps: WordPressDeps = defaultDeps) {
   async function stopSite(id: string, path: string) {
     togglingSiteId.value = id
     try {
-      applyResult(await deps.stopWordPressSite(path))
+      applyResult(await deps.stopProject(path))
     } finally {
       togglingSiteId.value = null
     }
@@ -125,7 +125,7 @@ export function useWordPress(deps: WordPressDeps = defaultDeps) {
   async function deleteSite(path: string) {
     deleting.value = true
     try {
-      applyResult(await deps.deleteWordPressSite(path))
+      applyResult(await deps.deleteProject(path))
       selectedSiteId.value = null
     } finally {
       deleting.value = false

@@ -29,22 +29,22 @@ function openUrl(url: string) {
 </script>
 
 <template>
-  <div class="wp-site-view">
+  <div class="project-view">
     <!-- Site header -->
-    <div class="wp-site-header">
+    <div class="project-header">
       <BondText as="h2" size="xl" weight="semibold">{{ site.name }}</BondText>
-      <div class="wp-site-url-row">
+      <div class="project-url-row">
         <BondText as="a" size="sm" color="accent" mono :href="site.url" @click.prevent="openUrl(site.url)">{{ site.url }}</BondText>
         <CopyButton :value="site.url" />
       </div>
-      <div class="wp-site-path-row">
+      <div class="project-path-row">
         <BondText size="sm" color="muted" mono>{{ site.path }}</BondText>
         <CopyButton :value="site.path" />
       </div>
     </div>
 
     <!-- Quick actions -->
-    <div class="wp-site-actions">
+    <div class="project-actions">
       <BondButton v-if="!site.running" variant="secondary" size="sm" :disabled="toggling" @click="emit('start')">
         <PhPlay :size="14" weight="bold" />
         {{ toggling ? 'Starting...' : 'Start site' }}
@@ -60,7 +60,7 @@ function openUrl(url: string) {
     </div>
 
     <!-- Site info -->
-    <div class="wp-site-details">
+    <div class="project-details">
       <div class="detail-row">
         <BondText size="sm" color="muted">Status</BondText>
         <BondText v-if="toggling" size="sm" color="accent">{{ site.running ? 'Stopping...' : 'Starting...' }}</BondText>
@@ -101,9 +101,9 @@ function openUrl(url: string) {
     </div>
 
     <!-- Content (only when details loaded) -->
-    <div v-if="details" class="wp-site-section">
+    <div v-if="details" class="project-section">
       <BondText as="h3" size="sm" weight="semibold" color="muted">Content</BondText>
-      <div class="wp-site-details">
+      <div class="project-details">
         <div v-if="details.siteTitle" class="detail-row">
           <BondText size="sm" color="muted">Site title</BondText>
           <BondText size="sm">{{ details.siteTitle }}</BondText>
@@ -132,9 +132,9 @@ function openUrl(url: string) {
     </div>
 
     <!-- Active theme -->
-    <div v-if="details && details.themes.length" class="wp-site-section">
+    <div v-if="details && details.themes.length" class="project-section">
       <BondText as="h3" size="sm" weight="semibold" color="muted">Theme</BondText>
-      <div class="wp-site-details">
+      <div class="project-details">
         <div v-for="theme in details.themes.filter(t => t.status === 'active')" :key="theme.name" class="detail-row">
           <BondText size="sm">{{ theme.name }}</BondText>
           <BondText size="sm" color="muted" mono>{{ theme.version }}</BondText>
@@ -147,9 +147,9 @@ function openUrl(url: string) {
     </div>
 
     <!-- Plugins -->
-    <div v-if="details && details.plugins.length" class="wp-site-section">
+    <div v-if="details && details.plugins.length" class="project-section">
       <BondText as="h3" size="sm" weight="semibold" color="muted">Plugins</BondText>
-      <div class="wp-site-details">
+      <div class="project-details">
         <div v-for="plugin in details.plugins" :key="plugin.name" class="detail-row" :class="{ 'detail-row--inactive': plugin.status !== 'active' }">
           <div class="plugin-name">
             <BondText size="sm" :color="plugin.status === 'active' ? 'primary' : 'muted'">{{ plugin.name }}</BondText>
@@ -161,9 +161,9 @@ function openUrl(url: string) {
     </div>
 
     <!-- Templates -->
-    <div v-if="details && details.templates.length" class="wp-site-section">
+    <div v-if="details && details.templates.length" class="project-section">
       <BondText as="h3" size="sm" weight="semibold" color="muted">Templates</BondText>
-      <div class="wp-site-details">
+      <div class="project-details">
         <div v-for="template in details.templates" :key="template.name" class="detail-row">
           <BondText size="sm">{{ template.title }}</BondText>
           <BondText size="sm" color="muted" mono>{{ template.name }}</BondText>
@@ -172,17 +172,17 @@ function openUrl(url: string) {
     </div>
 
     <!-- Loading details indicator -->
-    <div v-if="loadingDetails" class="wp-site-loading">
+    <div v-if="loadingDetails" class="project-loading">
       <BondText size="sm" color="muted">Loading site details...</BondText>
     </div>
 
     <!-- Not running hint -->
-    <div v-if="!site.running && !loadingDetails && !details" class="wp-site-loading">
+    <div v-if="!site.running && !loadingDetails && !details" class="project-loading">
       <BondText size="sm" color="muted">Start the site to see themes, plugins, and content details.</BondText>
     </div>
 
     <!-- Admin -->
-    <div class="wp-site-details">
+    <div class="project-details">
       <div class="detail-row">
         <BondText size="sm" color="muted">Admin username</BondText>
         <BondText size="sm" mono>{{ site.adminUsername }}</BondText>
@@ -210,7 +210,7 @@ function openUrl(url: string) {
     </div>
 
     <!-- Delete -->
-    <div class="wp-site-danger">
+    <div class="project-danger">
       <div v-if="!confirmingDelete" class="danger-row">
         <div>
           <BondText size="sm" weight="medium">Delete site</BondText>
@@ -239,7 +239,7 @@ function openUrl(url: string) {
 </template>
 
 <style scoped>
-.wp-site-view {
+.project-view {
   padding: 1.5rem;
   display: flex;
   flex-direction: column;
@@ -247,38 +247,38 @@ function openUrl(url: string) {
   max-width: 600px;
 }
 
-.wp-site-header {
+.project-header {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
 }
 
-.wp-site-url-row,
-.wp-site-path-row {
+.project-url-row,
+.project-path-row {
   display: flex;
   align-items: center;
   gap: 0.25rem;
 }
 
-.wp-site-url-row a {
+.project-url-row a {
   cursor: pointer;
 }
-.wp-site-url-row a:hover {
+.project-url-row a:hover {
   text-decoration: underline;
 }
 
-.wp-site-actions {
+.project-actions {
   display: flex;
   gap: 0.5rem;
 }
 
-.wp-site-section {
+.project-section {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
-.wp-site-details {
+.project-details {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--color-border);
@@ -303,11 +303,11 @@ function openUrl(url: string) {
   gap: 0.5rem;
 }
 
-.wp-site-loading {
+.project-loading {
   padding: 0.5rem 0;
 }
 
-.wp-site-danger {
+.project-danger {
   border: 1px solid var(--color-err);
   border-radius: var(--radius-lg);
   padding: 0.875rem;

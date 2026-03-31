@@ -5,7 +5,7 @@ import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
-import { useWordPress } from './composables/useWordPress'
+import { useProjects } from './composables/useProjects'
 import { useSitePreview } from './composables/useSitePreview'
 import type { ModelId, AttachedImage } from './types/message'
 import type { WordPressSite } from '../shared/wordpress'
@@ -17,7 +17,7 @@ import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ChatInput from './components/ChatInput.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
-import WordPressSiteView from './components/WordPressSiteView.vue'
+import ProjectView from './components/ProjectView.vue'
 import SitePreview from './components/SitePreview.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
@@ -28,7 +28,7 @@ const chat = useChat()
 const sessions = useSessions()
 const { activeView } = useAppView()
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
-const wordpress = useWordPress()
+const projects = useProjects()
 const sitePreview = useSitePreview()
 
 function applyWindowOpacity(val: number) {
@@ -73,7 +73,7 @@ const sidebarWidth = ref(getInitialSidebarWidth())
 
 const sidebarStyle = computed(() => ({
   marginLeft: sidebarCollapsed.value ? `-${sidebarWidth.value}px` : '0',
-  transition: 'margin-left 0.15s ease',
+  transition: `margin-left var(--transition-base)`,
 }))
 
 function handleToggleSidebar() {
@@ -83,7 +83,7 @@ function handleToggleSidebar() {
 
 const siteOptions = computed(() => {
   const opts = [{ value: '', label: 'No site' }]
-  for (const s of wordpress.sites.value) {
+  for (const s of projects.sites.value) {
     opts.push({ value: s.id, label: s.name })
   }
   return opts
@@ -178,9 +178,9 @@ async function handleSelectSession(id: string) {
   nextTick(scrollToBottom)
 }
 
-function handleSelectWpSite(site: WordPressSite) {
-  wordpress.selectSite(site.id)
-  activeView.value = 'wordpress'
+function handleSelectProject(site: WordPressSite) {
+  projects.selectSite(site.id)
+  activeView.value = 'projects'
   syncBrowserToContext()
 }
 
@@ -199,26 +199,26 @@ async function handleChatAboutSite(site: WordPressSite) {
   nextTick(() => chatInputRef.value?.focus())
 }
 
-function handleOpenWpSite(site: WordPressSite) {
+function handleOpenProject(site: WordPressSite) {
   sitePreview.openSite(site)
 }
 
 async function handleStartPreviewSite(site: WordPressSite) {
-  await wordpress.startSite(site.id, site.path)
+  await projects.startSite(site.id, site.path)
   syncBrowserToContext()
 }
 
-async function handleDeleteWpSite(site: WordPressSite) {
-  await wordpress.deleteSite(site.path)
+async function handleDeleteProject(site: WordPressSite) {
+  await projects.deleteSite(site.path)
   activeView.value = 'chat'
 }
 
 function getContextSite(): WordPressSite | undefined {
-  if (activeView.value === 'wordpress') {
-    return wordpress.selectedSite.value ?? undefined
+  if (activeView.value === 'projects') {
+    return projects.selectedSite.value ?? undefined
   }
   const siteId = sessions.activeSession.value?.siteId
-  if (siteId) return wordpress.sites.value.find(s => s.id === siteId)
+  if (siteId) return projects.sites.value.find(s => s.id === siteId)
   return undefined
 }
 
@@ -269,11 +269,11 @@ function onKeyDown(e: KeyboardEvent) {
   }
 }
 
-function handleWpRefresh() { wordpress.load() }
+function handleProjectsRefresh() { projects.load() }
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
-  window.addEventListener('focus', handleWpRefresh)
+  window.addEventListener('focus', handleProjectsRefresh)
   removeCreateSkillListener = window.bond.onCreateSkill(handleCreateSkill)
   removeOpacityListener = window.bond.onWindowOpacity(applyWindowOpacity)
   removeAccentListener = window.bond.onAccentColor(applyExternalAccent)
@@ -283,7 +283,7 @@ onMounted(async () => {
   chat.subscribe()
   loadAccent()
   loadWindowOpacity()
-  wordpress.load()
+  projects.load()
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
 
@@ -311,7 +311,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
-  window.removeEventListener('focus', handleWpRefresh)
+  window.removeEventListener('focus', handleProjectsRefresh)
   removeCreateSkillListener?.()
   removeOpacityListener?.()
   removeAccentListener?.()
@@ -329,21 +329,22 @@ onUnmounted(() => {
         :activeSessionId="sessions.activeSessionId.value"
         :activeView="activeView"
         :generatingTitleId="sessions.generatingTitleId.value"
-        :wordPressSites="wordpress.sites.value"
-        :wordPressAvailable="wordpress.available.value"
-        :wordPressCreating="wordpress.creating.value"
-        :selectedWpSiteId="wordpress.selectedSiteId.value"
-        :togglingSiteId="wordpress.togglingSiteId.value"
+        :projects="projects.sites.value"
+        :projectsAvailable="projects.available.value"
+        :projectsCreating="projects.creating.value"
+        :selectedProjectId="projects.selectedSiteId.value"
+        :togglingProjectId="projects.togglingSiteId.value"
         @select="handleSelectSession"
         @create="handleNewSession"
         @archive="sessions.archive"
         @unarchive="sessions.unarchive"
         @remove="sessions.remove"
-        @wpSelect="handleSelectWpSite"
-        @wpOpen="handleOpenWpSite"
-        @wpCreate="wordpress.createSite"
-        @wpStart="(site: WordPressSite) => wordpress.startSite(site.id, site.path)"
-        @wpStop="(site: WordPressSite) => wordpress.stopSite(site.id, site.path)"
+        @removeArchived="sessions.removeArchived"
+        @projectSelect="handleSelectProject"
+        @projectOpen="handleOpenProject"
+        @projectCreate="projects.createSite"
+        @projectStart="(site: WordPressSite) => projects.startSite(site.id, site.path)"
+        @projectStop="(site: WordPressSite) => projects.stopSite(site.id, site.path)"
       />
     </BondPanel>
 
@@ -355,6 +356,7 @@ onUnmounted(() => {
         v-if="activeView === 'chat'"
         ref="chatShellRef"
         :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
+        :insetStart="sidebarCollapsed"
       >
         <template #header-start>
           <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
@@ -363,7 +365,7 @@ onUnmounted(() => {
         </template>
         <template #header-end>
           <BondSelect
-            v-if="wordpress.sites.value.length > 0"
+            v-if="projects.sites.value.length > 0"
             :modelValue="sessions.activeSession.value?.siteId ?? ''"
             :options="siteOptions"
             variant="minimal"
@@ -394,7 +396,7 @@ onUnmounted(() => {
         </template>
       </ViewShell>
 
-      <ViewShell v-else-if="activeView === 'wordpress'" :title="wordpress.selectedSite.value?.name ?? 'WordPress'">
+      <ViewShell v-else-if="activeView === 'projects'" :title="projects.selectedSite.value?.name ?? 'Projects'" :insetStart="sidebarCollapsed">
         <template #header-start>
           <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
             <PhSidebarSimple :size="16" weight="bold" />
@@ -405,17 +407,17 @@ onUnmounted(() => {
             <PhCompass :size="16" weight="bold" />
           </BondButton>
         </template>
-        <WordPressSiteView
-          v-if="wordpress.selectedSite.value"
-          :site="wordpress.selectedSite.value"
-          :details="wordpress.siteDetails.value"
-          :loadingDetails="wordpress.loadingDetails.value"
-          :toggling="wordpress.togglingSiteId.value === wordpress.selectedSite.value.id"
-          :deleting="wordpress.deleting.value"
-          @start="wordpress.startSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
-          @stop="wordpress.stopSite(wordpress.selectedSite.value!.id, wordpress.selectedSite.value!.path)"
-          @chat="handleChatAboutSite(wordpress.selectedSite.value!)"
-          @delete="handleDeleteWpSite(wordpress.selectedSite.value!)"
+        <ProjectView
+          v-if="projects.selectedSite.value"
+          :site="projects.selectedSite.value"
+          :details="projects.siteDetails.value"
+          :loadingDetails="projects.loadingDetails.value"
+          :toggling="projects.togglingSiteId.value === projects.selectedSite.value.id"
+          :deleting="projects.deleting.value"
+          @start="projects.startSite(projects.selectedSite.value!.id, projects.selectedSite.value!.path)"
+          @stop="projects.stopSite(projects.selectedSite.value!.id, projects.selectedSite.value!.path)"
+          @chat="handleChatAboutSite(projects.selectedSite.value!)"
+          @delete="handleDeleteProject(projects.selectedSite.value!)"
         />
       </ViewShell>
       </div>
@@ -456,7 +458,7 @@ onUnmounted(() => {
   z-index: 5;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   cursor: pointer;
   transition: box-shadow var(--transition-base);
 }
@@ -481,9 +483,4 @@ onUnmounted(() => {
 }
 
 
-/* When sidebar is collapsed the main panel starts at the window edge —
-   push the toggle right to clear macOS traffic lights (~70px). */
-.main-panel-wrap.sidebar-collapsed .view-header-left {
-  left: 5.5rem;
-}
 </style>

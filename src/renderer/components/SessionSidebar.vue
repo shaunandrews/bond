@@ -1,18 +1,17 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
-import { PhPlus, PhCaretRight, PhArchive, PhArrowLineUp, PhGear } from '@phosphor-icons/vue'
+import { ref, computed } from 'vue'
+import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import type { WordPressSite } from '../../shared/wordpress'
 import type { AppView } from '../composables/useAppView'
 import SessionItem from './SessionItem.vue'
 import BondToolbar from './BondToolbar.vue'
 import BondButton from './BondButton.vue'
+import BondText from './BondText.vue'
 import BondFlyoutMenu from './BondFlyoutMenu.vue'
+import BondPanelGroup from './BondPanelGroup.vue'
+import BondPanel from './BondPanel.vue'
 import SiteStatusButton from './SiteStatusButton.vue'
-
-const WP_KEY = 'bond:wordpress-open'
-const wpOpen = ref(localStorage.getItem(WP_KEY) !== 'false')
-watch(wpOpen, (v) => localStorage.setItem(WP_KEY, String(v)))
 
 const props = defineProps<{
   sessions: Session[]
@@ -20,11 +19,11 @@ const props = defineProps<{
   activeSessionId: string | null
   activeView: AppView
   generatingTitleId: string | null
-  wordPressSites: WordPressSite[]
-  wordPressAvailable: boolean | null
-  wordPressCreating: boolean
-  selectedWpSiteId: string | null
-  togglingSiteId: string | null
+  projects: WordPressSite[]
+  projectsAvailable: boolean | null
+  projectsCreating: boolean
+  selectedProjectId: string | null
+  togglingProjectId: string | null
 }>()
 
 const chatCount = computed(() => props.sessions.length)
@@ -52,11 +51,12 @@ const emit = defineEmits<{
   archive: [id: string]
   unarchive: [id: string]
   remove: [id: string]
-  wpSelect: [site: WordPressSite]
-  wpOpen: [site: WordPressSite]
-  wpCreate: []
-  wpStart: [site: WordPressSite]
-  wpStop: [site: WordPressSite]
+  removeArchived: []
+  projectSelect: [site: WordPressSite]
+  projectOpen: [site: WordPressSite]
+  projectCreate: []
+  projectStart: [site: WordPressSite]
+  projectStop: [site: WordPressSite]
 }>()
 </script>
 
@@ -77,11 +77,10 @@ const emit = defineEmits<{
       </template>
     </BondToolbar>
 
-    <!-- Chats list -->
-    <div class="sidebar-chats">
-      <div class="sidebar-section-header">
-        <span class="sidebar-section-title">Chats ({{ chatCount }})</span>
-        <div class="chats-header-actions">
+    <BondPanelGroup direction="vertical" class="flex-1 min-h-0">
+      <!-- Chats list -->
+      <BondPanel id="chats" :defaultSize="100" :header="`Chats (${chatCount})`">
+        <template #header-extra>
           <BondButton
             ref="archiveBtnRef"
             variant="ghost"
@@ -98,8 +97,10 @@ const emit = defineEmits<{
             :width="260"
             @close="archiveFlyoutOpen = false"
           >
-            <div class="archive-flyout-header">Archived ({{ archivedSessions.length }})</div>
-            <nav v-if="archivedSessions.length" class="archive-flyout-list sidebar-list">
+            <BondText as="div" size="xs" weight="medium" color="muted" class="pt-2 px-3 pb-1 shrink-0">
+              Archived ({{ archivedSessions.length }})
+            </BondText>
+            <nav v-if="archivedSessions.length" class="archive-flyout-list overflow-y-auto flex flex-col gap-0.5 py-1.5 px-2">
               <SessionItem
                 v-for="s in archivedSessions"
                 :key="s.id"
@@ -112,7 +113,13 @@ const emit = defineEmits<{
                 <PhArrowLineUp :size="14" weight="bold" />
               </SessionItem>
             </nav>
-            <p v-else class="archive-flyout-empty">No archived chats</p>
+            <BondText v-else as="p" size="sm" color="muted" class="p-3 text-center">No archived chats</BondText>
+            <div v-if="archivedSessions.length" class="archive-flyout-footer">
+              <BondButton variant="danger" size="sm" @click="emit('removeArchived'); archiveFlyoutOpen = false">
+                <PhTrash :size="14" weight="bold" />
+                Delete all
+              </BondButton>
+            </div>
           </BondFlyoutMenu>
           <BondButton
             variant="ghost"
@@ -123,76 +130,68 @@ const emit = defineEmits<{
           >
             <PhPlus :size="16" weight="bold" />
           </BondButton>
-        </div>
-      </div>
+        </template>
 
-      <nav class="sidebar-list chats-list">
-        <SessionItem
-          v-for="s in sessions"
-          :key="s.id"
-          :session="s"
-          :active="s.id === activeSessionId && activeView === 'chat'"
-          :generating="generatingTitleId === s.id"
-          actionTitle="Archive"
-          @select="emit('select', s.id)"
-          @action="emit('archive', s.id)"
-        >
-          <PhArchive :size="14" weight="bold" />
-        </SessionItem>
-
-        <p v-if="sessions.length === 0" class="text-sm text-muted px-3 py-4">
-          No chats yet. Start a new one!
-        </p>
-      </nav>
-    </div>
-
-    <!-- WordPress sites -->
-    <div v-if="wordPressAvailable" class="sidebar-wordpress">
-      <div class="sidebar-section-header">
-        <span class="sidebar-section-title">WordPress ({{ wordPressSites.length }})</span>
-        <div class="wp-header-actions">
-          <BondButton
-            variant="ghost"
-            size="sm"
-            :disabled="wordPressCreating"
-            @click.stop="emit('wpCreate')"
+        <nav class="chats-list overflow-y-auto h-full flex flex-col gap-0.5 py-1.5 px-2">
+          <SessionItem
+            v-for="s in sessions"
+            :key="s.id"
+            :session="s"
+            :active="s.id === activeSessionId && activeView === 'chat'"
+            :generating="generatingTitleId === s.id"
+            actionTitle="Archive"
+            @select="emit('select', s.id)"
+            @action="emit('archive', s.id)"
           >
-            {{ wordPressCreating ? 'Adding...' : 'Add' }}
-          </BondButton>
+            <PhArchive :size="14" weight="bold" />
+          </SessionItem>
+
+          <BondText v-if="sessions.length === 0" as="p" size="sm" color="muted" class="px-3 py-4">
+            No chats yet. Start a new one!
+          </BondText>
+        </nav>
+      </BondPanel>
+
+      <!-- Projects -->
+      <BondPanel
+        v-if="projectsAvailable"
+        id="projects"
+        :header="`Projects (${projects.length})`"
+        collapsible
+        class="sidebar-projects"
+      >
+        <template #header-extra>
           <BondButton
             variant="ghost"
             size="sm"
             icon
-            v-tooltip="wpOpen ? 'Collapse' : 'Expand'"
-            @click.stop="wpOpen = !wpOpen"
+            :disabled="projectsCreating"
+            v-tooltip="'Add project'"
+            @click.stop="emit('projectCreate')"
           >
-            <PhCaretRight :class="['collapse-chevron', { open: wpOpen }]" :size="12" weight="bold" />
+            <PhPlus :size="16" weight="bold" />
           </BondButton>
-        </div>
-      </div>
+        </template>
 
-      <div :class="['wp-collapsible', { open: wpOpen }]">
-        <div class="wp-collapsible-inner">
-          <div class="wp-site-list">
-            <div
-              v-for="site in wordPressSites"
-              :key="site.id"
-              :class="['wp-site-row', { active: site.id === selectedWpSiteId && activeView === 'wordpress' }]"
-              @click="emit('wpSelect', site)"
-            >
-              <span class="wp-site-name">{{ site.name }}</span>
-              <SiteStatusButton
-                :running="site.running"
-                :toggling="togglingSiteId === site.id"
-                @toggle="site.running ? emit('wpStop', site) : emit('wpStart', site)"
-              />
-            </div>
-
-            <p v-if="wordPressSites.length === 0" class="wp-empty">No sites yet</p>
+        <div class="flex flex-col gap-0.5 px-2 pb-2">
+          <div
+            v-for="site in projects"
+            :key="site.id"
+            :class="['project-row', { active: site.id === selectedProjectId && activeView === 'projects' }]"
+            @click="emit('projectSelect', site)"
+          >
+            <BondText size="sm" weight="medium" color="inherit" truncate class="flex-1 min-w-0">{{ site.name }}</BondText>
+            <SiteStatusButton
+              :running="site.running"
+              :toggling="togglingProjectId === site.id"
+              @toggle="site.running ? emit('projectStop', site) : emit('projectStart', site)"
+            />
           </div>
+
+          <BondText v-if="projects.length === 0" as="p" size="xs" color="inherit" class="project-empty p-2">No projects yet</BondText>
         </div>
-      </div>
-    </div>
+      </BondPanel>
+    </BondPanelGroup>
 
   </aside>
 </template>
@@ -207,142 +206,45 @@ const emit = defineEmits<{
   overflow: hidden;
 }
 
-.sidebar-toolbar {
-  /* macOS traffic lights need the toolbar height for vertical clearance */
-}
-
-.sidebar-chats {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.625rem 0.75rem 0.625rem 1rem;
-  flex-shrink: 0;
-}
-
-.collapse-chevron {
-  transition: transform var(--transition-fast);
-  transform: rotate(0deg);
-}
-.collapse-chevron.open {
-  transform: rotate(90deg);
-}
-
-.sidebar-section-title {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--sidebar-text-muted);
-}
-
-.chats-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.125rem;
-}
-
-.archive-flyout-header {
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--color-muted);
-  padding: 0.5rem 0.75rem 0.25rem;
-  flex-shrink: 0;
-}
-
-.archive-flyout-list {
-  max-height: 280px;
-  overflow-y: auto;
-}
-
-.archive-flyout-empty {
-  font-size: 0.8125rem;
-  color: var(--color-muted);
-  padding: 0.75rem;
-  text-align: center;
-}
-
-.sidebar-list {
-  overflow-y: auto;
-  height: 100%;
-  padding: 0.375rem 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
 .chats-list {
   flex: 1;
   min-height: 0;
 }
 
-/* WordPress section */
-.sidebar-wordpress {
-  flex-shrink: 0;
+.archive-flyout-list {
+  max-height: 280px;
+}
+
+.archive-flyout-footer {
+  border-top: 1px solid var(--color-border);
+  padding: 0.5rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Projects section */
+.sidebar-projects {
   border-top: 1px solid var(--sidebar-border);
 }
 
-.wp-collapsible {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows var(--transition-base);
-}
-.wp-collapsible.open {
-  grid-template-rows: 1fr;
-}
-.wp-collapsible-inner {
-  overflow: hidden;
-  min-height: 0;
-}
-
-.wp-site-list {
-  padding: 0 0.5rem 0.375rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.wp-header-actions {
-  display: flex;
-  align-items: center;
-}
-
-.wp-site-row {
+.project-row {
   display: flex;
   align-items: center;
   gap: 0.25rem;
   padding: 0.5rem 0.25rem 0.5rem 0.5rem;
   border-radius: var(--radius-md);
   cursor: pointer;
+  color: var(--sidebar-text);
   transition: background var(--transition-fast);
 }
-.wp-site-row:hover {
+.project-row:hover {
   background: var(--sidebar-hover-bg);
 }
-.wp-site-row.active {
+.project-row.active {
   background: var(--sidebar-active-bg);
 }
 
-.wp-site-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--sidebar-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wp-empty {
-  font-size: 0.75rem;
+.project-empty {
   color: var(--sidebar-text-muted);
-  padding: 0.5rem;
 }
-
 </style>
-

@@ -1,9 +1,9 @@
 import { ref, watch } from 'vue'
 
-export type AppView = 'chat' | 'wordpress'
+export type AppView = 'chat' | 'projects'
 
 const STORAGE_KEY = 'bond:activeView'
-const VALID_VIEWS: AppView[] = ['chat', 'wordpress']
+const VALID_VIEWS: AppView[] = ['chat', 'projects']
 
 function loadView(): AppView {
   const stored = localStorage.getItem(STORAGE_KEY)

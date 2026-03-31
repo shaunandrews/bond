@@ -24,11 +24,17 @@ const defaultProps = {
   activeSessionId: 'sess-1',
   activeView: 'chat' as const,
   generatingTitleId: null,
+  projects: [],
+  projectsAvailable: null,
+  projectsCreating: false,
+  selectedProjectId: null,
+  togglingProjectId: null,
 }
 
 async function openFlyout(w: ReturnType<typeof mount>) {
-  // Archive button is the first button in the chats header actions
-  const archiveBtn = w.find('.chats-header-actions button')
+  // Archive button is the first button in the chats panel header actions
+  const chatsPanel = w.find('[data-panel-id="chats"]')
+  const archiveBtn = chatsPanel.find('.bond-panel__header-actions button')
   await archiveBtn.trigger('click')
   await nextTick()
 }
@@ -43,7 +49,8 @@ describe('SessionSidebar', () => {
   describe('chats header', () => {
     it('renders chat count in header', () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-      expect(w.find('.sidebar-section-title').text()).toContain('Chats (1)')
+      const chatsPanel = w.find('[data-panel-id="chats"]')
+      expect(chatsPanel.find('.bond-panel__header-label').text()).toContain('Chats (1)')
       w.unmount()
     })
 
@@ -62,8 +69,9 @@ describe('SessionSidebar', () => {
 
     it('new chat button emits create', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
-      // New chat button is the last button in the chats header actions
-      const buttons = w.findAll('.chats-header-actions button')
+      // New chat button is the last button in the chats panel header actions
+      const chatsPanel = w.find('[data-panel-id="chats"]')
+      const buttons = chatsPanel.findAll('.bond-panel__header-actions button')
       const newChatBtn = buttons[buttons.length - 1]
       expect(newChatBtn).toBeTruthy()
       await newChatBtn.trigger('click')
@@ -89,8 +97,8 @@ describe('SessionSidebar', () => {
     it('flyout shows archived session count', async () => {
       const w = mount(SessionSidebar, { props: defaultProps })
       await openFlyout(w)
-      const header = document.body.querySelector('.archive-flyout-header')
-      expect(header?.textContent).toContain('Archived (2)')
+      const flyout = document.body.querySelector('.bond-flyout-menu')
+      expect(flyout?.textContent).toContain('Archived (2)')
       w.unmount()
     })
 
@@ -106,8 +114,8 @@ describe('SessionSidebar', () => {
         props: { ...defaultProps, archivedSessions: [] },
       })
       await openFlyout(w)
-      const empty = document.body.querySelector('.archive-flyout-empty')
-      expect(empty?.textContent).toBe('No archived chats')
+      const flyout = document.body.querySelector('.bond-flyout-menu')
+      expect(flyout?.textContent).toContain('No archived chats')
       w.unmount()
     })
   })

@@ -259,7 +259,7 @@ const components = [
     name: 'SessionSidebar',
     file: 'components/SessionSidebar.vue',
     category: 'Composed',
-    description: 'Left sidebar with always-open session list, archive flyout, and WordPress sites.',
+    description: 'Left sidebar with always-open session list, archive flyout, and projects.',
     props: [
       { name: 'sessions', type: 'Session[]', description: 'Active sessions to display' },
       { name: 'archivedSessions', type: 'Session[]', description: 'Archived sessions (shown in flyout)' },
