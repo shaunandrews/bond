@@ -36,7 +36,16 @@ import {
   getMessages,
   saveMessages
 } from './sessions'
-import { listTodos, createTodo, updateTodo, deleteTodo } from './todos'
+import { listTodos, createTodo, updateTodo, deleteTodo, reorderTodos } from './todos'
+import {
+  listProjects,
+  getProject,
+  createProject,
+  updateProject,
+  deleteProject,
+  addResource,
+  removeResource
+} from './projects'
 import { parseTodoInput } from './parse-todo'
 import { generateTitleAndSummary } from './generate-title'
 import {
@@ -119,6 +128,16 @@ function broadcastChunk(sessionId: string, chunk: BondStreamChunk): void {
 function broadcastTodoChanged(): void {
   if (!serverWss) return
   const msg = JSON.stringify(makeNotification('todo.changed', {}))
+  for (const client of serverWss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg)
+    }
+  }
+}
+
+function broadcastProjectsChanged(): void {
+  if (!serverWss) return
+  const msg = JSON.stringify(makeNotification('project.changed', {}))
   for (const client of serverWss.clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(msg)
@@ -336,7 +355,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
       case 'session.create': {
         const sessionTitle = getStringParam(p, 'title')
-        return JSON.stringify(makeResponse(id, createSession({ title: sessionTitle || undefined })))
+        const projectId = getStringParam(p, 'projectId')
+        return JSON.stringify(makeResponse(id, createSession({ title: sessionTitle || undefined, projectId: projectId || undefined })))
       }
 
       case 'session.get': {
@@ -467,7 +487,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (!text) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'text is required'))
         const notes = getStringParam(p, 'notes') ?? ''
         const group = getStringParam(p, 'group') ?? ''
-        const newTodo = createTodo(text, notes, group)
+        const projectId = getStringParam(p, 'projectId')
+        const newTodo = createTodo(text, notes, group, projectId)
         broadcastTodoChanged()
         return JSON.stringify(makeResponse(id, newTodo))
       }
@@ -494,6 +515,71 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (!raw) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'raw is required'))
         const parsed = await parseTodoInput(raw)
         return JSON.stringify(makeResponse(id, parsed))
+      }
+
+      case 'todo.reorder': {
+        const ids = getParam(p, 'ids') as string[] | undefined
+        if (!ids || !Array.isArray(ids)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'ids array is required'))
+        reorderTodos(ids)
+        broadcastTodoChanged()
+        return JSON.stringify(makeResponse(id, true))
+      }
+
+      // --- Projects ---
+      case 'project.list':
+        return JSON.stringify(makeResponse(id, listProjects()))
+
+      case 'project.get': {
+        const pid = getStringParam(p, 'id')
+        if (!pid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        return JSON.stringify(makeResponse(id, getProject(pid)))
+      }
+
+      case 'project.create': {
+        const name = getStringParam(p, 'name')
+        if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
+        const goal = getStringParam(p, 'goal') ?? ''
+        const type = getStringParam(p, 'type') ?? 'generic'
+        const deadline = getStringParam(p, 'deadline')
+        const project = createProject(name, goal, type as any, deadline)
+        broadcastProjectsChanged()
+        return JSON.stringify(makeResponse(id, project))
+      }
+
+      case 'project.update': {
+        const pid = getStringParam(p, 'id')
+        if (!pid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
+        const updated = updateProject(pid, updates ?? {})
+        broadcastProjectsChanged()
+        return JSON.stringify(makeResponse(id, updated))
+      }
+
+      case 'project.delete': {
+        const pid = getStringParam(p, 'id')
+        if (!pid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const deleted = deleteProject(pid)
+        broadcastProjectsChanged()
+        return JSON.stringify(makeResponse(id, deleted))
+      }
+
+      case 'project.addResource': {
+        const pid = getStringParam(p, 'projectId')
+        const kind = getStringParam(p, 'kind')
+        const value = getStringParam(p, 'value')
+        if (!pid || !kind || !value) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'projectId, kind, and value are required'))
+        const label = getStringParam(p, 'label')
+        const resource = addResource(pid, kind as any, value, label)
+        broadcastProjectsChanged()
+        return JSON.stringify(makeResponse(id, resource))
+      }
+
+      case 'project.removeResource': {
+        const rid = getStringParam(p, 'id')
+        if (!rid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const removed = removeResource(rid)
+        broadcastProjectsChanged()
+        return JSON.stringify(makeResponse(id, removed))
       }
 
       default:

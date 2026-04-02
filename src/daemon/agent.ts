@@ -167,7 +167,30 @@ export async function runBondQuery(
     'Each SKILL.md has YAML frontmatter (name, description, argument-hint) and a body with instructions. ' +
     'You can create, edit, list, and remove skills by reading/writing files in ~/.bond/skills/. ' +
     'To create a skill: mkdir the directory, write a SKILL.md with frontmatter and instructions. ' +
-    'The user invokes skills by typing /skill-name in chat. After creating or modifying skills, tell the user to restart the daemon for changes to take effect.'
+    'The user invokes skills by typing /skill-name in chat. After creating or modifying skills, tell the user to restart the daemon for changes to take effect.\n\n' +
+    'Projects organize work into named collections with context. Each project has:\n' +
+    '- **Name**: what the project is called\n' +
+    '- **Goal**: a description of the project\'s purpose — use this to stay focused and understand intent\n' +
+    '- **Type**: wordpress, web, presentation, or generic — may affect what tools or approaches are relevant\n' +
+    '- **Deadline**: optional date (YYYY-MM-DD) — be mindful of urgency when one is set\n' +
+    '- **Resources**: paths (folders), files, and links attached to the project — read these for context when working on the project\n\n' +
+    'Chats and todos can be linked to a project via a projectId. When this chat is linked to a project:\n' +
+    '- Treat the project\'s goal as the overarching objective for your work in this session\n' +
+    '- Read the project\'s resource files/folders for context before making changes\n' +
+    '- If the project has a deadline, factor it into prioritization and scope decisions\n' +
+    '- When you create todos for the user, associate them with the project by including the projectId\n\n' +
+    'To look up project details, use the `bond project show <name>` CLI command or read the project\'s resource files directly. ' +
+    'If the user mentions a project by name and this chat isn\'t already linked to one, offer to look it up. ' +
+    'Projects are managed via the Bond UI or the `bond project` CLI (list, add, show, edit, archive, rm, resource add/rm).\n\n' +
+    'Todos can optionally belong to a project. To create a todo linked to a project:\n' +
+    '  `bond todo add <text> --project <project-name>`\n' +
+    'To link an existing todo to a project:\n' +
+    '  `bond todo link <todo> <project-name>`\n' +
+    'To remove a project link:\n' +
+    '  `bond todo unlink <todo>`\n' +
+    'To list todos for a specific project:\n' +
+    '  `bond todo ls --project <project-name>`\n' +
+    'The user can also manage these links through the Bond UI.'
 
   const editMode = options.editMode ?? { type: 'full' }
   const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS

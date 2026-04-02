@@ -8,6 +8,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: overrides.id ?? 'sess-1',
     title: overrides.title ?? 'Test Chat',
+    summary: overrides.summary ?? '',
     createdAt: overrides.createdAt ?? '2026-03-01T00:00:00Z',
     updatedAt: overrides.updatedAt ?? '2026-03-01T00:00:00Z',
     archived: overrides.archived ?? false,
@@ -31,6 +32,7 @@ const defaultProps = {
   selectedProjectId: null,
   togglingProjectId: null,
   mediaCount: 0,
+  projectCount: 0,
 }
 
 async function openFlyout(w: ReturnType<typeof mount>) {

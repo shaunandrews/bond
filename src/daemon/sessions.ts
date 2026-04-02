@@ -24,6 +24,7 @@ function rowToSession(row: Record<string, unknown>): Session {
     summary: row.summary as string,
     archived: row.archived === 1,
     editMode: parseEditMode(row.edit_mode),
+    projectId: (row.project_id as string) || undefined,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string
   }
@@ -63,17 +64,18 @@ export function listSessions(): Session[] {
   return rows.map(r => rowToSession(r as Record<string, unknown>))
 }
 
-export function createSession(options?: { title?: string }): Session {
+export function createSession(options?: { title?: string; projectId?: string }): Session {
   const db = getDb()
   const now = new Date().toISOString()
   const id = crypto.randomUUID()
   const title = options?.title ?? 'New chat'
+  const projectId = options?.projectId ?? null
 
   db.prepare(
-    'INSERT INTO sessions (id, title, summary, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, title, '', 0, now, now)
+    'INSERT INTO sessions (id, title, summary, archived, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, title, '', 0, projectId, now, now)
 
-  return { id, title, summary: '', archived: false, editMode: DEFAULT_EDIT_MODE, createdAt: now, updatedAt: now }
+  return { id, title, summary: '', archived: false, editMode: DEFAULT_EDIT_MODE, projectId: projectId || undefined, createdAt: now, updatedAt: now }
 }
 
 export function getSession(id: string): Session | null {
@@ -82,7 +84,7 @@ export function getSession(id: string): Session | null {
   return row ? rowToSession(row as Record<string, unknown>) : null
 }
 
-export function updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>): Session | null {
+export function updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode' | 'projectId'>>): Session | null {
   const db = getDb()
   const now = new Date().toISOString()
 
@@ -93,6 +95,7 @@ export function updateSession(id: string, updates: Partial<Pick<Session, 'title'
   if (updates.summary !== undefined) { sets.push('summary = ?'); values.push(updates.summary) }
   if (updates.archived !== undefined) { sets.push('archived = ?'); values.push(updates.archived ? 1 : 0) }
   if (updates.editMode !== undefined) { sets.push('edit_mode = ?'); values.push(JSON.stringify(updates.editMode)) }
+  if (updates.projectId !== undefined) { sets.push('project_id = ?'); values.push(updates.projectId || null) }
 
   values.push(id)
   const result = db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`).run(...values)
@@ -131,6 +134,18 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
   // Verify session exists
   const session = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId)
   if (!session) return false
+
+  // Guard: never overwrite with significantly fewer messages.
+  // Prevents crash-induced partial renderer state from destroying conversation history.
+  // Small reductions (filtered empty thinking messages) are OK; catastrophic ones are blocked.
+  if (messages.length > 0) {
+    const existing = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(sessionId) as { count: number }
+    const loss = existing.count - messages.length
+    if (loss > 5) {
+      console.warn(`[bond] saveMessages blocked: would lose ${loss} messages (${messages.length} < ${existing.count}) for session ${sessionId}`)
+      return false
+    }
+  }
 
   const save = db.transaction(() => {
     db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId)

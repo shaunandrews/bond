@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
-import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync, watch, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
@@ -178,6 +178,8 @@ async function connectClient(): Promise<void> {
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
+const viewerWindows = new Map<string, BrowserWindow>()
+const viewerWatchers = new Map<string, FSWatcher>()
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -217,6 +219,12 @@ function createWindow(): void {
   client.onTodoChanged(() => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('bond:todoChanged')
+    }
+  })
+
+  client.onProjectsChanged(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:projectsChanged')
     }
   })
 
@@ -279,11 +287,131 @@ function createSettingsWindow(): void {
   }
 }
 
+function createViewerWindow(filePath: string): void {
+  // Reuse existing viewer for the same file
+  const existing = viewerWindows.get(filePath)
+  if (existing && !existing.isDestroyed()) {
+    existing.focus()
+    return
+  }
+
+  const parentBounds = mainWindow?.getBounds()
+  const display = parentBounds
+    ? require('electron').screen.getDisplayMatching(parentBounds)
+    : require('electron').screen.getPrimaryDisplay()
+  const { x: dx, y: dy, width: dw, height: dh } = display.workArea
+  const vw = 700, vh = 600
+
+  const filename = filePath.split('/').pop() ?? 'Viewer'
+
+  const win = new BrowserWindow({
+    width: vw,
+    height: vh,
+    x: Math.round(dx + (dw - vw) / 2),
+    y: Math.round(dy + (dh - vh) / 2),
+    minWidth: 400,
+    minHeight: 300,
+    show: false,
+    autoHideMenuBar: true,
+    title: filename,
+    titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 16, y: 14 },
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.mjs'),
+      contextIsolation: true,
+      sandbox: false
+    }
+  })
+
+  viewerWindows.set(filePath, win)
+
+  win.on('ready-to-show', () => {
+    win.show()
+    win.webContents.send('bond:viewerFile', filePath)
+
+    // Watch the file for changes and push updates to the viewer.
+    // Some editors do atomic saves (write tmp + rename), which fires 'rename'
+    // and can invalidate the watcher. On rename, re-establish the watch.
+    function startWatching(): void {
+      try {
+        const watcher = watch(filePath, { persistent: false }, (eventType) => {
+          if (win.isDestroyed()) return
+          if (eventType === 'change') {
+            win.webContents.send('bond:viewerFile', filePath)
+          } else if (eventType === 'rename') {
+            watcher.close()
+            viewerWatchers.delete(filePath)
+            // Re-read immediately (file was replaced)
+            if (existsSync(filePath)) {
+              win.webContents.send('bond:viewerFile', filePath)
+              setTimeout(startWatching, 100)
+            }
+          }
+        })
+        viewerWatchers.set(filePath, watcher)
+      } catch { /* file may not exist yet */ }
+    }
+    startWatching()
+  })
+
+  win.on('closed', () => {
+    viewerWindows.delete(filePath)
+    const watcher = viewerWatchers.get(filePath)
+    if (watcher) {
+      watcher.close()
+      viewerWatchers.delete(filePath)
+    }
+  })
+
+  const devUrl = process.env.ELECTRON_RENDERER_URL
+  if (devUrl) {
+    void win.loadURL(`${devUrl}/viewer.html`)
+  } else {
+    void win.loadFile(join(__dirname, '../renderer/viewer.html'))
+  }
+}
+
 // --- App lifecycle ---
+
+let isReconnecting = false
+
+function setupAutoReconnect(): void {
+  client.onDisconnect(() => {
+    if (isReconnecting) return
+    isReconnecting = true
+    console.warn('[bond] daemon connection lost, attempting reconnect...')
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:connectionLost')
+    }
+    attemptReconnect()
+  })
+}
+
+async function attemptReconnect(): Promise<void> {
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 1000))
+    try {
+      await ensureDaemon()
+      await client.reconnect()
+      setupAutoReconnect()
+      isReconnecting = false
+      console.log('[bond] reconnected to daemon')
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('bond:connectionRestored')
+      }
+      return
+    } catch {
+      // Keep trying
+    }
+  }
+  isReconnecting = false
+  console.error('[bond] failed to reconnect after 30 attempts')
+}
 
 app.whenReady().then(async () => {
   await ensureDaemon()
   await connectClient()
+  setupAutoReconnect()
 
   createWindow()
 
@@ -329,6 +457,28 @@ app.whenReady().then(async () => {
   ipcMain.handle('shell:openExternal', (_e, url: string) => {
     if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
       return shell.openExternal(url)
+    }
+  })
+
+  ipcMain.handle('shell:openPath', (_e, filePath: string) => {
+    if (typeof filePath === 'string') {
+      return shell.openPath(filePath)
+    }
+  })
+
+  ipcMain.handle('viewer:open', (_e, filePath: string) => {
+    if (typeof filePath === 'string') {
+      createViewerWindow(filePath)
+    }
+  })
+
+  ipcMain.handle('file:read', (_e, filePath: string): string | null => {
+    if (typeof filePath !== 'string') return null
+    try {
+      if (!existsSync(filePath)) return null
+      return readFileSync(filePath, 'utf-8')
+    } catch {
+      return null
     }
   })
 
@@ -382,10 +532,20 @@ app.whenReady().then(async () => {
 
   // --- Todos ---
   ipcMain.handle('todo:list', () => client.listTodos())
-  ipcMain.handle('todo:create', (_e, text: string, notes?: string, group?: string) => client.createTodo(text, notes, group))
+  ipcMain.handle('todo:create', (_e, text: string, notes?: string, group?: string, projectId?: string) => client.createTodo(text, notes, group, projectId))
   ipcMain.handle('todo:update', (_e, id: string, updates: Record<string, unknown>) => client.updateTodo(id, updates))
   ipcMain.handle('todo:delete', (_e, id: string) => client.deleteTodo(id))
   ipcMain.handle('todo:parse', (_e, raw: string) => client.parseTodo(raw))
+  ipcMain.handle('todo:reorder', (_e, ids: string[]) => client.reorderTodos(ids))
+
+  // --- Projects ---
+  ipcMain.handle('project:list', () => client.listProjects())
+  ipcMain.handle('project:get', (_e, id: string) => client.getProject(id))
+  ipcMain.handle('project:create', (_e, name: string, goal?: string, type?: string, deadline?: string) => client.createProject(name, goal, type as any, deadline))
+  ipcMain.handle('project:update', (_e, id: string, updates: Record<string, unknown>) => client.updateProject(id, updates))
+  ipcMain.handle('project:delete', (_e, id: string) => client.deleteProject(id))
+  ipcMain.handle('project:addResource', (_e, projectId: string, kind: string, value: string, label?: string) => client.addProjectResource(projectId, kind as any, value, label))
+  ipcMain.handle('project:removeResource', (_e, id: string) => client.removeProjectResource(id))
 
   ipcMain.handle('image:readLocal', (_e, filePath: string): string | null => {
     const EXT_TO_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }

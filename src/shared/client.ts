@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem } from './session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType } from './session'
 import {
   makeRequest,
   isResponse,
@@ -11,6 +11,7 @@ import {
 
 type ChunkListener = (chunk: TaggedChunk) => void
 type TodoChangeListener = () => void
+type ProjectChangeListener = () => void
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -23,6 +24,8 @@ export class BondClient {
   private pending = new Map<string | number, PendingRequest>()
   private chunkListeners = new Set<ChunkListener>()
   private todoChangeListeners = new Set<TodoChangeListener>()
+  private projectChangeListeners = new Set<ProjectChangeListener>()
+  private disconnectListeners = new Set<() => void>()
   private socketPath: string
   private _connected = false
 
@@ -57,6 +60,8 @@ export class BondClient {
           req.reject(new Error('Connection closed'))
         }
         this.pending.clear()
+        // Notify disconnect listeners
+        for (const fn of this.disconnectListeners) fn()
       })
 
       this.ws.on('message', (data) => {
@@ -87,6 +92,10 @@ export class BondClient {
             for (const fn of this.todoChangeListeners) {
               fn()
             }
+          } else if (msg.method === 'project.changed') {
+            for (const fn of this.projectChangeListeners) {
+              fn()
+            }
           }
         }
       })
@@ -99,6 +108,21 @@ export class BondClient {
       this.ws = null
       this._connected = false
     }
+  }
+
+  async reconnect(): Promise<void> {
+    if (this.ws) {
+      this.ws.removeAllListeners()
+      try { this.ws.close() } catch { /* ignore */ }
+      this.ws = null
+      this._connected = false
+    }
+    return this.connect()
+  }
+
+  onDisconnect(fn: () => void): () => void {
+    this.disconnectListeners.add(fn)
+    return () => this.disconnectListeners.delete(fn)
   }
 
   private call(method: string, params?: unknown): Promise<unknown> {
@@ -163,7 +187,7 @@ export class BondClient {
     return await this.call('session.list') as Session[]
   }
 
-  async createSession(options?: { title?: string }): Promise<Session> {
+  async createSession(options?: { title?: string; projectId?: string }): Promise<Session> {
     return await this.call('session.create', options) as Session
   }
 
@@ -171,7 +195,7 @@ export class BondClient {
     return await this.call('session.get', { id }) as Session | null
   }
 
-  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>): Promise<Session | null> {
+  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode' | 'projectId'>>): Promise<Session | null> {
     return await this.call('session.update', { id, updates }) as Session | null
   }
 
@@ -223,11 +247,11 @@ export class BondClient {
     return await this.call('todo.list') as TodoItem[]
   }
 
-  async createTodo(text: string, notes = '', group = ''): Promise<TodoItem> {
-    return await this.call('todo.create', { text, notes, group }) as TodoItem
+  async createTodo(text: string, notes = '', group = '', projectId?: string): Promise<TodoItem> {
+    return await this.call('todo.create', { text, notes, group, projectId }) as TodoItem
   }
 
-  async updateTodo(id: string, updates: Partial<Pick<TodoItem, 'text' | 'notes' | 'group' | 'done'>>): Promise<TodoItem | null> {
+  async updateTodo(id: string, updates: Partial<Pick<TodoItem, 'text' | 'notes' | 'group' | 'done' | 'projectId'>>): Promise<TodoItem | null> {
     return await this.call('todo.update', { id, updates }) as TodoItem | null
   }
 
@@ -237,6 +261,10 @@ export class BondClient {
 
   async parseTodo(raw: string): Promise<{ title: string; notes: string; group: string }> {
     return await this.call('todo.parse', { raw }) as { title: string; notes: string; group: string }
+  }
+
+  async reorderTodos(ids: string[]): Promise<boolean> {
+    return await this.call('todo.reorder', { ids }) as boolean
   }
 
   // --- Skills ---
@@ -251,6 +279,41 @@ export class BondClient {
 
   async removeSkill(name: string): Promise<{ ok: boolean }> {
     return await this.call('skills.remove', { name }) as { ok: boolean }
+  }
+
+  // --- Projects ---
+
+  async listProjects(): Promise<Project[]> {
+    return await this.call('project.list') as Project[]
+  }
+
+  async getProject(id: string): Promise<Project | null> {
+    return await this.call('project.get', { id }) as Project | null
+  }
+
+  async createProject(name: string, goal?: string, type?: ProjectType, deadline?: string): Promise<Project> {
+    return await this.call('project.create', { name, goal, type, deadline }) as Project
+  }
+
+  async updateProject(id: string, updates: Partial<Pick<Project, 'name' | 'goal' | 'type' | 'archived' | 'deadline'>>): Promise<Project | null> {
+    return await this.call('project.update', { id, updates }) as Project | null
+  }
+
+  async deleteProject(id: string): Promise<boolean> {
+    return await this.call('project.delete', { id }) as boolean
+  }
+
+  async addProjectResource(projectId: string, kind: ProjectResource['kind'], value: string, label?: string): Promise<ProjectResource> {
+    return await this.call('project.addResource', { projectId, kind, value, label }) as ProjectResource
+  }
+
+  async removeProjectResource(id: string): Promise<boolean> {
+    return await this.call('project.removeResource', { id }) as boolean
+  }
+
+  onProjectsChanged(fn: ProjectChangeListener): () => void {
+    this.projectChangeListeners.add(fn)
+    return () => this.projectChangeListeners.delete(fn)
   }
 
   // --- Shell (client-side only, not proxied through daemon) ---

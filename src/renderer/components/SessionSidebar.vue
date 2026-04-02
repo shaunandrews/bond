@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages } from '@phosphor-icons/vue'
+import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhCube } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import SessionItem from './SessionItem.vue'
 import BondToolbar from './BondToolbar.vue'
@@ -18,13 +18,14 @@ const props = defineProps<{
   generatingTitleId: string | null
   busySessionIds: Set<string>
   mediaCount: number
+  projectCount: number
 }>()
 
 const chatCount = computed(() => props.sessions.length)
 
 /* Archive flyout */
 const archiveFlyoutOpen = ref(false)
-const archiveBtnRef = ref<HTMLElement | null>(null)
+const archiveBtnRef = ref<InstanceType<typeof BondButton> | null>(null)
 
 function toggleArchiveFlyout() {
   archiveFlyoutOpen.value = !archiveFlyoutOpen.value
@@ -46,6 +47,7 @@ const emit = defineEmits<{
   unarchive: [id: string]
   remove: [id: string]
   removeArchived: []
+  projects: []
   media: []
   rename: [id: string, title: string]
 }>()
@@ -147,6 +149,14 @@ const emit = defineEmits<{
     </BondPanelGroup>
 
     <nav class="sidebar-nav">
+      <button
+        :class="['sidebar-nav-item', { active: activeView === 'projects' }]"
+        @click="emit('projects')"
+      >
+        <PhCube :size="16" weight="bold" />
+        <BondText size="sm">Projects</BondText>
+        <span v-if="projectCount > 0" class="media-count-badge">{{ projectCount }}</span>
+      </button>
       <button
         :class="['sidebar-nav-item', { active: activeView === 'media' }]"
         @click="emit('media')"

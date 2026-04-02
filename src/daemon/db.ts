@@ -23,6 +23,10 @@ export function getDb(): Database.Database {
   migrateCreateTodosTable(_db)
   migrateAddTodoNotesColumn(_db)
   migrateAddTodoGroupColumn(_db)
+  migrateCreateProjectsTable(_db)
+  migrateAddProjectIdColumns(_db)
+  migrateAddProjectDeadlineColumn(_db)
+  migrateAddTodoSortOrder(_db)
 
   return _db
 }
@@ -188,6 +192,60 @@ function migrateAddTodoGroupColumn(db: Database.Database): void {
   const columns = db.pragma('table_info(todos)') as { name: string }[]
   if (!columns.some(c => c.name === 'group_name')) {
     db.exec("ALTER TABLE todos ADD COLUMN group_name TEXT NOT NULL DEFAULT ''")
+  }
+}
+
+function migrateCreateProjectsTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      goal TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL DEFAULT 'generic',
+      archived INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS project_resources (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      value TEXT NOT NULL,
+      label TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_resources_project ON project_resources(project_id);
+  `)
+}
+
+function migrateAddProjectIdColumns(db: Database.Database): void {
+  const sessionCols = db.pragma('table_info(sessions)') as { name: string }[]
+  if (!sessionCols.some(c => c.name === 'project_id')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL')
+  }
+
+  const todoCols = db.pragma('table_info(todos)') as { name: string }[]
+  if (!todoCols.some(c => c.name === 'project_id')) {
+    db.exec('ALTER TABLE todos ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL')
+  }
+}
+
+function migrateAddProjectDeadlineColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(projects)') as { name: string }[]
+  if (!columns.some(c => c.name === 'deadline')) {
+    db.exec('ALTER TABLE projects ADD COLUMN deadline TEXT')
+  }
+}
+
+function migrateAddTodoSortOrder(db: Database.Database): void {
+  const columns = db.pragma('table_info(todos)') as { name: string }[]
+  if (!columns.some(c => c.name === 'sort_order')) {
+    db.exec('ALTER TABLE todos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
+    // Backfill existing todos with sequential sort_order based on created_at
+    const rows = db.prepare('SELECT id FROM todos ORDER BY created_at ASC').all() as { id: string }[]
+    const stmt = db.prepare('UPDATE todos SET sort_order = ? WHERE id = ?')
+    rows.forEach((row, i) => stmt.run(i, row.id))
   }
 }
 

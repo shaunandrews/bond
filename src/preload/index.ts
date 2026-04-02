@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem } from '../shared/session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType } from '../shared/session'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
@@ -25,9 +25,9 @@ contextBridge.exposeInMainWorld('bond', {
 
   // Sessions
   listSessions: () => ipcRenderer.invoke('session:list') as Promise<Session[]>,
-  createSession: (options?: { title?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
+  createSession: (options?: { title?: string; projectId?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
   getSession: (id: string) => ipcRenderer.invoke('session:get', id) as Promise<Session | null>,
-  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) => ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
+  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode' | 'projectId'>>) => ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id) as Promise<boolean>,
   deleteArchivedSessions: () => ipcRenderer.invoke('session:deleteArchived') as Promise<{ ok: boolean; count: number }>,
   getMessages: (sessionId: string) => ipcRenderer.invoke('session:getMessages', sessionId) as Promise<SessionMessage[]>,
@@ -43,10 +43,25 @@ contextBridge.exposeInMainWorld('bond', {
     ipcRenderer.on('bond:todoChanged', listener)
     return () => ipcRenderer.removeListener('bond:todoChanged', listener)
   },
-  createTodo: (text: string, notes?: string, group?: string) => ipcRenderer.invoke('todo:create', text, notes, group) as Promise<TodoItem>,
-  updateTodo: (id: string, updates: Partial<Pick<TodoItem, 'text' | 'notes' | 'group' | 'done'>>) => ipcRenderer.invoke('todo:update', id, updates) as Promise<TodoItem | null>,
+  createTodo: (text: string, notes?: string, group?: string, projectId?: string) => ipcRenderer.invoke('todo:create', text, notes, group, projectId) as Promise<TodoItem>,
+  updateTodo: (id: string, updates: Partial<Pick<TodoItem, 'text' | 'notes' | 'group' | 'done' | 'projectId'>>) => ipcRenderer.invoke('todo:update', id, updates) as Promise<TodoItem | null>,
   deleteTodo: (id: string) => ipcRenderer.invoke('todo:delete', id) as Promise<boolean>,
   parseTodo: (raw: string) => ipcRenderer.invoke('todo:parse', raw) as Promise<{ title: string; notes: string; group: string }>,
+  reorderTodos: (ids: string[]) => ipcRenderer.invoke('todo:reorder', ids) as Promise<boolean>,
+
+  // Projects
+  listProjects: () => ipcRenderer.invoke('project:list') as Promise<Project[]>,
+  getProject: (id: string) => ipcRenderer.invoke('project:get', id) as Promise<Project | null>,
+  createProject: (name: string, goal?: string, type?: ProjectType, deadline?: string) => ipcRenderer.invoke('project:create', name, goal, type, deadline) as Promise<Project>,
+  updateProject: (id: string, updates: Partial<Pick<Project, 'name' | 'goal' | 'type' | 'archived' | 'deadline'>>) => ipcRenderer.invoke('project:update', id, updates) as Promise<Project | null>,
+  deleteProject: (id: string) => ipcRenderer.invoke('project:delete', id) as Promise<boolean>,
+  addProjectResource: (projectId: string, kind: ProjectResource['kind'], value: string, label?: string) => ipcRenderer.invoke('project:addResource', projectId, kind, value, label) as Promise<ProjectResource>,
+  removeProjectResource: (id: string) => ipcRenderer.invoke('project:removeResource', id) as Promise<boolean>,
+  onProjectsChanged: (fn: () => void) => {
+    const listener = () => fn()
+    ipcRenderer.on('bond:projectsChanged', listener)
+    return () => ipcRenderer.removeListener('bond:projectsChanged', listener)
+  },
 
   // Images
   listImages: () => ipcRenderer.invoke('image:list') as Promise<ImageRecord[]>,
@@ -62,11 +77,21 @@ contextBridge.exposeInMainWorld('bond', {
   // Local images
   readLocalImage: (filePath: string) => ipcRenderer.invoke('image:readLocal', filePath) as Promise<string | null>,
 
+  // File viewing
+  openViewer: (filePath: string) => ipcRenderer.invoke('viewer:open', filePath) as Promise<void>,
+  readFile: (filePath: string) => ipcRenderer.invoke('file:read', filePath) as Promise<string | null>,
+  onViewerFile: (fn: (filePath: string) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, filePath: string) => fn(filePath)
+    ipcRenderer.on('bond:viewerFile', listener)
+    return () => ipcRenderer.removeListener('bond:viewerFile', listener)
+  },
+
   // Dev
   captureScreenshot: (outputPath: string) => ipcRenderer.invoke('dev:captureScreenshot', outputPath) as Promise<string>,
 
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url) as Promise<void>,
+  openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath) as Promise<string>,
 
   // Settings window
   openSettings: () => ipcRenderer.invoke('window:openSettings') as Promise<void>,
@@ -75,6 +100,18 @@ contextBridge.exposeInMainWorld('bond', {
     const listener = (_: Electron.IpcRendererEvent, description: string) => fn(description)
     ipcRenderer.on('bond:createSkill', listener)
     return () => ipcRenderer.removeListener('bond:createSkill', listener)
+  },
+
+  // Connection status
+  onConnectionLost: (fn: () => void) => {
+    const listener = () => fn()
+    ipcRenderer.on('bond:connectionLost', listener)
+    return () => ipcRenderer.removeListener('bond:connectionLost', listener)
+  },
+  onConnectionRestored: (fn: () => void) => {
+    const listener = () => fn()
+    ipcRenderer.on('bond:connectionRestored', listener)
+    return () => ipcRenderer.removeListener('bond:connectionRestored', listener)
   },
 
   // Settings
