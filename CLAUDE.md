@@ -34,15 +34,17 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | File | Purpose |
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `wordpress.*`) |
+| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `project.*`, `image.*`, `todo.*`, `settings.*`, `skills.*`) |
 | `agent.ts` | Runs `query()` from Claude Agent SDK, streams chunks, handles tool approvals |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
+| `projects.ts` | Project CRUD + resource management (SQLite) |
+| `todos.ts` | Todo CRUD (SQLite) |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
 | `db.ts` | Database init, migrations, WAL mode |
 | `settings.ts` | Key-value settings storage (soul, model, accent color) |
 | `generate-title.ts` | Auto-generates session titles via Haiku |
 | `paths.ts` | Data directory resolution |
-| `wordpress.ts` | WordPress Studio CLI integration (list/create/delete/start/stop sites, cached site details/site map/theme JSON via WP-CLI) |
+| `skills.ts` | Skill scanning from ~/.bond/skills/ |
 
 ### Main Process (`src/main/`)
 
@@ -50,7 +52,7 @@ Electron main process. Spawns daemon if not running, creates window, proxies all
 
 ### Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, settings, model, shell utilities.
+Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, projects, todos, settings, images, skills, model, and shell utilities.
 
 ### Shared (`src/shared/`)
 
@@ -59,54 +61,58 @@ Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, sett
 | `protocol.ts` | JSON-RPC 2.0 types and helpers |
 | `stream.ts` | `BondStreamChunk` union type (text, thinking, tool, approval, error, system) |
 | `client.ts` | `BondClient` WebSocket client class |
-| `session.ts` | Session, SessionMessage, EditMode, AttachedImage types |
+| `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Project, ProjectResource, TodoItem types |
 | `models.ts` | `ModelId` type (`'opus' | 'sonnet' | 'haiku'`) |
-| `wordpress.ts` | `WordPressSite`, `WordPressSiteDetails`, `WpSiteMap`, `WpSiteMapNode`, `WpThemeJson`, `WpTheme`, `WpPlugin`, `WpTemplate` types |
 
 ### CLI (`bin/bond`)
 
-Bash CLI for daemon management: `bond status`, `bond start`, `bond stop`, `bond restart`, `bond dev`, `bond build`, `bond rebuild`, `bond log`, `bond test`.
+Bash CLI for daemon management and data: `bond status`, `bond start`, `bond stop`, `bond restart`, `bond dev`, `bond build`, `bond rebuild`, `bond log`, `bond todo`, `bond project`, `bond media`, `bond screenshot`, `bond test`.
 
 ## Project Structure
 
 ```
 bin/bond                             # CLI for daemon management
 src/
+  cli/
+    todo.ts                          # bond todo — CLI for todo management
+    project.ts                       # bond project — CLI for project management
+    media.ts                         # bond media — CLI for media management
+    screenshot.ts                    # bond screenshot — capture Bond window
   daemon/
     main.ts                          # Daemon entry point
     server.ts                        # WebSocket JSON-RPC server
     agent.ts                         # Claude Agent SDK integration
     sessions.ts                      # Session CRUD (SQLite)
+    projects.ts                      # Project + resource CRUD (SQLite)
+    todos.ts                         # Todo CRUD (SQLite)
     images.ts                        # Image file storage + images table
     db.ts                            # Database management + migrations
     settings.ts                      # Settings storage
     generate-title.ts                # Auto title generation
+    parse-todo.ts                    # AI-powered todo input parsing
     paths.ts                         # Data directory paths
     skills.ts                        # Skill scanning from ~/.bond/skills/
-    wordpress.ts                     # WordPress Studio CLI integration + cached WP-CLI details
   main/index.ts                      # Electron main process
   preload/index.ts                   # contextBridge API
   shared/
     protocol.ts                      # JSON-RPC 2.0 types
     stream.ts                        # BondStreamChunk types (incl. thinking_text)
-
     client.ts                        # BondClient WebSocket client
-    session.ts                       # Session, message, ImageRecord types
+    session.ts                       # Session, SessionMessage, Project, ProjectResource, TodoItem, EditMode, AttachedImage types
     models.ts                        # ModelId type
-    wordpress.ts                     # WordPressSite, WordPressSiteDetails, WpSiteMap, WpThemeJson types
   renderer/
     App.vue                          # Root shell — panel layout + view routing
+    ViewerWindow.vue                 # Markdown file viewer window
     app.css                          # Tailwind v4 theme tokens
     types/message.ts                 # Message union type
     types/webview.d.ts               # Electron webview element types
     composables/
       useChat.ts                     # Chat state, streaming, message persistence
       useSessions.ts                 # Session CRUD, archive, title generation
+      useProjects.ts                 # Project CRUD, archive, resources
       useAutoScroll.ts               # Smart scroll-to-bottom
       useAccentColor.ts              # Dynamic accent color theming
-      useAppView.ts                  # View routing state
-      useProjects.ts                 # WordPress Studio project management (sites, details, site map, theme JSON)
-      useSitePreview.ts              # In-app browser panel state
+      useAppView.ts                  # View routing state (chat | projects | media)
     directives/
       tooltip.ts                     # v-tooltip directive (singleton, positioned tooltips)
     components/
@@ -129,11 +135,15 @@ src/
       ThinkingIndicator.vue          # Standalone "Bond is working..." dots (unused, kept for reference)
       SessionItem.vue                # Single session row
       SessionSidebar.vue             # Sidebar with session lists + nav
-      SitePreview.vue                # In-app browser panel (webview + toolbar)
-      ProjectView.vue                # WordPress project detail view (details, site map, theme tokens)
-      SiteMapView.vue                # Visual site map canvas (zoomable SVG tree of pages/posts)
-      ThemeTokensView.vue            # Theme JSON token display (colors, fonts, spacing)
+      ProjectDetail.vue              # Shared project detail (todos, resources, deadline, goal)
+      ProjectsView.vue               # Project list + detail view (main content area)
+      ProjectPanelView.vue           # Project list/detail panel (right side of chat)
+      ProjectWizard.vue              # Multi-step project creation wizard
+      MediaView.vue                  # Image gallery view
+      TodoView.vue                   # Todo panel with groups and notes
       CopyButton.vue                 # Inline copy-to-clipboard button
+      ActivityBar.vue                # Expandable activity/event log bar
+      MissionBriefing.vue            # Empty chat welcome screen
       SettingsView.vue               # Accent color, model, personality settings
       AboutView.vue                  # Architecture, tools, data paths, CLI reference
       DesignSystemView.vue           # Live design token browser
@@ -247,27 +257,29 @@ Single session row used in both active and archived lists inside SessionSidebar.
 - **Events:** `select()`, `action()`
 
 ### SessionSidebar
-Left sidebar with session list, archive flyout, and projects. Chats section is always open (non-collapsible) with archive and new-chat buttons in the header. Archive button opens a BondFlyoutMenu listing archived sessions. Projects section (collapsible) shows Studio sites with status dots and open-in-browser actions.
-- **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`, `projects: WordPressSite[]`, `projectsAvailable: boolean | null`, `projectsCreating: boolean`, `selectedProjectId: string | null`, `togglingProjectId: string | null`
-- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `removeArchived()`, `projectSelect(site: WordPressSite)`, `projectOpen(site: WordPressSite)`, `projectCreate()`, `projectStart(site: WordPressSite)`, `projectStop(site: WordPressSite)`
+Left sidebar with session list, archive flyout, and bottom nav (Projects, Media). Chats section is always open (non-collapsible) with archive and new-chat buttons in the header.
+- **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`, `busySessionIds: Set<string>`, `mediaCount: number`, `projectCount: number`
+- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `removeArchived()`, `projects()`, `media()`, `rename(id, title)`
 
-### SitePreview
-In-app browser panel using Electron's `<webview>` tag. Uses BondToolbar for navigation (back/forward/reload, URL display, close). Webview is conditionally rendered (`v-if="url"`) — removed from DOM when no URL is set. Listens to webview navigation events to sync URL and nav state.
-- **State:** Reads from `useSitePreview()` composable (url, loading, canGoBack, canGoForward)
-- **Events:** None — calls `useSitePreview().close()` directly
+### ProjectDetail
+Shared project detail component used by both ProjectsView and ProjectPanelView. Displays type badge, deadline badge, goal, interactive resource management (add form, click-to-open, remove), and interactive todo management (inline add, checkboxes, delete). Owns its own todo state via `window.bond`.
+- **Props:** `project: Project`, `compact?: boolean` (tighter spacing for panel use)
+- **Events:** `addResource(projectId, kind, value, label?)`, `removeResource(projectId, resourceId)`, `updateDeadline(projectId, deadline)`
 
-### ProjectView
-Detail view for a selected WordPress Studio project. Tabbed layout: Details (site config, WP-CLI info), Map (visual site map), Theme (design tokens). Tabs lazy-load data on first switch.
-- **Props:** `site: WordPressSite`, `details: WordPressSiteDetails | null`, `loadingDetails: boolean`, `toggling: boolean`, `deleting: boolean`, `siteMap: WpSiteMap | null`, `loadingSiteMap: boolean`, `themeJson: WpThemeJson | null`, `loadingThemeJson: boolean`
-- **Events:** `start()`, `stop()`, `chat()`, `delete()`, `loadSiteMap()`, `loadThemeJson()`
+### ProjectsView
+Main content area view for projects. Shows a project list (cards) or a `ProjectDetail` for the selected project. Includes archive flyout, creation wizard, and project menu (archive/delete).
+- **Props:** `projects: Project[]`, `archivedProjects: Project[]`, `activeProjectId: string | null`, `insetStart?: boolean`
+- **Events:** `select(id)`, `create(name, goal, type, deadline)`, `archive(id)`, `unarchive(id)`, `remove(id)`, `addResource(projectId, kind, value, label?)`, `removeResource(projectId, resourceId)`, `updateDeadline(projectId, deadline)`, `startChat(projectId)`, `back()`
+- **Slots:** `header-start`, `header-end`
 
-### SiteMapView
-Zoomable SVG canvas showing WordPress site's page hierarchy and posts as a tree. Pan/zoom via mouse drag and scroll wheel. Renders page thumbnails as embedded webview screenshots.
-- **Props:** `siteMap: WpSiteMap`, `siteUrl: string`
+### ProjectPanelView
+Project list/detail panel for the right side of chat. Shows project list or `ProjectDetail` (compact) for the selected project. Full feature parity with the main view.
+- **Props:** `projects: Project[]`, `activeProjectId: string | null`
+- **Events:** `select(id | null)`, `startChat(projectId)`, `addResource(projectId, kind, value, label?)`, `removeResource(projectId, resourceId)`
 
-### ThemeTokensView
-Displays WordPress theme.json design tokens — color palette swatches, font families, font sizes, spacing sizes, and layout dimensions.
-- **Props:** `themeJson: WpThemeJson`
+### ProjectWizard
+Multi-step project creation wizard (name → goal → type + deadline). Full-screen overlay.
+- **Events:** `submit(name, goal, type, deadline)`, `cancel()`
 
 ### CopyButton
 Inline copy-to-clipboard button with checkmark confirmation feedback.
@@ -308,18 +320,13 @@ Dynamic accent color theming. Derives a full palette from a single hex color (HS
 - **Methods:** `load()`, `setAccent()`, `reset()`
 
 ### useProjects(deps?)
-WordPress Studio project management. Lists, creates, deletes, starts, and stops sites via the daemon. Auto-fetches WP-CLI details for running sites when selected — details, site map, and theme JSON come from daemon-side caches with 2-minute TTL. Site map and theme JSON are lazy-loaded on tab switch.
-- **State:** `sites`, `available` (null until loaded, false if `studio` CLI not installed), `loading`, `creating`, `deleting`, `selectedSiteId`, `selectedSite`, `siteDetails`, `loadingDetails`, `siteMap`, `loadingSiteMap`, `themeJson`, `loadingThemeJson`, `togglingSiteId`
-- **Methods:** `load()`, `createSite()`, `selectSite(id)`, `startSite(id, path)`, `stopSite(id, path)`, `deleteSite(path)`
-
-### useSitePreview()
-In-app browser panel state. Module-level singleton managing the webview panel's URL, open/close state, and navigation capabilities. Persists open state to localStorage.
-- **State:** `url`, `isOpen`, `loading`, `title`, `canGoBack`, `canGoForward`
-- **Methods:** `openSite(site: WordPressSite)`, `close()`, `navigate(url: string)`
+Project CRUD, archive/unarchive, resources. Persists active project ID to localStorage.
+- **State:** `projects`, `activeProjectId`, `activeProject`, `activeProjects`, `archivedProjects`, `loading`
+- **Methods:** `load()`, `create(name, goal?, type?, deadline?)`, `select(id)`, `archive(id)`, `unarchive(id)`, `update(id, updates)`, `remove(id)`, `addResource(projectId, kind, value, label?)`, `removeResource(projectId, resourceId)`, `updateLocal(id, updates)`
 
 ### useAppView()
 View routing state. Persists to localStorage.
-- **State:** `activeView` (`'chat' | 'projects'`)
+- **State:** `activeView` (`'chat' | 'projects' | 'media'`)
 
 ## Icons
 

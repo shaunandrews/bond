@@ -29,6 +29,10 @@ bond dev                 # Full dev server (stops daemon, runs electron-vite dev
 bond build [daemon|all]  # Build targets (default: all)
 bond rebuild [target]    # Stop, build, start
 bond log                 # Tail daemon log
+bond todo                # Manage todos (list, add, done, undo, rm)
+bond project             # Manage projects (list, add, show, edit, archive, rm, resource)
+bond media               # Manage media (list, info, open, rm, purge)
+bond screenshot          # Capture Bond window to /tmp/bond-screenshot.png
 bond test                # Run tests
 bond help                # Show all commands
 ```
@@ -86,7 +90,11 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `bond.setModel` / `bond.getModel` — model selection
 - `bond.approvalResponse` — tool approval flow
 - `session.*` — CRUD, messages, title generation
-- `settings.*` — soul, accent color
+- `project.*` — CRUD, resources
+- `todo.*` — CRUD, parsing
+- `image.*` — list, get, import, delete
+- `settings.*` — soul, accent color, window opacity
+- `skills.*` — list, refresh, remove
 
 **Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
 
@@ -120,7 +128,7 @@ Types and utilities shared across all layers:
 - `protocol.ts` — JSON-RPC 2.0 request/response/notification types
 - `stream.ts` — `BondStreamChunk` union type (text, tool, approval, error, system)
 - `client.ts` — `BondClient` WebSocket client class
-- `session.ts` — Session, SessionMessage, EditMode, AttachedImage types
+- `session.ts` — Session, SessionMessage, EditMode, AttachedImage, Project, ProjectResource, TodoItem types
 - `models.ts` — `ModelId` type (`'opus' | 'sonnet' | 'haiku'`)
 
 ## Data & Runtime
@@ -159,7 +167,7 @@ src/
   main/                  # Electron main process (window, IPC proxy, daemon lifecycle)
   preload/               # contextBridge → window.bond API
   renderer/              # Vue 3 chat UI + Tailwind
-    composables/         # State and logic (useChat, useSessions, useAutoScroll, useAccentColor, useAppView, useProjects)
+    composables/         # State and logic (useChat, useSessions, useProjects, useAutoScroll, useAccentColor, useAppView)
     components/          # Vue components (primitives, layout, chat, views)
     types/               # Message types
     lib/                 # Utilities (highlight.js setup)

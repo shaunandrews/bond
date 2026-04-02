@@ -139,6 +139,9 @@ const dataPaths = [
         <div class="cli-row"><code>bond dev</code><span>Full dev server with hot reload</span></div>
         <div class="cli-row"><code>bond log</code><span>Tail the daemon log</span></div>
         <div class="cli-row"><code>bond build</code><span>Production build</span></div>
+        <div class="cli-row"><code>bond todo</code><span>Manage todos (list, add, done, undo, rm)</span></div>
+        <div class="cli-row"><code>bond project</code><span>Manage projects (list, add, show, edit, archive, rm)</span></div>
+        <div class="cli-row"><code>bond media</code><span>Manage media (list, info, open, rm, purge)</span></div>
       </div>
     </section>
 
