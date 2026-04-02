@@ -4,17 +4,21 @@
  * bond todo — CLI for managing Bond todos via the daemon.
  *
  * Usage:
- *   bond todo                                    List all todos
- *   bond todo add <text>                         Add a new todo
- *   bond todo add <text> --notes <n>             Add with notes
- *   bond todo add <text> --group <g>             Add with group
- *   bond todo add <text> --group <g> --notes <n> Add with both
- *   bond todo done <id|text>                     Mark as done
- *   bond todo undo <id|text>                     Mark as not done
- *   bond todo rm <id|text>                       Delete a todo
- *   bond todo notes <id|text> <notes>            Set notes
- *   bond todo group <id|text> <group>            Set group
- *   bond todo ls --group <g>                     List filtered by group
+ *   bond todo                                           List all todos
+ *   bond todo add <text>                                Add a new todo
+ *   bond todo add <text> --notes <n>                    Add with notes
+ *   bond todo add <text> --group <g>                    Add with group
+ *   bond todo add <text> --project <p>                  Add linked to a project
+ *   bond todo done <id|text>                            Mark as done
+ *   bond todo undo <id|text>                            Mark as not done
+ *   bond todo rm <id|text>                              Delete a todo
+ *   bond todo notes <id|text> <notes>                   Set notes
+ *   bond todo group <id|text> <group>                   Set group
+ *   bond todo link <id|text> <project>                  Link a todo to a project
+ *   bond todo unlink <id|text>                          Remove project link
+ *   bond todo move <id|text> <position>                 Move a todo to a position (1-based)
+ *   bond todo ls --group <g>                            List filtered by group
+ *   bond todo ls --project <p>                          List filtered by project
  */
 
 import { join } from 'node:path'
@@ -50,7 +54,13 @@ interface Todo {
   notes: string
   group: string
   done: boolean
+  projectId?: string
   createdAt: string
+}
+
+interface Project {
+  id: string
+  name: string
 }
 
 function connect(): Promise<WebSocket> {
@@ -80,29 +90,57 @@ const D = '\x1b[0;90m'
 const S = '\x1b[9m'  // strikethrough
 const N = '\x1b[0m'
 
-function extractFlags(args: string[]): { textArgs: string[]; notes: string | undefined; group: string | undefined } {
+const FLAG_NAMES = new Set(['--notes', '--group', '--project'])
+
+function extractFlags(args: string[]): { textArgs: string[]; notes: string | undefined; group: string | undefined; project: string | undefined } {
   let notes: string | undefined
   let group: string | undefined
+  let project: string | undefined
   const textArgs: string[] = []
   let i = 0
   while (i < args.length) {
     if (args[i] === '--notes') {
-      // Collect everything up to the next flag or end
       i++
       const parts: string[] = []
-      while (i < args.length && args[i] !== '--group') { parts.push(args[i]); i++ }
+      while (i < args.length && !FLAG_NAMES.has(args[i])) { parts.push(args[i]); i++ }
       notes = parts.join(' ')
     } else if (args[i] === '--group') {
       i++
       const parts: string[] = []
-      while (i < args.length && args[i] !== '--notes') { parts.push(args[i]); i++ }
+      while (i < args.length && !FLAG_NAMES.has(args[i])) { parts.push(args[i]); i++ }
       group = parts.join(' ')
+    } else if (args[i] === '--project') {
+      i++
+      const parts: string[] = []
+      while (i < args.length && !FLAG_NAMES.has(args[i])) { parts.push(args[i]); i++ }
+      project = parts.join(' ')
     } else {
       textArgs.push(args[i])
       i++
     }
   }
-  return { textArgs, notes, group }
+  return { textArgs, notes, group, project }
+}
+
+async function resolveProjectId(ws: WebSocket, query: string): Promise<string> {
+  const projects = await call(ws, 'project.list') as Project[]
+  // ID prefix
+  const byId = projects.find(p => p.id.toLowerCase().startsWith(query.toLowerCase()))
+  if (byId) return byId.id
+  // Numeric index
+  const idx = parseInt(query, 10)
+  if (!isNaN(idx) && idx >= 1 && idx <= projects.length) return projects[idx - 1].id
+  // Name substring
+  const lower = query.toLowerCase()
+  const byName = projects.find(p => p.name.toLowerCase().includes(lower))
+  if (byName) return byName.id
+  console.error(`${R}No matching project:${N} ${query}`)
+  process.exit(1)
+}
+
+async function getProjectName(ws: WebSocket, projectId: string): Promise<string> {
+  const project = await call(ws, 'project.get', { id: projectId }) as Project | null
+  return project?.name ?? projectId.slice(0, 8)
 }
 
 async function main() {
@@ -121,18 +159,31 @@ async function main() {
     switch (sub) {
       case 'list':
       case 'ls': {
-        const { group: filterGroup } = extractFlags(args.slice(1))
+        const { group: filterGroup, project: filterProject } = extractFlags(args.slice(1))
         let todos = await call(ws, 'todo.list') as Todo[]
         if (filterGroup) todos = todos.filter(t => t.group === filterGroup)
+        let filterProjectId: string | undefined
+        if (filterProject) {
+          filterProjectId = await resolveProjectId(ws, filterProject)
+          todos = todos.filter(t => t.projectId === filterProjectId)
+        }
+        const filterDesc = filterGroup ? ` in group "${filterGroup}"` : filterProject ? ` in project "${filterProject}"` : ''
         if (todos.length === 0) {
-          console.log(`${D}No todos${filterGroup ? ` in group "${filterGroup}"` : ''}${N}`)
+          console.log(`${D}No todos${filterDesc}${N}`)
           break
+        }
+        // Build project name cache for display
+        const projectIds = new Set(todos.map(t => t.projectId).filter(Boolean) as string[])
+        const projectNames = new Map<string, string>()
+        for (const pid of projectIds) {
+          projectNames.set(pid, await getProjectName(ws, pid))
         }
         const pending = todos.filter(t => !t.done)
         const done = todos.filter(t => t.done)
         pending.forEach((t, i) => {
           const groupTag = t.group ? ` ${D}[${t.group}]${N}` : ''
-          console.log(`  ${D}${i + 1}.${N}  ${t.text}${groupTag}`)
+          const projTag = t.projectId ? ` ${Y}← ${projectNames.get(t.projectId) ?? '?'}${N}` : ''
+          console.log(`  ${D}${i + 1}.${N}  ${t.text}${groupTag}${projTag}`)
           if (t.notes) {
             const lines = t.notes.split('\n')
             lines.forEach(line => console.log(`      ${D}${line}${N}`))
@@ -142,19 +193,23 @@ async function main() {
           console.log(`\n  ${D}Done (${done.length})${N}`)
           done.forEach(t => {
             const groupTag = t.group ? ` ${D}[${t.group}]${N}` : ''
-            console.log(`  ${D}${S}${t.text}${N}${groupTag}`)
+            const projTag = t.projectId ? ` ${Y}← ${projectNames.get(t.projectId) ?? '?'}${N}` : ''
+            console.log(`  ${D}${S}${t.text}${N}${groupTag}${projTag}`)
           })
         }
         break
       }
 
       case 'add': {
-        const { textArgs, notes, group } = extractFlags(args.slice(1))
+        const { textArgs, notes, group, project } = extractFlags(args.slice(1))
         const text = textArgs.join(' ')
-        if (!text) { console.error(`${R}Usage:${N} bond todo add <text> [--notes <notes>] [--group <group>]`); process.exit(1) }
-        const todo = await call(ws, 'todo.create', { text, notes: notes ?? '', group: group ?? '' }) as Todo
+        if (!text) { console.error(`${R}Usage:${N} bond todo add <text> [--notes <notes>] [--group <group>] [--project <project>]`); process.exit(1) }
+        let projectId: string | undefined
+        if (project) projectId = await resolveProjectId(ws, project)
+        const todo = await call(ws, 'todo.create', { text, notes: notes ?? '', group: group ?? '', projectId }) as Todo
         const groupTag = todo.group ? ` ${D}[${todo.group}]${N}` : ''
-        console.log(`${G}Added${N}  ${todo.text}${groupTag}`)
+        const projTag = project ? ` ${Y}← ${project}${N}` : ''
+        console.log(`${G}Added${N}  ${todo.text}${groupTag}${projTag}`)
         if (todo.notes) console.log(`      ${D}${todo.notes}${N}`)
         break
       }
@@ -226,9 +281,58 @@ async function main() {
         break
       }
 
+      case 'link': {
+        const todoQuery = args[1]
+        const projectQuery = args.slice(2).join(' ')
+        if (!todoQuery || !projectQuery) { console.error(`${R}Usage:${N} bond todo link <id|number|text> <project>`); process.exit(1) }
+        const todos = await call(ws, 'todo.list') as Todo[]
+        const todo = findTodo(todos, todoQuery)
+        if (!todo) { console.error(`${R}No matching todo:${N} ${todoQuery}`); process.exit(1) }
+        const projectId = await resolveProjectId(ws, projectQuery)
+        const projectName = await getProjectName(ws, projectId)
+        await call(ws, 'todo.update', { id: todo.id, updates: { projectId } })
+        console.log(`${G}Linked${N}  ${todo.text} ${Y}← ${projectName}${N}`)
+        break
+      }
+
+      case 'unlink': {
+        const todoQuery = args.slice(1).join(' ')
+        if (!todoQuery) { console.error(`${R}Usage:${N} bond todo unlink <id|number|text>`); process.exit(1) }
+        const todos = await call(ws, 'todo.list') as Todo[]
+        const todo = findTodo(todos, todoQuery)
+        if (!todo) { console.error(`${R}No matching todo:${N} ${todoQuery}`); process.exit(1) }
+        if (!todo.projectId) { console.log(`${D}Todo is not linked to a project${N}`); break }
+        await call(ws, 'todo.update', { id: todo.id, updates: { projectId: '' } })
+        console.log(`${Y}Unlinked${N}  ${todo.text}`)
+        break
+      }
+
+      case 'move':
+      case 'mv': {
+        const todoQuery = args[1]
+        const posStr = args[2]
+        if (!todoQuery || !posStr) { console.error(`${R}Usage:${N} bond todo move <id|number|text> <position>`); process.exit(1) }
+        const pos = parseInt(posStr, 10)
+        if (isNaN(pos) || pos < 1) { console.error(`${R}Position must be a positive number${N}`); process.exit(1) }
+        const todos = await call(ws, 'todo.list') as Todo[]
+        const pending = todos.filter(t => !t.done)
+        const done = todos.filter(t => t.done)
+        const todo = findTodo(todos, todoQuery)
+        if (!todo) { console.error(`${R}No matching todo:${N} ${todoQuery}`); process.exit(1) }
+        const ids = pending.map(t => t.id)
+        const fromIdx = ids.indexOf(todo.id)
+        if (fromIdx === -1) { console.error(`${R}Cannot reorder a completed todo${N}`); process.exit(1) }
+        ids.splice(fromIdx, 1)
+        const toIdx = Math.min(pos - 1, ids.length)
+        ids.splice(toIdx, 0, todo.id)
+        await call(ws, 'todo.reorder', { ids: [...ids, ...done.map(t => t.id)] })
+        console.log(`${G}Moved${N}  ${todo.text} ${D}→ position ${toIdx + 1}${N}`)
+        break
+      }
+
       default:
         console.error(`${R}Unknown subcommand:${N} ${sub}`)
-        console.log(`\nUsage: bond todo [list|add|done|undo|notes|group|rm] [args...]`)
+        console.log(`\nUsage: bond todo [list|add|done|undo|notes|group|link|unlink|move|rm] [args...]`)
         process.exit(1)
     }
   } finally {

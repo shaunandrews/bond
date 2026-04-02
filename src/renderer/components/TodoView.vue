@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { PhPlus, PhTrash, PhChatCircle, PhNotePencil, PhTag, PhSpinner } from '@phosphor-icons/vue'
-import type { TodoItem } from '../../shared/session'
+import { PhPlus, PhTrash, PhChatCircle, PhNotePencil, PhTag, PhSpinner, PhFolder } from '@phosphor-icons/vue'
+import type { TodoItem, Project } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
 
@@ -10,16 +10,19 @@ const emit = defineEmits<{
 }>()
 
 const todos = ref<TodoItem[]>([])
+const projects = ref<Project[]>([])
 const loading = ref(true)
 const newRaw = ref('')
 const parsing = ref(false)
 const activeGroup = ref<string | null>(null)
+const activeProjectId = ref<string | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const expandedId = ref<string | null>(null)
 const editingId = ref<string | null>(null)
 const titleInput = ref('')
 const notesInput = ref('')
 const groupInput = ref('')
+const projectInput = ref('')
 const titleInputRef = ref<HTMLInputElement | null>(null)
 const notesTextareaRef = ref<HTMLTextAreaElement | null>(null)
 
@@ -31,9 +34,33 @@ const groups = computed(() => {
   return [...set].sort((a, b) => a.localeCompare(b))
 })
 
+const UNASSIGNED = '__unassigned__'
+
+const projectsWithTodos = computed(() => {
+  const ids = new Set<string>()
+  for (const t of todos.value) {
+    if (t.projectId) ids.add(t.projectId)
+  }
+  return projects.value.filter(p => ids.has(p.id))
+})
+
+const hasUnassigned = computed(() => todos.value.some(t => !t.projectId))
+
 const filteredTodos = computed(() => {
-  if (!activeGroup.value) return todos.value
-  return todos.value.filter(t => t.group === activeGroup.value)
+  let list = todos.value
+  if (activeGroup.value) list = list.filter(t => t.group === activeGroup.value)
+  if (activeProjectId.value === UNASSIGNED) {
+    list = list.filter(t => !t.projectId)
+  } else if (activeProjectId.value) {
+    list = list.filter(t => t.projectId === activeProjectId.value)
+  }
+  return list
+})
+
+const projectMap = computed(() => {
+  const map = new Map<string, string>()
+  for (const p of projects.value) map.set(p.id, p.name)
+  return map
 })
 
 const pending = computed(() => filteredTodos.value.filter(t => !t.done))
@@ -43,19 +70,26 @@ async function refreshTodos() {
   todos.value = await window.bond.listTodos()
 }
 
+async function refreshProjects() {
+  projects.value = (await window.bond.listProjects()).filter(p => !p.archived)
+}
+
 let unsubTodoChanged: (() => void) | null = null
+let unsubProjectsChanged: (() => void) | null = null
 
 onMounted(async () => {
   try {
-    await refreshTodos()
+    await Promise.all([refreshTodos(), refreshProjects()])
   } finally {
     loading.value = false
   }
   unsubTodoChanged = window.bond.onTodoChanged(() => refreshTodos())
+  unsubProjectsChanged = window.bond.onProjectsChanged(() => refreshProjects())
 })
 
 onUnmounted(() => {
   unsubTodoChanged?.()
+  unsubProjectsChanged?.()
 })
 
 async function addTodo() {
@@ -89,6 +123,10 @@ function setFilter(group: string | null) {
   activeGroup.value = activeGroup.value === group ? null : group
 }
 
+function setProjectFilter(projectId: string | null) {
+  activeProjectId.value = activeProjectId.value === projectId ? null : projectId
+}
+
 async function toggle(todo: TodoItem) {
   const updated = await window.bond.updateTodo(todo.id, { done: !todo.done })
   if (updated) {
@@ -117,6 +155,7 @@ function startEdit(todo: TodoItem) {
   titleInput.value = todo.text
   notesInput.value = todo.notes
   groupInput.value = todo.group
+  projectInput.value = todo.projectId ?? ''
   nextTick(() => {
     titleInputRef.value?.focus()
     autoResizeNotes()
@@ -140,7 +179,8 @@ async function saveEdit(todo: TodoItem) {
   if (!text) return
   const notes = notesInput.value
   const group = groupInput.value.trim()
-  const updated = await window.bond.updateTodo(todo.id, { text, notes, group })
+  const projectId = projectInput.value || undefined
+  const updated = await window.bond.updateTodo(todo.id, { text, notes, group, projectId })
   if (updated) {
     const idx = todos.value.findIndex(t => t.id === todo.id)
     if (idx !== -1) todos.value[idx] = updated
@@ -164,6 +204,73 @@ function onInputKeydown(e: KeyboardEvent) {
     e.preventDefault()
     addTodo()
   }
+}
+
+// --- Drag and drop ---
+const dragId = ref<string | null>(null)
+const dropTargetId = ref<string | null>(null)
+const dropPosition = ref<'before' | 'after'>('before')
+
+function onDragStart(e: DragEvent, todo: TodoItem) {
+  dragId.value = todo.id
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', todo.id)
+  }
+}
+
+function onDragOver(e: DragEvent, todo: TodoItem) {
+  if (!dragId.value || dragId.value === todo.id) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const midY = rect.top + rect.height / 2
+  dropPosition.value = e.clientY < midY ? 'before' : 'after'
+  dropTargetId.value = todo.id
+}
+
+function onDragLeave(e: DragEvent, todo: TodoItem) {
+  // Only clear if actually leaving this element (not entering a child)
+  const related = e.relatedTarget as HTMLElement | null
+  const current = e.currentTarget as HTMLElement
+  if (!related || !current.contains(related)) {
+    if (dropTargetId.value === todo.id) dropTargetId.value = null
+  }
+}
+
+async function onDrop(e: DragEvent) {
+  e.preventDefault()
+  if (!dragId.value || !dropTargetId.value || dragId.value === dropTargetId.value) {
+    dragId.value = null
+    dropTargetId.value = null
+    return
+  }
+
+  // Reorder within the pending list (we only drag pending items)
+  const ids = pending.value.map(t => t.id)
+  const fromIdx = ids.indexOf(dragId.value)
+  const toIdx = ids.indexOf(dropTargetId.value)
+  if (fromIdx === -1 || toIdx === -1) return
+
+  // Remove the dragged item and insert at the target position
+  ids.splice(fromIdx, 1)
+  const insertIdx = dropPosition.value === 'before' ? ids.indexOf(dropTargetId.value) : ids.indexOf(dropTargetId.value) + 1
+  ids.splice(insertIdx, 0, dragId.value)
+
+  // Append done items to maintain full order
+  const doneIds = done.value.map(t => t.id)
+  const allIds = [...ids, ...doneIds]
+
+  dragId.value = null
+  dropTargetId.value = null
+
+  await window.bond.reorderTodos(allIds)
+  await refreshTodos()
+}
+
+function onDragEnd() {
+  dragId.value = null
+  dropTargetId.value = null
 }
 </script>
 
@@ -195,34 +302,79 @@ function onInputKeydown(e: KeyboardEvent) {
           </BondButton>
         </div>
 
-        <div v-if="groups.length" class="todo-group-filters">
-          <button
-            class="todo-group-pill"
-            :class="{ active: activeGroup === null }"
-            @click="setFilter(null)"
-          >All</button>
-          <button
-            v-for="g in groups"
-            :key="g"
-            class="todo-group-pill"
-            :class="{ active: activeGroup === g }"
-            @click="setFilter(g)"
-          >{{ g }}</button>
+        <div v-if="groups.length || projectsWithTodos.length" class="todo-filters">
+          <div v-if="groups.length" class="todo-group-filters">
+            <button
+              class="todo-group-pill"
+              :class="{ active: activeGroup === null }"
+              @click="setFilter(null)"
+            >All</button>
+            <button
+              v-for="g in groups"
+              :key="g"
+              class="todo-group-pill"
+              :class="{ active: activeGroup === g }"
+              @click="setFilter(g)"
+            >{{ g }}</button>
+          </div>
+          <div v-if="projectsWithTodos.length" class="todo-group-filters">
+            <button
+              v-for="p in projectsWithTodos"
+              :key="p.id"
+              class="todo-group-pill todo-project-pill"
+              :class="{ active: activeProjectId === p.id }"
+              @click="setProjectFilter(p.id)"
+            ><PhFolder :size="11" weight="fill" /> {{ p.name }}</button>
+            <button
+              v-if="hasUnassigned"
+              class="todo-group-pill todo-project-pill"
+              :class="{ active: activeProjectId === UNASSIGNED }"
+              @click="setProjectFilter(UNASSIGNED)"
+            >Unassigned</button>
+          </div>
         </div>
 
         <div v-if="pending.length === 0 && done.length === 0" class="todo-empty">
           <BondText size="sm" color="muted">No todos yet.</BondText>
         </div>
 
-        <ul v-if="pending.length" class="todo-list">
-          <li v-for="todo in pending" :key="todo.id" class="todo-item-wrapper" :class="{ expanded: expandedId === todo.id }">
-            <div class="todo-item">
-              <input type="checkbox" class="todo-checkbox" :checked="todo.done" @change="toggle(todo)" />
-              <div class="todo-body" @click="toggleExpand(todo.id)">
-                <span class="todo-text">{{ todo.text }}</span>
+        <ul v-if="pending.length" class="list-none m-0 p-0 flex flex-col" @drop="onDrop">
+          <li
+            v-for="todo in pending"
+            :key="todo.id"
+            class="rounded-md transition-opacity"
+            :class="{
+              'bg-[var(--color-surface)]': expandedId === todo.id,
+              'shadow-[inset_0_2px_0_0_var(--color-accent)]': dropTargetId === todo.id && dropPosition === 'before',
+              'shadow-[inset_0_-2px_0_0_var(--color-accent)]': dropTargetId === todo.id && dropPosition === 'after',
+              'opacity-30': dragId === todo.id
+            }"
+            draggable="true"
+            @dragstart="onDragStart($event, todo)"
+            @dragover="onDragOver($event, todo)"
+            @dragleave="onDragLeave($event, todo)"
+            @dragend="onDragEnd"
+          >
+            <div
+              class="group flex items-start gap-2 py-1 px-2 rounded-md transition-colors"
+              :class="{ 'hover:bg-[var(--color-surface)]': expandedId !== todo.id }"
+            >
+              <input
+                type="checkbox"
+                class="mt-[3px] size-3.5 shrink-0 cursor-pointer accent-[var(--color-accent)]"
+                :checked="todo.done"
+                @change="toggle(todo)"
+              />
+              <div class="flex-1 min-w-0 cursor-pointer" @click="toggleExpand(todo.id)">
+                <span class="text-[13px] leading-5 text-[var(--color-text-primary)]">{{ todo.text }}</span>
               </div>
-              <button class="todo-hover-action" :class="{ 'todo-hover-action--visible': expandedId === todo.id }" @click.stop="emit('startChat', todo.notes ? `${todo.text}\n\n${todo.notes}` : todo.text)" v-tooltip="'Start a chat'">
-                <PhChatCircle :size="14" weight="bold" />
+              <button
+                class="shrink-0 size-5 flex items-center justify-center rounded-sm text-[var(--color-muted)] opacity-0 transition-opacity hover:bg-[var(--color-bg)] hover:text-[var(--color-text-primary)]"
+                :class="{ 'opacity-100': expandedId === todo.id, 'group-hover:opacity-100': true }"
+                @click.stop="emit('startChat', todo.notes ? `${todo.text}\n\n${todo.notes}` : todo.text)"
+                v-tooltip="'Start a chat'"
+              >
+                <PhChatCircle :size="13" weight="bold" />
               </button>
             </div>
             <div v-if="expandedId === todo.id" class="todo-detail">
@@ -251,6 +403,16 @@ function onInputKeydown(e: KeyboardEvent) {
                     @keydown="onEditKeydown($event, todo)"
                   />
                 </div>
+                <div class="todo-edit-group-row">
+                  <PhFolder :size="13" weight="fill" class="todo-edit-group-icon" />
+                  <select
+                    v-model="projectInput"
+                    class="todo-edit-select"
+                  >
+                    <option value="">No project</option>
+                    <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
+                  </select>
+                </div>
                 <div class="todo-edit-actions">
                   <BondButton variant="ghost" size="sm" @click="cancelEdit">Cancel</BondButton>
                   <BondButton variant="primary" size="sm" @click="saveEdit(todo)">Save</BondButton>
@@ -260,9 +422,15 @@ function onInputKeydown(e: KeyboardEvent) {
                 <div v-if="todo.notes" class="todo-notes-display">
                   {{ todo.notes }}
                 </div>
-                <div v-if="todo.group" class="todo-detail-group">
-                  <PhTag :size="12" weight="bold" class="todo-detail-group-icon" />
-                  <BondText size="xs" color="muted">{{ todo.group }}</BondText>
+                <div class="todo-detail-meta">
+                  <div v-if="todo.group" class="todo-detail-group">
+                    <PhTag :size="12" weight="bold" class="todo-detail-group-icon" />
+                    <BondText size="xs" color="muted">{{ todo.group }}</BondText>
+                  </div>
+                  <div v-if="todo.projectId && projectMap.get(todo.projectId)" class="todo-detail-group">
+                    <PhFolder :size="12" weight="fill" class="todo-detail-group-icon" />
+                    <BondText size="xs" color="muted">{{ projectMap.get(todo.projectId) }}</BondText>
+                  </div>
                 </div>
                 <div class="todo-detail-actions">
                   <button class="todo-detail-action" @click="startEdit(todo)">
@@ -283,15 +451,28 @@ function onInputKeydown(e: KeyboardEvent) {
           <BondText as="div" size="xs" color="muted" class="todo-section-label">
             Done ({{ done.length }})
           </BondText>
-          <ul class="todo-list">
-            <li v-for="todo in done" :key="todo.id" class="todo-item-wrapper" :class="{ expanded: expandedId === todo.id }">
-              <div class="todo-item done">
-                <input type="checkbox" class="todo-checkbox" :checked="todo.done" @change="toggle(todo)" />
-                <div class="todo-body" @click="toggleExpand(todo.id)">
-                  <span class="todo-text">{{ todo.text }}</span>
+          <ul class="list-none m-0 p-0 flex flex-col">
+            <li v-for="todo in done" :key="todo.id" class="rounded-md" :class="{ 'bg-[var(--color-surface)]': expandedId === todo.id }">
+              <div
+                class="group flex items-start gap-2 py-1 px-2 rounded-md transition-colors"
+                :class="{ 'hover:bg-[var(--color-surface)]': expandedId !== todo.id }"
+              >
+                <input
+                  type="checkbox"
+                  class="mt-[3px] size-3.5 shrink-0 cursor-pointer accent-[var(--color-accent)]"
+                  :checked="todo.done"
+                  @change="toggle(todo)"
+                />
+                <div class="flex-1 min-w-0 cursor-pointer" @click="toggleExpand(todo.id)">
+                  <span class="text-[13px] leading-5 text-[var(--color-muted)] line-through">{{ todo.text }}</span>
                 </div>
-                <button class="todo-hover-action" :class="{ 'todo-hover-action--visible': expandedId === todo.id }" @click.stop="emit('startChat', todo.notes ? `${todo.text}\n\n${todo.notes}` : todo.text)" v-tooltip="'Start a chat'">
-                  <PhChatCircle :size="14" weight="bold" />
+                <button
+                  class="shrink-0 size-5 flex items-center justify-center rounded-sm text-[var(--color-muted)] opacity-0 transition-opacity hover:bg-[var(--color-bg)] hover:text-[var(--color-text-primary)]"
+                  :class="{ 'opacity-100': expandedId === todo.id, 'group-hover:opacity-100': true }"
+                  @click.stop="emit('startChat', todo.notes ? `${todo.text}\n\n${todo.notes}` : todo.text)"
+                  v-tooltip="'Start a chat'"
+                >
+                  <PhChatCircle :size="13" weight="bold" />
                 </button>
               </div>
               <div v-if="expandedId === todo.id" class="todo-detail">
@@ -407,88 +588,6 @@ function onInputKeydown(e: KeyboardEvent) {
   animation: spin 0.8s linear infinite;
 }
 
-.todo-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.todo-item-wrapper {
-  border-radius: var(--radius-md);
-}
-
-.todo-item-wrapper.expanded {
-  background: var(--color-surface);
-}
-
-.todo-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  padding: 0.5rem 0.5rem;
-  border-radius: var(--radius-md);
-  transition: background var(--transition-fast);
-}
-
-.todo-item-wrapper:not(.expanded) .todo-item:hover {
-  background: var(--color-surface);
-}
-
-.todo-checkbox {
-  accent-color: var(--color-accent, #888);
-  flex-shrink: 0;
-  cursor: pointer;
-  margin-top: 0.1875rem;
-}
-
-.todo-body {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-}
-
-.todo-text {
-  font-size: 0.875rem;
-  color: var(--color-text-primary);
-}
-
-.todo-item.done .todo-text {
-  text-decoration: line-through;
-  color: var(--color-muted);
-}
-
-.todo-hover-action {
-  all: unset;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-sm);
-  color: var(--color-muted);
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-}
-
-.todo-item:hover .todo-hover-action,
-.todo-hover-action--visible {
-  opacity: 1;
-}
-
-.todo-hover-action:hover {
-  background: var(--color-bg, rgba(0,0,0,0.05));
-  color: var(--color-text-primary);
-}
-
 .todo-section-label {
   padding: 0.75rem 0.5rem 0.25rem;
 }
@@ -563,6 +662,12 @@ function onInputKeydown(e: KeyboardEvent) {
   opacity: 0.6;
 }
 
+.todo-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .todo-detail-group {
   display: flex;
   align-items: center;
@@ -619,6 +724,31 @@ function onInputKeydown(e: KeyboardEvent) {
   color: var(--color-muted);
 }
 
+.todo-edit-select {
+  flex: 1;
+  font-size: 0.8125rem;
+  font-family: inherit;
+  color: var(--color-text-primary);
+  background: var(--color-bg, #fff);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.25rem 0.5rem;
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  padding-right: 1.5rem;
+}
+
+.todo-edit-select:focus {
+  border-color: var(--color-accent, var(--color-border));
+}
+
 .todo-edit-actions {
   display: flex;
   align-items: center;
@@ -650,13 +780,19 @@ function onInputKeydown(e: KeyboardEvent) {
   color: var(--color-danger, #e55);
 }
 
-/* --- Groups --- */
+/* --- Filters --- */
+
+.todo-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
+}
 
 .todo-group-filters {
   display: flex;
   gap: 0.25rem;
   flex-wrap: wrap;
-  margin-bottom: 0.75rem;
 }
 
 .todo-group-pill {
@@ -680,6 +816,12 @@ function onInputKeydown(e: KeyboardEvent) {
   background: var(--color-accent, var(--color-text-primary));
   color: var(--color-bg, #fff);
   border-color: var(--color-accent, var(--color-text-primary));
+}
+
+.todo-project-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 
