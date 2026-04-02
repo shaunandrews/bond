@@ -36,6 +36,7 @@ import {
   getMessages,
   saveMessages
 } from './sessions'
+import { listTodos, createTodo, updateTodo, deleteTodo } from './todos'
 import { generateTitleAndSummary } from './generate-title'
 import {
   getSoul,
@@ -50,24 +51,11 @@ import {
 import {
   saveImages,
   getImage,
-  getImages
+  getImages,
+  listAllImages,
+  deleteImage,
+  importImage
 } from './images'
-import {
-  listSites as listWordPressSites,
-  getCachedSiteDetails,
-  refreshSiteDetails,
-  getCachedSiteMap,
-  refreshSiteMap,
-  getCachedThemeJson,
-  refreshThemeJson,
-  createSite as createWordPressSite,
-  deleteSite as deleteWordPressSite,
-  startSite as startWordPressSite,
-  stopSite as stopWordPressSite,
-  startBackgroundRefresh as startWpBackgroundRefresh,
-  stopBackgroundRefresh as stopWpBackgroundRefresh,
-  generateLoginCookies
-} from './wordpress'
 
 // --- State ---
 
@@ -209,7 +197,6 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
                 resumeSession: shouldResume,
                 imageIds,
                 editMode: session.editMode,
-                siteId: session.siteId
               })
               break // Query ran (success or graceful failure) — stop retrying
             } catch (e) {
@@ -245,15 +232,19 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         })()
 
         activeQueries.set(sessionId, { ac, promise: queryPromise })
+        broadcastChunk(sessionId, { kind: 'query_start' })
 
-        const succeeded = await queryPromise
+        // Fire-and-forget: clean up when the query finishes, don't block the RPC response
+        queryPromise.then((succeeded) => {
+          if (succeeded) {
+            knownSdkSessions.add(sessionId)
+          } else {
+            knownSdkSessions.delete(sessionId)
+          }
+          activeQueries.delete(sessionId)
+          broadcastChunk(sessionId, { kind: 'query_end', succeeded })
+        })
 
-        if (succeeded) {
-          knownSdkSessions.add(sessionId)
-        } else {
-          knownSdkSessions.delete(sessionId)
-        }
-        activeQueries.delete(sessionId)
         return JSON.stringify(makeResponse(id, { ok: true, imageIds }))
       }
 
@@ -332,9 +323,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, listSessions()))
 
       case 'session.create': {
-        const siteId = getStringParam(p, 'siteId')
         const sessionTitle = getStringParam(p, 'title')
-        return JSON.stringify(makeResponse(id, createSession({ siteId: siteId || undefined, title: sessionTitle || undefined })))
+        return JSON.stringify(makeResponse(id, createSession({ title: sessionTitle || undefined })))
       }
 
       case 'session.get': {
@@ -428,6 +418,9 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       }
 
       // --- Images ---
+      case 'image.list':
+        return JSON.stringify(makeResponse(id, listAllImages()))
+
       case 'image.get': {
         const imageId = getStringParam(p, 'id')
         if (!imageId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
@@ -440,67 +433,40 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, getImages(ids)))
       }
 
-      // --- WordPress ---
-      case 'wordpress.list':
-        return JSON.stringify(makeResponse(id, listWordPressSites()))
-
-      case 'wordpress.details': {
-        const sitePath = getStringParam(p, 'path')
-        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
-        // Return cached if available, otherwise await the background fetch
-        const cached = getCachedSiteDetails(sitePath)
-        if (cached) return JSON.stringify(makeResponse(id, cached))
-        const fresh = await refreshSiteDetails(sitePath)
-        return JSON.stringify(makeResponse(id, fresh))
+      case 'image.import': {
+        const data = getStringParam(p, 'data')
+        const mediaType = getStringParam(p, 'mediaType')
+        if (!data || !mediaType) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'data and mediaType are required'))
+        return JSON.stringify(makeResponse(id, importImage(data, mediaType as any)))
       }
 
-      case 'wordpress.siteMap': {
-        const sitePath = getStringParam(p, 'path')
-        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
-        const cachedMap = getCachedSiteMap(sitePath)
-        if (cachedMap) return JSON.stringify(makeResponse(id, cachedMap))
-        const freshMap = await refreshSiteMap(sitePath)
-        return JSON.stringify(makeResponse(id, freshMap))
+      case 'image.delete': {
+        const imageId = getStringParam(p, 'id')
+        if (!imageId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        return JSON.stringify(makeResponse(id, deleteImage(imageId)))
       }
 
-      case 'wordpress.themeJson': {
-        const sitePath = getStringParam(p, 'path')
-        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
-        const cachedTheme = getCachedThemeJson(sitePath)
-        if (cachedTheme) return JSON.stringify(makeResponse(id, cachedTheme))
-        const freshTheme = await refreshThemeJson(sitePath)
-        return JSON.stringify(makeResponse(id, freshTheme))
+      // --- Todos ---
+      case 'todo.list':
+        return JSON.stringify(makeResponse(id, listTodos()))
+
+      case 'todo.create': {
+        const text = getStringParam(p, 'text')
+        if (!text) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'text is required'))
+        return JSON.stringify(makeResponse(id, createTodo(text)))
       }
 
-      case 'wordpress.loginCookies': {
-        const sitePath = getStringParam(p, 'path')
-        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
-        const cookies = await generateLoginCookies(sitePath)
-        return JSON.stringify(makeResponse(id, cookies))
+      case 'todo.update': {
+        const todoId = getStringParam(p, 'id')
+        if (!todoId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const updates = getParam(p, 'updates') as Partial<{ text: string; done: boolean }> | undefined
+        return JSON.stringify(makeResponse(id, updateTodo(todoId, updates ?? {})))
       }
 
-      case 'wordpress.create': {
-        const name = getStringParam(p, 'name')
-        if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
-        return JSON.stringify(makeResponse(id, createWordPressSite(name)))
-      }
-
-      case 'wordpress.start': {
-        const sitePath = getStringParam(p, 'path')
-        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
-        return JSON.stringify(makeResponse(id, startWordPressSite(sitePath)))
-      }
-
-      case 'wordpress.stop': {
-        const sitePath = getStringParam(p, 'path')
-        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
-        return JSON.stringify(makeResponse(id, stopWordPressSite(sitePath)))
-      }
-
-      case 'wordpress.delete': {
-        const sitePath = getStringParam(p, 'path')
-        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
-        return JSON.stringify(makeResponse(id, deleteWordPressSite(sitePath)))
+      case 'todo.delete': {
+        const todoId = getStringParam(p, 'id')
+        if (!todoId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        return JSON.stringify(makeResponse(id, deleteTodo(todoId)))
       }
 
       default:
@@ -556,7 +522,6 @@ export function startServer(socketPath: string): BondServer {
   })
 
   httpServer.listen(socketPath)
-  startWpBackgroundRefresh()
 
   return {
     wss,
@@ -569,7 +534,6 @@ export function startServer(socketPath: string): BondServer {
       activeQueries.clear()
       knownSdkSessions.clear()
 
-      stopWpBackgroundRefresh()
       wss.close(() => {
         httpServer.close(() => {
           // Clean up socket file

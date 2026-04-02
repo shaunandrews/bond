@@ -20,6 +20,7 @@ export function getDb(): Database.Database {
   migrateFromFiles(_db)
   migrateInlineImages(_db)
   migrateAddSiteIdColumn(_db)
+  migrateCreateTodosTable(_db)
 
   return _db
 }
@@ -160,6 +161,18 @@ function migrateAddSiteIdColumn(db: Database.Database): void {
   if (!columns.some(c => c.name === 'site_id')) {
     db.exec('ALTER TABLE sessions ADD COLUMN site_id TEXT')
   }
+}
+
+function migrateCreateTodosTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS todos (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      done INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `)
 }
 
 // --- One-time migration from file-based storage ---

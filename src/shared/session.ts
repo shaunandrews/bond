@@ -23,7 +23,6 @@ export interface Session {
   summary: string
   archived: boolean
   editMode: EditMode
-  siteId?: string     // WordPress Studio site ID
   createdAt: string   // ISO 8601
   updatedAt: string   // ISO 8601
 }
@@ -35,6 +34,14 @@ export interface ImageRecord {
   mediaType: ImageMediaType
   sizeBytes: number
   createdAt: string
+}
+
+export interface TodoItem {
+  id: string
+  text: string
+  done: boolean
+  createdAt: string
+  updatedAt: string
 }
 
 export interface SessionMessage {

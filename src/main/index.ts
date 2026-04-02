@@ -113,7 +113,7 @@ function spawnDaemon(): void {
   // In packaged mode, daemon deps live alongside daemon/main.mjs.
   // NODE_PATH ensures CJS require() can find them as a fallback.
   // PATH must be resolved from a login shell so the daemon can find
-  // user-installed binaries like `studio` (Homebrew, etc.).
+  // user-installed binaries.
   const daemonDir = join(daemonPath, '..')
   const daemonNodeModules = join(daemonDir, 'node_modules')
   const env: Record<string, string | undefined> = { ...process.env }
@@ -354,7 +354,7 @@ app.whenReady().then(async () => {
 
   // --- Sessions ---
   ipcMain.handle('session:list', () => client.listSessions())
-  ipcMain.handle('session:create', (_e, options?: { siteId?: string; title?: string }) => client.createSession(options))
+  ipcMain.handle('session:create', (_e, options?: { title?: string }) => client.createSession(options))
   ipcMain.handle('session:get', (_e, id: string) => client.getSession(id))
   ipcMain.handle('session:update', (_e, id: string, updates: Record<string, unknown>) => client.updateSession(id, updates))
   ipcMain.handle('session:delete', (_e, id: string) => client.deleteSession(id))
@@ -369,8 +369,16 @@ app.whenReady().then(async () => {
   ipcMain.handle('skills:remove', (_e, name: string) => client.removeSkill(name))
 
   // --- Images ---
+  ipcMain.handle('image:list', () => client.listImages())
   ipcMain.handle('image:get', (_e, imageId: string) => client.getImage(imageId))
   ipcMain.handle('image:getMultiple', (_e, ids: string[]) => client.getImages(ids))
+  ipcMain.handle('image:delete', (_e, imageId: string) => client.deleteImage(imageId))
+
+  // --- Todos ---
+  ipcMain.handle('todo:list', () => client.listTodos())
+  ipcMain.handle('todo:create', (_e, text: string) => client.createTodo(text))
+  ipcMain.handle('todo:update', (_e, id: string, updates: Record<string, unknown>) => client.updateTodo(id, updates))
+  ipcMain.handle('todo:delete', (_e, id: string) => client.deleteTodo(id))
 
   ipcMain.handle('image:readLocal', (_e, filePath: string): string | null => {
     const EXT_TO_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
@@ -380,17 +388,6 @@ app.whenReady().then(async () => {
     const data = readFileSync(filePath).toString('base64')
     return `data:${mime};base64,${data}`
   })
-
-  // --- WordPress ---
-  ipcMain.handle('wordpress:list', () => client.listWordPressSites())
-  ipcMain.handle('wordpress:details', (_e, path: string) => client.getWordPressSiteDetails(path))
-  ipcMain.handle('wordpress:siteMap', (_e, path: string) => client.getWordPressSiteMap(path))
-  ipcMain.handle('wordpress:themeJson', (_e, path: string) => client.getWordPressThemeJson(path))
-  ipcMain.handle('wordpress:create', (_e, name: string) => client.createWordPressSite(name))
-  ipcMain.handle('wordpress:delete', (_e, path: string) => client.deleteWordPressSite(path))
-  ipcMain.handle('wordpress:start', (_e, path: string) => client.startWordPressSite(path))
-  ipcMain.handle('wordpress:stop', (_e, path: string) => client.stopWordPressSite(path))
-  ipcMain.handle('wordpress:loginCookies', (_e, path: string) => client.getWordPressLoginCookies(path))
 
   // --- Settings ---
   ipcMain.handle('settings:getSoul', () => client.getSoul())

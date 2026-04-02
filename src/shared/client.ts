@@ -1,7 +1,6 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
-import type { Session, SessionMessage, AttachedImage } from './session'
-import type { WordPressSite, WordPressSiteDetails, WpSiteMap, WpThemeJson } from './wordpress'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem } from './session'
 import {
   makeRequest,
   isResponse,
@@ -153,7 +152,7 @@ export class BondClient {
     return await this.call('session.list') as Session[]
   }
 
-  async createSession(options?: { siteId?: string; title?: string }): Promise<Session> {
+  async createSession(options?: { title?: string }): Promise<Session> {
     return await this.call('session.create', options) as Session
   }
 
@@ -161,7 +160,7 @@ export class BondClient {
     return await this.call('session.get', { id }) as Session | null
   }
 
-  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode' | 'siteId'>>): Promise<Session | null> {
+  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>): Promise<Session | null> {
     return await this.call('session.update', { id, updates }) as Session | null
   }
 
@@ -187,12 +186,42 @@ export class BondClient {
 
   // --- Images ---
 
+  async listImages(): Promise<ImageRecord[]> {
+    return await this.call('image.list') as ImageRecord[]
+  }
+
   async getImage(imageId: string): Promise<AttachedImage | null> {
     return await this.call('image.get', { id: imageId }) as AttachedImage | null
   }
 
   async getImages(ids: string[]): Promise<(AttachedImage | null)[]> {
     return await this.call('image.getMultiple', { ids }) as (AttachedImage | null)[]
+  }
+
+  async importImage(data: string, mediaType: string): Promise<ImageRecord> {
+    return await this.call('image.import', { data, mediaType }) as ImageRecord
+  }
+
+  async deleteImage(imageId: string): Promise<boolean> {
+    return await this.call('image.delete', { id: imageId }) as boolean
+  }
+
+  // --- Todos ---
+
+  async listTodos(): Promise<TodoItem[]> {
+    return await this.call('todo.list') as TodoItem[]
+  }
+
+  async createTodo(text: string): Promise<TodoItem> {
+    return await this.call('todo.create', { text }) as TodoItem
+  }
+
+  async updateTodo(id: string, updates: Partial<Pick<TodoItem, 'text' | 'done'>>): Promise<TodoItem | null> {
+    return await this.call('todo.update', { id, updates }) as TodoItem | null
+  }
+
+  async deleteTodo(id: string): Promise<boolean> {
+    return await this.call('todo.delete', { id }) as boolean
   }
 
   // --- Skills ---
@@ -242,41 +271,4 @@ export class BondClient {
     return await this.call('settings.saveWindowOpacity', { opacity }) as boolean
   }
 
-  // --- WordPress ---
-
-  async listWordPressSites(): Promise<{ available: boolean; sites: WordPressSite[] }> {
-    return await this.call('wordpress.list') as { available: boolean; sites: WordPressSite[] }
-  }
-
-  async getWordPressSiteDetails(path: string): Promise<WordPressSiteDetails | null> {
-    return await this.call('wordpress.details', { path }) as WordPressSiteDetails | null
-  }
-
-  async getWordPressSiteMap(path: string): Promise<WpSiteMap | null> {
-    return await this.call('wordpress.siteMap', { path }) as WpSiteMap | null
-  }
-
-  async getWordPressThemeJson(path: string): Promise<WpThemeJson | null> {
-    return await this.call('wordpress.themeJson', { path }) as WpThemeJson | null
-  }
-
-  async createWordPressSite(name: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
-    return await this.call('wordpress.create', { name }) as { available: boolean; sites: WordPressSite[] }
-  }
-
-  async startWordPressSite(path: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
-    return await this.call('wordpress.start', { path }) as { available: boolean; sites: WordPressSite[] }
-  }
-
-  async stopWordPressSite(path: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
-    return await this.call('wordpress.stop', { path }) as { available: boolean; sites: WordPressSite[] }
-  }
-
-  async deleteWordPressSite(path: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
-    return await this.call('wordpress.delete', { path }) as { available: boolean; sites: WordPressSite[] }
-  }
-
-  async getWordPressLoginCookies(path: string): Promise<{ cookies: { name: string; value: string; path: string; expires: number }[] } | null> {
-    return await this.call('wordpress.loginCookies', { path }) as { cookies: { name: string; value: string; path: string; expires: number }[] } | null
-  }
 }

@@ -5,7 +5,7 @@ const SESSION_STORAGE_KEY = 'bond:activeSessionId'
 
 export interface SessionDeps {
   listSessions: () => Promise<Session[]>
-  createSession: (options?: { siteId?: string; title?: string }) => Promise<Session>
+  createSession: (options?: { title?: string }) => Promise<Session>
   updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) => Promise<Session | null>
   deleteSession: (id: string) => Promise<boolean>
   deleteArchivedSessions: () => Promise<{ ok: boolean; count: number }>
@@ -39,7 +39,7 @@ export function useSessions(deps: SessionDeps = window.bond) {
     sessions.value = await deps.listSessions()
   }
 
-  async function create(options?: { siteId?: string; title?: string }): Promise<Session> {
+  async function create(options?: { title?: string }): Promise<Session> {
     const session = await deps.createSession(options)
     sessions.value.unshift(session)
     activeSessionId.value = session.id

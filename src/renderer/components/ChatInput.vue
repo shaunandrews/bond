@@ -3,6 +3,7 @@ import { ref, computed, watch, toRefs, nextTick, onMounted } from 'vue'
 import { PhArrowUp, PhPaperclip, PhStop, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode } from '../../shared/session'
+import BondButton from './BondButton.vue'
 import BondSelect from './BondSelect.vue'
 
 interface SkillInfo {
@@ -299,6 +300,24 @@ function handleKeyDown(e: KeyboardEvent) {
       <!-- Toolbar -->
       <div class="flex items-center justify-between pt-1">
         <div class="flex items-center gap-s">
+          <BondButton
+            variant="ghost"
+            size="sm"
+            icon
+            :disabled="busy"
+            @click="handleAttachClick"
+            v-tooltip="'Attach image'"
+          >
+            <PhPaperclip :size="16" weight="bold" />
+          </BondButton>
+          <input
+            ref="fileInputEl"
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp"
+            multiple
+            class="hidden"
+            @change="handleFileChange"
+          />
           <BondSelect
             :modelValue="model"
             :options="modelOptions"
@@ -315,44 +334,28 @@ function handleKeyDown(e: KeyboardEvent) {
             size="sm"
             @update:modelValue="handleEditModeChange"
           />
-          <button
-            type="button"
-            :disabled="busy"
-            @click="handleAttachClick"
-            class="flex items-center justify-center w-7 h-7 rounded-md border border-border bg-transparent text-muted cursor-pointer transition-colors duration-[var(--transition-fast)] hover:text-text-primary disabled:opacity-45 disabled:cursor-not-allowed"
-            v-tooltip="'Attach image'"
-          >
-            <PhPaperclip :size="16" weight="regular" />
-          </button>
-          <input
-            ref="fileInputEl"
-            type="file"
-            accept="image/jpeg,image/png,image/gif,image/webp"
-            multiple
-            class="hidden"
-            @change="handleFileChange"
-          />
         </div>
-
-        <!-- Combined action button -->
-        <button
-          v-if="busy"
-          type="button"
-          data-action="stop"
-          class="flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-border text-text-primary hover:opacity-85"
-          @click="emit('cancel')"
-        >
-          <PhStop :size="16" weight="fill" />
-        </button>
-        <button
-          v-else
-          type="button"
-          data-action="send"
-          class="flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-accent text-white hover:opacity-85"
-          @click="handleSubmit()"
-        >
-          <PhArrowUp :size="16" weight="bold" />
-        </button>
+        <div class="flex items-center gap-s">
+          <!-- Combined action button -->
+          <button
+            v-if="busy"
+            type="button"
+            data-action="stop"
+            class="flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-border text-text-primary hover:opacity-85"
+            @click="emit('cancel')"
+          >
+            <PhStop :size="16" weight="fill" />
+          </button>
+          <button
+            v-else
+            type="button"
+            data-action="send"
+            class="flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-accent text-white hover:opacity-85"
+            @click="handleSubmit()"
+          >
+            <PhArrowUp :size="16" weight="bold" />
+          </button>
+        </div>
       </div>
     </div>
   </div>

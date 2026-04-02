@@ -17,7 +17,7 @@ const layers = [
   {
     name: 'Daemon',
     tech: 'Node.js + WebSocket + SQLite',
-    description: 'Standalone process on a Unix socket. Runs agent queries via the Claude Agent SDK, streams responses, persists sessions to a local database, and integrates with WordPress Studio CLI.',
+    description: 'Standalone process on a Unix socket. Runs agent queries via the Claude Agent SDK, streams responses, and persists sessions to a local database.',
     files: 'src/daemon/',
   },
   {

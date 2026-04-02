@@ -5,20 +5,16 @@ import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
-import { useProjects } from './composables/useProjects'
-import { useSitePreview } from './composables/useSitePreview'
 import type { ModelId, AttachedImage } from './types/message'
-import type { WordPressSite } from '../shared/wordpress'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhCompass, PhArrowDown } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
-import BondSelect from './components/BondSelect.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ChatInput from './components/ChatInput.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
-import ProjectView from './components/ProjectView.vue'
-import SitePreview from './components/SitePreview.vue'
+import MediaView from './components/MediaView.vue'
+import TodoView from './components/TodoView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
@@ -28,8 +24,6 @@ const chat = useChat()
 const sessions = useSessions()
 const { activeView } = useAppView()
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
-const projects = useProjects()
-const sitePreview = useSitePreview()
 
 function applyWindowOpacity(val: number) {
   document.documentElement.style.setProperty('--window-bg-opacity', `${Math.round(val * 100)}%`)
@@ -46,16 +40,6 @@ const selectedModel = ref<ModelId>('sonnet')
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
 const sidebarPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
-const browserPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
-
-watch(sitePreview.isOpen, (open) => {
-  nextTick(() => {
-    if (open) browserPanelRef.value?.expand()
-    else browserPanelRef.value?.collapse()
-  })
-}, { immediate: true })
-
-
 
 function getInitialSidebarWidth(): number {
   try {
@@ -81,14 +65,6 @@ function handleToggleSidebar() {
   localStorage.setItem('bond:sidebar-collapsed', sidebarCollapsed.value ? '1' : '0')
 }
 
-const siteOptions = computed(() => {
-  const opts = [{ value: '', label: 'No site' }]
-  for (const s of projects.sites.value) {
-    opts.push({ value: s.id, label: s.name })
-  }
-  return opts
-})
-
 function handleLayoutChange(layout: Record<string, number>) {
   if (layout.sidebar != null) sidebarWidth.value = layout.sidebar
 }
@@ -101,20 +77,22 @@ const { isAtBottom, scrollToBottom } = useAutoScroll(scrollEl)
 
 let titleGenPending = false
 
-async function handleSubmit(text: string, images: AttachedImage[]) {
-  nextTick(scrollToBottom)
-  await chat.submit(text, images?.length ? images : undefined)
-
+chat.onQueryEnd((sessionId) => {
   if (
-    sessions.activeSessionId.value &&
+    sessionId === sessions.activeSessionId.value &&
     sessions.activeSession.value?.title === 'New chat' &&
     !titleGenPending
   ) {
     titleGenPending = true
-    sessions.refreshTitle(sessions.activeSessionId.value).finally(() => {
+    sessions.refreshTitle(sessionId).finally(() => {
       titleGenPending = false
     })
   }
+})
+
+async function handleSubmit(text: string, images: AttachedImage[]) {
+  nextTick(scrollToBottom)
+  await chat.submit(text, images?.length ? images : undefined)
 }
 
 const currentEditMode = computed<EditMode>(() =>
@@ -133,19 +111,10 @@ async function handleEditModeChange(mode: EditMode) {
   sessions.updateLocal(id, { editMode: mode })
 }
 
-async function handleSiteIdChange(siteId: string | undefined) {
-  const id = sessions.activeSessionId.value
-  if (!id) return
-  await window.bond.updateSession(id, { siteId: siteId || undefined })
-  sessions.updateLocal(id, { siteId: siteId || undefined })
-  syncBrowserToContext()
-}
-
 async function handleNewSession() {
   const session = await sessions.create()
   await chat.loadSession(session.id)
   activeView.value = 'chat'
-  syncBrowserToContext()
   const model = await window.bond.getModel() as ModelId
   selectedModel.value = model
   nextTick(() => chatInputRef.value?.focus())
@@ -168,89 +137,23 @@ let removeModelListener: (() => void) | null = null
 
 async function handleSelectSession(id: string) {
   activeView.value = 'chat'
-  if (id === sessions.activeSessionId.value) {
-    syncBrowserToContext()
-    return
-  }
+  if (id === sessions.activeSessionId.value) return
   sessions.select(id)
   await chat.loadSession(id)
-  syncBrowserToContext()
   nextTick(scrollToBottom)
 }
 
-function handleSelectProject(site: WordPressSite) {
-  projects.selectSite(site.id)
-  activeView.value = 'projects'
-  syncBrowserToContext()
-}
-
-async function handleChatAboutSite(site: WordPressSite) {
-  // Find existing session for this site
-  const existing = sessions.activeSessions.value.find(s => s.siteId === site.id)
-  if (existing) {
-    sessions.select(existing.id)
-    await chat.loadSession(existing.id)
-  } else {
-    const session = await sessions.create({ siteId: site.id, title: site.name })
-    await chat.loadSession(session.id)
-  }
-  activeView.value = 'chat'
-  syncBrowserToContext()
-  nextTick(() => chatInputRef.value?.focus())
-}
-
-function handleOpenProject(site: WordPressSite) {
-  sitePreview.openSite(site)
-}
-
-async function handleStartPreviewSite(site: WordPressSite) {
-  await projects.startSite(site.id, site.path)
-  syncBrowserToContext()
-}
-
-async function handleDeleteProject(site: WordPressSite) {
-  await projects.deleteSite(site.path)
-  activeView.value = 'chat'
-}
-
-function getContextSite(): WordPressSite | undefined {
-  if (activeView.value === 'projects') {
-    return projects.selectedSite.value ?? undefined
-  }
-  const siteId = sessions.activeSession.value?.siteId
-  if (siteId) return projects.sites.value.find(s => s.id === siteId)
-  return undefined
-}
-
-function syncBrowserToContext() {
-  if (!sitePreview.isOpen.value) return
-  const site = getContextSite()
-  if (site?.running) {
-    sitePreview.openSite(site)
-  } else {
-    sitePreview.setSite(site ?? null)
-    sitePreview.url.value = ''
-  }
-}
-
-function handleToggleBrowser() {
-  if (sitePreview.isOpen.value) {
-    sitePreview.close()
-  } else {
-    const site = getContextSite()
-    if (site?.running) {
-      sitePreview.openSite(site)
-    } else {
-      // Open browser with site context (may be stopped or no site)
-      sitePreview.setSite(site ?? null)
-      sitePreview.isOpen.value = true
-      sitePreview.url.value = ''
-      localStorage.setItem('bond:site-preview-open', '1')
-    }
-  }
+async function handleRenameSession(id: string, title: string) {
+  const updated = await window.bond.updateSession(id, { title })
+  if (updated) sessions.updateLocal(id, { title })
 }
 
 function onKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && chat.busy.value) {
+    e.preventDefault()
+    chat.cancel()
+    return
+  }
   if (e.metaKey && !e.shiftKey && e.key === 'b') {
     e.preventDefault()
     handleToggleSidebar()
@@ -263,25 +166,15 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault()
     handleNewSession()
   }
-  if (e.metaKey && e.shiftKey && e.key === 'b') {
-    e.preventDefault()
-    handleToggleBrowser()
-  }
 }
 
-let lastProjectsLoad = 0
-const PROJECTS_LOAD_THROTTLE_MS = 30_000
-
-function handleProjectsRefresh() {
-  const now = Date.now()
-  if (now - lastProjectsLoad < PROJECTS_LOAD_THROTTLE_MS) return
-  lastProjectsLoad = now
-  projects.load()
+function handleBeforeUnload() {
+  chat.persistMessages()
 }
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
-  window.addEventListener('focus', handleProjectsRefresh)
+  window.addEventListener('beforeunload', handleBeforeUnload)
   removeCreateSkillListener = window.bond.onCreateSkill(handleCreateSkill)
   removeOpacityListener = window.bond.onWindowOpacity(applyWindowOpacity)
   removeAccentListener = window.bond.onAccentColor(applyExternalAccent)
@@ -291,7 +184,6 @@ onMounted(async () => {
   chat.subscribe()
   loadAccent()
   loadWindowOpacity()
-  projects.load()
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
 
@@ -323,11 +215,12 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
-  window.removeEventListener('focus', handleProjectsRefresh)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   removeCreateSkillListener?.()
   removeOpacityListener?.()
   removeAccentListener?.()
   removeModelListener?.()
+  chat.persistMessages()
   chat.unsubscribe()
 })
 </script>
@@ -341,22 +234,15 @@ onUnmounted(() => {
         :activeSessionId="sessions.activeSessionId.value"
         :activeView="activeView"
         :generatingTitleId="sessions.generatingTitleId.value"
-        :projects="projects.sites.value"
-        :projectsAvailable="projects.available.value"
-        :projectsCreating="projects.creating.value"
-        :selectedProjectId="projects.selectedSiteId.value"
-        :togglingProjectId="projects.togglingSiteId.value"
         @select="handleSelectSession"
         @create="handleNewSession"
         @archive="sessions.archive"
         @unarchive="sessions.unarchive"
         @remove="sessions.remove"
         @removeArchived="sessions.removeArchived"
-        @projectSelect="handleSelectProject"
-        @projectOpen="handleOpenProject"
-        @projectCreate="projects.createSite"
-        @projectStart="(site: WordPressSite) => projects.startSite(site.id, site.path)"
-        @projectStop="(site: WordPressSite) => projects.stopSite(site.id, site.path)"
+        @media="activeView = 'media'"
+        @todos="activeView = 'todos'"
+        @rename="handleRenameSession"
       />
     </BondPanel>
 
@@ -365,27 +251,16 @@ onUnmounted(() => {
     <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="420">
       <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
       <ViewShell
-        v-if="activeView === 'chat'"
+        v-show="activeView === 'chat'"
         ref="chatShellRef"
         :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
         :insetStart="sidebarCollapsed"
+        :titleEditable="!!sessions.activeSessionId.value && sessions.generatingTitleId.value !== sessions.activeSessionId.value"
+        @rename="sessions.activeSessionId.value && handleRenameSession(sessions.activeSessionId.value, $event)"
       >
         <template #header-start>
           <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
             <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-        <template #header-end>
-          <BondSelect
-            v-if="projects.sites.value.length > 0"
-            :modelValue="sessions.activeSession.value?.siteId ?? ''"
-            :options="siteOptions"
-            variant="minimal"
-            size="sm"
-            @update:modelValue="handleSiteIdChange($event || undefined)"
-          />
-          <BondButton variant="ghost" size="sm" icon class="browser-toggle-btn" :class="{ 'is-open': sitePreview.isOpen.value }" @click.stop="handleToggleBrowser" v-tooltip="(sitePreview.isOpen.value ? 'Hide browser' : 'Show browser') + ' ⌘⇧B'">
-            <PhCompass :size="16" weight="bold" />
           </BondButton>
         </template>
 
@@ -408,65 +283,28 @@ onUnmounted(() => {
         </template>
       </ViewShell>
 
-      <ViewShell v-else-if="activeView === 'projects'" :title="projects.selectedSite.value?.name ?? 'Projects'" :insetStart="sidebarCollapsed">
+      <TodoView v-show="activeView === 'todos'" :insetStart="sidebarCollapsed">
         <template #header-start>
           <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
             <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
-        <template #header-end>
-          <BondButton variant="ghost" size="sm" icon class="browser-toggle-btn" :class="{ 'is-open': sitePreview.isOpen.value }" @click.stop="handleToggleBrowser" v-tooltip="(sitePreview.isOpen.value ? 'Hide browser' : 'Show browser') + ' ⌘⇧B'">
-            <PhCompass :size="16" weight="bold" />
+      </TodoView>
+
+      <MediaView v-show="activeView === 'media'" :insetStart="sidebarCollapsed">
+        <template #header-start>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
+            <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
-        <ProjectView
-          v-if="projects.selectedSite.value"
-          :site="projects.selectedSite.value"
-          :details="projects.siteDetails.value"
-          :loadingDetails="projects.loadingDetails.value"
-          :toggling="projects.togglingSiteId.value === projects.selectedSite.value.id"
-          :deleting="projects.deleting.value"
-          :siteMap="projects.siteMap.value"
-          :loadingSiteMap="projects.loadingSiteMap.value"
-          :themeJson="projects.themeJson.value"
-          :loadingThemeJson="projects.loadingThemeJson.value"
-          @start="projects.startSite(projects.selectedSite.value!.id, projects.selectedSite.value!.path)"
-          @stop="projects.stopSite(projects.selectedSite.value!.id, projects.selectedSite.value!.path)"
-          @chat="handleChatAboutSite(projects.selectedSite.value!)"
-          @delete="handleDeleteProject(projects.selectedSite.value!)"
-          @loadSiteMap="projects.loadSiteMap(projects.selectedSite.value!.path)"
-          @loadThemeJson="projects.loadThemeJson(projects.selectedSite.value!.path)"
-        />
-      </ViewShell>
+      </MediaView>
       </div>
-    </BondPanel>
-
-    <BondPanelHandle v-show="sitePreview.isOpen.value" id="handle-1" />
-
-    <BondPanel
-      ref="browserPanelRef"
-      id="browser"
-      unit="px"
-      :defaultSize="500"
-      :minSize="280"
-      :maxSize="9999"
-      collapsible
-      :collapsedSize="0"
-    >
-      <SitePreview v-if="sitePreview.isOpen.value" @start="handleStartPreviewSite" />
     </BondPanel>
   </BondPanelGroup>
 </template>
 
 <style>
 @import './app.css';
-
-.browser-toggle-btn svg {
-  transition: transform 0.3s ease;
-}
-.browser-toggle-btn.is-open svg {
-  transform: rotate(90deg);
-}
 
 .main-panel-wrap {
   position: relative;
@@ -506,6 +344,4 @@ onUnmounted(() => {
   max-width: 720px;
   margin-inline: auto;
 }
-
-
 </style>

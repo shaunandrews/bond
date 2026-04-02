@@ -8,7 +8,6 @@ import { getSoul } from './settings'
 import { getImagePaths } from './images'
 import { getSkillsDir } from './paths'
 import { scanSkills, type SkillInfo } from './skills'
-import { listSites, getCachedSiteDetails } from './wordpress'
 
 export function getCachedSkills(): SkillInfo[] {
   return scanSkills()
@@ -149,70 +148,10 @@ export async function runBondQuery(
     resumeSession?: boolean
     imageIds?: string[]
     editMode?: EditMode
-    siteId?: string
   }
 ): Promise<boolean> {
   const cwd = homedir()
   const ac = new AbortController()
-
-  // Resolve WordPress site context if session is scoped to a site
-  let siteContext = ''
-  if (options.siteId) {
-    const { sites } = listSites()
-    const site = sites.find(s => s.id === options.siteId)
-    if (site) {
-      // For screenshots, use the custom domain URL with the Studio port (e.g. http://my-site.wp.local:8882).
-      // bond-screenshot handles custom domains automatically via a local proxy.
-      // For sites without a custom domain, use localhost:port.
-      const screenshotUrl = site.customDomain
-        ? `http://${site.customDomain}:${site.port}`
-        : `http://localhost:${site.port}`
-      siteContext = `\n\nYou are working on WordPress site "${site.name}" at ${site.path}.\n` +
-        `Site URL: ${site.url} | Status: ${site.running ? 'running' : 'stopped'} | Port: ${site.port}` +
-        (site.customDomain ? ` | Custom domain: ${site.customDomain}` : '') + '\n' +
-        `Use --path ${site.path} for all studio/wp commands.\n` +
-        `Use --url ${screenshotUrl} for bond-validate-blocks and bond-screenshot.`
-
-      // Append cached WP-CLI details if available (avoids the agent needing to run WP-CLI discovery commands)
-      if (site.running) {
-        const details = getCachedSiteDetails(site.path)
-        if (details) {
-          const activeTheme = details.themes.find(t => t.status === 'active')
-          const activePlugins = details.plugins.filter(p => p.status === 'active').map(p => p.name)
-          siteContext += `\n\nSite details (cached, no need to re-fetch):\n` +
-            `WordPress ${details.wpVersion} | PHP ${site.phpVersion}\n` +
-            (details.siteTitle ? `Title: ${details.siteTitle}` + (details.tagline ? ` — ${details.tagline}` : '') + '\n' : '') +
-            (activeTheme ? `Active theme: ${activeTheme.name} (${activeTheme.version})\n` : '') +
-            (activePlugins.length ? `Active plugins: ${activePlugins.join(', ')}\n` : '') +
-            `Content: ${details.postCount} posts, ${details.pageCount} pages, ${details.userCount} users\n` +
-            (details.permalinkStructure ? `Permalinks: ${details.permalinkStructure}\n` : '') +
-            `Templates: ${details.templates.map(t => t.title || t.name).join(', ')}`
-
-          // Inject actual page/post content so the agent understands what the site is about
-          if (details.content.length > 0) {
-            siteContext += '\n\nPublished content (you already have this — do NOT re-fetch with WP-CLI):'
-            for (const item of details.content) {
-              // Strip block delimiter comments for readability
-              const cleaned = item.content
-                .replace(/<!-- \/?wp:[^\s]+(?: \{[^}]*\})? -->/g, '')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim()
-              siteContext += `\n\n--- ${item.type.toUpperCase()}: "${item.title}" (/${item.slug}) ---\n${cleaned}`
-            }
-          }
-
-          // Redesign guidance — helps the agent ask smart questions instead of generic discovery
-          siteContext += '\n\n' +
-            'REDESIGN GUIDANCE (for when the user asks to redesign, restyle, or improve this site):\n' +
-            '- You already have the site\'s content above. Read it to understand what the site is about, who it\'s for, and what it does.\n' +
-            '- Do NOT ask the user basic questions you can answer from the content (e.g. "What is this site about?" or "Is this a band?").\n' +
-            '- Take a screenshot to see the current visual state.\n' +
-            '- Then ask 2-3 pointed design questions based on what you know: aesthetic direction, what\'s not working about the current design, specific goals (more bookings? sell merch? look more professional?). Frame questions around the content you\'ve already read.\n' +
-            '- Follow the design guidelines in the /wordpress skill for implementation.'
-        }
-      }
-    }
-  }
 
   const basePrompt =
     'You are Bond, a standalone desktop assistant app for Mac. ' +
@@ -228,68 +167,7 @@ export async function runBondQuery(
     'Each SKILL.md has YAML frontmatter (name, description, argument-hint) and a body with instructions. ' +
     'You can create, edit, list, and remove skills by reading/writing files in ~/.bond/skills/. ' +
     'To create a skill: mkdir the directory, write a SKILL.md with frontmatter and instructions. ' +
-    'The user invokes skills by typing /skill-name in chat. After creating or modifying skills, tell the user to restart the daemon for changes to take effect.\n\n' +
-    'You are an expert with WordPress and the `studio` CLI (WordPress Studio).\n\n' +
-    'STUDIO CLI REFERENCE:\n' +
-    'All sites live in ~/Studio/. Always pass --path to target a site.\n\n' +
-    'Site management:\n' +
-    '  studio site list --format json          # Returns [{id, name, path, port, url, running}, ...]\n' +
-    '  studio site create --name "Name" --path ~/Studio/slug --start true --skip-browser true\n' +
-    '  studio site start --path PATH\n' +
-    '  studio site stop --path PATH\n' +
-    '  studio site status --path PATH          # URL, PHP/WP version, admin creds\n' +
-    '  studio site delete --path PATH\n' +
-    '  studio site set --path PATH --php 8.4   # Also: --domain, --https, --wp, --xdebug, --admin-username, --admin-password\n\n' +
-    'WP-CLI (via studio wp <command> --path PATH):\n' +
-    '  IMPORTANT: Site must be running before WP-CLI commands work. Start it first if needed.\n\n' +
-    '  Content:\n' +
-    '    studio wp post list --post_type=post --fields=ID,post_title,post_status --path PATH\n' +
-    '    studio wp post create --post_type=post --post_title="Title" --post_content="<p>HTML</p>" --post_status=publish --path PATH\n' +
-    '    studio wp post update POST_ID --post_title="New" --path PATH\n' +
-    '    studio wp post get POST_ID --field=post_content --path PATH\n' +
-    '    studio wp post delete POST_ID --path PATH\n' +
-    '    studio wp post meta get/update POST_ID key [value] --path PATH\n\n' +
-    '  Plugins:\n' +
-    '    studio wp plugin list --path PATH\n' +
-    '    studio wp plugin install SLUG --activate --path PATH\n' +
-    '    studio wp plugin activate/deactivate SLUG --path PATH\n' +
-    '    studio wp plugin update SLUG --path PATH\n' +
-    '    studio wp plugin delete SLUG --path PATH\n' +
-    '    studio wp plugin search "term" --fields=name,slug,rating --path PATH\n\n' +
-    '  Themes:\n' +
-    '    studio wp theme list --path PATH\n' +
-    '    studio wp theme install SLUG --activate --path PATH\n' +
-    '    studio wp theme activate SLUG --path PATH\n' +
-    '    studio wp theme search "term" --fields=name,slug,rating --path PATH\n\n' +
-    '  Options:\n' +
-    '    studio wp option get OPTION --path PATH\n' +
-    '    studio wp option update OPTION "value" --path PATH\n' +
-    '    Common: blogname, blogdescription, siteurl, home, permalink_structure\n\n' +
-    '  Users:\n' +
-    '    studio wp user list --fields=ID,user_login,user_email,roles --path PATH\n' +
-    '    studio wp user create USERNAME EMAIL --role=editor --path PATH\n\n' +
-    '  Database:\n' +
-    '    studio wp db export ~/Desktop/backup.sql --path PATH\n' +
-    '    studio wp db import file.sql --path PATH\n' +
-    '    studio wp search-replace "old" "new" --path PATH\n\n' +
-    '  Menus:\n' +
-    '    studio wp menu list/create --path PATH\n' +
-    '    studio wp menu item add-post MENU_ID POST_ID --path PATH\n' +
-    '    studio wp menu item add-custom MENU_ID "Label" "url" --path PATH\n\n' +
-    '  Other: wp core version/update, wp transient delete --all, wp cache flush, wp scaffold block\n\n' +
-    'Preview sites (push local to WordPress.com):\n' +
-    '  studio preview create --path PATH\n' +
-    '  studio preview list/update/delete --path PATH\n\n' +
-    'File editing: Site files at ~/Studio/site-name/wp-content/{themes,plugins,uploads}/. ' +
-    'You can directly Read/Edit/Write theme and plugin PHP, CSS, JS, JSON, and template files.\n\n' +
-    'WordPress development tools (run via Bash with node):\n' +
-    '  node ~/Developer/Projects/bond/bin/bond-validate-blocks --url SITE_URL --file PATH\n' +
-    '  node ~/Developer/Projects/bond/bin/bond-screenshot --url SITE_URL --viewport desktop\n' +
-    'Screenshots are saved to ~/Library/Application Support/bond/screenshots/.\n' +
-    'To show a screenshot to the user, include it in your response as a markdown image: ![description](/absolute/path/to/screenshot.png)\n' +
-    'Paths with spaces work fine in markdown images — the app handles encoding automatically.\n' +
-    'After writing block content, always validate. After building a site, screenshot to verify.\n' +
-    'When creating a site from scratch, follow the design workflow in the /wordpress skill.'
+    'The user invokes skills by typing /skill-name in chat. After creating or modifying skills, tell the user to restart the daemon for changes to take effect.'
 
   const editMode = options.editMode ?? { type: 'full' }
   const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS
@@ -302,10 +180,12 @@ export async function runBondQuery(
   }
 
   const soul = getSoul().trim()
-  const base = basePrompt + modePrompt + siteContext
+  const base = basePrompt + modePrompt
   const systemPrompt = soul
     ? `${base}\n\n<soul>\n${soul}\n</soul>`
     : base
+
+  let lastStderrHint: 'already_in_use' | null = null
 
   const queryOptions: Record<string, unknown> = {
     abortController: ac,
@@ -348,6 +228,9 @@ export async function runBondQuery(
     },
     stderr: (text: string) => {
       console.error('[bond] sdk stderr:', text.trimEnd())
+      if (text.includes('already in use')) {
+        lastStderrHint = 'already_in_use'
+      }
     },
     plugins: [
       { type: 'local', path: resolve(getSkillsDir(), '..') }
@@ -415,6 +298,11 @@ export async function runBondQuery(
     // Startup failures (no chunks emitted) are re-thrown so the caller
     // can retry — e.g. "Session ID already in use" after a cancel.
     if (chunkCount === 0) {
+      // The SDK often puts the real error on stderr while throwing a generic
+      // "process exited with code 1". Enrich the message so retry logic can match.
+      if (lastStderrHint === 'already_in_use' && !msg.includes('already in use')) {
+        throw new Error(`${msg} (session already in use)`)
+      }
       throw e
     }
     options.onChunk({ kind: 'raw_error', message: msg })

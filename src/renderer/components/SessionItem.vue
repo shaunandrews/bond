@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, nextTick } from 'vue'
 import type { Session } from '../../shared/session'
 
 const props = defineProps<{
@@ -12,7 +13,45 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: []
   action: []
+  rename: [title: string]
 }>()
+
+const editing = ref(false)
+const editValue = ref('')
+const inputRef = ref<HTMLInputElement | null>(null)
+
+function startEditing() {
+  if (props.generating || props.archived) return
+  editing.value = true
+  editValue.value = props.session.title
+  nextTick(() => {
+    inputRef.value?.focus()
+    inputRef.value?.select()
+  })
+}
+
+function commitEdit() {
+  if (!editing.value) return
+  editing.value = false
+  const trimmed = editValue.value.trim()
+  if (trimmed && trimmed !== props.session.title) {
+    emit('rename', trimmed)
+  }
+}
+
+function cancelEdit() {
+  editing.value = false
+}
+
+function onInputKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    commitEdit()
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    cancelEdit()
+  }
+}
 
 function formatTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime()
@@ -35,7 +74,17 @@ function formatTime(iso: string): string {
     @keydown.enter="emit('select')"
     @keydown.space.prevent="emit('select')"
   >
-    <span :class="['session-title', { generating }]">
+    <input
+      v-if="editing"
+      ref="inputRef"
+      v-model="editValue"
+      class="session-title-input"
+      @blur="commitEdit"
+      @keydown="onInputKeydown"
+      @click.stop
+      @dblclick.stop
+    />
+    <span v-else :class="['session-title', { generating }]" @dblclick.stop="startEditing">
       {{ generating ? 'Naming...' : session.title }}
     </span>
     <span class="session-end">
@@ -127,5 +176,20 @@ function formatTime(iso: string): string {
 .session-action:hover {
   background: var(--sidebar-hover-bg);
   color: var(--sidebar-text);
+}
+
+.session-title-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--sidebar-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent, var(--color-border));
+  border-radius: var(--radius-sm);
+  padding: 0 0.25rem;
+  outline: none;
+  height: 1.5rem;
 }
 </style>

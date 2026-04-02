@@ -1,7 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord } from '../shared/session'
-import type { WordPressSite, WordPressSiteDetails, WpSiteMap, WpThemeJson } from '../shared/wordpress'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem } from '../shared/session'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
@@ -26,10 +25,9 @@ contextBridge.exposeInMainWorld('bond', {
 
   // Sessions
   listSessions: () => ipcRenderer.invoke('session:list') as Promise<Session[]>,
-  createSession: (options?: { siteId?: string; title?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
+  createSession: (options?: { title?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
   getSession: (id: string) => ipcRenderer.invoke('session:get', id) as Promise<Session | null>,
-  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) =>
-    ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
+  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) => ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id) as Promise<boolean>,
   deleteArchivedSessions: () => ipcRenderer.invoke('session:deleteArchived') as Promise<{ ok: boolean; count: number }>,
   getMessages: (sessionId: string) => ipcRenderer.invoke('session:getMessages', sessionId) as Promise<SessionMessage[]>,
@@ -38,9 +36,17 @@ contextBridge.exposeInMainWorld('bond', {
   generateTitle: (sessionId: string, userMessage?: string) =>
     ipcRenderer.invoke('session:generateTitle', sessionId, userMessage) as Promise<{ title: string; summary: string }>,
 
+  // Todos
+  listTodos: () => ipcRenderer.invoke('todo:list') as Promise<TodoItem[]>,
+  createTodo: (text: string) => ipcRenderer.invoke('todo:create', text) as Promise<TodoItem>,
+  updateTodo: (id: string, updates: Partial<Pick<TodoItem, 'text' | 'done'>>) => ipcRenderer.invoke('todo:update', id, updates) as Promise<TodoItem | null>,
+  deleteTodo: (id: string) => ipcRenderer.invoke('todo:delete', id) as Promise<boolean>,
+
   // Images
+  listImages: () => ipcRenderer.invoke('image:list') as Promise<ImageRecord[]>,
   getImage: (imageId: string) => ipcRenderer.invoke('image:get', imageId) as Promise<AttachedImage | null>,
   getImages: (ids: string[]) => ipcRenderer.invoke('image:getMultiple', ids) as Promise<(AttachedImage | null)[]>,
+  deleteImage: (imageId: string) => ipcRenderer.invoke('image:delete', imageId) as Promise<boolean>,
 
   // Skills
   listSkills: () => ipcRenderer.invoke('skills:list') as Promise<{ name: string; description: string; argumentHint: string }[]>,
@@ -83,14 +89,4 @@ contextBridge.exposeInMainWorld('bond', {
     return () => ipcRenderer.removeListener('bond:windowOpacity', listener)
   },
 
-  // WordPress
-  listWordPressSites: () => ipcRenderer.invoke('wordpress:list') as Promise<{ available: boolean; sites: WordPressSite[] }>,
-  getWordPressSiteDetails: (path: string) => ipcRenderer.invoke('wordpress:details', path) as Promise<WordPressSiteDetails | null>,
-  getWordPressSiteMap: (path: string) => ipcRenderer.invoke('wordpress:siteMap', path) as Promise<WpSiteMap | null>,
-  getWordPressThemeJson: (path: string) => ipcRenderer.invoke('wordpress:themeJson', path) as Promise<WpThemeJson | null>,
-  createWordPressSite: (name: string) => ipcRenderer.invoke('wordpress:create', name) as Promise<{ available: boolean; sites: WordPressSite[] }>,
-  deleteWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:delete', path) as Promise<{ available: boolean; sites: WordPressSite[] }>,
-  startWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:start', path) as Promise<{ available: boolean; sites: WordPressSite[] }>,
-  stopWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:stop', path) as Promise<{ available: boolean; sites: WordPressSite[] }>,
-  getWordPressLoginCookies: (path: string) => ipcRenderer.invoke('wordpress:loginCookies', path) as Promise<{ cookies: { name: string; value: string; path: string; expires: number }[] } | null>
 })

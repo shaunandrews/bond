@@ -41,45 +41,51 @@ describe('useChat', () => {
 
   describe('submit', () => {
     it('adds a user message and thinking placeholder, then calls send', async () => {
+      chat.currentSessionId.value = 'sess-1'
       await chat.submit('hello')
 
-      // user message + thinking placeholder (removed after since no thinking text)
       expect(chat.messages.value[0]).toMatchObject({ role: 'user', text: 'hello' })
-      expect(deps.send).toHaveBeenCalledWith('hello', undefined, undefined)
+      expect(deps.send).toHaveBeenCalledWith('hello', 'sess-1', undefined)
     })
 
-    it('sets busy during send and resets after', async () => {
+    it('sets busy on submit and clears on query_end chunk', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
       expect(chat.busy.value).toBe(false)
 
-      const promise = chat.submit('hello')
-      // busy is true while awaiting
+      await chat.submit('hello')
       expect(chat.busy.value).toBe(true)
 
-      await promise
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
       expect(chat.busy.value).toBe(false)
     })
 
-    it('adds thinking message during send and removes empty one after', async () => {
-      const promise = chat.submit('hello')
-      // Should have user message + thinking placeholder
+    it('adds thinking message during send and removes empty one on query_end', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      await chat.submit('hello')
       expect(chat.messages.value).toHaveLength(2)
       expect(chat.messages.value[1]).toMatchObject({ role: 'meta', kind: 'thinking', streaming: true })
 
-      await promise
-      // Empty thinking placeholder gets removed
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
       expect(chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'thinking')).toBeUndefined()
     })
 
     it('adds error message when send fails', async () => {
+      chat.currentSessionId.value = 'sess-1'
       ;(deps.send as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: 'boom' })
 
       await chat.submit('hello')
 
-      // user + error (thinking placeholder removed)
       expect(chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'error')).toMatchObject({ text: 'boom' })
     })
 
     it('ignores empty text', async () => {
+      chat.currentSessionId.value = 'sess-1'
       await chat.submit('')
       await chat.submit('   ')
 
@@ -87,15 +93,25 @@ describe('useChat', () => {
       expect(deps.send).not.toHaveBeenCalled()
     })
 
-    it('ignores submit while busy', async () => {
-      const promise = chat.submit('first')
+    it('ignores submit while session is busy', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+
+      await chat.submit('first')
       await chat.submit('second')
 
       expect(deps.send).toHaveBeenCalledTimes(1)
-      await promise
+    })
+
+    it('ignores submit without a session', async () => {
+      await chat.submit('hello')
+
+      expect(chat.messages.value).toHaveLength(0)
+      expect(deps.send).not.toHaveBeenCalled()
     })
 
     it('swaps images for imageIds after send returns', async () => {
+      chat.currentSessionId.value = 'sess-1'
       const images = [{ data: 'abc123', mediaType: 'image/png' as const }]
       ;(deps.send as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, imageIds: ['img-1'] })
 
@@ -106,6 +122,131 @@ describe('useChat', () => {
       if (userMsg.role === 'user') {
         expect(userMsg.imageIds).toEqual(['img-1'])
       }
+    })
+  })
+
+  describe('concurrent sessions', () => {
+    it('tracks busy state per session', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      await chat.submit('hello')
+      expect(chat.busy.value).toBe(true)
+
+      // Switch to a different session
+      chat.currentSessionId.value = 'sess-2'
+      await nextTick()
+      expect(chat.busy.value).toBe(false)
+
+      // Switch back — sess-1 is still busy
+      chat.currentSessionId.value = 'sess-1'
+      await nextTick()
+      expect(chat.busy.value).toBe(true)
+
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+      expect(chat.busy.value).toBe(false)
+    })
+
+    it('query_end for non-current session still clears its busy state', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      await chat.submit('hello')
+      expect(chat.busy.value).toBe(true)
+
+      chat.currentSessionId.value = 'sess-2'
+      await nextTick()
+
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+
+      chat.currentSessionId.value = 'sess-1'
+      await nextTick()
+      expect(chat.busy.value).toBe(false)
+    })
+
+    it('query_start chunk marks session busy', () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      expect(chat.busy.value).toBe(false)
+      handler({ kind: 'query_start', sessionId: 'sess-1' })
+      expect(chat.busy.value).toBe(true)
+    })
+
+    it('buffers chunks for non-current sessions in background', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      // Submit in sess-1 and switch away
+      await chat.submit('hello')
+
+      // Switch to sess-2 — stashes sess-1 messages in background
+      await chat.loadSession('sess-2')
+      expect(chat.messages.value).toHaveLength(0) // new session, empty
+
+      // Chunks arrive for sess-1 in background
+      handler({ kind: 'assistant_text', text: 'response from sess-1', sessionId: 'sess-1' })
+      handler({ kind: 'result', subtype: 'success', sessionId: 'sess-1' })
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+
+      // sess-2 messages unchanged (still empty)
+      expect(chat.messages.value).toHaveLength(0)
+
+      // Verify sess-1 response was persisted — check the LAST save call for sess-1
+      const sess1Calls = (deps.saveMessages as ReturnType<typeof vi.fn>).mock.calls
+        .filter((call: unknown[]) => call[0] === 'sess-1')
+      const lastSave = sess1Calls[sess1Calls.length - 1]
+      expect(lastSave).toBeTruthy()
+      const savedMsgs = lastSave![1] as Array<{ role: string; text?: string }>
+      expect(savedMsgs.some(m => m.role === 'bond' && m.text === 'response from sess-1')).toBe(true)
+    })
+
+    it('restores background messages when switching back to a busy session', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      // Submit in sess-1
+      await chat.submit('hello')
+
+      // Switch to sess-2
+      await chat.loadSession('sess-2')
+
+      // Partial response arrives for sess-1
+      handler({ kind: 'assistant_text', text: 'partial...', sessionId: 'sess-1' })
+
+      // Switch back to sess-1 — should restore from background with partial response
+      await chat.loadSession('sess-1')
+      const bondMsg = chat.messages.value.find(m => m.role === 'bond')
+      expect(bondMsg).toMatchObject({ text: 'partial...', streaming: true })
+    })
+  })
+
+  describe('onQueryEnd', () => {
+    it('fires callback with sessionId when query ends', () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      const cb = vi.fn()
+      chat.onQueryEnd(cb)
+
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+      expect(cb).toHaveBeenCalledWith('sess-1')
+    })
+
+    it('fires callback even for non-current session', () => {
+      chat.currentSessionId.value = 'sess-2'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      const cb = vi.fn()
+      chat.onQueryEnd(cb)
+
+      handler({ kind: 'query_end', succeeded: false, sessionId: 'sess-1' })
+      expect(cb).toHaveBeenCalledWith('sess-1')
     })
   })
 
@@ -186,18 +327,15 @@ describe('useChat', () => {
 
     it('removes empty thinking placeholder on non-thinking chunk', () => {
       const handler = getChunkHandler()
-      // Simulate submit adding a thinking placeholder
       chat.messages.value.push({ id: '1', role: 'meta', kind: 'thinking', text: '', streaming: true } as any)
       handler({ kind: 'assistant_text', text: 'hi' })
 
-      // Empty thinking removed, only bond message remains
       expect(chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'thinking')).toBeUndefined()
       expect(chat.messages.value[chat.messages.value.length - 1]).toMatchObject({ role: 'bond', text: 'hi' })
     })
 
     it('accumulates thinking text into a thinking message', () => {
       const handler = getChunkHandler()
-      // Simulate submit adding a thinking placeholder
       chat.messages.value.push({ id: '1', role: 'meta', kind: 'thinking', text: '', streaming: true } as any)
       handler({ kind: 'thinking_text', text: 'Let me ' })
       handler({ kind: 'thinking_text', text: 'think...' })
@@ -210,7 +348,6 @@ describe('useChat', () => {
 
     it('finalizes thinking message when assistant text arrives', () => {
       const handler = getChunkHandler()
-      // Simulate submit adding a thinking placeholder
       chat.messages.value.push({ id: '1', role: 'meta', kind: 'thinking', text: '', streaming: true } as any)
       handler({ kind: 'thinking_text', text: 'reasoning' })
       handler({ kind: 'assistant_text', text: 'hi' })
@@ -290,9 +427,17 @@ describe('useChat', () => {
   })
 
   describe('cancel', () => {
-    it('calls deps.cancel', () => {
+    it('calls deps.cancel and clears busy', () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      handler({ kind: 'query_start', sessionId: 'sess-1' })
+      expect(chat.busy.value).toBe(true)
+
       chat.cancel()
-      expect(deps.cancel).toHaveBeenCalledTimes(1)
+      expect(deps.cancel).toHaveBeenCalledWith('sess-1')
+      expect(chat.busy.value).toBe(false)
     })
   })
 })

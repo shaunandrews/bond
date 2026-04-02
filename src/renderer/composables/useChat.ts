@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import type { BondStreamChunk, TaggedChunk } from '../../shared/stream'
 import type { SessionMessage, AttachedImage } from '../../shared/session'
 import type { Message } from '../types/message'
@@ -51,102 +51,164 @@ function fromSessionMessages(msgs: SessionMessage[]): Message[] {
 // Preserve chat state across HMR reloads so in-flight streaming
 // isn't lost when Vite hot-updates a module during a response.
 const _hmr = import.meta.hot?.data as
-  | { messages?: Message[]; busy?: boolean; sessionId?: string | null }
+  | { messages?: Message[]; busySessions?: string[]; sessionId?: string | null; backgroundMessages?: [string, Message[]][] }
   | undefined
 
 export function useChat(deps: ChatDeps = window.bond) {
+  /** Messages for the current session (reactive, rendered by template) */
   const messages = ref<Message[]>(_hmr?.messages ?? [])
-  const busy = ref(_hmr?.busy ?? false)
+  const busySessions = ref<Set<string>>(new Set(_hmr?.busySessions ?? []))
   const currentSessionId = ref<string | null>(_hmr?.sessionId ?? null)
 
+  /** Messages for non-current sessions that are still receiving chunks */
+  const backgroundMessages = new Map<string, Message[]>(_hmr?.backgroundMessages ?? [])
+
+  const busy = computed(() => {
+    const sid = currentSessionId.value
+    return sid ? busySessions.value.has(sid) : false
+  })
+
+  function markBusy(sessionId: string) {
+    busySessions.value = new Set([...busySessions.value, sessionId])
+  }
+
+  function markIdle(sessionId: string) {
+    const next = new Set(busySessions.value)
+    next.delete(sessionId)
+    busySessions.value = next
+  }
+
   let unsub: (() => void) | undefined
-  let thinkingStartedAt = 0
-  let persistTimer: ReturnType<typeof setTimeout> | null = null
+  const thinkingStartTimes = new Map<string, number>()
+  const persistTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const queryEndCallbacks: Array<(sessionId: string) => void> = []
 
-  // Throttled persist: saves at most every 2s during streaming
-  function schedulePersist() {
-    if (persistTimer) return
-    persistTimer = setTimeout(() => {
-      persistTimer = null
-      persistMessages()
-    }, 2000)
+  function onQueryEnd(fn: (sessionId: string) => void) {
+    queryEndCallbacks.push(fn)
   }
 
-  function flushPersist() {
-    if (persistTimer) {
-      clearTimeout(persistTimer)
-      persistTimer = null
+  /** Get the message array for a session — current session uses the reactive ref, others use the background buffer */
+  function getMessagesFor(sessionId: string): Message[] {
+    if (sessionId === currentSessionId.value) return messages.value
+    let msgs = backgroundMessages.get(sessionId)
+    if (!msgs) {
+      msgs = []
+      backgroundMessages.set(sessionId, msgs)
     }
-    persistMessages()
+    return msgs
   }
 
-  function addMessage(msg: Message) {
+  // Per-session throttled persist: saves at most every 2s during streaming
+  function schedulePersistFor(sessionId: string) {
+    if (persistTimers.has(sessionId)) return
+    persistTimers.set(sessionId, setTimeout(() => {
+      persistTimers.delete(sessionId)
+      persistMessagesFor(sessionId)
+    }, 2000))
+  }
+
+  function flushPersistFor(sessionId: string) {
+    const timer = persistTimers.get(sessionId)
+    if (timer) {
+      clearTimeout(timer)
+      persistTimers.delete(sessionId)
+    }
+    persistMessagesFor(sessionId)
+  }
+
+  function addMessageTo(msgs: Message[], msg: Message) {
     if (!msg.ts) msg.ts = Date.now()
-    messages.value.push(msg)
+    msgs.push(msg)
   }
 
-  function finalizeThinking() {
-    for (let i = messages.value.length - 1; i >= 0; i--) {
-      const m = messages.value[i]
+  function finalizeThinkingOn(msgs: Message[], sessionId: string) {
+    const startTime = thinkingStartTimes.get(sessionId) ?? 0
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]
       if (m.role === 'meta' && m.kind === 'thinking' && m.streaming) {
         if (!m.text) {
-          // No thinking text arrived — remove the placeholder
-          messages.value.splice(i, 1)
+          msgs.splice(i, 1)
         } else {
           m.streaming = false
-          m.durationSec = thinkingStartedAt
-            ? Math.round((Date.now() - thinkingStartedAt) / 1000)
+          m.durationSec = startTime
+            ? Math.round((Date.now() - startTime) / 1000)
             : undefined
         }
-        thinkingStartedAt = 0
+        thinkingStartTimes.delete(sessionId)
         break
       }
     }
   }
 
+  function endStreamingOn(msgs: Message[]) {
+    const last = msgs[msgs.length - 1]
+    if (last?.role === 'bond' && last.streaming) {
+      last.streaming = false
+    }
+  }
+
   function handleChunk(chunk: TaggedChunk) {
-    // Ignore chunks for other sessions
-    if (chunk.sessionId !== currentSessionId.value) return
+    // Per-session busy tracking — always processed regardless of active session
+    if (chunk.kind === 'query_start') {
+      markBusy(chunk.sessionId)
+      return
+    }
+    if (chunk.kind === 'query_end') {
+      markIdle(chunk.sessionId)
+      queryEndCallbacks.forEach(fn => fn(chunk.sessionId))
+      const msgs = getMessagesFor(chunk.sessionId)
+      finalizeThinkingOn(msgs, chunk.sessionId)
+      endStreamingOn(msgs)
+      flushPersistFor(chunk.sessionId)
+      // Clean up background buffer after persisting — DB has the final state
+      if (chunk.sessionId !== currentSessionId.value) {
+        backgroundMessages.delete(chunk.sessionId)
+      }
+      return
+    }
+
+    // Route to the correct session's message array
+    const sid = chunk.sessionId
+    const msgs = getMessagesFor(sid)
 
     // Thinking deltas accumulate into the current thinking message
     if (chunk.kind === 'thinking_text') {
-      // Find the streaming thinking message (may not be last due to interleaved tool messages)
-      for (let i = messages.value.length - 1; i >= 0; i--) {
-        const m = messages.value[i]
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i]
         if (m.role === 'meta' && m.kind === 'thinking' && m.streaming) {
-          if (!m.text && !thinkingStartedAt) thinkingStartedAt = Date.now()
+          if (!m.text && !thinkingStartTimes.has(sid)) thinkingStartTimes.set(sid, Date.now())
           m.text += chunk.text
           return
         }
       }
       // No streaming thinking message exists — create one (e.g. mid-turn thinking)
-      thinkingStartedAt = Date.now()
-      addMessage({ id: uid(), role: 'meta', kind: 'thinking', text: chunk.text, streaming: true })
+      thinkingStartTimes.set(sid, Date.now())
+      addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'thinking', text: chunk.text, streaming: true })
       return
     }
 
     // Any non-thinking chunk finalizes the thinking message
-    finalizeThinking()
+    finalizeThinkingOn(msgs, sid)
 
     switch (chunk.kind) {
       case 'assistant_text': {
-        const last = messages.value[messages.value.length - 1]
+        const last = msgs[msgs.length - 1]
         if (last?.role === 'bond' && last.streaming) {
           last.text += chunk.text
         } else {
-          messages.value.push({ id: uid(), role: 'bond', text: chunk.text, streaming: true })
+          msgs.push({ id: uid(), role: 'bond', text: chunk.text, streaming: true } as Message)
         }
-        schedulePersist()
+        schedulePersistFor(sid)
         break
       }
 
       case 'assistant_tool':
-        addMessage({ id: uid(), role: 'meta', kind: 'tool', name: chunk.name, summary: chunk.summary })
-        schedulePersist()
+        addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'tool', name: chunk.name, summary: chunk.summary })
+        schedulePersistFor(sid)
         break
 
       case 'tool_approval':
-        addMessage({
+        addMessageTo(msgs, {
           id: uid(),
           role: 'meta',
           kind: 'approval',
@@ -161,53 +223,68 @@ export function useChat(deps: ChatDeps = window.bond) {
 
       case 'result':
         if (chunk.errors?.length) {
-          addMessage({ id: uid(), role: 'meta', kind: 'error', text: chunk.errors.join('; ') })
+          addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text: chunk.errors.join('; ') })
         }
         {
-          const last = messages.value[messages.value.length - 1]
+          const last = msgs[msgs.length - 1]
           if (last?.role === 'bond' && last.streaming) {
             last.streaming = false
           } else if (chunk.result && (!last || last.role !== 'bond')) {
             // Fallback: if no streaming message was created, use the result text
-            addMessage({ id: uid(), role: 'bond', text: chunk.result, streaming: false })
+            addMessageTo(msgs, { id: uid(), role: 'bond', text: chunk.result, streaming: false })
           }
         }
         // Auto-save after each completed turn
-        flushPersist()
+        flushPersistFor(sid)
         break
 
       case 'raw_error':
-        addMessage({ id: uid(), role: 'meta', kind: 'error', text: chunk.message })
-        flushPersist()
+        addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text: chunk.message })
+        flushPersistFor(sid)
         break
 
       case 'system':
-        addMessage({ id: uid(), role: 'meta', kind: 'system', text: chunk.text ?? chunk.subtype })
+        addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'system', text: chunk.text ?? chunk.subtype })
         break
     }
   }
 
-  function endStreaming() {
-    const last = messages.value[messages.value.length - 1]
-    if (last?.role === 'bond' && last.streaming) {
-      last.streaming = false
+  async function persistMessagesFor(sessionId: string) {
+    const msgs = sessionId === currentSessionId.value
+      ? messages.value
+      : backgroundMessages.get(sessionId)
+    if (msgs) {
+      await deps.saveMessages(sessionId, toSessionMessages(msgs))
     }
   }
 
   async function persistMessages() {
     if (currentSessionId.value) {
-      await deps.saveMessages(currentSessionId.value, toSessionMessages(messages.value))
+      await persistMessagesFor(currentSessionId.value)
     }
   }
 
   async function loadSession(sessionId: string) {
-    // Flush any pending throttled persist and save current session before switching
-    if (persistTimer) {
-      clearTimeout(persistTimer)
-      persistTimer = null
+    const oldSid = currentSessionId.value
+    if (oldSid) {
+      flushPersistFor(oldSid)
+      // Stash current messages if the old session is still busy (receiving chunks)
+      if (busySessions.value.has(oldSid)) {
+        backgroundMessages.set(oldSid, [...messages.value])
+      }
     }
-    await persistMessages()
+
     currentSessionId.value = sessionId
+
+    // Restore from background buffer if available (preserves in-flight responses)
+    const bg = backgroundMessages.get(sessionId)
+    if (bg) {
+      messages.value = bg
+      backgroundMessages.delete(sessionId)
+      return
+    }
+
+    // Load from DB
     const saved = await deps.getMessages(sessionId)
     const msgs = fromSessionMessages(saved)
 
@@ -234,28 +311,32 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   async function submit(text: string, images?: AttachedImage[]) {
     const trimmed = text.trim()
-    if ((!trimmed && !images?.length) || busy.value) return
+    const sid = currentSessionId.value
+    if ((!trimmed && !images?.length) || !sid || busySessions.value.has(sid)) return
 
-    addMessage({ id: uid(), role: 'user', text: trimmed, images: images?.length ? images : undefined })
+    addMessageTo(messages.value, { id: uid(), role: 'user', text: trimmed, images: images?.length ? images : undefined })
 
     // Detect skill invocation: /skill-name [args]
     const skillMatch = trimmed.match(/^\/([a-z0-9-]+)(?:\s+(.*))?$/s)
     if (skillMatch) {
-      addMessage({ id: uid(), role: 'meta', kind: 'skill', name: skillMatch[1], args: skillMatch[2] })
+      addMessageTo(messages.value, { id: uid(), role: 'meta', kind: 'skill', name: skillMatch[1], args: skillMatch[2] })
     }
-    busy.value = true
-    thinkingStartedAt = Date.now()
-    addMessage({ id: uid(), role: 'meta', kind: 'thinking', text: '', streaming: true })
+    markBusy(sid)
+    thinkingStartTimes.set(sid, Date.now())
+    addMessageTo(messages.value, { id: uid(), role: 'meta', kind: 'thinking', text: '', streaming: true })
 
     // Persist user message in background — don't block the send
-    persistMessages()
+    persistMessagesFor(sid)
 
+    // Send returns immediately now (fire-and-forget). Busy state is cleared
+    // by the query_end chunk from the daemon, not here.
     try {
-      const res = await deps.send(trimmed, currentSessionId.value ?? undefined, images)
+      const res = await deps.send(trimmed, sid, images)
       if (res.ok && res.imageIds?.length) {
-        // Swap inline base64 for image IDs on the user message we just added
-        for (let i = messages.value.length - 1; i >= 0; i--) {
-          const m = messages.value[i]
+        // User might have switched sessions during send — target the right array
+        const msgs = getMessagesFor(sid)
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i]
           if (m.role === 'user' && m.images?.length) {
             m.imageIds = res.imageIds
             break
@@ -263,13 +344,19 @@ export function useChat(deps: ChatDeps = window.bond) {
         }
       }
       if (!res.ok && res.error) {
-        addMessage({ id: uid(), role: 'meta', kind: 'error', text: res.error })
+        const msgs = getMessagesFor(sid)
+        addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text: res.error })
+        markIdle(sid)
+        finalizeThinkingOn(msgs, sid)
+        endStreamingOn(msgs)
+        await persistMessagesFor(sid)
       }
-    } finally {
-      busy.value = false
-      finalizeThinking()
-      endStreaming()
-      await persistMessages()
+    } catch {
+      const msgs = getMessagesFor(sid)
+      markIdle(sid)
+      finalizeThinkingOn(msgs, sid)
+      endStreamingOn(msgs)
+      await persistMessagesFor(sid)
     }
   }
 
@@ -284,11 +371,14 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   function cancel() {
-    busy.value = false
-    deps.cancel(currentSessionId.value ?? undefined).catch(() => {})
-    finalizeThinking()
-    endStreaming()
-    flushPersist()
+    const sid = currentSessionId.value
+    if (sid) markIdle(sid)
+    deps.cancel(sid ?? undefined).catch(() => {})
+    if (sid) {
+      finalizeThinkingOn(messages.value, sid)
+      endStreamingOn(messages.value)
+      flushPersistFor(sid)
+    }
   }
 
   function subscribe() {
@@ -303,8 +393,9 @@ export function useChat(deps: ChatDeps = window.bond) {
   if (import.meta.hot) {
     import.meta.hot.dispose((data) => {
       data.messages = messages.value
-      data.busy = busy.value
+      data.busySessions = [...busySessions.value]
       data.sessionId = currentSessionId.value
+      data.backgroundMessages = [...backgroundMessages.entries()]
     })
   }
 
@@ -319,6 +410,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     unsubscribe,
     loadSession,
     clearMessages,
-    persistMessages
+    persistMessages,
+    onQueryEnd
   }
 }

@@ -24,7 +24,6 @@ function rowToSession(row: Record<string, unknown>): Session {
     summary: row.summary as string,
     archived: row.archived === 1,
     editMode: parseEditMode(row.edit_mode),
-    siteId: (row.site_id as string) || undefined,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string
   }
@@ -64,18 +63,17 @@ export function listSessions(): Session[] {
   return rows.map(r => rowToSession(r as Record<string, unknown>))
 }
 
-export function createSession(options?: { siteId?: string; title?: string }): Session {
+export function createSession(options?: { title?: string }): Session {
   const db = getDb()
   const now = new Date().toISOString()
   const id = crypto.randomUUID()
   const title = options?.title ?? 'New chat'
-  const siteId = options?.siteId ?? null
 
   db.prepare(
-    'INSERT INTO sessions (id, title, summary, archived, site_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, title, '', 0, siteId, now, now)
+    'INSERT INTO sessions (id, title, summary, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(id, title, '', 0, now, now)
 
-  return { id, title, summary: '', archived: false, editMode: DEFAULT_EDIT_MODE, siteId: siteId || undefined, createdAt: now, updatedAt: now }
+  return { id, title, summary: '', archived: false, editMode: DEFAULT_EDIT_MODE, createdAt: now, updatedAt: now }
 }
 
 export function getSession(id: string): Session | null {
@@ -84,7 +82,7 @@ export function getSession(id: string): Session | null {
   return row ? rowToSession(row as Record<string, unknown>) : null
 }
 
-export function updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode' | 'siteId'>>): Session | null {
+export function updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>): Session | null {
   const db = getDb()
   const now = new Date().toISOString()
 
@@ -95,7 +93,6 @@ export function updateSession(id: string, updates: Partial<Pick<Session, 'title'
   if (updates.summary !== undefined) { sets.push('summary = ?'); values.push(updates.summary) }
   if (updates.archived !== undefined) { sets.push('archived = ?'); values.push(updates.archived ? 1 : 0) }
   if (updates.editMode !== undefined) { sets.push('edit_mode = ?'); values.push(JSON.stringify(updates.editMode)) }
-  if (updates.siteId !== undefined) { sets.push('site_id = ?'); values.push(updates.siteId || null) }
 
   values.push(id)
   const result = db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`).run(...values)
