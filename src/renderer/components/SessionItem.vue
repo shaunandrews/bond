@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onUnmounted } from 'vue'
 import type { Session } from '../../shared/session'
+import SessionPreview from './SessionPreview.vue'
 
 const props = defineProps<{
   session: Session
@@ -21,8 +22,38 @@ const editing = ref(false)
 const editValue = ref('')
 const inputRef = ref<HTMLInputElement | null>(null)
 
+/* Hover preview — shared across instances */
+const SHOW_DELAY = 150
+const SKIP_WINDOW = 500
+let lastHideTime = 0
+
+const itemEl = ref<HTMLElement | null>(null)
+const previewVisible = ref(false)
+let hoverTimer: ReturnType<typeof setTimeout> | null = null
+
+function onMouseEnter() {
+  if (editing.value) return
+  const elapsed = Date.now() - lastHideTime
+  if (elapsed < SKIP_WINDOW) {
+    previewVisible.value = true
+  } else {
+    hoverTimer = setTimeout(() => { previewVisible.value = true }, SHOW_DELAY)
+  }
+}
+
+function onMouseLeave() {
+  if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null }
+  if (previewVisible.value) lastHideTime = Date.now()
+  previewVisible.value = false
+}
+
+onUnmounted(() => {
+  if (hoverTimer) clearTimeout(hoverTimer)
+})
+
 function startEditing() {
   if (props.generating || props.archived) return
+  previewVisible.value = false
   editing.value = true
   editValue.value = props.session.title
   nextTick(() => {
@@ -54,26 +85,19 @@ function onInputKeydown(e: KeyboardEvent) {
   }
 }
 
-function formatTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime()
-  if (diff < 60_000) return 'now'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`
-  if (diff < 604_800_000) return `${Math.floor(diff / 86_400_000)}d`
-  const weeks = Math.floor(diff / 604_800_000)
-  if (weeks < 52) return `${weeks}w`
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
 </script>
 
 <template>
   <div
+    ref="itemEl"
     role="button"
     tabindex="0"
     :class="['session-item', { active, archived }]"
     @click="emit('select')"
     @keydown.enter="emit('select')"
     @keydown.space.prevent="emit('select')"
+    @mouseenter="onMouseEnter"
+    @mouseleave="onMouseLeave"
   >
     <input
       v-if="editing"
@@ -88,9 +112,8 @@ function formatTime(iso: string): string {
     <span v-else :class="['session-title', { generating }]" @dblclick.stop="startEditing">
       {{ generating ? 'Naming...' : session.title }}
     </span>
-    <span v-if="busy" class="session-busy-dot" />
     <span class="session-end">
-      <span class="session-meta">{{ formatTime(session.updatedAt) }}</span>
+      <span v-if="busy" class="session-busy-dot" />
       <button
         type="button"
         class="session-action"
@@ -100,6 +123,12 @@ function formatTime(iso: string): string {
         <slot />
       </button>
     </span>
+
+    <SessionPreview
+      :session="session"
+      :anchor="itemEl"
+      :visible="previewVisible"
+    />
   </div>
 </template>
 
@@ -150,12 +179,6 @@ function formatTime(iso: string): string {
   justify-content: center;
 }
 
-.session-meta {
-  font-size: 0.7rem;
-  color: var(--sidebar-text-faint);
-  transition: opacity var(--transition-fast);
-}
-
 .session-action {
   all: unset;
   cursor: pointer;
@@ -169,11 +192,11 @@ function formatTime(iso: string): string {
   color: var(--sidebar-text-muted);
   transition: background var(--transition-fast);
 }
+.session-item:hover .session-busy-dot {
+  display: none;
+}
 .session-item:hover .session-action {
   display: flex;
-}
-.session-item:hover .session-meta {
-  display: none;
 }
 .session-action:hover {
   background: var(--sidebar-hover-bg);

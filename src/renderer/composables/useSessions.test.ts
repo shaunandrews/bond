@@ -24,6 +24,7 @@ function mockDeps(): SessionDeps {
       return { ...makeSession(), ...updates }
     }),
     deleteSession: vi.fn().mockResolvedValue(true),
+    deleteArchivedSessions: vi.fn().mockResolvedValue({ ok: true, count: 0 }),
     generateTitle: vi.fn().mockResolvedValue({ title: 'Generated', summary: 'A summary' }),
   }
 }

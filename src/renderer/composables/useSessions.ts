@@ -5,7 +5,7 @@ const SESSION_STORAGE_KEY = 'bond:activeSessionId'
 
 export interface SessionDeps {
   listSessions: () => Promise<Session[]>
-  createSession: (options?: { title?: string }) => Promise<Session>
+  createSession: (options?: { title?: string; projectId?: string }) => Promise<Session>
   updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) => Promise<Session | null>
   deleteSession: (id: string) => Promise<boolean>
   deleteArchivedSessions: () => Promise<{ ok: boolean; count: number }>
@@ -39,10 +39,13 @@ export function useSessions(deps: SessionDeps = window.bond) {
     sessions.value = await deps.listSessions()
   }
 
-  async function create(options?: { title?: string }): Promise<Session> {
+  async function create(options?: { title?: string; projectId?: string }): Promise<Session> {
     const session = await deps.createSession(options)
     sessions.value.unshift(session)
     activeSessionId.value = session.id
+    // Track total sessions created for mission numbering
+    const count = parseInt(localStorage.getItem('bond:sessionCount') ?? '0', 10)
+    localStorage.setItem('bond:sessionCount', String(count + 1))
     return session
   }
 
