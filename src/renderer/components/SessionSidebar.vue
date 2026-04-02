@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhChecks } from '@phosphor-icons/vue'
+import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import SessionItem from './SessionItem.vue'
 import BondToolbar from './BondToolbar.vue'
@@ -16,6 +16,8 @@ const props = defineProps<{
   activeSessionId: string | null
   activeView: string
   generatingTitleId: string | null
+  busySessionIds: Set<string>
+  mediaCount: number
 }>()
 
 const chatCount = computed(() => props.sessions.length)
@@ -45,7 +47,6 @@ const emit = defineEmits<{
   remove: [id: string]
   removeArchived: []
   media: []
-  todos: []
   rename: [id: string, title: string]
 }>()
 </script>
@@ -129,6 +130,7 @@ const emit = defineEmits<{
             :session="s"
             :active="s.id === activeSessionId && activeView === 'chat'"
             :generating="generatingTitleId === s.id"
+            :busy="busySessionIds.has(s.id)"
             actionTitle="Archive"
             @select="emit('select', s.id)"
             @action="emit('archive', s.id)"
@@ -146,18 +148,12 @@ const emit = defineEmits<{
 
     <nav class="sidebar-nav">
       <button
-        :class="['sidebar-nav-item', { active: activeView === 'todos' }]"
-        @click="emit('todos')"
-      >
-        <PhChecks :size="16" weight="bold" />
-        <BondText size="sm">Todos</BondText>
-      </button>
-      <button
         :class="['sidebar-nav-item', { active: activeView === 'media' }]"
         @click="emit('media')"
       >
         <PhImages :size="16" weight="bold" />
         <BondText size="sm">Media</BondText>
+        <span v-if="mediaCount > 0" class="media-count-badge">{{ mediaCount }}</span>
       </button>
     </nav>
 
@@ -221,4 +217,21 @@ const emit = defineEmits<{
   background: var(--sidebar-hover-bg);
   color: var(--color-text-primary);
 }
+
+.media-count-badge {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  min-width: 1.125rem;
+  height: 1.125rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.3125rem;
+  border-radius: 999px;
+  background: var(--color-accent, var(--color-text-primary));
+  color: var(--color-bg, #fff);
+  margin-left: auto;
+}
+
 </style>

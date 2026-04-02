@@ -24,11 +24,13 @@ const defaultProps = {
   activeSessionId: 'sess-1',
   activeView: 'chat' as const,
   generatingTitleId: null,
+  busySessionIds: new Set<string>(),
   projects: [],
   projectsAvailable: null,
   projectsCreating: false,
   selectedProjectId: null,
   togglingProjectId: null,
+  mediaCount: 0,
 }
 
 async function openFlyout(w: ReturnType<typeof mount>) {

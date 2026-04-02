@@ -7,6 +7,7 @@ const props = defineProps<{
   active?: boolean
   archived?: boolean
   generating?: boolean
+  busy?: boolean
   actionTitle: string
 }>()
 
@@ -87,6 +88,7 @@ function formatTime(iso: string): string {
     <span v-else :class="['session-title', { generating }]" @dblclick.stop="startEditing">
       {{ generating ? 'Naming...' : session.title }}
     </span>
+    <span v-if="busy" class="session-busy-dot" />
     <span class="session-end">
       <span class="session-meta">{{ formatTime(session.updatedAt) }}</span>
       <button
@@ -176,6 +178,20 @@ function formatTime(iso: string): string {
 .session-action:hover {
   background: var(--sidebar-hover-bg);
   color: var(--sidebar-text);
+}
+
+.session-busy-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  flex-shrink: 0;
+  animation: session-pulse 2s ease-in-out infinite;
+}
+
+@keyframes session-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
 }
 
 .session-title-input {
