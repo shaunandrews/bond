@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { PhCaretRight } from '@phosphor-icons/vue'
 import type { Message } from '../types/message'
 import { imageDataUri } from '../../shared/session'
 import MarkdownMessage from './MarkdownMessage.vue'
 
 defineProps<{ msg: Message }>()
-defineEmits<{ approve: [requestId: string, approved: boolean] }>()
+defineEmits<{
+  approve: [requestId: string, approved: boolean]
+  openActivity: []
+}>()
 
-const thinkingExpanded = ref(false)
 const toast = ref<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false })
 let toastTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -49,6 +50,17 @@ function formatDuration(sec: number | undefined): string {
 function formatTime(ts: number | undefined): string {
   if (!ts) return ''
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+function formatToolSummary(name: string, summary?: string): string {
+  const filename = summary?.split('/').pop() || summary
+  const verbs: Record<string, string> = {
+    Read: 'Read', Edit: 'Edited', Write: 'Wrote',
+    Bash: 'Ran command', Glob: 'Searched files', Grep: 'Searched code',
+    WebSearch: 'Searched the web', WebFetch: 'Fetched page',
+  }
+  const verb = verbs[name] ?? name
+  return filename && !['Bash', 'Glob', 'WebSearch'].includes(name) ? `${verb} ${filename}` : verb
 }
 </script>
 
@@ -104,36 +116,14 @@ function formatTime(ts: number | undefined): string {
     </div>
   </div>
 
-  <!-- Thinking: single element transitions Working → Thinking → Thought -->
-  <div
+  <!-- Thinking: hidden while streaming (activity bar handles it), minimal summary when finalized -->
+  <!-- Streaming thinking renders nothing — swallowed so it doesn't hit the v-else catch-all -->
+  <template v-else-if="msg.kind === 'thinking' && (msg.streaming || !msg.text)" />
+  <span
     v-else-if="msg.kind === 'thinking'"
-    class="self-start w-full text-xs text-muted"
-    @dblclick="copyText(msg, $event)"
-  >
-    <!-- Working (no text yet) or Thinking (text streaming) -->
-    <div v-if="msg.streaming" class="px-1 py-1 italic opacity-70">
-      <template v-if="msg.text">Thinking<span class="thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></template>
-      <template v-else>Bond is working<span class="thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></template>
-    </div>
-    <!-- Thought: collapsed accordion -->
-    <template v-else>
-      <button
-        class="flex items-center gap-1 px-1 py-1 text-left cursor-pointer opacity-70 hover:opacity-100 transition-opacity"
-        @click="thinkingExpanded = !thinkingExpanded"
-      >
-        <span>Thought {{ formatDuration(msg.durationSec) }}</span>
-        <PhCaretRight
-          :size="10"
-          weight="bold"
-          class="thinking-chevron"
-          :class="{ 'rotate-90': thinkingExpanded }"
-        />
-      </button>
-      <div v-if="thinkingExpanded" class="px-1 pb-1">
-        <pre class="thinking-content text-[11px] text-muted whitespace-pre-wrap font-sans leading-relaxed">{{ msg.text }}</pre>
-      </div>
-    </template>
-  </div>
+    class="activity-summary"
+    @click="$emit('openActivity')"
+  >Thought {{ formatDuration(msg.durationSec) }}</span>
 
   <!-- Skill invocation -->
   <div
@@ -144,15 +134,12 @@ function formatTime(ts: number | undefined): string {
     <span v-if="msg.args"> — {{ msg.args }}</span>
   </div>
 
-  <!-- Tool call -->
-  <div
+  <!-- Tool call — minimal summary -->
+  <span
     v-else-if="msg.kind === 'tool'"
-    class="self-center max-w-[96%] px-3.5 py-2.5 rounded-[10px] text-xs text-muted border border-dashed border-border"
-  >
-    <span class="text-accent font-medium">{{ msg.name }}</span>
-    <span v-if="msg.summary"> — {{ msg.summary }}</span>
-    <span v-if="msg.ts" class="msg-timestamp-inline">{{ formatTime(msg.ts) }}</span>
-  </div>
+    class="activity-summary"
+    @click="$emit('openActivity')"
+  >{{ formatToolSummary(msg.name, msg.summary) }}</span>
 
   <!-- Error -->
   <div
@@ -181,38 +168,24 @@ function formatTime(ts: number | undefined): string {
 </template>
 
 <style scoped>
-.thinking-chevron {
-  transition: transform var(--transition-fast);
+.activity-summary {
+  display: block;
+  text-align: center;
+  font-size: 11px;
+  color: var(--color-muted);
+  opacity: 0.55;
+  cursor: pointer;
+  padding: 1px 0;
+  transition: opacity var(--transition-fast);
 }
-
-.thinking-content {
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.thinking-dots span {
-  animation: blink 1.4s infinite both;
-}
-.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
-.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes blink {
-  0%, 80%, 100% { opacity: 0.2; }
-  40% { opacity: 1; }
+.activity-summary:hover {
+  opacity: 0.85;
 }
 
 .msg-timestamp {
   font-size: 0.625rem;
   color: var(--color-muted);
   opacity: 0.6;
-  font-variant-numeric: tabular-nums;
-}
-
-.msg-timestamp-inline {
-  font-size: 0.625rem;
-  color: var(--color-muted);
-  opacity: 0.5;
-  margin-left: 0.5rem;
   font-variant-numeric: tabular-nums;
 }
 

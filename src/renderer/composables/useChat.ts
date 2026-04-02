@@ -3,6 +3,21 @@ import type { BondStreamChunk, TaggedChunk } from '../../shared/stream'
 import type { SessionMessage, AttachedImage } from '../../shared/session'
 import type { Message } from '../types/message'
 
+export interface ActivityEvent {
+  type: 'thinking' | 'tool' | 'responding'
+  label: string
+  ts: number
+  durationSec?: number
+}
+
+export type ActivityState =
+  | { type: 'idle' }
+  | { type: 'working'; startedAt: number; events: ActivityEvent[] }
+  | { type: 'thinking'; snippet: string; startedAt: number; events: ActivityEvent[] }
+  | { type: 'tool'; name: string; detail?: string; startedAt: number; events: ActivityEvent[] }
+  | { type: 'responding'; startedAt: number; events: ActivityEvent[] }
+  | { type: 'done'; startedAt: number; endedAt: number; events: ActivityEvent[] }
+
 export interface ChatDeps {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => Promise<{ ok: boolean; error?: string; imageIds?: string[] }>
   cancel: (sessionId?: string) => Promise<{ ok: boolean }>
@@ -36,23 +51,28 @@ function toSessionMessages(msgs: Message[]): SessionMessage[] {
 }
 
 function fromSessionMessages(msgs: SessionMessage[]): Message[] {
-  return msgs.map((m) => {
-    if (m.role === 'user') return { id: m.id, role: 'user' as const, text: m.text ?? '', images: m.images, imageIds: m.imageIds }
-    if (m.role === 'bond') return { id: m.id, role: 'bond' as const, text: m.text ?? '', streaming: false }
-    if (m.kind === 'tool') return { id: m.id, role: 'meta' as const, kind: 'tool' as const, name: m.name ?? '', summary: m.summary }
-    if (m.kind === 'skill') return { id: m.id, role: 'meta' as const, kind: 'skill' as const, name: m.name ?? '', args: m.summary }
-    if (m.kind === 'thinking') return { id: m.id, role: 'meta' as const, kind: 'thinking' as const, text: m.text ?? '', durationSec: m.summary ? parseInt(m.summary, 10) : undefined, streaming: false }
-    if (m.kind === 'approval') return { id: m.id, role: 'meta' as const, kind: 'approval' as const, requestId: '', toolName: m.name ?? '', input: {}, description: m.summary, status: (m.status as 'approved' | 'denied') ?? 'denied' }
-    if (m.kind === 'error') return { id: m.id, role: 'meta' as const, kind: 'error' as const, text: m.text ?? '' }
-    return { id: m.id, role: 'meta' as const, kind: 'system' as const, text: m.text ?? '' }
-  })
+  return msgs.map((m): Message | null => {
+    if (m.role === 'user') return { id: m.id, role: 'user', text: m.text ?? '', images: m.images, imageIds: m.imageIds }
+    if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text ?? '', streaming: false }
+    if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: m.name ?? '', summary: m.summary }
+    if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: m.name ?? '', args: m.summary }
+    if (m.kind === 'thinking') {
+      // Drop empty thinking messages (stale DB records from interrupted queries)
+      if (!m.text?.trim()) return null
+      return { id: m.id, role: 'meta', kind: 'thinking', text: m.text ?? '', durationSec: m.summary ? parseInt(m.summary, 10) : undefined, streaming: false }
+    }
+    if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', requestId: '', toolName: m.name ?? '', input: {}, description: m.summary, status: (m.status as 'approved' | 'denied') ?? 'denied' }
+    if (m.kind === 'error') return { id: m.id, role: 'meta', kind: 'error', text: m.text ?? '' }
+    return { id: m.id, role: 'meta', kind: 'system', text: m.text ?? '' }
+  }).filter((m): m is Message => m !== null)
 }
 
 // Preserve chat state across HMR reloads so in-flight streaming
 // isn't lost when Vite hot-updates a module during a response.
 const _hmr = import.meta.hot?.data as
-  | { messages?: Message[]; busySessions?: string[]; sessionId?: string | null; backgroundMessages?: [string, Message[]][] }
+  | { messages?: Message[]; busySessions?: string[]; sessionId?: string | null; backgroundMessages?: [string, Message[]][]; activityMap?: [string, ActivityState][]; thinkingBufs?: [string, string][]; eventsMap?: [string, ActivityEvent[]][] }
   | undefined
+const _hmrNeedsPersist = !!(_hmr?.messages?.length || _hmr?.backgroundMessages?.length)
 
 export function useChat(deps: ChatDeps = window.bond) {
   /** Messages for the current session (reactive, rendered by template) */
@@ -62,6 +82,68 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   /** Messages for non-current sessions that are still receiving chunks */
   const backgroundMessages = new Map<string, Message[]>(_hmr?.backgroundMessages ?? [])
+
+  /** Per-session activity tracking */
+  const _activityMap = new Map<string, ActivityState>(_hmr?.activityMap ?? [])
+  const _thinkingBufs = new Map<string, string>(_hmr?.thinkingBufs ?? [])
+  const _eventsMap = new Map<string, ActivityEvent[]>(_hmr?.eventsMap ?? [])
+  const activity = ref<ActivityState>(
+    _hmr?.sessionId ? (_activityMap.get(_hmr.sessionId) ?? { type: 'idle' }) : { type: 'idle' }
+  )
+
+  function _getEvents(sid: string): ActivityEvent[] {
+    let events = _eventsMap.get(sid)
+    if (!events) { events = []; _eventsMap.set(sid, events) }
+    return events
+  }
+
+  function _getStartedAt(sid: string): number {
+    const existing = _activityMap.get(sid)
+    return (existing && existing.type !== 'idle') ? existing.startedAt : Date.now()
+  }
+
+  type ActivityBase =
+    | { type: 'working'; startedAt: number }
+    | { type: 'thinking'; snippet: string; startedAt: number }
+    | { type: 'tool'; name: string; detail?: string; startedAt: number }
+    | { type: 'responding'; startedAt: number }
+    | { type: 'done'; startedAt: number; endedAt: number }
+
+  function _setActivity(sid: string, base: ActivityBase) {
+    const events = _getEvents(sid)
+    const state = { ...base, events } as ActivityState
+    _activityMap.set(sid, state)
+    if (sid === currentSessionId.value) activity.value = state
+  }
+
+  function _clearActivity(sid: string) {
+    _activityMap.delete(sid)
+    _thinkingBufs.delete(sid)
+    _eventsMap.delete(sid)
+    if (sid === currentSessionId.value) activity.value = { type: 'idle' }
+  }
+
+  function _finalizeThinkingEvent(sid: string) {
+    const events = _eventsMap.get(sid)
+    if (!events) return
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === 'thinking' && events[i].durationSec == null) {
+        events[i].durationSec = Math.max(1, Math.round((Date.now() - events[i].ts) / 1000))
+        break
+      }
+    }
+  }
+
+  function _formatToolLabel(name: string, summary?: string): string {
+    const filename = summary?.split('/').pop() || summary
+    const verbs: Record<string, string> = {
+      Read: 'Read', Edit: 'Edited', Write: 'Wrote',
+      Bash: 'Ran command', Glob: 'Searched files', Grep: 'Searched code',
+      WebSearch: 'Searched the web', WebFetch: 'Fetched page',
+    }
+    const verb = verbs[name] ?? name
+    return filename && !['Bash', 'Glob', 'WebSearch'].includes(name) ? `${verb} ${filename}` : verb
+  }
 
   const busy = computed(() => {
     const sid = currentSessionId.value
@@ -107,13 +189,13 @@ export function useChat(deps: ChatDeps = window.bond) {
     }, 2000))
   }
 
-  function flushPersistFor(sessionId: string) {
+  function flushPersistFor(sessionId: string): Promise<void> {
     const timer = persistTimers.get(sessionId)
     if (timer) {
       clearTimeout(timer)
       persistTimers.delete(sessionId)
     }
-    persistMessagesFor(sessionId)
+    return persistMessagesFor(sessionId)
   }
 
   function addMessageTo(msgs: Message[], msg: Message) {
@@ -151,19 +233,29 @@ export function useChat(deps: ChatDeps = window.bond) {
     // Per-session busy tracking — always processed regardless of active session
     if (chunk.kind === 'query_start') {
       markBusy(chunk.sessionId)
+      _thinkingBufs.delete(chunk.sessionId)
+      _eventsMap.set(chunk.sessionId, [])
+      _setActivity(chunk.sessionId, { type: 'working', startedAt: Date.now() })
       return
     }
     if (chunk.kind === 'query_end') {
       markIdle(chunk.sessionId)
+      _finalizeThinkingEvent(chunk.sessionId)
+      const events = _getEvents(chunk.sessionId)
+      _setActivity(chunk.sessionId, { type: 'done', startedAt: _getStartedAt(chunk.sessionId), endedAt: Date.now() })
+      // Clean up buffers but keep events for the done state
+      _thinkingBufs.delete(chunk.sessionId)
       queryEndCallbacks.forEach(fn => fn(chunk.sessionId))
       const msgs = getMessagesFor(chunk.sessionId)
       finalizeThinkingOn(msgs, chunk.sessionId)
       endStreamingOn(msgs)
-      flushPersistFor(chunk.sessionId)
-      // Clean up background buffer after persisting — DB has the final state
-      if (chunk.sessionId !== currentSessionId.value) {
-        backgroundMessages.delete(chunk.sessionId)
-      }
+      // Await persist before cleaning up background buffer — otherwise loadSession
+      // can hit the DB before the write lands and get stale data
+      flushPersistFor(chunk.sessionId).then(() => {
+        if (chunk.sessionId !== currentSessionId.value) {
+          backgroundMessages.delete(chunk.sessionId)
+        }
+      })
       return
     }
 
@@ -173,6 +265,19 @@ export function useChat(deps: ChatDeps = window.bond) {
 
     // Thinking deltas accumulate into the current thinking message
     if (chunk.kind === 'thinking_text') {
+      // Push event on first thinking chunk of this round
+      const cur = _activityMap.get(sid)
+      if (cur?.type !== 'thinking') {
+        _getEvents(sid).push({ type: 'thinking', label: 'Thinking', ts: Date.now() })
+      }
+      // Update activity to thinking with snippet
+      let buf = _thinkingBufs.get(sid) ?? ''
+      buf += chunk.text
+      _thinkingBufs.set(sid, buf)
+      const clean = buf.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim()
+      const snippet = clean.length > 120 ? '…' + clean.slice(-120) : clean
+      _setActivity(sid, { type: 'thinking', snippet, startedAt: _getStartedAt(sid) })
+
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i]
         if (m.role === 'meta' && m.kind === 'thinking' && m.streaming) {
@@ -187,11 +292,18 @@ export function useChat(deps: ChatDeps = window.bond) {
       return
     }
 
-    // Any non-thinking chunk finalizes the thinking message
+    // Any non-thinking chunk finalizes the thinking message and events
     finalizeThinkingOn(msgs, sid)
+    _finalizeThinkingEvent(sid)
+    _thinkingBufs.delete(sid)
 
     switch (chunk.kind) {
       case 'assistant_text': {
+        const cur = _activityMap.get(sid)
+        if (cur?.type !== 'responding') {
+          _getEvents(sid).push({ type: 'responding', label: 'Responding', ts: Date.now() })
+          _setActivity(sid, { type: 'responding', startedAt: _getStartedAt(sid) })
+        }
         const last = msgs[msgs.length - 1]
         if (last?.role === 'bond' && last.streaming) {
           last.text += chunk.text
@@ -203,6 +315,8 @@ export function useChat(deps: ChatDeps = window.bond) {
       }
 
       case 'assistant_tool':
+        _getEvents(sid).push({ type: 'tool', label: _formatToolLabel(chunk.name, chunk.summary), ts: Date.now() })
+        _setActivity(sid, { type: 'tool', name: chunk.name, detail: chunk.summary, startedAt: _getStartedAt(sid) })
         addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'tool', name: chunk.name, summary: chunk.summary })
         schedulePersistFor(sid)
         break
@@ -267,7 +381,7 @@ export function useChat(deps: ChatDeps = window.bond) {
   async function loadSession(sessionId: string) {
     const oldSid = currentSessionId.value
     if (oldSid) {
-      flushPersistFor(oldSid)
+      await flushPersistFor(oldSid)
       // Stash current messages if the old session is still busy (receiving chunks)
       if (busySessions.value.has(oldSid)) {
         backgroundMessages.set(oldSid, [...messages.value])
@@ -275,6 +389,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     }
 
     currentSessionId.value = sessionId
+    activity.value = _activityMap.get(sessionId) ?? { type: 'idle' }
 
     // Restore from background buffer if available (preserves in-flight responses)
     const bg = backgroundMessages.get(sessionId)
@@ -307,6 +422,7 @@ export function useChat(deps: ChatDeps = window.bond) {
   function clearMessages() {
     messages.value = []
     currentSessionId.value = null
+    activity.value = { type: 'idle' }
   }
 
   async function submit(text: string, images?: AttachedImage[]) {
@@ -347,6 +463,7 @@ export function useChat(deps: ChatDeps = window.bond) {
         const msgs = getMessagesFor(sid)
         addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text: res.error })
         markIdle(sid)
+        _clearActivity(sid)
         finalizeThinkingOn(msgs, sid)
         endStreamingOn(msgs)
         await persistMessagesFor(sid)
@@ -354,6 +471,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     } catch {
       const msgs = getMessagesFor(sid)
       markIdle(sid)
+      _clearActivity(sid)
       finalizeThinkingOn(msgs, sid)
       endStreamingOn(msgs)
       await persistMessagesFor(sid)
@@ -372,7 +490,17 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   function cancel() {
     const sid = currentSessionId.value
-    if (sid) markIdle(sid)
+    if (sid) {
+      markIdle(sid)
+      _finalizeThinkingEvent(sid)
+      const events = _getEvents(sid)
+      if (events.length > 0) {
+        _setActivity(sid, { type: 'done', startedAt: _getStartedAt(sid), endedAt: Date.now() })
+      } else {
+        _clearActivity(sid)
+      }
+      _thinkingBufs.delete(sid)
+    }
     deps.cancel(sid ?? undefined).catch(() => {})
     if (sid) {
       finalizeThinkingOn(messages.value, sid)
@@ -392,16 +520,40 @@ export function useChat(deps: ChatDeps = window.bond) {
   // Stash reactive state before HMR disposes this module
   if (import.meta.hot) {
     import.meta.hot.dispose((data) => {
+      // Flush all pending throttled persists before stashing state
+      for (const [sessionId, timer] of persistTimers) {
+        clearTimeout(timer)
+        persistMessagesFor(sessionId) // fire-and-forget (dispose is sync)
+      }
+      persistTimers.clear()
+
       data.messages = messages.value
       data.busySessions = [...busySessions.value]
       data.sessionId = currentSessionId.value
       data.backgroundMessages = [...backgroundMessages.entries()]
+      data.activityMap = [..._activityMap.entries()]
+      data.thinkingBufs = [..._thinkingBufs.entries()]
+      data.eventsMap = [..._eventsMap.entries()]
     })
+  }
+
+  // After HMR restore, persist all stashed sessions to ensure DB is in sync
+  if (_hmrNeedsPersist) {
+    if (currentSessionId.value && messages.value.length) {
+      persistMessagesFor(currentSessionId.value)
+    }
+    for (const [sessionId, msgs] of backgroundMessages) {
+      if (msgs.length) {
+        deps.saveMessages(sessionId, toSessionMessages(msgs))
+      }
+    }
   }
 
   return {
     messages,
     busy,
+    busySessionIds: busySessions,
+    activity,
     currentSessionId,
     submit,
     cancel,

@@ -28,27 +28,25 @@ describe('MessageBubble', () => {
     expect(md.props('streaming')).toBe(false)
   })
 
-  it('renders tool call with name and summary', () => {
+  it('renders tool call as minimal summary', () => {
     const wrapper = shallowMount(MessageBubble, {
       props: {
-        msg: { id: '3', role: 'meta' as const, kind: 'tool' as const, name: 'Read', summary: 'file.ts' },
+        msg: { id: '3', role: 'meta' as const, kind: 'tool' as const, name: 'Read', summary: '/path/to/file.ts' },
       },
     })
 
-    expect(wrapper.text()).toContain('Read')
-    expect(wrapper.text()).toContain('file.ts')
-    expect(wrapper.find('.text-accent').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Read file.ts')
+    expect(wrapper.find('.activity-summary').exists()).toBe(true)
   })
 
-  it('renders tool call without summary', () => {
+  it('renders tool call without summary as verb only', () => {
     const wrapper = shallowMount(MessageBubble, {
       props: {
         msg: { id: '4', role: 'meta' as const, kind: 'tool' as const, name: 'Glob' },
       },
     })
 
-    expect(wrapper.text()).toContain('Glob')
-    expect(wrapper.text()).not.toContain('—')
+    expect(wrapper.text()).toContain('Searched files')
   })
 
   it('renders error message with error styling', () => {
