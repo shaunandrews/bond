@@ -3,18 +3,22 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useChat } from './composables/useChat'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
+import { useProjects } from './composables/useProjects'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId, AttachedImage } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown, PhChecks } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhX } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
+import MissionBriefing from './components/MissionBriefing.vue'
 import ChatInput from './components/ChatInput.vue'
 import ActivityBar from './components/ActivityBar.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import MediaView from './components/MediaView.vue'
+import ProjectsView from './components/ProjectsView.vue'
+import ProjectPanelView from './components/ProjectPanelView.vue'
 import TodoView from './components/TodoView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
@@ -23,6 +27,7 @@ import BondPanelHandle from './components/BondPanelHandle.vue'
 
 const chat = useChat()
 const sessions = useSessions()
+const projects = useProjects()
 const { activeView } = useAppView()
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
 
@@ -64,12 +69,59 @@ function getInitialSidebarWidth(): number {
 
 const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === '1')
 const sidebarWidth = ref(getInitialSidebarWidth())
-const todoPanelOpen = ref(localStorage.getItem('bond:todo-panel-open') === '1')
-const todoPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
 
-function handleToggleTodoPanel() {
-  todoPanelOpen.value = !todoPanelOpen.value
-  localStorage.setItem('bond:todo-panel-open', todoPanelOpen.value ? '1' : '0')
+type RightPanelContent = 'todos' | 'projects'
+const rightPanelCollapsed = ref(localStorage.getItem('bond:right-panel') === 'none' || !localStorage.getItem('bond:right-panel'))
+const rightPanelContent = ref<RightPanelContent>(
+  (localStorage.getItem('bond:right-panel-content') as RightPanelContent) || 'todos'
+)
+const rightPanelOpen = computed(() => !rightPanelCollapsed.value && activeView.value === 'chat')
+const rightPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
+
+function getInitialRightPanelWidth(): number {
+  try {
+    const raw = localStorage.getItem('bond:panels:app-layout')
+    if (raw) {
+      const layout = JSON.parse(raw)
+      if (layout.sizes?.['right-panel'] != null) return layout.sizes['right-panel']
+    }
+  } catch {}
+  return 320
+}
+const rightPanelWidth = ref(getInitialRightPanelWidth())
+
+const rightPanelHidden = computed(() => rightPanelCollapsed.value || activeView.value !== 'chat')
+
+const rightPanelStyle = computed(() => ({
+  marginRight: rightPanelHidden.value ? `-${rightPanelWidth.value}px` : '0',
+  transition: `margin-right var(--transition-base)`,
+}))
+
+function toggleRightPanel(panel?: RightPanelContent) {
+  if (panel) {
+    if (!rightPanelCollapsed.value && rightPanelContent.value === panel) {
+      // Same panel clicked while open — collapse
+      syncRightPanelWidth()
+      rightPanelCollapsed.value = true
+    } else {
+      // Different panel or was collapsed — open/switch
+      rightPanelContent.value = panel
+      rightPanelCollapsed.value = false
+    }
+  } else {
+    // Generic toggle (keyboard shortcut)
+    if (!rightPanelCollapsed.value) {
+      syncRightPanelWidth()
+    }
+    rightPanelCollapsed.value = !rightPanelCollapsed.value
+  }
+  localStorage.setItem('bond:right-panel', rightPanelCollapsed.value ? 'none' : rightPanelContent.value)
+  localStorage.setItem('bond:right-panel-content', rightPanelContent.value)
+}
+
+function syncRightPanelWidth() {
+  const actual = rightPanelRef.value?.getSize()
+  if (actual != null) rightPanelWidth.value = actual
 }
 
 const sidebarStyle = computed(() => ({
@@ -78,16 +130,23 @@ const sidebarStyle = computed(() => ({
 }))
 
 function handleToggleSidebar() {
+  // Sync width to actual panel size before collapsing so the negative margin fully covers it
+  if (!sidebarCollapsed.value) {
+    const actual = sidebarPanelRef.value?.getSize()
+    if (actual != null) sidebarWidth.value = actual
+  }
   sidebarCollapsed.value = !sidebarCollapsed.value
   localStorage.setItem('bond:sidebar-collapsed', sidebarCollapsed.value ? '1' : '0')
 }
 
 function handleLayoutChange(layout: Record<string, number>) {
   if (layout.sidebar != null) sidebarWidth.value = layout.sidebar
+  if (layout['right-panel'] != null) rightPanelWidth.value = layout['right-panel']
 }
 
 function handleLayoutChanged(layout: Record<string, number>) {
   if (layout.sidebar != null) sidebarWidth.value = layout.sidebar
+  if (layout['right-panel'] != null) rightPanelWidth.value = layout['right-panel']
 }
 const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
 const { isAtBottom, scrollToBottom } = useAutoScroll(scrollEl)
@@ -157,10 +216,31 @@ async function handleTodoChat(text: string) {
   })
 }
 
+async function handleProjectCreate(name: string, goal: string, type: import('../shared/session').ProjectType, deadline: string) {
+  await projects.create(name, goal, type, deadline || undefined)
+}
+
+async function handleProjectStartChat(projectId: string) {
+  const project = projects.projects.value.find(p => p.id === projectId)
+  const session = await sessions.create({ projectId })
+  await chat.loadSession(session.id)
+  activeView.value = 'chat'
+  if (project?.goal) {
+    nextTick(() => {
+      chat.submit(`I'm working on the "${project.name}" project. Goal: ${project.goal}`)
+    })
+  } else {
+    nextTick(() => chatInputRef.value?.focus())
+  }
+}
+
 let removeCreateSkillListener: (() => void) | null = null
 let removeOpacityListener: (() => void) | null = null
 let removeAccentListener: (() => void) | null = null
 let removeModelListener: (() => void) | null = null
+let removeProjectsListener: (() => void) | null = null
+let removeConnectionLostListener: (() => void) | null = null
+let removeConnectionRestoredListener: (() => void) | null = null
 
 async function handleSelectSession(id: string) {
   activeView.value = 'chat'
@@ -195,11 +275,12 @@ function onKeyDown(e: KeyboardEvent) {
   }
   if (e.metaKey && e.shiftKey && e.key === 'b') {
     e.preventDefault()
-    handleToggleTodoPanel()
+    toggleRightPanel()
   }
 }
 
 function handleBeforeUnload() {
+  chat.stashToLocalStorage()
   chat.persistMessages()
 }
 
@@ -212,10 +293,25 @@ onMounted(async () => {
   removeModelListener = window.bond.onModelChanged((model: string) => {
     selectedModel.value = model as ModelId
   })
+  removeProjectsListener = window.bond.onProjectsChanged(() => projects.load())
+  removeConnectionLostListener = window.bond.onConnectionLost(() => {
+    chat.stashToLocalStorage()
+  })
+  removeConnectionRestoredListener = window.bond.onConnectionRestored(async () => {
+    // Re-persist all in-memory messages that survived the disconnect
+    await chat.repersistAll()
+    // Check if backup has messages the DB lost
+    const sid = sessions.activeSessionId.value
+    if (sid) {
+      const restored = await chat.restoreFromBackupIfNeeded(sid)
+      if (restored) await chat.loadSession(sid)
+    }
+  })
   chat.subscribe()
   loadAccent()
   loadWindowOpacity()
   refreshMediaCount()
+  projects.load()
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
 
@@ -252,13 +348,17 @@ onUnmounted(() => {
   removeOpacityListener?.()
   removeAccentListener?.()
   removeModelListener?.()
+  removeProjectsListener?.()
+  removeConnectionLostListener?.()
+  removeConnectionRestoredListener?.()
+  chat.stashToLocalStorage()
   chat.persistMessages()
   chat.unsubscribe()
 })
 </script>
 
 <template>
-  <BondPanelGroup direction="horizontal" autoSaveId="app-layout-v2" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
+  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
     <BondPanel ref="sidebarPanelRef" id="sidebar" unit="px" :defaultSize="260" :minSize="220" :maxSize="400" :style="sidebarStyle">
       <SessionSidebar
         :sessions="sessions.activeSessions.value"
@@ -268,12 +368,14 @@ onUnmounted(() => {
         :generatingTitleId="sessions.generatingTitleId.value"
         :busySessionIds="chat.busySessionIds.value"
         :mediaCount="mediaCount"
+        :projectCount="projects.activeProjects.value.length"
         @select="handleSelectSession"
         @create="handleNewSession"
         @archive="sessions.archive"
         @unarchive="sessions.unarchive"
         @remove="sessions.remove"
         @removeArchived="sessions.removeArchived"
+        @projects="activeView = 'projects'"
         @media="activeView = 'media'"
         @rename="handleRenameSession"
       />
@@ -297,13 +399,19 @@ onUnmounted(() => {
           </BondButton>
         </template>
         <template #header-end>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'todo-toggle-active': todoPanelOpen }" @click.stop="handleToggleTodoPanel" v-tooltip="'Toggle todos ⇧⌘B'">
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'projects' }" @click.stop="toggleRightPanel('projects')" v-tooltip="'Projects panel'">
+            <PhCube :size="16" weight="bold" />
+          </BondButton>
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'todos' }" @click.stop="toggleRightPanel('todos')" v-tooltip="'Todos panel ⇧⌘B'">
             <PhChecks :size="16" weight="bold" />
           </BondButton>
         </template>
 
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
-          <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" @approve="chat.respondToApproval" @openActivity="activityExpanded = true" />
+          <MissionBriefing v-if="chat.messages.value.length === 0" />
+          <template v-else>
+            <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" @approve="chat.respondToApproval" @openActivity="activityExpanded = true" />
+          </template>
         </div>
 
         <template #footer>
@@ -317,10 +425,42 @@ onUnmounted(() => {
               </div>
             </Transition>
             <ActivityBar :activity="chat.activity.value" v-model:expanded="activityExpanded" />
+            <TransitionGroup name="queued" tag="div" class="queued-list">
+              <div v-for="msg in chat.currentQueue.value" :key="msg.id" class="queued-item" @click="chat.removeQueuedMessage(msg.id); chatInputRef?.setText(msg.text)">
+                <BondText size="xs" color="muted" truncate class="flex-1 min-w-0">{{ msg.text }}</BondText>
+                <button class="queued-dismiss" @click.stop="chat.removeQueuedMessage(msg.id)" v-tooltip="'Remove from queue'">
+                  <PhX :size="10" />
+                </button>
+              </div>
+            </TransitionGroup>
             <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
           </div>
         </template>
       </ViewShell>
+
+      <ProjectsView
+        v-show="activeView === 'projects'"
+        :projects="projects.activeProjects.value"
+        :archivedProjects="projects.archivedProjects.value"
+        :activeProjectId="projects.activeProjectId.value"
+        :insetStart="sidebarCollapsed"
+        @select="projects.select"
+        @create="handleProjectCreate"
+        @archive="projects.archive"
+        @unarchive="projects.unarchive"
+        @remove="projects.remove"
+        @addResource="projects.addResource"
+        @removeResource="projects.removeResource"
+        @updateDeadline="(id, d) => projects.update(id, { deadline: d })"
+        @startChat="handleProjectStartChat"
+        @back="projects.select(null)"
+      >
+        <template #header-start>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
+            <PhSidebarSimple :size="16" weight="bold" />
+          </BondButton>
+        </template>
+      </ProjectsView>
 
       <MediaView v-show="activeView === 'media'" :insetStart="sidebarCollapsed">
         <template #header-start>
@@ -328,19 +468,22 @@ onUnmounted(() => {
             <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
-        <template #header-end>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'todo-toggle-active': todoPanelOpen }" @click.stop="handleToggleTodoPanel" v-tooltip="'Toggle todos ⇧⌘B'">
-            <PhChecks :size="16" weight="bold" />
-          </BondButton>
-        </template>
       </MediaView>
       </div>
     </BondPanel>
 
-    <BondPanelHandle v-show="todoPanelOpen" id="handle-1" />
+    <BondPanelHandle v-show="!rightPanelHidden" id="handle-1" />
 
-    <BondPanel ref="todoPanelRef" id="todo-panel" unit="px" :defaultSize="320" :minSize="260" :maxSize="480" v-show="todoPanelOpen">
-      <TodoView @startChat="handleTodoChat" />
+    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="260" :maxSize="480" :style="rightPanelStyle">
+      <TodoView v-if="rightPanelContent === 'todos'" @startChat="handleTodoChat" />
+      <ProjectPanelView v-else-if="rightPanelContent === 'projects'"
+        :projects="projects.activeProjects.value"
+        :activeProjectId="projects.activeProjectId.value"
+        @select="projects.select"
+        @startChat="handleProjectStartChat"
+        @addResource="projects.addResource"
+        @removeResource="projects.removeResource"
+      />
     </BondPanel>
   </BondPanelGroup>
 </template>
@@ -387,7 +530,51 @@ onUnmounted(() => {
   margin-inline: auto;
 }
 
-.todo-toggle-active {
+.panel-toggle-active {
   color: var(--color-accent, var(--color-text-primary)) !important;
+}
+
+.queued-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.queued-list:has(.queued-item) {
+  padding: 4px 0;
+}
+.queued-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-tint);
+  cursor: pointer;
+}
+.queued-item:hover {
+  background: var(--color-border);
+}
+.queued-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+}
+.queued-dismiss:hover {
+  color: var(--color-text-primary);
+}
+.queued-enter-active,
+.queued-leave-active {
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+.queued-enter-from,
+.queued-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
 }
 </style>

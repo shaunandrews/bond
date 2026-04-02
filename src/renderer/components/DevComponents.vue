@@ -551,11 +551,11 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
                 <template v-if="comp.name === 'ChatInput'">
                   <div class="dev-preview-row">
                     <span class="dev-preview-label">idle</span>
-                    <ChatInput :busy="false" model="sonnet" @submit="() => {}" @cancel="() => {}" />
+                    <ChatInput :busy="false" model="sonnet" :editMode="{ type: 'full' }" @submit="() => {}" @cancel="() => {}" />
                   </div>
                   <div class="dev-preview-row">
                     <span class="dev-preview-label">busy</span>
-                    <ChatInput :busy="true" model="sonnet" @submit="() => {}" @cancel="() => {}" />
+                    <ChatInput :busy="true" model="sonnet" :editMode="{ type: 'full' }" @submit="() => {}" @cancel="() => {}" />
                   </div>
                 </template>
 

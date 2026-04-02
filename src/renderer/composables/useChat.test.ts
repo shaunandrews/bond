@@ -93,7 +93,7 @@ describe('useChat', () => {
       expect(deps.send).not.toHaveBeenCalled()
     })
 
-    it('ignores submit while session is busy', async () => {
+    it('queues submit while session is busy instead of sending', async () => {
       chat.currentSessionId.value = 'sess-1'
       chat.subscribe()
 
@@ -101,6 +101,8 @@ describe('useChat', () => {
       await chat.submit('second')
 
       expect(deps.send).toHaveBeenCalledTimes(1)
+      expect(chat.currentQueue.value).toHaveLength(1)
+      expect(chat.currentQueue.value[0]).toMatchObject({ text: 'second', sessionId: 'sess-1' })
     })
 
     it('ignores submit without a session', async () => {
@@ -423,6 +425,117 @@ describe('useChat', () => {
       chat.subscribe()
       chat.unsubscribe()
       expect(unsub).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('message queue', () => {
+    it('queues messages when session is busy', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+
+      await chat.submit('first')
+      await chat.submit('second')
+      await chat.submit('third')
+
+      expect(deps.send).toHaveBeenCalledTimes(1)
+      expect(chat.currentQueue.value).toHaveLength(2)
+      expect(chat.currentQueue.value[0]).toMatchObject({ text: 'second' })
+      expect(chat.currentQueue.value[1]).toMatchObject({ text: 'third' })
+    })
+
+    it('queued messages include images', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+
+      await chat.submit('first')
+      const images = [{ data: 'abc', mediaType: 'image/png' as const }]
+      await chat.submit('with image', images)
+
+      expect(chat.currentQueue.value).toHaveLength(1)
+      expect(chat.currentQueue.value[0].images).toEqual(images)
+    })
+
+    it('auto-sends queued message on query_end', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      await chat.submit('first')
+      await chat.submit('second')
+      expect(chat.currentQueue.value).toHaveLength(1)
+
+      // Complete the first query — flush triggers auto-send
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+
+      // Wait for the flushPersist .then() to run
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(deps.send).toHaveBeenCalledTimes(2)
+      expect(deps.send).toHaveBeenLastCalledWith('second', 'sess-1', undefined)
+      expect(chat.currentQueue.value).toHaveLength(0)
+    })
+
+    it('does not auto-send queued messages for non-current session', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      await chat.submit('first')
+      await chat.submit('second')
+
+      // Switch away
+      chat.currentSessionId.value = 'sess-2'
+      await nextTick()
+
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+      await new Promise(r => setTimeout(r, 10))
+
+      // Should not have auto-sent — still in queue
+      expect(deps.send).toHaveBeenCalledTimes(1)
+      expect(chat.queuedMessages.value).toHaveLength(1)
+    })
+
+    it('removeQueuedMessage removes by id', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+
+      await chat.submit('first')
+      await chat.submit('second')
+      await chat.submit('third')
+
+      const id = chat.currentQueue.value[0].id
+      chat.removeQueuedMessage(id)
+
+      expect(chat.currentQueue.value).toHaveLength(1)
+      expect(chat.currentQueue.value[0]).toMatchObject({ text: 'third' })
+    })
+
+    it('cancel clears queued messages for the session', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      handler({ kind: 'query_start', sessionId: 'sess-1' })
+      await chat.submit('queued-1')
+      await chat.submit('queued-2')
+      expect(chat.currentQueue.value).toHaveLength(2)
+
+      chat.cancel()
+      expect(chat.currentQueue.value).toHaveLength(0)
+    })
+
+    it('currentQueue only shows messages for current session', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+
+      await chat.submit('first')
+      await chat.submit('queued for sess-1')
+
+      chat.currentSessionId.value = 'sess-2'
+      await nextTick()
+
+      expect(chat.currentQueue.value).toHaveLength(0)
+      expect(chat.queuedMessages.value).toHaveLength(1)
     })
   })
 

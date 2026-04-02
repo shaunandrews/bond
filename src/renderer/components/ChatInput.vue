@@ -1,10 +1,56 @@
 <script setup lang="ts">
 import { ref, computed, watch, toRefs, nextTick, onMounted } from 'vue'
-import { PhArrowUp, PhPaperclip, PhStop, PhX } from '@phosphor-icons/vue'
+import { PhArrowUp, PhPaperclip, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
-import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode } from '../../shared/session'
+import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode, type ImageMediaType } from '../../shared/session'
 import BondButton from './BondButton.vue'
 import BondSelect from './BondSelect.vue'
+
+function highlightMarkdownSyntax(text: string): string {
+  if (!text) return ''
+  return text.split('\n').map(line => {
+    let esc = line
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+
+    // Blockquote: > at line start (escaped as &gt;)
+    if (/^&gt;\s?/.test(esc)) {
+      return esc.replace(/^(&gt;)(\s?)(.*)$/,
+        '<span class="md-syn">$1</span>$2<span class="md-quote">$3</span>')
+    }
+
+    // Unordered list: - or * at line start
+    const ulMatch = esc.match(/^(\s*)([-*])\s/)
+    if (ulMatch) {
+      esc = esc.replace(/^(\s*)([-*])(\s)/, '$1<span class="md-syn">$2</span>$3')
+    }
+
+    // Ordered list: 1. at line start
+    const olMatch = esc.match(/^(\s*)(\d+\.)(\s)/)
+    if (olMatch) {
+      esc = esc.replace(/^(\s*)(\d+\.)(\s)/, '$1<span class="md-syn">$2</span>$3')
+    }
+
+    // Inline code: `text`
+    esc = esc.replace(/(`)((?:(?!`).)+)(`)/g,
+      '<span class="md-syn">$1</span><span class="md-code">$2</span><span class="md-syn">$3</span>')
+
+    // Bold: **text**
+    esc = esc.replace(/(\*\*)((?:(?!\*\*).)+)(\*\*)/g,
+      '<span class="md-syn">$1</span><span class="md-bold">$2</span><span class="md-syn">$3</span>')
+
+    // Italic: *text* (not adjacent to *)
+    esc = esc.replace(/(?<!\*)\*(?!\*)(.+?)\*(?!\*)/g,
+      '<span class="md-syn">*</span><span class="md-italic">$1</span><span class="md-syn">*</span>')
+
+    // Strikethrough: ~~text~~
+    esc = esc.replace(/(~~)((?:(?!~~).)+)(~~)/g,
+      '<span class="md-syn">$1</span><span class="md-strike">$2</span><span class="md-syn">$3</span>')
+
+    return esc
+  }).join('\n')
+}
 
 interface SkillInfo {
   name: string
@@ -57,8 +103,22 @@ const modelOptions = MODEL_IDS.map(id => ({ value: id, label: id.charAt(0).toUpp
 const editModeOptions = EDIT_MODE_OPTIONS.map(o => ({ value: o.value, label: o.label }))
 
 const inputEl = ref<HTMLTextAreaElement | null>(null)
+const previewEl = ref<HTMLElement | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const attachedImages = ref<AttachedImage[]>([])
+const inputText = ref('')
+
+const inputHighlightHtml = computed(() => highlightMarkdownSyntax(inputText.value))
+
+function updatePreview() {
+  inputText.value = inputEl.value?.value ?? ''
+}
+
+function syncPreviewScroll() {
+  if (previewEl.value && inputEl.value) {
+    previewEl.value.scrollTop = inputEl.value.scrollTop
+  }
+}
 
 watch(busy, (isBusy) => {
   if (!isBusy) {
@@ -70,6 +130,7 @@ function handleSubmit() {
   const text = inputEl.value?.value.trim() ?? ''
   if (!text && !attachedImages.value.length) return
   inputEl.value!.value = ''
+  inputText.value = ''
   emit('submit', text, attachedImages.value.map(i => ({ data: i.data, mediaType: i.mediaType })))
   attachedImages.value = []
   selectedImageIndex.value = null
@@ -81,7 +142,20 @@ function focus() {
   inputEl.value?.focus()
 }
 
-defineExpose({ focus })
+function setText(text: string) {
+  if (!inputEl.value) return
+  inputEl.value.value = text
+  inputText.value = text
+  nextTick(() => {
+    autoResize()
+    inputEl.value?.focus()
+    // Place cursor at end
+    const len = inputEl.value?.value.length ?? 0
+    inputEl.value?.setSelectionRange(len, len)
+  })
+}
+
+defineExpose({ focus, setText })
 
 function autoResize() {
   const el = inputEl.value
@@ -97,7 +171,7 @@ function addImageFile(file: File) {
     const result = reader.result as string
     const base64 = result.split(',')[1]
     if (base64) {
-      attachedImages.value.push({ data: base64, mediaType: file.type })
+      attachedImages.value.push({ data: base64, mediaType: file.type as ImageMediaType })
     }
   }
   reader.readAsDataURL(file)
@@ -192,6 +266,7 @@ function selectSkill(skill: SkillInfo) {
   const el = inputEl.value
   if (!el) return
   el.value = `/${skill.name} `
+  inputText.value = el.value
   showSkillMenu.value = false
   el.focus()
   nextTick(autoResize)
@@ -273,18 +348,28 @@ function handleKeyDown(e: KeyboardEvent) {
         </div>
       </div>
 
-      <!-- Textarea -->
-      <textarea
-        ref="inputEl"
-        rows="2"
-        placeholder="Ask Bond something…"
-        :spellcheck="false"
-        :disabled="busy"
-        @keydown="handleKeyDown"
-        @input="autoResize(); updateSkillMenu()"
-        @paste="handlePaste"
-        class="chat-textarea"
-      />
+      <!-- Textarea with markdown preview overlay -->
+      <div class="chat-textarea-wrapper">
+        <div
+          v-if="inputText"
+          ref="previewEl"
+          class="chat-highlight"
+          aria-hidden="true"
+          v-html="inputHighlightHtml"
+        />
+        <textarea
+          ref="inputEl"
+          rows="2"
+          placeholder="Ask Bond something…"
+          :spellcheck="false"
+          @keydown="handleKeyDown"
+          @input="autoResize(); updateSkillMenu(); updatePreview()"
+          @paste="handlePaste"
+          @scroll="syncPreviewScroll"
+          class="chat-textarea"
+          :class="{ 'has-highlight': inputText }"
+        />
+      </div>
 
       <!-- Scoped paths input -->
       <div v-if="editMode.type === 'scoped'" class="px-3 pt-2">
@@ -304,7 +389,6 @@ function handleKeyDown(e: KeyboardEvent) {
             variant="ghost"
             size="sm"
             icon
-            :disabled="busy"
             @click="handleAttachClick"
             v-tooltip="'Attach image'"
           >
@@ -336,18 +420,15 @@ function handleKeyDown(e: KeyboardEvent) {
           />
         </div>
         <div class="flex items-center gap-s">
-          <!-- Combined action button -->
-          <button
+          <BondButton
             v-if="busy"
-            type="button"
-            data-action="stop"
-            class="flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-border text-text-primary hover:opacity-85"
+            variant="ghost"
+            size="sm"
             @click="emit('cancel')"
           >
-            <PhStop :size="16" weight="fill" />
-          </button>
+            Esc to stop
+          </BondButton>
           <button
-            v-else
             type="button"
             data-action="send"
             class="flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-accent text-white hover:opacity-85"
@@ -377,6 +458,24 @@ function handleKeyDown(e: KeyboardEvent) {
   background: var(--color-surface);
 }
 
+.chat-textarea-wrapper {
+  position: relative;
+}
+
+.chat-highlight {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  padding: 0.75rem 0.75rem 0.5rem;
+  font: inherit;
+  font-size: 1rem;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: hidden;
+  z-index: 1;
+}
+
 .chat-textarea {
   display: block;
   width: 100%;
@@ -384,21 +483,41 @@ function handleKeyDown(e: KeyboardEvent) {
   max-height: 12rem;
   overflow-y: auto;
   padding: 0.75rem 0.75rem 0.5rem;
-  /* border: 1px solid var(--color-border); */
   border-radius: var(--radius-xl);
-  /* background: var(--color-surface); */
   color: var(--color-text-primary);
   font: inherit;
   font-size: 1rem;
   outline: none;
 }
+.chat-textarea.has-highlight {
+  color: transparent;
+  caret-color: var(--color-text-primary);
+}
 .chat-textarea::placeholder {
   color: var(--color-muted);
 }
-.chat-textarea:focus {
-  /* border-color: var(--color-accent);
-  box-shadow: 0 0 0 1px var(--color-accent);
-  background: var(--color-surface); */
+
+/* Markdown syntax highlighting in input */
+.chat-highlight :deep(.md-syn) {
+  opacity: 0.3;
+}
+.chat-highlight :deep(.md-bold) {
+  color: var(--color-accent);
+}
+.chat-highlight :deep(.md-italic) {
+  font-style: italic;
+}
+.chat-highlight :deep(.md-code) {
+  background: color-mix(in srgb, var(--color-border) 50%, transparent);
+  border-radius: 2px;
+}
+.chat-highlight :deep(.md-quote) {
+  color: var(--color-muted);
+  font-style: italic;
+}
+.chat-highlight :deep(.md-strike) {
+  text-decoration: line-through;
+  opacity: 0.6;
 }
 
 .image-strip {

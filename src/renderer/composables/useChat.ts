@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { ref, computed } from 'vue'
 import type { BondStreamChunk, TaggedChunk } from '../../shared/stream'
 import type { SessionMessage, AttachedImage } from '../../shared/session'
@@ -17,6 +18,13 @@ export type ActivityState =
   | { type: 'tool'; name: string; detail?: string; startedAt: number; events: ActivityEvent[] }
   | { type: 'responding'; startedAt: number; events: ActivityEvent[] }
   | { type: 'done'; startedAt: number; endedAt: number; events: ActivityEvent[] }
+
+export interface QueuedMessage {
+  id: string
+  sessionId: string
+  text: string
+  images?: AttachedImage[]
+}
 
 export interface ChatDeps {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => Promise<{ ok: boolean; error?: string; imageIds?: string[] }>
@@ -70,7 +78,7 @@ function fromSessionMessages(msgs: SessionMessage[]): Message[] {
 // Preserve chat state across HMR reloads so in-flight streaming
 // isn't lost when Vite hot-updates a module during a response.
 const _hmr = import.meta.hot?.data as
-  | { messages?: Message[]; busySessions?: string[]; sessionId?: string | null; backgroundMessages?: [string, Message[]][]; activityMap?: [string, ActivityState][]; thinkingBufs?: [string, string][]; eventsMap?: [string, ActivityEvent[]][] }
+  | { messages?: Message[]; busySessions?: string[]; sessionId?: string | null; backgroundMessages?: [string, Message[]][]; activityMap?: [string, ActivityState][]; thinkingBufs?: [string, string][]; eventsMap?: [string, ActivityEvent[]][]; queuedMessages?: QueuedMessage[] }
   | undefined
 const _hmrNeedsPersist = !!(_hmr?.messages?.length || _hmr?.backgroundMessages?.length)
 
@@ -78,6 +86,7 @@ export function useChat(deps: ChatDeps = window.bond) {
   /** Messages for the current session (reactive, rendered by template) */
   const messages = ref<Message[]>(_hmr?.messages ?? [])
   const busySessions = ref<Set<string>>(new Set(_hmr?.busySessions ?? []))
+  const queuedMessages = ref<QueuedMessage[]>(_hmr?.queuedMessages ?? [])
   const currentSessionId = ref<string | null>(_hmr?.sessionId ?? null)
 
   /** Messages for non-current sessions that are still receiving chunks */
@@ -149,6 +158,10 @@ export function useChat(deps: ChatDeps = window.bond) {
     const sid = currentSessionId.value
     return sid ? busySessions.value.has(sid) : false
   })
+
+  const currentQueue = computed(() =>
+    queuedMessages.value.filter(m => m.sessionId === currentSessionId.value)
+  )
 
   function markBusy(sessionId: string) {
     busySessions.value = new Set([...busySessions.value, sessionId])
@@ -254,6 +267,15 @@ export function useChat(deps: ChatDeps = window.bond) {
       flushPersistFor(chunk.sessionId).then(() => {
         if (chunk.sessionId !== currentSessionId.value) {
           backgroundMessages.delete(chunk.sessionId)
+        }
+        // Auto-send next queued message for this session
+        if (chunk.sessionId === currentSessionId.value) {
+          const nextIdx = queuedMessages.value.findIndex(m => m.sessionId === chunk.sessionId)
+          if (nextIdx !== -1) {
+            const next = queuedMessages.value[nextIdx]
+            queuedMessages.value = queuedMessages.value.filter((_, i) => i !== nextIdx)
+            submit(next.text, next.images)
+          }
         }
       })
       return
@@ -428,7 +450,18 @@ export function useChat(deps: ChatDeps = window.bond) {
   async function submit(text: string, images?: AttachedImage[]) {
     const trimmed = text.trim()
     const sid = currentSessionId.value
-    if ((!trimmed && !images?.length) || !sid || busySessions.value.has(sid)) return
+    if ((!trimmed && !images?.length) || !sid) return
+
+    // If busy, queue the message for later
+    if (busySessions.value.has(sid)) {
+      queuedMessages.value = [...queuedMessages.value, {
+        id: uid(),
+        sessionId: sid,
+        text: trimmed,
+        images: images?.length ? images : undefined
+      }]
+      return
+    }
 
     addMessageTo(messages.value, { id: uid(), role: 'user', text: trimmed, images: images?.length ? images : undefined })
 
@@ -441,8 +474,8 @@ export function useChat(deps: ChatDeps = window.bond) {
     thinkingStartTimes.set(sid, Date.now())
     addMessageTo(messages.value, { id: uid(), role: 'meta', kind: 'thinking', text: '', streaming: true })
 
-    // Persist user message in background — don't block the send
-    persistMessagesFor(sid)
+    // Persist user message immediately — ensures it lands in DB before any crash
+    await persistMessagesFor(sid)
 
     // Send returns immediately now (fire-and-forget). Busy state is cleared
     // by the query_end chunk from the daemon, not here.
@@ -488,9 +521,15 @@ export function useChat(deps: ChatDeps = window.bond) {
     deps.respondToApproval(requestId, approved)
   }
 
+  function removeQueuedMessage(id: string) {
+    queuedMessages.value = queuedMessages.value.filter(m => m.id !== id)
+  }
+
   function cancel() {
     const sid = currentSessionId.value
     if (sid) {
+      // Clear queued messages for this session
+      queuedMessages.value = queuedMessages.value.filter(m => m.sessionId !== sid)
       markIdle(sid)
       _finalizeThinkingEvent(sid)
       const events = _getEvents(sid)
@@ -507,6 +546,63 @@ export function useChat(deps: ChatDeps = window.bond) {
       endStreamingOn(messages.value)
       flushPersistFor(sid)
     }
+  }
+
+  /** Re-persist all in-memory messages after daemon reconnection.
+   *  Covers the gap where streaming data was in memory but couldn't be saved
+   *  because the daemon was down. */
+  async function repersistAll() {
+    if (currentSessionId.value && messages.value.length) {
+      await persistMessagesFor(currentSessionId.value).catch(() => {})
+    }
+    for (const [sessionId, msgs] of backgroundMessages) {
+      if (msgs.length) {
+        await deps.saveMessages(sessionId, toSessionMessages(msgs)).catch(() => {})
+      }
+    }
+  }
+
+  /** Stash current messages to localStorage as an emergency backup.
+   *  Called on beforeunload and connection loss. */
+  function stashToLocalStorage() {
+    const sid = currentSessionId.value
+    if (!sid || !messages.value.length) return
+    try {
+      const key = `bond:msg-backup:${sid}`
+      const data = JSON.stringify(toSessionMessages(messages.value))
+      localStorage.setItem(key, data)
+      localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
+    } catch { /* quota exceeded — best effort */ }
+  }
+
+  /** Restore messages from localStorage backup if DB has fewer.
+   *  Returns true if backup was applied. */
+  async function restoreFromBackupIfNeeded(sessionId: string): Promise<boolean> {
+    try {
+      const key = `bond:msg-backup:${sessionId}`
+      const raw = localStorage.getItem(key)
+      if (!raw) return false
+
+      const ts = parseInt(localStorage.getItem('bond:msg-backup-ts') ?? '0', 10)
+      // Only use backups less than 5 minutes old
+      if (Date.now() - ts > 5 * 60 * 1000) {
+        localStorage.removeItem(key)
+        return false
+      }
+
+      const backed: SessionMessage[] = JSON.parse(raw)
+      const dbMsgs = await deps.getMessages(sessionId)
+
+      if (backed.length > dbMsgs.length + 5) {
+        // Backup has significantly more messages — save it to DB
+        await deps.saveMessages(sessionId, backed)
+        localStorage.removeItem(key)
+        return true
+      }
+
+      localStorage.removeItem(key)
+    } catch { /* corrupt backup — ignore */ }
+    return false
   }
 
   function subscribe() {
@@ -534,6 +630,7 @@ export function useChat(deps: ChatDeps = window.bond) {
       data.activityMap = [..._activityMap.entries()]
       data.thinkingBufs = [..._thinkingBufs.entries()]
       data.eventsMap = [..._eventsMap.entries()]
+      data.queuedMessages = queuedMessages.value
     })
   }
 
@@ -555,14 +652,20 @@ export function useChat(deps: ChatDeps = window.bond) {
     busySessionIds: busySessions,
     activity,
     currentSessionId,
+    queuedMessages,
+    currentQueue,
     submit,
     cancel,
+    removeQueuedMessage,
     respondToApproval,
     subscribe,
     unsubscribe,
     loadSession,
     clearMessages,
     persistMessages,
+    repersistAll,
+    stashToLocalStorage,
+    restoreFromBackupIfNeeded,
     onQueryEnd
   }
 }

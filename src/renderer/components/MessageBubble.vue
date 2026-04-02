@@ -1,8 +1,15 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import type { Message } from '../types/message'
 import { imageDataUri } from '../../shared/session'
 import MarkdownMessage from './MarkdownMessage.vue'
+
+function renderUserMarkdown(text: string): string {
+  const raw = marked.parse(text, { async: false, gfm: true, breaks: true }) as string
+  return DOMPurify.sanitize(raw)
+}
 
 defineProps<{ msg: Message }>()
 defineEmits<{
@@ -75,9 +82,11 @@ function formatToolSummary(name: string, summary?: string): string {
         class="rounded-lg max-w-[200px] max-h-[200px] object-cover"
       />
     </div>
-    <div v-if="msg.text" class="px-3.5 py-2.5 rounded-[10px] text-sm leading-relaxed bg-surface border border-border whitespace-pre-wrap">
-      {{ msg.text }}
-    </div>
+    <div
+      v-if="msg.text"
+      class="user-markdown px-3.5 py-2.5 rounded-[10px] text-sm leading-relaxed bg-surface border border-border"
+      v-html="renderUserMarkdown(msg.text)"
+    />
     <span v-if="msg.ts" class="msg-timestamp">{{ formatTime(msg.ts) }}</span>
   </div>
 
@@ -218,4 +227,31 @@ function formatToolSummary(name: string, summary?: string): string {
   opacity: 0;
   transform: translate(-50%, -120%);
 }
+
+/* User message markdown */
+.user-markdown :deep(p) { margin: 0; }
+.user-markdown :deep(p + p) { margin-top: 0.4em; }
+.user-markdown :deep(p:only-child) { white-space: pre-wrap; }
+.user-markdown :deep(strong) { font-weight: 600; }
+.user-markdown :deep(em) { font-style: italic; }
+.user-markdown :deep(del) { text-decoration: line-through; }
+.user-markdown :deep(code) {
+  background: color-mix(in srgb, var(--color-border) 50%, transparent);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+  font-size: 0.88em;
+  font-family: var(--font-mono);
+}
+.user-markdown :deep(blockquote) {
+  border-left: 3px solid var(--color-border);
+  margin: 0.3em 0;
+  padding-left: 0.7em;
+  color: var(--color-muted);
+}
+.user-markdown :deep(ul), .user-markdown :deep(ol) {
+  margin: 0.3em 0;
+  padding-left: 1.4em;
+}
+.user-markdown :deep(li) { margin: 0.1em 0; }
+.user-markdown :deep(a) { color: var(--color-accent); text-decoration: underline; }
 </style>

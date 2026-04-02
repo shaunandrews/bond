@@ -63,8 +63,8 @@ describe('ChatInput', () => {
   it('emits cancel on action button click when busy', async () => {
     const wrapper = createWrapper(true)
 
-    const actionBtn = wrapper.find('[data-action="stop"]')
-    await actionBtn.trigger('click')
+    const stopBtn = wrapper.findAll('button').find(b => b.text().includes('Esc to stop'))!
+    await stopBtn.trigger('click')
 
     expect(wrapper.emitted('cancel')).toHaveLength(1)
   })
@@ -73,20 +73,39 @@ describe('ChatInput', () => {
     const wrapper = createWrapper(false)
 
     expect(wrapper.find('[data-action="send"]').exists()).toBe(true)
-    expect(wrapper.find('[data-action="stop"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Esc to stop')
   })
 
-  it('shows stop button when busy', () => {
+  it('shows both stop and send buttons when busy', () => {
     const wrapper = createWrapper(true)
 
-    expect(wrapper.find('[data-action="stop"]').exists()).toBe(true)
-    expect(wrapper.find('[data-action="send"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Esc to stop')
+    expect(wrapper.find('[data-action="send"]').exists()).toBe(true)
   })
 
-  it('disables textarea when busy', () => {
+  it('keeps textarea enabled when busy for message queuing', () => {
     const wrapper = createWrapper(true)
     const textarea = wrapper.find('textarea')
 
-    expect(textarea.attributes('disabled')).toBeDefined()
+    expect(textarea.attributes('disabled')).toBeUndefined()
+  })
+
+  it('emits submit even when busy (for queuing)', async () => {
+    const wrapper = createWrapper(true)
+    const textarea = wrapper.find('textarea')
+
+    ;(textarea.element as HTMLTextAreaElement).value = 'queued msg'
+    await textarea.trigger('keydown', { key: 'Enter' })
+
+    expect(wrapper.emitted('submit')).toHaveLength(1)
+    expect(wrapper.emitted('submit')![0]).toEqual(['queued msg', []])
+  })
+
+  it('setText populates textarea via exposed method', async () => {
+    const wrapper = createWrapper()
+    const textarea = wrapper.find('textarea')
+
+    ;(wrapper.vm as any).setText('edited message')
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('edited message')
   })
 })

@@ -4,14 +4,16 @@ import MessageBubble from './MessageBubble.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 
 describe('MessageBubble', () => {
-  it('renders user message with correct text and alignment', () => {
+  it('renders user message with markdown and alignment', () => {
     const wrapper = shallowMount(MessageBubble, {
       props: {
         msg: { id: '1', role: 'user' as const, text: 'hello there' },
       },
     })
 
-    expect(wrapper.text()).toContain('hello there')
+    const bubble = wrapper.find('.user-markdown')
+    expect(bubble.exists()).toBe(true)
+    expect(bubble.html()).toContain('hello there')
     expect(wrapper.find('.self-end').exists()).toBe(true)
   })
 
