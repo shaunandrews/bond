@@ -14,10 +14,12 @@ declare global {
       getMessages: (sessionId: string) => Promise<import('../../shared/session').SessionMessage[]>
       saveMessages: (sessionId: string, messages: import('../../shared/session').SessionMessage[]) => Promise<boolean>
       generateTitle: (sessionId: string) => Promise<{ title: string; summary: string }>
+      onTodoChanged: (fn: () => void) => () => void
       listTodos: () => Promise<import('../../shared/session').TodoItem[]>
-      createTodo: (text: string) => Promise<import('../../shared/session').TodoItem>
-      updateTodo: (id: string, updates: Partial<Pick<import('../../shared/session').TodoItem, 'text' | 'done'>>) => Promise<import('../../shared/session').TodoItem | null>
+      createTodo: (text: string, notes?: string, group?: string) => Promise<import('../../shared/session').TodoItem>
+      updateTodo: (id: string, updates: Partial<Pick<import('../../shared/session').TodoItem, 'text' | 'notes' | 'group' | 'done'>>) => Promise<import('../../shared/session').TodoItem | null>
       deleteTodo: (id: string) => Promise<boolean>
+      parseTodo: (raw: string) => Promise<{ title: string; notes: string; group: string }>
       listImages: () => Promise<import('../../shared/session').ImageRecord[]>
       getImage: (imageId: string) => Promise<import('../../shared/session').AttachedImage | null>
       getImages: (ids: string[]) => Promise<(import('../../shared/session').AttachedImage | null)[]>

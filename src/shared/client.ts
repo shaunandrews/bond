@@ -10,6 +10,7 @@ import {
 } from './protocol'
 
 type ChunkListener = (chunk: TaggedChunk) => void
+type TodoChangeListener = () => void
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -21,6 +22,7 @@ export class BondClient {
   private nextId = 1
   private pending = new Map<string | number, PendingRequest>()
   private chunkListeners = new Set<ChunkListener>()
+  private todoChangeListeners = new Set<TodoChangeListener>()
   private socketPath: string
   private _connected = false
 
@@ -81,6 +83,10 @@ export class BondClient {
             for (const fn of this.chunkListeners) {
               fn(chunk)
             }
+          } else if (msg.method === 'todo.changed') {
+            for (const fn of this.todoChangeListeners) {
+              fn()
+            }
           }
         }
       })
@@ -124,6 +130,11 @@ export class BondClient {
   onChunk(fn: ChunkListener): () => void {
     this.chunkListeners.add(fn)
     return () => this.chunkListeners.delete(fn)
+  }
+
+  onTodoChanged(fn: TodoChangeListener): () => void {
+    this.todoChangeListeners.add(fn)
+    return () => this.todoChangeListeners.delete(fn)
   }
 
   // --- Subscriptions ---
@@ -212,16 +223,20 @@ export class BondClient {
     return await this.call('todo.list') as TodoItem[]
   }
 
-  async createTodo(text: string): Promise<TodoItem> {
-    return await this.call('todo.create', { text }) as TodoItem
+  async createTodo(text: string, notes = '', group = ''): Promise<TodoItem> {
+    return await this.call('todo.create', { text, notes, group }) as TodoItem
   }
 
-  async updateTodo(id: string, updates: Partial<Pick<TodoItem, 'text' | 'done'>>): Promise<TodoItem | null> {
+  async updateTodo(id: string, updates: Partial<Pick<TodoItem, 'text' | 'notes' | 'group' | 'done'>>): Promise<TodoItem | null> {
     return await this.call('todo.update', { id, updates }) as TodoItem | null
   }
 
   async deleteTodo(id: string): Promise<boolean> {
     return await this.call('todo.delete', { id }) as boolean
+  }
+
+  async parseTodo(raw: string): Promise<{ title: string; notes: string; group: string }> {
+    return await this.call('todo.parse', { raw }) as { title: string; notes: string; group: string }
   }
 
   // --- Skills ---

@@ -214,6 +214,12 @@ function createWindow(): void {
     }
   })
 
+  client.onTodoChanged(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:todoChanged')
+    }
+  })
+
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
@@ -376,9 +382,10 @@ app.whenReady().then(async () => {
 
   // --- Todos ---
   ipcMain.handle('todo:list', () => client.listTodos())
-  ipcMain.handle('todo:create', (_e, text: string) => client.createTodo(text))
+  ipcMain.handle('todo:create', (_e, text: string, notes?: string, group?: string) => client.createTodo(text, notes, group))
   ipcMain.handle('todo:update', (_e, id: string, updates: Record<string, unknown>) => client.updateTodo(id, updates))
   ipcMain.handle('todo:delete', (_e, id: string) => client.deleteTodo(id))
+  ipcMain.handle('todo:parse', (_e, raw: string) => client.parseTodo(raw))
 
   ipcMain.handle('image:readLocal', (_e, filePath: string): string | null => {
     const EXT_TO_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }

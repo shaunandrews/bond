@@ -21,6 +21,8 @@ export function getDb(): Database.Database {
   migrateInlineImages(_db)
   migrateAddSiteIdColumn(_db)
   migrateCreateTodosTable(_db)
+  migrateAddTodoNotesColumn(_db)
+  migrateAddTodoGroupColumn(_db)
 
   return _db
 }
@@ -173,6 +175,20 @@ function migrateCreateTodosTable(db: Database.Database): void {
       updated_at TEXT NOT NULL
     );
   `)
+}
+
+function migrateAddTodoNotesColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(todos)') as { name: string }[]
+  if (!columns.some(c => c.name === 'notes')) {
+    db.exec("ALTER TABLE todos ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+  }
+}
+
+function migrateAddTodoGroupColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(todos)') as { name: string }[]
+  if (!columns.some(c => c.name === 'group_name')) {
+    db.exec("ALTER TABLE todos ADD COLUMN group_name TEXT NOT NULL DEFAULT ''")
+  }
 }
 
 // --- One-time migration from file-based storage ---

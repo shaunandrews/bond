@@ -39,6 +39,8 @@ export interface ImageRecord {
 export interface TodoItem {
   id: string
   text: string
+  notes: string
+  group: string
   done: boolean
   createdAt: string
   updatedAt: string

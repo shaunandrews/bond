@@ -37,6 +37,7 @@ import {
   saveMessages
 } from './sessions'
 import { listTodos, createTodo, updateTodo, deleteTodo } from './todos'
+import { parseTodoInput } from './parse-todo'
 import { generateTitleAndSummary } from './generate-title'
 import {
   getSoul,
@@ -62,6 +63,7 @@ import {
 const activeQueries = new Map<string, { ac: AbortController; promise: Promise<boolean> }>()
 let currentModel: string = 'sonnet'
 const knownSdkSessions = new Set<string>()
+let serverWss: WebSocketServer | null = null
 
 // Track which clients are subscribed to which sessions
 const sessionSubscribers = new Map<string, Set<WebSocket>>()
@@ -111,6 +113,16 @@ function broadcastChunk(sessionId: string, chunk: BondStreamChunk): void {
       pendingApprovalChunks.set(sessionId, pending)
     }
     pending.push(tagged)
+  }
+}
+
+function broadcastTodoChanged(): void {
+  if (!serverWss) return
+  const msg = JSON.stringify(makeNotification('todo.changed', {}))
+  for (const client of serverWss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg)
+    }
   }
 }
 
@@ -453,20 +465,35 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'todo.create': {
         const text = getStringParam(p, 'text')
         if (!text) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'text is required'))
-        return JSON.stringify(makeResponse(id, createTodo(text)))
+        const notes = getStringParam(p, 'notes') ?? ''
+        const group = getStringParam(p, 'group') ?? ''
+        const newTodo = createTodo(text, notes, group)
+        broadcastTodoChanged()
+        return JSON.stringify(makeResponse(id, newTodo))
       }
 
       case 'todo.update': {
         const todoId = getStringParam(p, 'id')
         if (!todoId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
         const updates = getParam(p, 'updates') as Partial<{ text: string; done: boolean }> | undefined
-        return JSON.stringify(makeResponse(id, updateTodo(todoId, updates ?? {})))
+        const updated = updateTodo(todoId, updates ?? {})
+        broadcastTodoChanged()
+        return JSON.stringify(makeResponse(id, updated))
       }
 
       case 'todo.delete': {
         const todoId = getStringParam(p, 'id')
         if (!todoId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, deleteTodo(todoId)))
+        const deleted = deleteTodo(todoId)
+        broadcastTodoChanged()
+        return JSON.stringify(makeResponse(id, deleted))
+      }
+
+      case 'todo.parse': {
+        const raw = getStringParam(p, 'raw')
+        if (!raw) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'raw is required'))
+        const parsed = await parseTodoInput(raw)
+        return JSON.stringify(makeResponse(id, parsed))
       }
 
       default:
@@ -496,6 +523,7 @@ export function startServer(socketPath: string): BondServer {
 
   const httpServer: HttpServer = createServer()
   const wss = new WebSocketServer({ server: httpServer })
+  serverWss = wss
 
   wss.on('connection', (ws) => {
     ws.on('message', async (data) => {

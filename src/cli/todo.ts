@@ -4,11 +4,17 @@
  * bond todo — CLI for managing Bond todos via the daemon.
  *
  * Usage:
- *   bond todo                  List all todos
- *   bond todo add <text>       Add a new todo
- *   bond todo done <id|text>   Mark a todo as done
- *   bond todo undo <id|text>   Mark a todo as not done
- *   bond todo rm <id|text>     Delete a todo
+ *   bond todo                                    List all todos
+ *   bond todo add <text>                         Add a new todo
+ *   bond todo add <text> --notes <n>             Add with notes
+ *   bond todo add <text> --group <g>             Add with group
+ *   bond todo add <text> --group <g> --notes <n> Add with both
+ *   bond todo done <id|text>                     Mark as done
+ *   bond todo undo <id|text>                     Mark as not done
+ *   bond todo rm <id|text>                       Delete a todo
+ *   bond todo notes <id|text> <notes>            Set notes
+ *   bond todo group <id|text> <group>            Set group
+ *   bond todo ls --group <g>                     List filtered by group
  */
 
 import { join } from 'node:path'
@@ -41,6 +47,8 @@ function call(ws: WebSocket, method: string, params?: unknown): Promise<unknown>
 interface Todo {
   id: string
   text: string
+  notes: string
+  group: string
   done: boolean
   createdAt: string
 }
@@ -72,6 +80,31 @@ const D = '\x1b[0;90m'
 const S = '\x1b[9m'  // strikethrough
 const N = '\x1b[0m'
 
+function extractFlags(args: string[]): { textArgs: string[]; notes: string | undefined; group: string | undefined } {
+  let notes: string | undefined
+  let group: string | undefined
+  const textArgs: string[] = []
+  let i = 0
+  while (i < args.length) {
+    if (args[i] === '--notes') {
+      // Collect everything up to the next flag or end
+      i++
+      const parts: string[] = []
+      while (i < args.length && args[i] !== '--group') { parts.push(args[i]); i++ }
+      notes = parts.join(' ')
+    } else if (args[i] === '--group') {
+      i++
+      const parts: string[] = []
+      while (i < args.length && args[i] !== '--notes') { parts.push(args[i]); i++ }
+      group = parts.join(' ')
+    } else {
+      textArgs.push(args[i])
+      i++
+    }
+  }
+  return { textArgs, notes, group }
+}
+
 async function main() {
   const args = process.argv.slice(2)
   const sub = args[0] || 'list'
@@ -88,30 +121,71 @@ async function main() {
     switch (sub) {
       case 'list':
       case 'ls': {
-        const todos = await call(ws, 'todo.list') as Todo[]
+        const { group: filterGroup } = extractFlags(args.slice(1))
+        let todos = await call(ws, 'todo.list') as Todo[]
+        if (filterGroup) todos = todos.filter(t => t.group === filterGroup)
         if (todos.length === 0) {
-          console.log(`${D}No todos${N}`)
+          console.log(`${D}No todos${filterGroup ? ` in group "${filterGroup}"` : ''}${N}`)
           break
         }
         const pending = todos.filter(t => !t.done)
         const done = todos.filter(t => t.done)
         pending.forEach((t, i) => {
-          console.log(`  ${D}${i + 1}.${N}  ${t.text}`)
+          const groupTag = t.group ? ` ${D}[${t.group}]${N}` : ''
+          console.log(`  ${D}${i + 1}.${N}  ${t.text}${groupTag}`)
+          if (t.notes) {
+            const lines = t.notes.split('\n')
+            lines.forEach(line => console.log(`      ${D}${line}${N}`))
+          }
         })
         if (done.length) {
           console.log(`\n  ${D}Done (${done.length})${N}`)
           done.forEach(t => {
-            console.log(`  ${D}${S}${t.text}${N}`)
+            const groupTag = t.group ? ` ${D}[${t.group}]${N}` : ''
+            console.log(`  ${D}${S}${t.text}${N}${groupTag}`)
           })
         }
         break
       }
 
       case 'add': {
-        const text = args.slice(1).join(' ')
-        if (!text) { console.error(`${R}Usage:${N} bond todo add <text>`); process.exit(1) }
-        const todo = await call(ws, 'todo.create', { text }) as Todo
-        console.log(`${G}Added${N}  ${todo.text}`)
+        const { textArgs, notes, group } = extractFlags(args.slice(1))
+        const text = textArgs.join(' ')
+        if (!text) { console.error(`${R}Usage:${N} bond todo add <text> [--notes <notes>] [--group <group>]`); process.exit(1) }
+        const todo = await call(ws, 'todo.create', { text, notes: notes ?? '', group: group ?? '' }) as Todo
+        const groupTag = todo.group ? ` ${D}[${todo.group}]${N}` : ''
+        console.log(`${G}Added${N}  ${todo.text}${groupTag}`)
+        if (todo.notes) console.log(`      ${D}${todo.notes}${N}`)
+        break
+      }
+
+      case 'notes': {
+        const query = args[1]
+        if (!query) { console.error(`${R}Usage:${N} bond todo notes <id|number|text> <notes>`); process.exit(1) }
+        const notesText = args.slice(2).join(' ')
+        const todos = await call(ws, 'todo.list') as Todo[]
+        const todo = findTodo(todos, query)
+        if (!todo) { console.error(`${R}No matching todo:${N} ${query}`); process.exit(1) }
+        await call(ws, 'todo.update', { id: todo.id, updates: { notes: notesText } })
+        console.log(`${G}Updated notes${N}  ${todo.text}`)
+        if (notesText) console.log(`      ${D}${notesText}${N}`)
+        break
+      }
+
+      case 'group':
+      case 'tag': {
+        const query = args[1]
+        if (!query) { console.error(`${R}Usage:${N} bond todo group <id|number|text> <group>`); process.exit(1) }
+        const groupName = args.slice(2).join(' ')
+        const todos = await call(ws, 'todo.list') as Todo[]
+        const todo = findTodo(todos, query)
+        if (!todo) { console.error(`${R}No matching todo:${N} ${query}`); process.exit(1) }
+        await call(ws, 'todo.update', { id: todo.id, updates: { group: groupName } })
+        if (groupName) {
+          console.log(`${G}Group set${N}  ${todo.text} ${D}[${groupName}]${N}`)
+        } else {
+          console.log(`${Y}Group removed${N}  ${todo.text}`)
+        }
         break
       }
 
@@ -154,7 +228,7 @@ async function main() {
 
       default:
         console.error(`${R}Unknown subcommand:${N} ${sub}`)
-        console.log(`\nUsage: bond todo [list|add|done|undo|rm] [args...]`)
+        console.log(`\nUsage: bond todo [list|add|done|undo|notes|group|rm] [args...]`)
         process.exit(1)
     }
   } finally {

@@ -38,9 +38,15 @@ contextBridge.exposeInMainWorld('bond', {
 
   // Todos
   listTodos: () => ipcRenderer.invoke('todo:list') as Promise<TodoItem[]>,
-  createTodo: (text: string) => ipcRenderer.invoke('todo:create', text) as Promise<TodoItem>,
-  updateTodo: (id: string, updates: Partial<Pick<TodoItem, 'text' | 'done'>>) => ipcRenderer.invoke('todo:update', id, updates) as Promise<TodoItem | null>,
+  onTodoChanged: (fn: () => void) => {
+    const listener = () => fn()
+    ipcRenderer.on('bond:todoChanged', listener)
+    return () => ipcRenderer.removeListener('bond:todoChanged', listener)
+  },
+  createTodo: (text: string, notes?: string, group?: string) => ipcRenderer.invoke('todo:create', text, notes, group) as Promise<TodoItem>,
+  updateTodo: (id: string, updates: Partial<Pick<TodoItem, 'text' | 'notes' | 'group' | 'done'>>) => ipcRenderer.invoke('todo:update', id, updates) as Promise<TodoItem | null>,
   deleteTodo: (id: string) => ipcRenderer.invoke('todo:delete', id) as Promise<boolean>,
+  parseTodo: (raw: string) => ipcRenderer.invoke('todo:parse', raw) as Promise<{ title: string; notes: string; group: string }>,
 
   // Images
   listImages: () => ipcRenderer.invoke('image:list') as Promise<ImageRecord[]>,
