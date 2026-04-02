@@ -66,6 +66,9 @@ onMounted(async () => {
     <template #header-start>
       <slot name="header-start" />
     </template>
+    <template v-if="$slots['header-end']" #header-end>
+      <slot name="header-end" />
+    </template>
 
     <div class="media-view">
       <div v-if="loading" class="media-empty">

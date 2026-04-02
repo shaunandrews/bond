@@ -7,11 +7,12 @@ import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId, AttachedImage } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown, PhChecks } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ChatInput from './components/ChatInput.vue'
+import ActivityBar from './components/ActivityBar.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import MediaView from './components/MediaView.vue'
 import TodoView from './components/TodoView.vue'
@@ -36,6 +37,15 @@ async function loadWindowOpacity() {
   } catch { /* use CSS default */ }
 }
 const selectedModel = ref<ModelId>('sonnet')
+const activityExpanded = ref(false)
+const mediaCount = ref(0)
+
+async function refreshMediaCount() {
+  try {
+    const images = await window.bond.listImages()
+    mediaCount.value = images.length
+  } catch { /* ignore */ }
+}
 
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
@@ -54,6 +64,13 @@ function getInitialSidebarWidth(): number {
 
 const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === '1')
 const sidebarWidth = ref(getInitialSidebarWidth())
+const todoPanelOpen = ref(localStorage.getItem('bond:todo-panel-open') === '1')
+const todoPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
+
+function handleToggleTodoPanel() {
+  todoPanelOpen.value = !todoPanelOpen.value
+  localStorage.setItem('bond:todo-panel-open', todoPanelOpen.value ? '1' : '0')
+}
 
 const sidebarStyle = computed(() => ({
   marginLeft: sidebarCollapsed.value ? `-${sidebarWidth.value}px` : '0',
@@ -78,6 +95,7 @@ const { isAtBottom, scrollToBottom } = useAutoScroll(scrollEl)
 let titleGenPending = false
 
 chat.onQueryEnd((sessionId) => {
+  refreshMediaCount()
   if (
     sessionId === sessions.activeSessionId.value &&
     sessions.activeSession.value?.title === 'New chat' &&
@@ -130,6 +148,15 @@ async function handleCreateSkill(description: string) {
   })
 }
 
+async function handleTodoChat(text: string) {
+  const session = await sessions.create()
+  await chat.loadSession(session.id)
+  activeView.value = 'chat'
+  nextTick(() => {
+    chat.submit(text)
+  })
+}
+
 let removeCreateSkillListener: (() => void) | null = null
 let removeOpacityListener: (() => void) | null = null
 let removeAccentListener: (() => void) | null = null
@@ -166,6 +193,10 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault()
     handleNewSession()
   }
+  if (e.metaKey && e.shiftKey && e.key === 'b') {
+    e.preventDefault()
+    handleToggleTodoPanel()
+  }
 }
 
 function handleBeforeUnload() {
@@ -184,6 +215,7 @@ onMounted(async () => {
   chat.subscribe()
   loadAccent()
   loadWindowOpacity()
+  refreshMediaCount()
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
 
@@ -234,6 +266,8 @@ onUnmounted(() => {
         :activeSessionId="sessions.activeSessionId.value"
         :activeView="activeView"
         :generatingTitleId="sessions.generatingTitleId.value"
+        :busySessionIds="chat.busySessionIds.value"
+        :mediaCount="mediaCount"
         @select="handleSelectSession"
         @create="handleNewSession"
         @archive="sessions.archive"
@@ -241,7 +275,6 @@ onUnmounted(() => {
         @remove="sessions.remove"
         @removeArchived="sessions.removeArchived"
         @media="activeView = 'media'"
-        @todos="activeView = 'todos'"
         @rename="handleRenameSession"
       />
     </BondPanel>
@@ -263,9 +296,14 @@ onUnmounted(() => {
             <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
+        <template #header-end>
+          <BondButton variant="ghost" size="sm" icon :class="{ 'todo-toggle-active': todoPanelOpen }" @click.stop="handleToggleTodoPanel" v-tooltip="'Toggle todos ⇧⌘B'">
+            <PhChecks :size="16" weight="bold" />
+          </BondButton>
+        </template>
 
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
-          <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" @approve="chat.respondToApproval" />
+          <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" @approve="chat.respondToApproval" @openActivity="activityExpanded = true" />
         </div>
 
         <template #footer>
@@ -278,18 +316,11 @@ onUnmounted(() => {
                 </BondButton>
               </div>
             </Transition>
+            <ActivityBar :activity="chat.activity.value" v-model:expanded="activityExpanded" />
             <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
           </div>
         </template>
       </ViewShell>
-
-      <TodoView v-show="activeView === 'todos'" :insetStart="sidebarCollapsed">
-        <template #header-start>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-      </TodoView>
 
       <MediaView v-show="activeView === 'media'" :insetStart="sidebarCollapsed">
         <template #header-start>
@@ -297,8 +328,19 @@ onUnmounted(() => {
             <PhSidebarSimple :size="16" weight="bold" />
           </BondButton>
         </template>
+        <template #header-end>
+          <BondButton variant="ghost" size="sm" icon :class="{ 'todo-toggle-active': todoPanelOpen }" @click.stop="handleToggleTodoPanel" v-tooltip="'Toggle todos ⇧⌘B'">
+            <PhChecks :size="16" weight="bold" />
+          </BondButton>
+        </template>
       </MediaView>
       </div>
+    </BondPanel>
+
+    <BondPanelHandle v-show="todoPanelOpen" id="handle-1" />
+
+    <BondPanel ref="todoPanelRef" id="todo-panel" unit="px" :defaultSize="320" :minSize="260" :maxSize="480" v-show="todoPanelOpen">
+      <TodoView @startChat="handleTodoChat" />
     </BondPanel>
   </BondPanelGroup>
 </template>
@@ -343,5 +385,9 @@ onUnmounted(() => {
   width: 100%;
   max-width: 720px;
   margin-inline: auto;
+}
+
+.todo-toggle-active {
+  color: var(--color-accent, var(--color-text-primary)) !important;
 }
 </style>
