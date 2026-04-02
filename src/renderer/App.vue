@@ -269,7 +269,15 @@ function onKeyDown(e: KeyboardEvent) {
   }
 }
 
-function handleProjectsRefresh() { projects.load() }
+let lastProjectsLoad = 0
+const PROJECTS_LOAD_THROTTLE_MS = 30_000
+
+function handleProjectsRefresh() {
+  const now = Date.now()
+  if (now - lastProjectsLoad < PROJECTS_LOAD_THROTTLE_MS) return
+  lastProjectsLoad = now
+  projects.load()
+}
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
@@ -304,8 +312,12 @@ onMounted(async () => {
     sessions.select(first.id)
     if (!hasHmrState) await chat.loadSession(first.id)
     nextTick(scrollToBottom)
-  } else {
+  } else if (sessions.sessions.value.length === 0) {
+    // True first run — no sessions at all
     await handleNewSession()
+  } else {
+    // All sessions archived — show empty chat without auto-creating
+    activeView.value = 'chat'
   }
 })
 
@@ -372,7 +384,7 @@ onUnmounted(() => {
             size="sm"
             @update:modelValue="handleSiteIdChange($event || undefined)"
           />
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleBrowser" v-tooltip="(sitePreview.isOpen.value ? 'Hide browser' : 'Show browser') + ' ⌘⇧B'">
+          <BondButton variant="ghost" size="sm" icon class="browser-toggle-btn" :class="{ 'is-open': sitePreview.isOpen.value }" @click.stop="handleToggleBrowser" v-tooltip="(sitePreview.isOpen.value ? 'Hide browser' : 'Show browser') + ' ⌘⇧B'">
             <PhCompass :size="16" weight="bold" />
           </BondButton>
         </template>
@@ -403,7 +415,7 @@ onUnmounted(() => {
           </BondButton>
         </template>
         <template #header-end>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleBrowser" v-tooltip="(sitePreview.isOpen.value ? 'Hide browser' : 'Show browser') + ' ⌘⇧B'">
+          <BondButton variant="ghost" size="sm" icon class="browser-toggle-btn" :class="{ 'is-open': sitePreview.isOpen.value }" @click.stop="handleToggleBrowser" v-tooltip="(sitePreview.isOpen.value ? 'Hide browser' : 'Show browser') + ' ⌘⇧B'">
             <PhCompass :size="16" weight="bold" />
           </BondButton>
         </template>
@@ -448,6 +460,13 @@ onUnmounted(() => {
 
 <style>
 @import './app.css';
+
+.browser-toggle-btn svg {
+  transition: transform 0.3s ease;
+}
+.browser-toggle-btn.is-open svg {
+  transform: rotate(90deg);
+}
 
 .main-panel-wrap {
   position: relative;

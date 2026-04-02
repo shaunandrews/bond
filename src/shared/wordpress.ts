@@ -8,6 +8,7 @@ export interface WordPressSite {
   phpVersion: string
   enableHttps: boolean
   adminUsername: string
+  adminPassword: string
   adminEmail: string
   isWpAutoUpdating: boolean
   autoStart: boolean

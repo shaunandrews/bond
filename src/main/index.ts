@@ -83,6 +83,27 @@ function findSystemNode(): string {
   )
 }
 
+function resolveUserPath(): string {
+  // Finder-launched apps get minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin).
+  // Resolve the full user PATH via login shell, same approach as findSystemNode().
+  try {
+    const fullPath = execFileSync('/bin/zsh', ['-l', '-c', 'echo $PATH'], {
+      encoding: 'utf-8',
+      timeout: 3000,
+    }).trim()
+    if (fullPath) return fullPath
+  } catch { /* fall through */ }
+
+  // Fallback: augment current PATH with common locations
+  const current = process.env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin'
+  const extras = ['/opt/homebrew/bin', '/usr/local/bin']
+  const parts = current.split(':')
+  for (const extra of extras) {
+    if (!parts.includes(extra)) parts.push(extra)
+  }
+  return parts.join(':')
+}
+
 function spawnDaemon(): void {
   const daemonPath = getDaemonPath()
   const nodePath = findSystemNode()
@@ -91,11 +112,16 @@ function spawnDaemon(): void {
 
   // In packaged mode, daemon deps live alongside daemon/main.mjs.
   // NODE_PATH ensures CJS require() can find them as a fallback.
+  // PATH must be resolved from a login shell so the daemon can find
+  // user-installed binaries like `studio` (Homebrew, etc.).
   const daemonDir = join(daemonPath, '..')
   const daemonNodeModules = join(daemonDir, 'node_modules')
   const env: Record<string, string | undefined> = { ...process.env }
-  if (app.isPackaged && existsSync(daemonNodeModules)) {
-    env.NODE_PATH = daemonNodeModules
+  if (app.isPackaged) {
+    env.PATH = resolveUserPath()
+    if (existsSync(daemonNodeModules)) {
+      env.NODE_PATH = daemonNodeModules
+    }
   }
 
   daemonProcess = spawn(nodePath, [daemonPath], {
@@ -163,7 +189,7 @@ function createWindow(): void {
     autoHideMenuBar: true,
     title: 'Bond',
     titleBarStyle: 'hidden',
-    trafficLightPosition: { x: 20, y: 18 },
+    trafficLightPosition: { x: 20, y: 16 },
     vibrancy: 'under-window',
     visualEffectState: 'active',
     webPreferences: {
@@ -364,6 +390,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('wordpress:delete', (_e, path: string) => client.deleteWordPressSite(path))
   ipcMain.handle('wordpress:start', (_e, path: string) => client.startWordPressSite(path))
   ipcMain.handle('wordpress:stop', (_e, path: string) => client.stopWordPressSite(path))
+  ipcMain.handle('wordpress:loginCookies', (_e, path: string) => client.getWordPressLoginCookies(path))
 
   // --- Settings ---
   ipcMain.handle('settings:getSoul', () => client.getSoul())

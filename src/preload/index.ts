@@ -91,5 +91,6 @@ contextBridge.exposeInMainWorld('bond', {
   createWordPressSite: (name: string) => ipcRenderer.invoke('wordpress:create', name) as Promise<{ available: boolean; sites: WordPressSite[] }>,
   deleteWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:delete', path) as Promise<{ available: boolean; sites: WordPressSite[] }>,
   startWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:start', path) as Promise<{ available: boolean; sites: WordPressSite[] }>,
-  stopWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:stop', path) as Promise<{ available: boolean; sites: WordPressSite[] }>
+  stopWordPressSite: (path: string) => ipcRenderer.invoke('wordpress:stop', path) as Promise<{ available: boolean; sites: WordPressSite[] }>,
+  getWordPressLoginCookies: (path: string) => ipcRenderer.invoke('wordpress:loginCookies', path) as Promise<{ cookies: { name: string; value: string; path: string; expires: number }[] } | null>
 })

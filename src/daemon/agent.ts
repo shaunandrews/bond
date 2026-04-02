@@ -418,6 +418,8 @@ export async function runBondQuery(
       throw e
     }
     options.onChunk({ kind: 'raw_error', message: msg })
+  } finally {
+    try { q.close() } catch { /* ensure subprocess cleanup */ }
   }
   if (chunkCount === 0) {
     console.warn('[bond] query completed with no chunks emitted')

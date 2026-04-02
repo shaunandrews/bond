@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onUnmounted } from 'vue'
-import { PhArrowLeft, PhArrowRight, PhArrowClockwise, PhPlay } from '@phosphor-icons/vue'
+import { PhArrowLeft, PhArrowRight, PhArrowClockwise, PhPlay, PhLockOpen } from '@phosphor-icons/vue'
 import { useSitePreview } from '../composables/useSitePreview'
 import BondToolbar from './BondToolbar.vue'
 import BondButton from './BondButton.vue'
@@ -10,7 +10,7 @@ const emit = defineEmits<{
   start: [site: import('../../shared/wordpress').WordPressSite]
 }>()
 
-const { url, loading, canGoBack, canGoForward, site, navigate } = useSitePreview()
+const { url, loading, canGoBack, canGoForward, site, transitioning, navigate } = useSitePreview()
 
 const urlInput = ref('')
 
@@ -21,6 +21,33 @@ function onUrlSubmit() {
   if (!val) return
   if (!/^https?:\/\//i.test(val)) val = 'http://' + val
   navigate(val)
+}
+
+async function openWpAdmin() {
+  const s = site.value
+  if (!s) return
+
+  const wv = getWebview()
+  if (!wv || !ready.value) {
+    navigate(s.url + '/wp-admin/')
+    return
+  }
+
+  // Ask the daemon to generate real auth cookies via WP-CLI
+  const result = await window.bond.getWordPressLoginCookies(s.path)
+  if (!result) {
+    navigate(s.url + '/wp-admin/')
+    return
+  }
+
+  // Set each cookie in the webview via document.cookie
+  const cookieStatements = result.cookies.map(c => {
+    const expires = new Date(c.expires * 1000).toUTCString()
+    return `document.cookie = ${JSON.stringify(c.name + '=' + c.value + '; path=' + c.path + '; expires=' + expires)};`
+  }).join('\n')
+
+  await wv.executeJavaScript(cookieStatements)
+  navigate(s.url + '/wp-admin/')
 }
 
 const webviewRef = ref<HTMLElement | null>(null)
@@ -67,6 +94,7 @@ function handleStartLoading() {
 
 function handleStopLoading() {
   loading.value = false
+  transitioning.value = false
   updateNavState()
 }
 
@@ -144,6 +172,18 @@ onUnmounted(() => {
             <PhArrowClockwise :size="14" weight="bold" :class="{ spinning: loading }" />
           </BondButton>
         </template>
+        <template #end>
+          <BondButton
+            v-if="site"
+            variant="ghost"
+            size="sm"
+            icon
+            @click="openWpAdmin"
+            v-tooltip="'WP Admin'"
+          >
+            <PhLockOpen :size="14" weight="bold" />
+          </BondButton>
+        </template>
         <template #middle>
           <input
             class="toolbar-url-input"
@@ -157,11 +197,16 @@ onUnmounted(() => {
 
       <div v-if="loading" class="site-preview-loading-bar" />
 
-      <webview
-        ref="webviewRef"
-        :src="url"
-        class="site-preview-webview"
-      />
+      <div class="site-preview-content">
+        <webview
+          ref="webviewRef"
+          :src="url"
+          class="site-preview-webview"
+        />
+        <div v-if="transitioning" class="site-preview-transition">
+          <BondText size="sm" color="muted">Loading...</BondText>
+        </div>
+      </div>
     </template>
 
     <div v-else-if="site && !site.running" class="site-preview-stopped">
@@ -228,10 +273,25 @@ onUnmounted(() => {
   to { transform: rotate(360deg); }
 }
 
-.site-preview-webview {
+.site-preview-content {
   flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.site-preview-webview {
   width: 100%;
+  height: 100%;
   border: none;
+}
+
+.site-preview-transition {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
 }
 
 .site-preview-stopped {

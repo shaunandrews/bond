@@ -65,7 +65,8 @@ import {
   startSite as startWordPressSite,
   stopSite as stopWordPressSite,
   startBackgroundRefresh as startWpBackgroundRefresh,
-  stopBackgroundRefresh as stopWpBackgroundRefresh
+  stopBackgroundRefresh as stopWpBackgroundRefresh,
+  generateLoginCookies
 } from './wordpress'
 
 // --- State ---
@@ -191,70 +192,52 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         }
 
         const ac = new AbortController()
-        const resumeSession = knownSdkSessions.has(sessionId)
+        let shouldResume = knownSdkSessions.has(sessionId)
 
+        // Retry loop for startup failures only (runBondQuery throws when chunkCount === 0).
+        // Mid-stream crashes return false with raw_error already broadcast — no auto-retry.
         const queryPromise = (async () => {
           let succeeded = false
-          try {
-            succeeded = await runBondQuery(text ?? '', {
-              abortSignal: ac.signal,
-              onChunk: (chunk) => broadcastChunk(sessionId, chunk),
-              model: currentModel,
-              sessionId,
-              resumeSession,
-              imageIds,
-              editMode: session.editMode,
-              siteId: session.siteId
-            })
-          } catch (e) {
-            if (ac.signal.aborted) {
-              // Aborted by cancel — don't retry
-              return false
-            }
-            if (resumeSession) {
-              // Resume failed — retry with a fresh session
-              console.warn('[bond] resume failed, retrying with fresh session:', sessionId)
-              knownSdkSessions.delete(sessionId)
-            } else {
-              // Startup failure (e.g. "Session ID already in use" after a cancel) — retry after a delay
-              console.warn('[bond] startup failure, retrying after delay:', sessionId)
-              await new Promise(r => setTimeout(r, 500))
-            }
+
+          for (let attempt = 0; attempt < 3; attempt++) {
             try {
               succeeded = await runBondQuery(text ?? '', {
                 abortSignal: ac.signal,
                 onChunk: (chunk) => broadcastChunk(sessionId, chunk),
                 model: currentModel,
                 sessionId,
-                resumeSession: false,
+                resumeSession: shouldResume,
                 imageIds,
                 editMode: session.editMode,
                 siteId: session.siteId
               })
-            } catch (retryErr) {
-              const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
-              broadcastChunk(sessionId, { kind: 'raw_error', message })
-              return false
-            }
-          }
+              break // Query ran (success or graceful failure) — stop retrying
+            } catch (e) {
+              if (ac.signal.aborted) return false
 
-          // If resume produced no success, retry with a fresh session
-          if (!succeeded && resumeSession && !ac.signal.aborted) {
-            console.warn('[bond] resume returned no success, retrying fresh:', sessionId)
-            knownSdkSessions.delete(sessionId)
-            try {
-              succeeded = await runBondQuery(text ?? '', {
-                abortSignal: ac.signal,
-                onChunk: (chunk) => broadcastChunk(sessionId, chunk),
-                model: currentModel,
-                sessionId,
-                resumeSession: false,
-                imageIds,
-                editMode: session.editMode
-              })
-            } catch (retryErr) {
-              const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
-              broadcastChunk(sessionId, { kind: 'raw_error', message })
+              const errorMsg = e instanceof Error ? e.message : String(e)
+              const isAlreadyInUse = errorMsg.includes('already in use')
+
+              if (attempt === 2) {
+                // Final attempt — broadcast error to user
+                broadcastChunk(sessionId, { kind: 'raw_error', message: errorMsg })
+                return false
+              }
+
+              if (shouldResume && !isAlreadyInUse) {
+                // Resume failed for a non-collision reason — switch to fresh
+                console.warn('[bond] resume failed, will retry fresh:', sessionId)
+                knownSdkSessions.delete(sessionId)
+                shouldResume = false
+              } else if (!shouldResume && isAlreadyInUse) {
+                // Fresh start rejected — SDK already has this session on disk. Switch to resume.
+                console.warn('[bond] session exists in SDK, will retry with resume:', sessionId)
+                shouldResume = true
+              } else {
+                // Other startup failure — retry same strategy after a delay
+                console.warn('[bond] startup failure, retrying after delay:', sessionId)
+                await new Promise(r => setTimeout(r, 500))
+              }
             }
           }
 
@@ -487,6 +470,13 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (cachedTheme) return JSON.stringify(makeResponse(id, cachedTheme))
         const freshTheme = await refreshThemeJson(sitePath)
         return JSON.stringify(makeResponse(id, freshTheme))
+      }
+
+      case 'wordpress.loginCookies': {
+        const sitePath = getStringParam(p, 'path')
+        if (!sitePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'path is required'))
+        const cookies = await generateLoginCookies(sitePath)
+        return JSON.stringify(makeResponse(id, cookies))
       }
 
       case 'wordpress.create': {

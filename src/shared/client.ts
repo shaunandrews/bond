@@ -275,4 +275,8 @@ export class BondClient {
   async deleteWordPressSite(path: string): Promise<{ available: boolean; sites: WordPressSite[] }> {
     return await this.call('wordpress.delete', { path }) as { available: boolean; sites: WordPressSite[] }
   }
+
+  async getWordPressLoginCookies(path: string): Promise<{ cookies: { name: string; value: string; path: string; expires: number }[] } | null> {
+    return await this.call('wordpress.loginCookies', { path }) as { cookies: { name: string; value: string; path: string; expires: number }[] } | null
+  }
 }

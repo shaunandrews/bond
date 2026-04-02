@@ -10,12 +10,15 @@ const title = ref('')
 const canGoBack = ref(false)
 const canGoForward = ref(false)
 const site = ref<WordPressSite | null>(null)
+const transitioning = ref(false)
 
 function openSite(s: WordPressSite) {
+  const changing = site.value != null && site.value.path !== s.path
   site.value = s
   url.value = s.url
   title.value = s.name
   isOpen.value = true
+  if (changing) transitioning.value = true
   localStorage.setItem(STORAGE_KEY, '1')
 }
 
@@ -42,6 +45,7 @@ export function useSitePreview() {
     canGoBack,
     canGoForward,
     site,
+    transitioning,
     openSite,
     setSite,
     close,

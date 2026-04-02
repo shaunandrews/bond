@@ -1,4 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -6,16 +7,44 @@ import type { WordPressSite, WordPressSiteDetails, WpContent, WpSiteMap, WpSiteM
 
 const execFileAsync = promisify(execFile)
 
+// Suppress Studio CLI stderr from leaking into daemon.log
+const SILENT_STDIO: [string, string, string] = ['pipe', 'pipe', 'pipe']
+
 // --- Binary resolution (cached) ---
 
 let cachedBin: string | null | undefined
 function findStudioBinary(): string | null {
   if (cachedBin !== undefined) return cachedBin
+
+  // 1. Try current PATH (works when main process resolved it for packaged app)
   try {
-    cachedBin = execFileSync('/bin/sh', ['-c', 'which studio'], { encoding: 'utf-8' }).trim()
-  } catch {
-    cachedBin = null
+    const result = execFileSync('/bin/sh', ['-c', 'which studio'], {
+      encoding: 'utf-8',
+      stdio: SILENT_STDIO,
+    }).trim()
+    if (result && existsSync(result)) { cachedBin = result; return cachedBin }
+  } catch { /* fall through */ }
+
+  // 2. Login shell — picks up Homebrew/nvm/fnm paths from ~/.zshrc
+  try {
+    const result = execFileSync('/bin/zsh', ['-l', '-c', 'which studio'], {
+      encoding: 'utf-8',
+      timeout: 3000,
+      stdio: SILENT_STDIO,
+    }).trim()
+    if (result && existsSync(result)) { cachedBin = result; return cachedBin }
+  } catch { /* fall through */ }
+
+  // 3. Well-known filesystem paths
+  const candidates = [
+    '/opt/homebrew/bin/studio',  // Homebrew on Apple Silicon
+    '/usr/local/bin/studio',     // Homebrew on Intel / manual install
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) { cachedBin = candidate; return cachedBin }
   }
+
+  cachedBin = null
   return cachedBin
 }
 
@@ -115,6 +144,53 @@ export function stopBackgroundRefresh(): void {
   if (refreshTimer) {
     clearInterval(refreshTimer)
     refreshTimer = null
+  }
+}
+
+// --- WP Admin login cookies ---
+
+export interface WpLoginCookie {
+  name: string
+  value: string
+  path: string
+  expires: number
+}
+
+export interface WpLoginCookies {
+  cookies: WpLoginCookie[]
+}
+
+export async function generateLoginCookies(path: string): Promise<WpLoginCookies | null> {
+  const bin = findStudioBinary()
+  if (!bin) return null
+
+  try {
+    const raw = await wpCliAsync(bin, path, ['eval', `
+$user = get_user_by("login", "admin");
+if (!$user) $user = get_user_by("ID", 1);
+$expiration = time() + DAY_IN_SECONDS;
+$auth = wp_generate_auth_cookie($user->ID, $expiration, "auth");
+$logged_in = wp_generate_auth_cookie($user->ID, $expiration, "logged_in");
+echo json_encode([
+  "cookies" => [
+    ["name" => AUTH_COOKIE, "value" => $auth, "path" => ADMIN_COOKIE_PATH, "expires" => (int) $expiration],
+    ["name" => SECURE_AUTH_COOKIE, "value" => $auth, "path" => ADMIN_COOKIE_PATH, "expires" => (int) $expiration],
+    ["name" => LOGGED_IN_COOKIE, "value" => $logged_in, "path" => COOKIEPATH, "expires" => (int) $expiration],
+  ]
+]);
+`])
+    const data = JSON.parse(raw.trim())
+    return {
+      cookies: data.cookies.map((c: Record<string, unknown>) => ({
+        name: String(c.name),
+        value: String(c.value),
+        path: String(c.path),
+        expires: Number(c.expires)
+      }))
+    }
+  } catch (e) {
+    console.error('[wordpress] generateLoginCookies failed:', e instanceof Error ? e.message : e)
+    return null
   }
 }
 
@@ -229,28 +305,26 @@ async function fetchSiteMap(path: string): Promise<WpSiteMap | null> {
   if (!bin) return null
 
   try {
-    // Fetch pages with parent info
-    const pagesRaw = JSON.parse(await wpCliAsync(bin, path, [
-      'post', 'list', '--post_type=page', '--post_status=publish',
-      '--fields=ID,post_title,post_name,post_parent', '--format=json'
-    ]))
+    // Run all CLI calls in parallel for speed
+    const [pagesStr, postsStr, showOnFrontStr, pageOnFrontStr, siteUrlStr] = await Promise.all([
+      wpCliAsync(bin, path, [
+        'post', 'list', '--post_type=page', '--post_status=publish',
+        '--fields=ID,post_title,post_name,post_parent', '--format=json'
+      ]).catch(() => '[]'),
+      wpCliAsync(bin, path, [
+        'post', 'list', '--post_type=post', '--post_status=publish',
+        '--fields=ID,post_title,post_name', '--format=json'
+      ]).catch(() => '[]'),
+      wpCliAsync(bin, path, ['option', 'get', 'show_on_front']).catch(() => 'posts'),
+      wpCliAsync(bin, path, ['option', 'get', 'page_on_front']).catch(() => '0'),
+      wpCliAsync(bin, path, ['option', 'get', 'siteurl']).catch(() => '')
+    ])
 
-    // Fetch posts (flat)
-    const postsRaw = JSON.parse(await wpCliAsync(bin, path, [
-      'post', 'list', '--post_type=post', '--post_status=publish',
-      '--fields=ID,post_title,post_name', '--format=json'
-    ]))
-
-    // Check front page settings
-    let showOnFront = 'posts'
-    let pageOnFront = 0
-    try { showOnFront = (await wpCliAsync(bin, path, ['option', 'get', 'show_on_front'])).trim() } catch { /* */ }
-    try { pageOnFront = parseInt((await wpCliAsync(bin, path, ['option', 'get', 'page_on_front'])).trim(), 10) || 0 } catch { /* */ }
-
-    // Get site URL for building page URLs
-    let siteUrl = ''
-    try { siteUrl = (await wpCliAsync(bin, path, ['option', 'get', 'siteurl'])).trim() } catch { /* */ }
-
+    const pagesRaw = JSON.parse(pagesStr)
+    const postsRaw = JSON.parse(postsStr)
+    const showOnFront = showOnFrontStr.trim()
+    const pageOnFront = parseInt(pageOnFrontStr.trim(), 10) || 0
+    const siteUrl = siteUrlStr.trim()
     const homePageId = showOnFront === 'page' ? pageOnFront : null
 
     // Build page nodes
@@ -442,7 +516,8 @@ export function listSites(): { available: boolean; sites: WordPressSite[] } {
   try {
     const raw = execFileSync(bin, ['site', 'list', '--format', 'json'], {
       encoding: 'utf-8',
-      timeout: 10_000
+      timeout: 10_000,
+      stdio: SILENT_STDIO
     })
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return { available: true, sites: [] }
@@ -457,6 +532,7 @@ export function listSites(): { available: boolean; sites: WordPressSite[] } {
       phpVersion: String(s.phpVersion ?? ''),
       enableHttps: Boolean(s.enableHttps),
       adminUsername: String(s.adminUsername ?? ''),
+      adminPassword: String(s.adminPassword ?? ''),
       adminEmail: String(s.adminEmail ?? ''),
       isWpAutoUpdating: Boolean(s.isWpAutoUpdating),
       autoStart: Boolean(s.autoStart),
@@ -503,7 +579,8 @@ export function createSite(name: string): { available: boolean; sites: WordPress
       '--skip-browser', 'true'
     ], {
       encoding: 'utf-8',
-      timeout: 60_000
+      timeout: 60_000,
+      stdio: SILENT_STDIO
     })
   } catch (e) {
     console.error('[wordpress] create failed:', e instanceof Error ? e.message : e)
@@ -519,7 +596,8 @@ export function startSite(path: string): { available: boolean; sites: WordPressS
   try {
     execFileSync(bin, ['site', 'start', '--path', path, '--skip-browser', 'true'], {
       encoding: 'utf-8',
-      timeout: 30_000
+      timeout: 30_000,
+      stdio: SILENT_STDIO
     })
   } catch (e) {
     console.error('[wordpress] start failed:', e instanceof Error ? e.message : e)
@@ -538,7 +616,8 @@ export function deleteSite(path: string): { available: boolean; sites: WordPress
   try {
     execFileSync(bin, ['site', 'delete', '--path', path, '--files'], {
       encoding: 'utf-8',
-      timeout: 30_000
+      timeout: 30_000,
+      stdio: SILENT_STDIO
     })
   } catch (e) {
     console.error('[wordpress] delete failed:', e instanceof Error ? e.message : e)
@@ -555,7 +634,8 @@ export function stopSite(path: string): { available: boolean; sites: WordPressSi
   try {
     execFileSync(bin, ['site', 'stop', '--path', path], {
       encoding: 'utf-8',
-      timeout: 30_000
+      timeout: 30_000,
+      stdio: SILENT_STDIO
     })
   } catch (e) {
     console.error('[wordpress] stop failed:', e instanceof Error ? e.message : e)

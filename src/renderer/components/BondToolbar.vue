@@ -46,7 +46,7 @@ defineProps<{
 }
 
 .bond-toolbar--inset-start {
-  padding-left: 4.5rem;
+  padding-left: 5.5rem;
 }
 
 .bond-toolbar--blur::before {

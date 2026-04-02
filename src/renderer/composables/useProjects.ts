@@ -87,6 +87,7 @@ export function useProjects(deps: ProjectsDeps = defaultDeps) {
       const site = selectedSite.value
       if (site?.running) {
         loadDetails(site.path)
+        loadSiteMap(site.path)
       } else {
         siteDetails.value = null
         siteMap.value = null
