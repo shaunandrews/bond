@@ -29,6 +29,7 @@ export function getDb(): Database.Database {
   migrateAddTodoSortOrder(_db)
   migrateAddFavoritedColumn(_db)
   migrateAddIconSeedColumn(_db)
+  migrateCreateCollectionsTable(_db)
 
   return _db
 }
@@ -263,6 +264,30 @@ function migrateAddIconSeedColumn(db: Database.Database): void {
   if (!columns.some(c => c.name === 'icon_seed')) {
     db.exec('ALTER TABLE sessions ADD COLUMN icon_seed INTEGER')
   }
+}
+
+function migrateCreateCollectionsTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS collections (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      icon TEXT NOT NULL DEFAULT '',
+      schema TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(schema)),
+      archived INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS collection_items (
+      id TEXT PRIMARY KEY,
+      collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+      data TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(data)),
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_collection_items_collection ON collection_items(collection_id);
+  `)
 }
 
 // --- One-time migration from file-based storage ---

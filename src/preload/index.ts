@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType } from '../shared/session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef } from '../shared/session'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
@@ -65,6 +65,25 @@ contextBridge.exposeInMainWorld('bond', {
     const listener = () => fn()
     ipcRenderer.on('bond:projectsChanged', listener)
     return () => ipcRenderer.removeListener('bond:projectsChanged', listener)
+  },
+
+  // Collections
+  listCollections: () => ipcRenderer.invoke('collection:list') as Promise<Collection[]>,
+  getCollection: (id: string) => ipcRenderer.invoke('collection:get', id) as Promise<Collection | null>,
+  createCollection: (name: string, schema: FieldDef[], icon?: string) => ipcRenderer.invoke('collection:create', name, schema, icon) as Promise<Collection>,
+  updateCollection: (id: string, updates: Partial<Pick<Collection, 'name' | 'icon' | 'schema' | 'archived'>>) => ipcRenderer.invoke('collection:update', id, updates) as Promise<Collection | null>,
+  deleteCollection: (id: string) => ipcRenderer.invoke('collection:delete', id) as Promise<boolean>,
+  renameCollectionField: (id: string, oldName: string, newName: string) => ipcRenderer.invoke('collection:renameField', id, oldName, newName) as Promise<boolean>,
+  listCollectionItems: (collectionId: string) => ipcRenderer.invoke('collection:listItems', collectionId) as Promise<CollectionItem[]>,
+  getCollectionItem: (id: string) => ipcRenderer.invoke('collection:getItem', id) as Promise<CollectionItem | null>,
+  addCollectionItem: (collectionId: string, data: Record<string, unknown>) => ipcRenderer.invoke('collection:addItem', collectionId, data) as Promise<CollectionItem>,
+  updateCollectionItem: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('collection:updateItem', id, data) as Promise<CollectionItem | null>,
+  deleteCollectionItem: (id: string) => ipcRenderer.invoke('collection:deleteItem', id) as Promise<boolean>,
+  reorderCollectionItems: (ids: string[]) => ipcRenderer.invoke('collection:reorderItems', ids) as Promise<boolean>,
+  onCollectionsChanged: (fn: () => void) => {
+    const listener = () => fn()
+    ipcRenderer.on('bond:collectionsChanged', listener)
+    return () => ipcRenderer.removeListener('bond:collectionsChanged', listener)
   },
 
   // Images

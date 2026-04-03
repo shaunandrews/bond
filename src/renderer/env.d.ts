@@ -58,6 +58,20 @@ declare global {
       addProjectResource: (projectId: string, kind: import('../../shared/session').ProjectResource['kind'], value: string, label?: string) => Promise<import('../../shared/session').ProjectResource>
       removeProjectResource: (id: string) => Promise<boolean>
       onProjectsChanged: (fn: () => void) => () => void
+      // Collections
+      listCollections: () => Promise<import('../../shared/session').Collection[]>
+      getCollection: (id: string) => Promise<import('../../shared/session').Collection | null>
+      createCollection: (name: string, schema: import('../../shared/session').FieldDef[], icon?: string) => Promise<import('../../shared/session').Collection>
+      updateCollection: (id: string, updates: Partial<Pick<import('../../shared/session').Collection, 'name' | 'icon' | 'schema' | 'archived'>>) => Promise<import('../../shared/session').Collection | null>
+      deleteCollection: (id: string) => Promise<boolean>
+      renameCollectionField: (id: string, oldName: string, newName: string) => Promise<boolean>
+      listCollectionItems: (collectionId: string) => Promise<import('../../shared/session').CollectionItem[]>
+      getCollectionItem: (id: string) => Promise<import('../../shared/session').CollectionItem | null>
+      addCollectionItem: (collectionId: string, data: Record<string, unknown>) => Promise<import('../../shared/session').CollectionItem>
+      updateCollectionItem: (id: string, data: Record<string, unknown>) => Promise<import('../../shared/session').CollectionItem | null>
+      deleteCollectionItem: (id: string) => Promise<boolean>
+      reorderCollectionItems: (ids: string[]) => Promise<boolean>
+      onCollectionsChanged: (fn: () => void) => () => void
       // Connection status
       onConnectionLost: (fn: () => void) => () => void
       onConnectionRestored: (fn: () => void) => () => void

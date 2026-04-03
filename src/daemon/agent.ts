@@ -8,6 +8,7 @@ import { getSoul } from './settings'
 import { getImagePaths } from './images'
 import { getSkillsDir } from './paths'
 import { scanSkills, type SkillInfo } from './skills'
+import { listCollections, countItems } from './collections'
 
 export function getCachedSkills(): SkillInfo[] {
   return scanSkills()
@@ -153,7 +154,7 @@ export async function runBondQuery(
   const cwd = homedir()
   const ac = new AbortController()
 
-  const basePrompt =
+  let basePrompt =
     'You are Bond, a standalone desktop assistant app for Mac. ' +
     'Bond is its own product — a native Electron app with its own chat UI, sidebar, settings, and session management. ' +
     'You are NOT Claude, Claude Code, or the Claude website. You are powered by Claude (an AI model by Anthropic), but your identity is Bond. ' +
@@ -216,7 +217,7 @@ export async function runBondQuery(
     '</bond-artifact>\n\n' +
     'Attributes:\n' +
     '- title: optional label shown above the artifact (only shown when chrome is "default")\n' +
-    '- layout: "normal" (default), "wide", or "full"\n' +
+    '- layout: "normal" (default, message width), "wide" (up to 960px, for tables and comparisons), or "full" (edge-to-edge, for carousels, galleries, dashboards, and immersive content)\n' +
     '- chrome: "default" (border + header) or "none" (seamless, blends into chat). Use chrome="none" by default.\n\n' +
     'Available inside the artifact:\n' +
     '- All Tailwind CSS utility classes (loaded via CDN)\n' +
@@ -257,7 +258,40 @@ export async function runBondQuery(
     'Embeds are live and interactive — the user can check todos, open resources, add items directly in chat.\n' +
     'Use ids="" to show specific todos you want to highlight (get IDs from `bond todo ls` output). ' +
     'Use search="" to show todos matching a keyword. These let you curate which todos to show rather than dumping all of them.\n' +
-    'ALWAYS use embeds (not artifacts, not markdown, not CLI output) when showing Bond data to the user.'
+    'ALWAYS use embeds (not artifacts, not markdown, not CLI output) when showing Bond data to the user.\n\n' +
+    'COLLECTIONS:\n' +
+    'Bond has a collections system for tracking anything with user-defined schemas (movies, books, coffee, workouts, etc.). ' +
+    'Manage via the `bond collection` CLI:\n' +
+    '- `bond collection` — list all collections\n' +
+    '- `bond collection create <name> --icon 🎬 --schema \'<json>\'` — create a collection\n' +
+    '- `bond collection show <name|id>` — show collection details\n' +
+    '- `bond collection ls <name|id>` — list items\n' +
+    '- `bond collection ls <name|id> --<field> <value>` — filter items\n' +
+    '- `bond collection add <name|id> --<field> <value>` — add an item\n' +
+    '- `bond collection update <name|id> <item> --<field> <value>` — update item\n' +
+    '- `bond collection done <name|id> <item>` — mark status field as done\n' +
+    '- `bond collection info <name|id> <item>` — show item details\n' +
+    '- `bond collection rm <name|id> [item]` — delete collection or item\n' +
+    '- `bond collection archive <name|id>` — archive a collection\n' +
+    'When the user talks about items conversationally (e.g. "just watched Dune, it was great"), use the CLI to create/update items.\n' +
+    'To SHOW collections in chat, use:\n' +
+    '<bond-embed type="collection" />                              — all collections as cards\n' +
+    '<bond-embed type="collection" name="Movies" />                — items for one collection\n' +
+    '<bond-embed type="collection" name="Movies" filter="status=Want to see" /> — filtered\n' +
+    '<bond-embed type="collection" name="Movies" search="Dune" /> — text search\n' +
+    '<bond-embed type="collection" name="Movies" limit="5" />     — cap results\n'
+
+  // Inject current collections context
+  const collections = listCollections().filter(c => !c.archived)
+  if (collections.length > 0) {
+    const lines = collections.map(c => {
+      const icon = c.icon ? `${c.icon} ` : ''
+      const count = countItems(c.id)
+      const fields = c.schema.map(f => f.name).join(', ')
+      return `- ${icon}${c.name} (${count} items) — fields: ${fields}`
+    })
+    basePrompt += '\nCurrent collections:\n' + lines.join('\n') + '\n'
+  }
 
   const editMode = options.editMode ?? { type: 'full' }
   const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS

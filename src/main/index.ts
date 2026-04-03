@@ -228,6 +228,12 @@ function createWindow(): void {
     }
   })
 
+  client.onCollectionsChanged(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:collectionsChanged')
+    }
+  })
+
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
@@ -560,6 +566,20 @@ app.whenReady().then(async () => {
   ipcMain.handle('project:delete', (_e, id: string) => client.deleteProject(id))
   ipcMain.handle('project:addResource', (_e, projectId: string, kind: string, value: string, label?: string) => client.addProjectResource(projectId, kind as any, value, label))
   ipcMain.handle('project:removeResource', (_e, id: string) => client.removeProjectResource(id))
+
+  // --- Collections ---
+  ipcMain.handle('collection:list', () => client.listCollections())
+  ipcMain.handle('collection:get', (_e, id: string) => client.getCollection(id))
+  ipcMain.handle('collection:create', (_e, name: string, schema: unknown[], icon?: string) => client.createCollection(name, schema as any, icon))
+  ipcMain.handle('collection:update', (_e, id: string, updates: Record<string, unknown>) => client.updateCollection(id, updates))
+  ipcMain.handle('collection:delete', (_e, id: string) => client.deleteCollection(id))
+  ipcMain.handle('collection:renameField', (_e, id: string, oldName: string, newName: string) => client.renameCollectionField(id, oldName, newName))
+  ipcMain.handle('collection:listItems', (_e, collectionId: string) => client.listCollectionItems(collectionId))
+  ipcMain.handle('collection:getItem', (_e, id: string) => client.getCollectionItem(id))
+  ipcMain.handle('collection:addItem', (_e, collectionId: string, data: Record<string, unknown>) => client.addCollectionItem(collectionId, data))
+  ipcMain.handle('collection:updateItem', (_e, id: string, data: Record<string, unknown>) => client.updateCollectionItem(id, data))
+  ipcMain.handle('collection:deleteItem', (_e, id: string) => client.deleteCollectionItem(id))
+  ipcMain.handle('collection:reorderItems', (_e, ids: string[]) => client.reorderCollectionItems(ids))
 
   ipcMain.handle('image:readLocal', (_e, filePath: string): string | null => {
     const EXT_TO_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhCube } from '@phosphor-icons/vue'
+import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhCube, PhListBullets } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import SessionItem from './SessionItem.vue'
 import SessionCard from './SessionCard.vue'
@@ -20,6 +20,7 @@ const props = defineProps<{
   busySessionIds: Set<string>
   mediaCount: number
   projectCount: number
+  collectionCount: number
 }>()
 
 const chatCount = computed(() => props.sessions.length)
@@ -53,6 +54,7 @@ const emit = defineEmits<{
   favorite: [id: string]
   unfavorite: [id: string]
   projects: []
+  collections: []
   media: []
   rename: [id: string, title: string]
   setIconSeed: [id: string, seed: number]
@@ -180,6 +182,14 @@ const emit = defineEmits<{
         <PhCube :size="16" weight="bold" />
         <BondText size="sm">Projects</BondText>
         <span v-if="projectCount > 0" class="media-count-badge">{{ projectCount }}</span>
+      </button>
+      <button
+        :class="['sidebar-nav-item', { active: activeView === 'collections' }]"
+        @click="emit('collections')"
+      >
+        <PhListBullets :size="16" weight="bold" />
+        <BondText size="sm">Collections</BondText>
+        <span v-if="collectionCount > 0" class="media-count-badge">{{ collectionCount }}</span>
       </button>
       <button
         :class="['sidebar-nav-item', { active: activeView === 'media' }]"

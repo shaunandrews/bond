@@ -126,6 +126,11 @@ cmd_project() {
   node "$PROJECT_DIR/out/cli/project.js" "$@"
 }
 
+cmd_collection() {
+  _ensure_cli
+  node "$PROJECT_DIR/out/cli/collection.js" "$@"
+}
+
 _ensure_cli() {
   if [[ ! -f "$PROJECT_DIR/out/cli/todo.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/media.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/project.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/screenshot.js" ]]; then
     cd "$PROJECT_DIR"
@@ -169,6 +174,7 @@ case "${1:-help}" in
   todo)    shift; cmd_todo "$@" ;;
   project) shift; cmd_project "$@" ;;
   media)   shift; cmd_media "$@" ;;
+  collection) shift; cmd_collection "$@" ;;
   screenshot|ss) cmd_screenshot "${2:-/tmp/bond-screenshot.png}" ;;
   test)    cmd_test ;;
   help|-h|--help) cmd_help ;;

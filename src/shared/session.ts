@@ -88,3 +88,37 @@ export interface Project {
   createdAt: string
   updatedAt: string
 }
+
+// --- Collections ---
+
+export type FieldType = 'text' | 'longtext' | 'number' | 'date' | 'boolean' | 'select' | 'multiselect' | 'rating' | 'url' | 'tags' | 'image'
+
+export interface FieldDef {
+  name: string
+  type: FieldType
+  primary?: boolean
+  options?: string[]     // for select/multiselect
+  max?: number           // for rating (default 5)
+  prefix?: string        // for number display (e.g. "$")
+  suffix?: string        // for number display (e.g. "min", "%")
+  default?: unknown      // default value for new items
+}
+
+export interface Collection {
+  id: string
+  name: string
+  icon: string
+  schema: FieldDef[]
+  archived: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CollectionItem {
+  id: string
+  collectionId: string
+  data: Record<string, unknown>
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}

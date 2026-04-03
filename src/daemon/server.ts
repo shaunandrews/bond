@@ -46,6 +46,20 @@ import {
   addResource,
   removeResource
 } from './projects'
+import {
+  listCollections,
+  getCollection,
+  createCollection,
+  updateCollection,
+  deleteCollection,
+  listItems,
+  getItem,
+  addItem,
+  updateItem,
+  deleteItem,
+  reorderItems,
+  renameField
+} from './collections'
 import { parseTodoInput } from './parse-todo'
 import { generateTitleAndSummary } from './generate-title'
 import {
@@ -138,6 +152,16 @@ function broadcastTodoChanged(): void {
 function broadcastProjectsChanged(): void {
   if (!serverWss) return
   const msg = JSON.stringify(makeNotification('project.changed', {}))
+  for (const client of serverWss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg)
+    }
+  }
+}
+
+function broadcastCollectionsChanged(): void {
+  if (!serverWss) return
+  const msg = JSON.stringify(makeNotification('collection.changed', {}))
   for (const client of serverWss.clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(msg)
@@ -580,6 +604,102 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const removed = removeResource(rid)
         broadcastProjectsChanged()
         return JSON.stringify(makeResponse(id, removed))
+      }
+
+      // --- Collections ---
+      case 'collection.list':
+        return JSON.stringify(makeResponse(id, listCollections()))
+
+      case 'collection.get': {
+        const cid = getStringParam(p, 'id')
+        if (!cid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        return JSON.stringify(makeResponse(id, getCollection(cid)))
+      }
+
+      case 'collection.create': {
+        const name = getStringParam(p, 'name')
+        if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
+        const schema = getParam(p, 'schema') as unknown[] | undefined
+        if (!schema || !Array.isArray(schema)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'schema is required'))
+        const icon = getStringParam(p, 'icon') ?? ''
+        const collection = createCollection(name, schema as any, icon)
+        broadcastCollectionsChanged()
+        return JSON.stringify(makeResponse(id, collection))
+      }
+
+      case 'collection.update': {
+        const cid = getStringParam(p, 'id')
+        if (!cid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
+        const updated = updateCollection(cid, updates ?? {})
+        broadcastCollectionsChanged()
+        return JSON.stringify(makeResponse(id, updated))
+      }
+
+      case 'collection.delete': {
+        const cid = getStringParam(p, 'id')
+        if (!cid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const deleted = deleteCollection(cid)
+        broadcastCollectionsChanged()
+        return JSON.stringify(makeResponse(id, deleted))
+      }
+
+      case 'collection.renameField': {
+        const cid = getStringParam(p, 'id')
+        const oldName = getStringParam(p, 'oldName')
+        const newName = getStringParam(p, 'newName')
+        if (!cid || !oldName || !newName) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id, oldName, and newName are required'))
+        const renamed = renameField(cid, oldName, newName)
+        broadcastCollectionsChanged()
+        return JSON.stringify(makeResponse(id, renamed))
+      }
+
+      case 'collection.listItems': {
+        const collectionId = getStringParam(p, 'collectionId')
+        if (!collectionId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'collectionId is required'))
+        return JSON.stringify(makeResponse(id, listItems(collectionId)))
+      }
+
+      case 'collection.getItem': {
+        const itemId = getStringParam(p, 'id')
+        if (!itemId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        return JSON.stringify(makeResponse(id, getItem(itemId)))
+      }
+
+      case 'collection.addItem': {
+        const collectionId = getStringParam(p, 'collectionId')
+        if (!collectionId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'collectionId is required'))
+        const data = getParam(p, 'data') as Record<string, unknown> | undefined
+        if (!data) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'data is required'))
+        const item = addItem(collectionId, data)
+        broadcastCollectionsChanged()
+        return JSON.stringify(makeResponse(id, item))
+      }
+
+      case 'collection.updateItem': {
+        const itemId = getStringParam(p, 'id')
+        if (!itemId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const data = getParam(p, 'data') as Record<string, unknown> | undefined
+        if (!data) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'data is required'))
+        const updated = updateItem(itemId, data)
+        broadcastCollectionsChanged()
+        return JSON.stringify(makeResponse(id, updated))
+      }
+
+      case 'collection.deleteItem': {
+        const itemId = getStringParam(p, 'id')
+        if (!itemId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const deleted = deleteItem(itemId)
+        broadcastCollectionsChanged()
+        return JSON.stringify(makeResponse(id, deleted))
+      }
+
+      case 'collection.reorderItems': {
+        const ids = getParam(p, 'ids') as string[] | undefined
+        if (!ids || !Array.isArray(ids)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'ids array is required'))
+        reorderItems(ids)
+        broadcastCollectionsChanged()
+        return JSON.stringify(makeResponse(id, true))
       }
 
       default:

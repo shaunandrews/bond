@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType } from './session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef } from './session'
 import {
   makeRequest,
   isResponse,
@@ -12,6 +12,7 @@ import {
 type ChunkListener = (chunk: TaggedChunk) => void
 type TodoChangeListener = () => void
 type ProjectChangeListener = () => void
+type CollectionChangeListener = () => void
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -25,6 +26,7 @@ export class BondClient {
   private chunkListeners = new Set<ChunkListener>()
   private todoChangeListeners = new Set<TodoChangeListener>()
   private projectChangeListeners = new Set<ProjectChangeListener>()
+  private collectionChangeListeners = new Set<CollectionChangeListener>()
   private disconnectListeners = new Set<() => void>()
   private socketPath: string
   private _connected = false
@@ -94,6 +96,10 @@ export class BondClient {
             }
           } else if (msg.method === 'project.changed') {
             for (const fn of this.projectChangeListeners) {
+              fn()
+            }
+          } else if (msg.method === 'collection.changed') {
+            for (const fn of this.collectionChangeListeners) {
               fn()
             }
           }
@@ -314,6 +320,61 @@ export class BondClient {
   onProjectsChanged(fn: ProjectChangeListener): () => void {
     this.projectChangeListeners.add(fn)
     return () => this.projectChangeListeners.delete(fn)
+  }
+
+  // --- Collections ---
+
+  async listCollections(): Promise<Collection[]> {
+    return await this.call('collection.list') as Collection[]
+  }
+
+  async getCollection(id: string): Promise<Collection | null> {
+    return await this.call('collection.get', { id }) as Collection | null
+  }
+
+  async createCollection(name: string, schema: FieldDef[], icon?: string): Promise<Collection> {
+    return await this.call('collection.create', { name, schema, icon }) as Collection
+  }
+
+  async updateCollection(id: string, updates: Partial<Pick<Collection, 'name' | 'icon' | 'schema' | 'archived'>>): Promise<Collection | null> {
+    return await this.call('collection.update', { id, updates }) as Collection | null
+  }
+
+  async deleteCollection(id: string): Promise<boolean> {
+    return await this.call('collection.delete', { id }) as boolean
+  }
+
+  async renameCollectionField(id: string, oldName: string, newName: string): Promise<boolean> {
+    return await this.call('collection.renameField', { id, oldName, newName }) as boolean
+  }
+
+  async listCollectionItems(collectionId: string): Promise<CollectionItem[]> {
+    return await this.call('collection.listItems', { collectionId }) as CollectionItem[]
+  }
+
+  async getCollectionItem(id: string): Promise<CollectionItem | null> {
+    return await this.call('collection.getItem', { id }) as CollectionItem | null
+  }
+
+  async addCollectionItem(collectionId: string, data: Record<string, unknown>): Promise<CollectionItem> {
+    return await this.call('collection.addItem', { collectionId, data }) as CollectionItem
+  }
+
+  async updateCollectionItem(id: string, data: Record<string, unknown>): Promise<CollectionItem | null> {
+    return await this.call('collection.updateItem', { id, data }) as CollectionItem | null
+  }
+
+  async deleteCollectionItem(id: string): Promise<boolean> {
+    return await this.call('collection.deleteItem', { id }) as boolean
+  }
+
+  async reorderCollectionItems(ids: string[]): Promise<boolean> {
+    return await this.call('collection.reorderItems', { ids }) as boolean
+  }
+
+  onCollectionsChanged(fn: CollectionChangeListener): () => void {
+    this.collectionChangeListeners.add(fn)
+    return () => this.collectionChangeListeners.delete(fn)
   }
 
   // --- Shell (client-side only, not proxied through daemon) ---
