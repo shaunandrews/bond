@@ -1,21 +1,29 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { Message } from '../types/message'
 import { imageDataUri } from '../../shared/session'
 import MarkdownMessage from './MarkdownMessage.vue'
+import ArtifactFrame from './ArtifactFrame.vue'
+import EmbedRenderer from './EmbedRenderer.vue'
+import { parseArtifacts, hasRichContent } from '../lib/parseArtifacts'
 
 function renderUserMarkdown(text: string): string {
   const raw = marked.parse(text, { async: false, gfm: true, breaks: true }) as string
   return DOMPurify.sanitize(raw)
 }
 
-defineProps<{ msg: Message }>()
+const props = defineProps<{ msg: Message }>()
 defineEmits<{
   approve: [requestId: string, approved: boolean]
   openActivity: []
 }>()
+
+const segments = computed(() => {
+  if (props.msg.role !== 'bond' || !hasRichContent(props.msg.text)) return null
+  return parseArtifacts(props.msg.text)
+})
 
 const toast = ref<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false })
 let toastTimer: ReturnType<typeof setTimeout> | undefined
@@ -84,13 +92,43 @@ function formatToolSummary(name: string, summary?: string): string {
     </div>
     <div
       v-if="msg.text"
-      class="user-markdown px-3.5 py-2.5 rounded-[10px] text-sm leading-relaxed bg-surface border border-border"
+      class="user-markdown px-3.5 py-2.5 rounded-[10px] leading-relaxed bg-surface"
       v-html="renderUserMarkdown(msg.text)"
     />
     <span v-if="msg.ts" class="msg-timestamp">{{ formatTime(msg.ts) }}</span>
   </div>
 
-  <!-- Bond message -->
+  <!-- Bond message: with artifacts -->
+  <div
+    v-else-if="msg.role === 'bond' && segments"
+    class="self-start w-full text-sm leading-relaxed"
+    @dblclick="copyText(msg, $event)"
+  >
+    <template v-for="(seg, i) in segments" :key="i">
+      <MarkdownMessage
+        v-if="seg.type === 'text' && seg.content.trim()"
+        :text="seg.content"
+        :streaming="msg.streaming && i === segments.length - 1"
+        class="px-3.5 py-2.5"
+      />
+      <ArtifactFrame
+        v-else-if="seg.type === 'artifact'"
+        :content="seg.content"
+        :title="seg.title"
+        :layout="seg.layout"
+        :chrome="seg.chrome"
+        :streaming="msg.streaming"
+      />
+      <EmbedRenderer
+        v-else-if="seg.type === 'embed'"
+        :embedType="seg.embedType"
+        :attrs="seg.attrs"
+        class="px-3.5"
+      />
+    </template>
+  </div>
+
+  <!-- Bond message: plain markdown -->
   <MarkdownMessage
     v-else-if="msg.role === 'bond'"
     :text="msg.text"
