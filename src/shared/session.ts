@@ -89,6 +89,21 @@ export interface Project {
   updatedAt: string
 }
 
+// --- Journal ---
+
+export interface JournalEntry {
+  id: string
+  author: 'user' | 'bond'
+  title: string
+  body: string
+  tags: string[]
+  projectId?: string
+  sessionId?: string
+  pinned: boolean
+  createdAt: string   // ISO 8601
+  updatedAt: string   // ISO 8601
+}
+
 // --- Collections ---
 
 export type FieldType = 'text' | 'longtext' | 'number' | 'date' | 'boolean' | 'select' | 'multiselect' | 'rating' | 'url' | 'tags' | 'image'

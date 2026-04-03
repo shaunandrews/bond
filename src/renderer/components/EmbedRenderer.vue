@@ -11,6 +11,7 @@ const components: Record<string, ReturnType<typeof defineAsyncComponent>> = {
   project: defineAsyncComponent(() => import('./embeds/ProjectEmbed.vue')),
   media: defineAsyncComponent(() => import('./embeds/MediaEmbed.vue')),
   collection: defineAsyncComponent(() => import('./embeds/CollectionEmbed.vue')),
+  journal: defineAsyncComponent(() => import('./embeds/JournalEmbed.vue')),
 }
 
 const component = computed(() => components[props.embedType] ?? null)

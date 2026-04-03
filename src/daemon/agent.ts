@@ -281,6 +281,28 @@ export async function runBondQuery(
     '<bond-embed type="collection" name="Movies" search="Dune" /> — text search\n' +
     '<bond-embed type="collection" name="Movies" limit="5" />     — cap results\n'
 
+  basePrompt +=
+    'JOURNAL:\n' +
+    'Bond has a shared journal where both you and the user can write entries. ' +
+    'It\'s a space for reflections, decision logs, project summaries, and freeform notes that persist across sessions.\n' +
+    '- `bond journal` — list recent entries\n' +
+    '- `bond journal add "your entry text"` — write an entry (title + tags auto-generated)\n' +
+    '- `bond journal add --body "longer text here" --project <name>` — write with project link\n' +
+    '- `bond journal show <id|number|title>` — read full entry\n' +
+    '- `bond journal search <query>` — search entries\n' +
+    '- `bond journal pin <id|number|title>` — pin/unpin\n' +
+    '- `bond journal rm <id|number|title>` — delete\n' +
+    'Write journal entries when the user asks, or when a chat produces a meaningful summary, decision, or milestone worth preserving. ' +
+    'Always use author "user" — the CLI defaults to this. Link entries to projects with --project when relevant. ' +
+    'Use tags to categorize entries.\n' +
+    'To SHOW journal entries in chat, use:\n' +
+    '<bond-embed type="journal" />                              — recent entries\n' +
+    '<bond-embed type="journal" ids="id1,id2" />                — specific entries\n' +
+    '<bond-embed type="journal" project="Bond" />               — entries linked to a project\n' +
+    '<bond-embed type="journal" author="bond" />                — only Bond\'s entries\n' +
+    '<bond-embed type="journal" search="connectors" />          — search results\n' +
+    '<bond-embed type="journal" limit="5" />                    — cap results\n\n'
+
   // Inject current collections context
   const collections = listCollections().filter(c => !c.archived)
   if (collections.length > 0) {

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef } from '../shared/session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry } from '../shared/session'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
@@ -84,6 +84,23 @@ contextBridge.exposeInMainWorld('bond', {
     const listener = () => fn()
     ipcRenderer.on('bond:collectionsChanged', listener)
     return () => ipcRenderer.removeListener('bond:collectionsChanged', listener)
+  },
+
+  // Journal
+  listJournalEntries: (opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }) =>
+    ipcRenderer.invoke('journal:list', opts) as Promise<JournalEntry[]>,
+  getJournalEntry: (id: string) => ipcRenderer.invoke('journal:get', id) as Promise<JournalEntry | null>,
+  createJournalEntry: (params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }) =>
+    ipcRenderer.invoke('journal:create', params) as Promise<JournalEntry>,
+  updateJournalEntry: (id: string, updates: Partial<Pick<JournalEntry, 'title' | 'body' | 'tags' | 'pinned' | 'projectId'>>) =>
+    ipcRenderer.invoke('journal:update', id, updates) as Promise<JournalEntry | null>,
+  deleteJournalEntry: (id: string) => ipcRenderer.invoke('journal:delete', id) as Promise<boolean>,
+  searchJournalEntries: (query: string) => ipcRenderer.invoke('journal:search', query) as Promise<JournalEntry[]>,
+  generateJournalMeta: (id: string) => ipcRenderer.invoke('journal:generateMeta', id) as Promise<JournalEntry | null>,
+  onJournalChanged: (fn: () => void) => {
+    const listener = () => fn()
+    ipcRenderer.on('bond:journalChanged', listener)
+    return () => ipcRenderer.removeListener('bond:journalChanged', listener)
   },
 
   // Images

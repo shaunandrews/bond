@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef } from './session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry } from './session'
 import {
   makeRequest,
   isResponse,
@@ -13,6 +13,7 @@ type ChunkListener = (chunk: TaggedChunk) => void
 type TodoChangeListener = () => void
 type ProjectChangeListener = () => void
 type CollectionChangeListener = () => void
+type JournalChangeListener = () => void
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -27,6 +28,7 @@ export class BondClient {
   private todoChangeListeners = new Set<TodoChangeListener>()
   private projectChangeListeners = new Set<ProjectChangeListener>()
   private collectionChangeListeners = new Set<CollectionChangeListener>()
+  private journalChangeListeners = new Set<JournalChangeListener>()
   private disconnectListeners = new Set<() => void>()
   private socketPath: string
   private _connected = false
@@ -100,6 +102,10 @@ export class BondClient {
             }
           } else if (msg.method === 'collection.changed') {
             for (const fn of this.collectionChangeListeners) {
+              fn()
+            }
+          } else if (msg.method === 'journal.changed') {
+            for (const fn of this.journalChangeListeners) {
               fn()
             }
           }
@@ -375,6 +381,41 @@ export class BondClient {
   onCollectionsChanged(fn: CollectionChangeListener): () => void {
     this.collectionChangeListeners.add(fn)
     return () => this.collectionChangeListeners.delete(fn)
+  }
+
+  // --- Journal ---
+
+  async listJournalEntries(opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }): Promise<JournalEntry[]> {
+    return await this.call('journal.list', opts) as JournalEntry[]
+  }
+
+  async getJournalEntry(id: string): Promise<JournalEntry | null> {
+    return await this.call('journal.get', { id }) as JournalEntry | null
+  }
+
+  async createJournalEntry(params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }): Promise<JournalEntry> {
+    return await this.call('journal.create', params) as JournalEntry
+  }
+
+  async updateJournalEntry(id: string, updates: Partial<Pick<JournalEntry, 'title' | 'body' | 'tags' | 'pinned' | 'projectId'>>): Promise<JournalEntry | null> {
+    return await this.call('journal.update', { id, updates }) as JournalEntry | null
+  }
+
+  async deleteJournalEntry(id: string): Promise<boolean> {
+    return await this.call('journal.delete', { id }) as boolean
+  }
+
+  async searchJournalEntries(query: string): Promise<JournalEntry[]> {
+    return await this.call('journal.search', { query }) as JournalEntry[]
+  }
+
+  async generateJournalMeta(id: string): Promise<JournalEntry | null> {
+    return await this.call('journal.generateMeta', { id }) as JournalEntry | null
+  }
+
+  onJournalChanged(fn: JournalChangeListener): () => void {
+    this.journalChangeListeners.add(fn)
+    return () => this.journalChangeListeners.delete(fn)
   }
 
   // --- Shell (client-side only, not proxied through daemon) ---

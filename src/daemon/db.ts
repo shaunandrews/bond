@@ -30,6 +30,7 @@ export function getDb(): Database.Database {
   migrateAddFavoritedColumn(_db)
   migrateAddIconSeedColumn(_db)
   migrateCreateCollectionsTable(_db)
+  migrateCreateJournalTable(_db)
 
   return _db
 }
@@ -287,6 +288,26 @@ function migrateCreateCollectionsTable(db: Database.Database): void {
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_collection_items_collection ON collection_items(collection_id);
+  `)
+}
+
+function migrateCreateJournalTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS journal_entries (
+      id TEXT PRIMARY KEY,
+      author TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL,
+      tags TEXT NOT NULL DEFAULT '[]',
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_journal_created ON journal_entries(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_journal_project ON journal_entries(project_id);
+    CREATE INDEX IF NOT EXISTS idx_journal_author ON journal_entries(author);
   `)
 }
 

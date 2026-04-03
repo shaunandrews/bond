@@ -60,6 +60,8 @@ import {
   reorderItems,
   renameField
 } from './collections'
+import { listEntries, getEntry, createEntry, updateEntry, deleteEntry, searchEntries } from './journal'
+import { generateJournalMeta } from './generate-journal-meta'
 import { parseTodoInput } from './parse-todo'
 import { generateTitleAndSummary } from './generate-title'
 import {
@@ -162,6 +164,16 @@ function broadcastProjectsChanged(): void {
 function broadcastCollectionsChanged(): void {
   if (!serverWss) return
   const msg = JSON.stringify(makeNotification('collection.changed', {}))
+  for (const client of serverWss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg)
+    }
+  }
+}
+
+function broadcastJournalChanged(): void {
+  if (!serverWss) return
+  const msg = JSON.stringify(makeNotification('journal.changed', {}))
   for (const client of serverWss.clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(msg)
@@ -700,6 +712,69 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         reorderItems(ids)
         broadcastCollectionsChanged()
         return JSON.stringify(makeResponse(id, true))
+      }
+
+      // --- Journal ---
+      case 'journal.list': {
+        const author = getStringParam(p, 'author')
+        const projectId = getStringParam(p, 'projectId')
+        const tag = getStringParam(p, 'tag')
+        const limit = getParam(p, 'limit') as number | undefined
+        const offset = getParam(p, 'offset') as number | undefined
+        return JSON.stringify(makeResponse(id, listEntries({ author, projectId, tag, limit, offset })))
+      }
+
+      case 'journal.get': {
+        const eid = getStringParam(p, 'id')
+        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        return JSON.stringify(makeResponse(id, getEntry(eid)))
+      }
+
+      case 'journal.create': {
+        const author = getStringParam(p, 'author') as 'user' | 'bond' | undefined
+        const title = getStringParam(p, 'title')
+        const body = getStringParam(p, 'body')
+        if (!author || !title || !body) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'author, title, and body are required'))
+        const tags = getParam(p, 'tags') as string[] | undefined
+        const projectId = getStringParam(p, 'projectId')
+        const sessionId = getStringParam(p, 'sessionId')
+        const entry = createEntry({ author, title, body, tags, projectId, sessionId })
+        broadcastJournalChanged()
+        return JSON.stringify(makeResponse(id, entry))
+      }
+
+      case 'journal.update': {
+        const eid = getStringParam(p, 'id')
+        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
+        const updated = updateEntry(eid, updates ?? {})
+        broadcastJournalChanged()
+        return JSON.stringify(makeResponse(id, updated))
+      }
+
+      case 'journal.delete': {
+        const eid = getStringParam(p, 'id')
+        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const deleted = deleteEntry(eid)
+        broadcastJournalChanged()
+        return JSON.stringify(makeResponse(id, deleted))
+      }
+
+      case 'journal.search': {
+        const query = getStringParam(p, 'query')
+        if (!query) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'query is required'))
+        return JSON.stringify(makeResponse(id, searchEntries(query)))
+      }
+
+      case 'journal.generateMeta': {
+        const eid = getStringParam(p, 'id')
+        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const entry = getEntry(eid)
+        if (!entry) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'entry not found'))
+        const meta = await generateJournalMeta(entry.body)
+        const updated = updateEntry(eid, { title: meta.title, tags: meta.tags })
+        broadcastJournalChanged()
+        return JSON.stringify(makeResponse(id, updated))
       }
 
       default:
