@@ -22,6 +22,8 @@ export interface Session {
   title: string
   summary: string
   archived: boolean
+  favorited: boolean
+  iconSeed?: number
   editMode: EditMode
   projectId?: string  // optional link to a project
   createdAt: string   // ISO 8601

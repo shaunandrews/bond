@@ -23,6 +23,8 @@ function rowToSession(row: Record<string, unknown>): Session {
     title: row.title as string,
     summary: row.summary as string,
     archived: row.archived === 1,
+    favorited: row.favorited === 1,
+    iconSeed: row.icon_seed != null ? (row.icon_seed as number) : undefined,
     editMode: parseEditMode(row.edit_mode),
     projectId: (row.project_id as string) || undefined,
     createdAt: row.created_at as string,
@@ -75,7 +77,7 @@ export function createSession(options?: { title?: string; projectId?: string }):
     'INSERT INTO sessions (id, title, summary, archived, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(id, title, '', 0, projectId, now, now)
 
-  return { id, title, summary: '', archived: false, editMode: DEFAULT_EDIT_MODE, projectId: projectId || undefined, createdAt: now, updatedAt: now }
+  return { id, title, summary: '', archived: false, favorited: false, editMode: DEFAULT_EDIT_MODE, projectId: projectId || undefined, createdAt: now, updatedAt: now }
 }
 
 export function getSession(id: string): Session | null {
@@ -84,7 +86,7 @@ export function getSession(id: string): Session | null {
   return row ? rowToSession(row as Record<string, unknown>) : null
 }
 
-export function updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode' | 'projectId'>>): Session | null {
+export function updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'iconSeed' | 'editMode' | 'projectId'>>): Session | null {
   const db = getDb()
   const now = new Date().toISOString()
 
@@ -94,6 +96,8 @@ export function updateSession(id: string, updates: Partial<Pick<Session, 'title'
   if (updates.title !== undefined) { sets.push('title = ?'); values.push(updates.title) }
   if (updates.summary !== undefined) { sets.push('summary = ?'); values.push(updates.summary) }
   if (updates.archived !== undefined) { sets.push('archived = ?'); values.push(updates.archived ? 1 : 0) }
+  if (updates.favorited !== undefined) { sets.push('favorited = ?'); values.push(updates.favorited ? 1 : 0) }
+  if (updates.iconSeed !== undefined) { sets.push('icon_seed = ?'); values.push(updates.iconSeed ?? null) }
   if (updates.editMode !== undefined) { sets.push('edit_mode = ?'); values.push(JSON.stringify(updates.editMode)) }
   if (updates.projectId !== undefined) { sets.push('project_id = ?'); values.push(updates.projectId || null) }
 

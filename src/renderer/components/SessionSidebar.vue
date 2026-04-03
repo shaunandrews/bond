@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhCube } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import SessionItem from './SessionItem.vue'
+import SessionCard from './SessionCard.vue'
 import BondToolbar from './BondToolbar.vue'
 import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
@@ -22,6 +23,8 @@ const props = defineProps<{
 }>()
 
 const chatCount = computed(() => props.sessions.length)
+const favoritedSessions = computed(() => props.sessions.filter(s => s.favorited))
+const regularSessions = computed(() => props.sessions.filter(s => !s.favorited))
 
 /* Archive flyout */
 const archiveFlyoutOpen = ref(false)
@@ -47,9 +50,12 @@ const emit = defineEmits<{
   unarchive: [id: string]
   remove: [id: string]
   removeArchived: []
+  favorite: [id: string]
+  unfavorite: [id: string]
   projects: []
   media: []
   rename: [id: string, title: string]
+  setIconSeed: [id: string, seed: number]
 }>()
 </script>
 
@@ -125,21 +131,39 @@ const emit = defineEmits<{
           </BondButton>
         </template>
 
-        <nav class="chats-list overflow-y-auto h-full flex flex-col gap-0.5 py-1.5 px-2">
-          <SessionItem
-            v-for="s in sessions"
-            :key="s.id"
-            :session="s"
-            :active="s.id === activeSessionId && activeView === 'chat'"
-            :generating="generatingTitleId === s.id"
-            :busy="busySessionIds.has(s.id)"
-            actionTitle="Archive"
-            @select="emit('select', s.id)"
-            @action="emit('archive', s.id)"
-            @rename="emit('rename', s.id, $event)"
-          >
-            <PhArchive :size="14" weight="bold" />
-          </SessionItem>
+        <nav class="chats-list overflow-y-auto h-full py-1.5 px-2">
+          <div v-if="favoritedSessions.length" class="favorites-grid">
+            <SessionCard
+              v-for="s in favoritedSessions"
+              :key="s.id"
+              :session="s"
+              :active="s.id === activeSessionId && activeView === 'chat'"
+              :busy="busySessionIds.has(s.id)"
+              @select="emit('select', s.id)"
+              @unfavorite="emit('unfavorite', s.id)"
+              @archive="emit('archive', s.id)"
+              @rename="emit('rename', s.id, $event)"
+              @newIcon="emit('setIconSeed', s.id, $event)"
+            />
+          </div>
+
+          <div class="regular-list">
+            <SessionItem
+              v-for="s in regularSessions"
+              :key="s.id"
+              :session="s"
+              :active="s.id === activeSessionId && activeView === 'chat'"
+              :generating="generatingTitleId === s.id"
+              :busy="busySessionIds.has(s.id)"
+              actionTitle="Archive"
+              @select="emit('select', s.id)"
+              @action="emit('archive', s.id)"
+              @rename="emit('rename', s.id, $event)"
+              @favorite="emit('favorite', s.id)"
+            >
+              <PhArchive :size="14" weight="bold" />
+            </SessionItem>
+          </div>
 
           <BondText v-if="sessions.length === 0" as="p" size="sm" color="muted" class="px-3 py-4">
             No chats yet. Start a new one!
@@ -183,6 +207,22 @@ const emit = defineEmits<{
 .chats-list {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.favorites-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.375rem;
+  margin-bottom: 0.375rem;
+  min-width: 0;
+}
+
+.regular-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
 }
 
 .archive-flyout-list {

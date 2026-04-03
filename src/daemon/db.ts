@@ -27,6 +27,8 @@ export function getDb(): Database.Database {
   migrateAddProjectIdColumns(_db)
   migrateAddProjectDeadlineColumn(_db)
   migrateAddTodoSortOrder(_db)
+  migrateAddFavoritedColumn(_db)
+  migrateAddIconSeedColumn(_db)
 
   return _db
 }
@@ -246,6 +248,20 @@ function migrateAddTodoSortOrder(db: Database.Database): void {
     const rows = db.prepare('SELECT id FROM todos ORDER BY created_at ASC').all() as { id: string }[]
     const stmt = db.prepare('UPDATE todos SET sort_order = ? WHERE id = ?')
     rows.forEach((row, i) => stmt.run(i, row.id))
+  }
+}
+
+function migrateAddFavoritedColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(sessions)') as { name: string }[]
+  if (!columns.some(c => c.name === 'favorited')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0')
+  }
+}
+
+function migrateAddIconSeedColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(sessions)') as { name: string }[]
+  if (!columns.some(c => c.name === 'icon_seed')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN icon_seed INTEGER')
   }
 }
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, onUnmounted } from 'vue'
+import { PhStar } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import SessionPreview from './SessionPreview.vue'
 
@@ -16,6 +17,7 @@ const emit = defineEmits<{
   select: []
   action: []
   rename: [title: string]
+  favorite: []
 }>()
 
 const editing = ref(false)
@@ -29,7 +31,14 @@ let lastHideTime = 0
 
 const itemEl = ref<HTMLElement | null>(null)
 const previewVisible = ref(false)
+const mouseX = ref(0)
+const mouseY = ref(0)
 let hoverTimer: ReturnType<typeof setTimeout> | null = null
+
+function onMouseMove(e: MouseEvent) {
+  mouseX.value = e.clientX
+  mouseY.value = e.clientY
+}
 
 function onMouseEnter() {
   if (editing.value) return
@@ -75,6 +84,22 @@ function cancelEdit() {
   editing.value = false
 }
 
+/* Context menu */
+async function onContextMenu(e: MouseEvent) {
+  if (props.archived || props.generating || editing.value) return
+  e.preventDefault()
+  previewVisible.value = false
+  const action = await window.bond.showContextMenu([
+    { id: 'favorite', label: props.session.favorited ? 'Unfavorite' : 'Favorite' },
+    { id: 'sep', label: '', type: 'separator' },
+    { id: 'rename', label: 'Rename' },
+    { id: 'archive', label: 'Archive' },
+  ])
+  if (action === 'favorite') emit('favorite')
+  else if (action === 'rename') startEditing()
+  else if (action === 'archive') emit('action')
+}
+
 function onInputKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter') {
     e.preventDefault()
@@ -98,6 +123,8 @@ function onInputKeydown(e: KeyboardEvent) {
     @keydown.space.prevent="emit('select')"
     @mouseenter="onMouseEnter"
     @mouseleave="onMouseLeave"
+    @mousemove="onMouseMove"
+    @contextmenu="onContextMenu"
   >
     <input
       v-if="editing"
@@ -105,7 +132,7 @@ function onInputKeydown(e: KeyboardEvent) {
       v-model="editValue"
       class="session-title-input"
       @blur="commitEdit"
-      @keydown="onInputKeydown"
+      @keydown.stop="onInputKeydown"
       @click.stop
       @dblclick.stop
     />
@@ -114,6 +141,15 @@ function onInputKeydown(e: KeyboardEvent) {
     </span>
     <span class="session-end">
       <span v-if="busy" class="session-busy-dot" />
+      <button
+        v-if="!archived"
+        type="button"
+        :class="['session-favorite', { active: session.favorited }]"
+        v-tooltip="session.favorited ? 'Unfavorite' : 'Favorite'"
+        @click.stop="previewVisible = false; emit('favorite')"
+      >
+        <PhStar :size="13" :weight="session.favorited ? 'fill' : 'bold'" />
+      </button>
       <button
         type="button"
         class="session-action"
@@ -126,9 +162,11 @@ function onInputKeydown(e: KeyboardEvent) {
 
     <SessionPreview
       :session="session"
-      :anchor="itemEl"
       :visible="previewVisible"
+      :mouseX="mouseX"
+      :mouseY="mouseY"
     />
+
   </div>
 </template>
 
@@ -142,6 +180,7 @@ function onInputKeydown(e: KeyboardEvent) {
   width: 100%;
   box-sizing: border-box;
   padding: 0.5rem 0.3rem 0.5rem 0.5rem;
+  min-height: 38px;
   border-radius: var(--radius-md);
   transition: background var(--transition-fast);
 }
@@ -172,13 +211,12 @@ function onInputKeydown(e: KeyboardEvent) {
 
 .session-end {
   flex-shrink: 0;
-  width: 24px;
-  height: 22px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 0;
 }
 
+.session-favorite,
 .session-action {
   all: unset;
   cursor: pointer;
@@ -190,17 +228,26 @@ function onInputKeydown(e: KeyboardEvent) {
   border-radius: var(--radius-sm);
   font-size: 0.75rem;
   color: var(--sidebar-text-muted);
-  transition: background var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.session-favorite.active {
+  display: flex;
+  color: var(--color-accent);
 }
 .session-item:hover .session-busy-dot {
   display: none;
 }
+.session-item:hover .session-favorite,
 .session-item:hover .session-action {
   display: flex;
 }
+.session-favorite:hover,
 .session-action:hover {
   background: var(--sidebar-hover-bg);
   color: var(--sidebar-text);
+}
+.session-favorite.active:hover {
+  color: var(--color-accent);
 }
 
 .session-busy-dot {

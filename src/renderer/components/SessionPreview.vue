@@ -1,53 +1,37 @@
 <script setup lang="ts">
-import { ref, watch, onUnmounted, nextTick } from 'vue'
+import { ref, computed } from 'vue'
 import type { Session } from '../../shared/session'
 import BondText from './BondText.vue'
 
 const props = defineProps<{
   session: Session
-  anchor: HTMLElement | null
   visible: boolean
+  mouseX: number
+  mouseY: number
 }>()
 
 const panelEl = ref<HTMLElement | null>(null)
-const pos = ref({ top: 0, left: 0 })
 
-function updatePosition() {
-  if (!props.anchor || !panelEl.value) return
-  const anchorRect = props.anchor.getBoundingClientRect()
-  const panelRect = panelEl.value.getBoundingClientRect()
+const pos = computed(() => {
+  if (!panelEl.value) return { top: props.mouseY + 12, left: props.mouseX + 16 }
+
+  const pw = panelEl.value.offsetWidth
+  const ph = panelEl.value.offsetHeight
+  const vw = window.innerWidth
   const vh = window.innerHeight
-  const gap = 6
+  const pad = 8
 
-  // Position to the right of the sidebar item
-  const left = anchorRect.right + gap
+  let left = props.mouseX + 16
+  let top = props.mouseY + 12
 
-  // Vertically align to the anchor, clamped to viewport
-  let top = anchorRect.top
-  if (top + panelRect.height > vh - 8) {
-    top = vh - panelRect.height - 8
-  }
-  top = Math.max(8, top)
+  // Flip left if it would overflow right
+  if (left + pw > vw - pad) left = props.mouseX - pw - 8
+  // Clamp vertically
+  if (top + ph > vh - pad) top = vh - ph - pad
+  top = Math.max(pad, top)
+  left = Math.max(pad, left)
 
-  pos.value = { top, left }
-}
-
-watch(() => props.visible, (show) => {
-  if (show) {
-    nextTick(() => nextTick(updatePosition))
-  }
-})
-
-// Reposition on scroll/resize while visible
-function onScroll() { if (props.visible) updatePosition() }
-function onResize() { if (props.visible) updatePosition() }
-
-document.addEventListener('scroll', onScroll, { capture: true, passive: true })
-window.addEventListener('resize', onResize, { passive: true })
-
-onUnmounted(() => {
-  document.removeEventListener('scroll', onScroll, { capture: true })
-  window.removeEventListener('resize', onResize)
+  return { top, left }
 })
 
 function formatDate(iso: string): string {

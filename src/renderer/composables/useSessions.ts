@@ -6,7 +6,7 @@ const SESSION_STORAGE_KEY = 'bond:activeSessionId'
 export interface SessionDeps {
   listSessions: () => Promise<Session[]>
   createSession: (options?: { title?: string; projectId?: string }) => Promise<Session>
-  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'editMode'>>) => Promise<Session | null>
+  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'iconSeed' | 'editMode'>>) => Promise<Session | null>
   deleteSession: (id: string) => Promise<boolean>
   deleteArchivedSessions: () => Promise<{ ok: boolean; count: number }>
   generateTitle: (sessionId: string) => Promise<{ title: string; summary: string }>
@@ -24,7 +24,13 @@ export function useSessions(deps: SessionDeps = window.bond) {
   const generatingTitleId = ref<string | null>(null)
 
   const activeSessions = computed(() =>
-    sessions.value.filter((s) => !s.archived)
+    sessions.value
+      .filter((s) => !s.archived)
+      .sort((a, b) => {
+        if (a.favorited && !b.favorited) return -1
+        if (!a.favorited && b.favorited) return 1
+        return 0
+      })
   )
 
   const archivedSessions = computed(() =>
@@ -89,6 +95,30 @@ export function useSessions(deps: SessionDeps = window.bond) {
     sessions.value = sessions.value.filter((s) => !s.archived)
   }
 
+  async function favorite(id: string) {
+    const updated = await deps.updateSession(id, { favorited: true })
+    if (updated) {
+      const idx = sessions.value.findIndex((s) => s.id === id)
+      if (idx !== -1) sessions.value[idx] = updated
+    }
+  }
+
+  async function setIconSeed(id: string, seed: number) {
+    const updated = await deps.updateSession(id, { iconSeed: seed })
+    if (updated) {
+      const idx = sessions.value.findIndex((s) => s.id === id)
+      if (idx !== -1) sessions.value[idx] = updated
+    }
+  }
+
+  async function unfavorite(id: string) {
+    const updated = await deps.updateSession(id, { favorited: false })
+    if (updated) {
+      const idx = sessions.value.findIndex((s) => s.id === id)
+      if (idx !== -1) sessions.value[idx] = updated
+    }
+  }
+
   function updateLocal(id: string, updates: Partial<Session>) {
     const idx = sessions.value.findIndex((s) => s.id === id)
     if (idx !== -1) {
@@ -123,6 +153,9 @@ export function useSessions(deps: SessionDeps = window.bond) {
     unarchive,
     remove,
     removeArchived,
+    favorite,
+    unfavorite,
+    setIconSeed,
     updateLocal,
     generatingTitleId,
     refreshTitle

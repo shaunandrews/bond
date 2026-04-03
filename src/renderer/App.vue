@@ -373,11 +373,14 @@ onUnmounted(() => {
         @create="handleNewSession"
         @archive="sessions.archive"
         @unarchive="sessions.unarchive"
+        @favorite="sessions.favorite"
+        @unfavorite="sessions.unfavorite"
         @remove="sessions.remove"
         @removeArchived="sessions.removeArchived"
         @projects="activeView = 'projects'"
         @media="activeView = 'media'"
         @rename="handleRenameSession"
+        @setIconSeed="sessions.setIconSeed"
       />
     </BondPanel>
 

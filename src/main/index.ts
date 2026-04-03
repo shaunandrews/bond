@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron'
 import { join } from 'node:path'
 import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync, watch, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
@@ -506,6 +506,20 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('bond:getModel', () => {
     return client.getModel()
+  })
+
+  // --- Context menu ---
+  ipcMain.handle('context-menu:show', (_e, items: { id: string; label: string; type?: string }[]) => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win) return null
+    return new Promise<string | null>(resolve => {
+      const template = items.map(item => {
+        if (item.type === 'separator') return { type: 'separator' as const }
+        return { label: item.label, click: () => resolve(item.id) }
+      })
+      const menu = Menu.buildFromTemplate(template)
+      menu.popup({ window: win, callback: () => resolve(null) })
+    })
   })
 
   // --- Sessions ---
