@@ -5,6 +5,7 @@
  *
  * Usage:
  *   bond media                     List all images
+ *   bond media add <url>           Download image from URL and import
  *   bond media info <id|number>    Show details for an image
  *   bond media open <id|number>    Open an image in Preview
  *   bond media rm <id|number>      Delete an image
@@ -144,6 +145,52 @@ async function main() {
         break
       }
 
+      case 'add':
+      case 'download': {
+        const url = args[1]
+        if (!url) { console.error(`${R}Usage:${N} bond media add <url>`); process.exit(1) }
+
+        // Fetch the image
+        let response: Response
+        try {
+          response = await fetch(url, {
+            headers: { 'User-Agent': 'Bond/1.0' },
+            redirect: 'follow'
+          })
+        } catch (err) {
+          console.error(`${R}Failed to fetch:${N} ${err instanceof Error ? err.message : err}`)
+          process.exit(1)
+        }
+
+        if (!response.ok) {
+          console.error(`${R}HTTP ${response.status}${N} ${response.statusText}`)
+          process.exit(1)
+        }
+
+        // Determine media type from Content-Type header or URL extension
+        const contentType = response.headers.get('content-type')?.split(';')[0]?.trim()
+        const extMap: Record<string, string> = {
+          '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+          '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp'
+        }
+        const urlExt = '.' + url.split('?')[0].split('.').pop()?.toLowerCase()
+        const mediaType = (contentType && ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(contentType))
+          ? contentType
+          : extMap[urlExt]
+
+        if (!mediaType) {
+          console.error(`${R}Unsupported image type:${N} ${contentType || 'unknown'} (supported: jpeg, png, gif, webp)`)
+          process.exit(1)
+        }
+
+        const buf = Buffer.from(await response.arrayBuffer())
+        const data = buf.toString('base64')
+
+        const result = await call(ws, 'image.import', { data, mediaType }) as ImageRecord
+        console.log(`${G}Added${N}  ${formatSize(buf.length)}  ${D}${result.id}${N}`)
+        break
+      }
+
       case 'rm':
       case 'remove':
       case 'delete': {
@@ -175,7 +222,7 @@ async function main() {
 
       default:
         console.error(`${R}Unknown subcommand:${N} ${sub}`)
-        console.log(`\nUsage: bond media [list|info|open|rm|purge] [args...]`)
+        console.log(`\nUsage: bond media [list|add|info|open|rm|purge] [args...]`)
         process.exit(1)
     }
   } finally {

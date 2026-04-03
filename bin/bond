@@ -151,7 +151,7 @@ cmd_help() {
   echo -e "  ${G}log${N}                Tail daemon log"
   echo -e "  ${G}todo${N}               Manage todos (list, add, done, undo, rm)"
   echo -e "  ${G}project${N}            Manage projects (list, add, show, edit, archive, rm, resource)"
-  echo -e "  ${G}media${N}              Manage media (list, info, open, rm, purge)"
+  echo -e "  ${G}media${N}              Manage media (list, add, info, open, rm, purge)"
   echo -e "  ${G}screenshot${N}         Capture Bond window to /tmp/bond-screenshot.png"
   echo -e "  ${G}test${N}               Run tests"
   echo -e "  ${G}help${N}               This message"
