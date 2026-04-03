@@ -209,10 +209,14 @@ watch(srcdoc, (doc) => {
 }
 
 .artifact-wide {
-  max-width: 960px;
+  width: min(960px, 100cqi);
+  max-width: none;
+  margin-inline: calc((100% - min(960px, 100cqi)) / 2);
 }
 
 .artifact-full {
+  width: 100cqi;
   max-width: none;
+  margin-inline: calc(50% - 50cqi);
 }
 </style>

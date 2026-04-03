@@ -110,6 +110,7 @@ defineExpose({ scrollAreaEl })
   min-height: 0;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
 }
 
 .view-header {

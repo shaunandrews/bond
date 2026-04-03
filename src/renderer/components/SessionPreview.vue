@@ -100,7 +100,7 @@ function formatRelative(iso: string): string {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  z-index: 45;
+  z-index: 55;
   padding: 0.625rem 0.75rem;
   display: flex;
   flex-direction: column;
