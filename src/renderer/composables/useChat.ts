@@ -123,13 +123,38 @@ export function useChat(deps: ChatDeps = window.bond) {
     const state = { ...base, events } as ActivityState
     _activityMap.set(sid, state)
     if (sid === currentSessionId.value) activity.value = state
+    // Persist done states to localStorage so the activity bar survives view/session switches
+    if (base.type === 'done') {
+      try {
+        localStorage.setItem(`bond:activity:${sid}`, JSON.stringify({
+          startedAt: base.startedAt,
+          endedAt: (base as { endedAt: number }).endedAt,
+          events,
+        }))
+      } catch { /* quota — best effort */ }
+    }
   }
 
   function _clearActivity(sid: string) {
     _activityMap.delete(sid)
     _thinkingBufs.delete(sid)
     _eventsMap.delete(sid)
+    try { localStorage.removeItem(`bond:activity:${sid}`) } catch {}
     if (sid === currentSessionId.value) activity.value = { type: 'idle' }
+  }
+
+  function _restoreActivity(sid: string): ActivityState | null {
+    try {
+      const raw = localStorage.getItem(`bond:activity:${sid}`)
+      if (!raw) return null
+      const data = JSON.parse(raw)
+      const events: ActivityEvent[] = data.events ?? []
+      // Hydrate the events into the maps so subsequent updates work
+      _eventsMap.set(sid, events)
+      const state: ActivityState = { type: 'done', startedAt: data.startedAt, endedAt: data.endedAt, events }
+      _activityMap.set(sid, state)
+      return state
+    } catch { return null }
   }
 
   function _finalizeThinkingEvent(sid: string) {
@@ -411,7 +436,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     }
 
     currentSessionId.value = sessionId
-    activity.value = _activityMap.get(sessionId) ?? { type: 'idle' }
+    activity.value = _activityMap.get(sessionId) ?? _restoreActivity(sessionId) ?? { type: 'idle' }
 
     // Restore from background buffer if available (preserves in-flight responses)
     const bg = backgroundMessages.get(sessionId)

@@ -58,7 +58,7 @@ interface SkillInfo {
   argumentHint: string
 }
 
-const props = defineProps<{ busy: boolean; model: ModelId; editMode: EditMode }>()
+const props = defineProps<{ busy: boolean; model: ModelId; editMode: EditMode; trimBottom?: boolean }>()
 const { busy } = toRefs(props)
 
 const emit = defineEmits<{
@@ -304,7 +304,7 @@ function handleKeyDown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="pt-2 pb-5 relative">
+  <div :class="['pt-2 relative', trimBottom ? 'pb-1' : 'pb-5']">
     <!-- Skill autocomplete menu -->
     <div v-if="showSkillMenu" class="skill-menu">
       <button
@@ -424,6 +424,7 @@ function handleKeyDown(e: KeyboardEvent) {
             v-if="busy"
             variant="ghost"
             size="sm"
+            style="font-weight: normal"
             @click="emit('cancel')"
           >
             Esc to stop

@@ -4,9 +4,10 @@ import { useChat } from './composables/useChat'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useProjects } from './composables/useProjects'
+import { useCollections } from './composables/useCollections'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
-import type { ModelId, AttachedImage } from './types/message'
+import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
 import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhX } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
@@ -19,6 +20,7 @@ import SessionSidebar from './components/SessionSidebar.vue'
 import MediaView from './components/MediaView.vue'
 import ProjectsView from './components/ProjectsView.vue'
 import ProjectPanelView from './components/ProjectPanelView.vue'
+import CollectionsView from './components/CollectionsView.vue'
 import TodoView from './components/TodoView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
@@ -28,6 +30,7 @@ import BondPanelHandle from './components/BondPanelHandle.vue'
 const chat = useChat()
 const sessions = useSessions()
 const projects = useProjects()
+const collections = useCollections()
 const { activeView } = useAppView()
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
 
@@ -51,6 +54,49 @@ async function refreshMediaCount() {
     mediaCount.value = images.length
   } catch { /* ignore */ }
 }
+
+type DisplayItem =
+  | { type: 'message'; msg: Message }
+  | { type: 'activity-group'; id: string; toolCount: number }
+
+const displayItems = computed<DisplayItem[]>(() => {
+  const msgs = chat.messages.value
+  const result: DisplayItem[] = []
+  let i = 0
+
+  while (i < msgs.length) {
+    const msg = msgs[i]
+    if (msg.role === 'meta' && (msg.kind === 'tool' || msg.kind === 'thinking')) {
+      const start = i
+      let toolCount = 0
+      while (i < msgs.length) {
+        const m = msgs[i]
+        if (m.role === 'meta' && (m.kind === 'tool' || m.kind === 'thinking')) {
+          if (m.kind === 'tool') toolCount++
+          i++
+        } else {
+          break
+        }
+      }
+      if (i - start >= 3) {
+        result.push({
+          type: 'activity-group',
+          id: `group-${msgs[start].id}`,
+          toolCount,
+        })
+      } else {
+        for (let k = start; k < i; k++) {
+          result.push({ type: 'message', msg: msgs[k] })
+        }
+      }
+    } else {
+      result.push({ type: 'message', msg })
+      i++
+    }
+  }
+
+  return result
+})
 
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
@@ -239,6 +285,7 @@ let removeOpacityListener: (() => void) | null = null
 let removeAccentListener: (() => void) | null = null
 let removeModelListener: (() => void) | null = null
 let removeProjectsListener: (() => void) | null = null
+let removeCollectionsListener: (() => void) | null = null
 let removeConnectionLostListener: (() => void) | null = null
 let removeConnectionRestoredListener: (() => void) | null = null
 
@@ -294,6 +341,7 @@ onMounted(async () => {
     selectedModel.value = model as ModelId
   })
   removeProjectsListener = window.bond.onProjectsChanged(() => projects.load())
+  removeCollectionsListener = window.bond.onCollectionsChanged(() => collections.load())
   removeConnectionLostListener = window.bond.onConnectionLost(() => {
     chat.stashToLocalStorage()
   })
@@ -312,6 +360,7 @@ onMounted(async () => {
   loadWindowOpacity()
   refreshMediaCount()
   projects.load()
+  collections.load()
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
 
@@ -349,6 +398,7 @@ onUnmounted(() => {
   removeAccentListener?.()
   removeModelListener?.()
   removeProjectsListener?.()
+  removeCollectionsListener?.()
   removeConnectionLostListener?.()
   removeConnectionRestoredListener?.()
   chat.stashToLocalStorage()
@@ -369,6 +419,7 @@ onUnmounted(() => {
         :busySessionIds="chat.busySessionIds.value"
         :mediaCount="mediaCount"
         :projectCount="projects.activeProjects.value.length"
+        :collectionCount="collections.activeCollections.value.length"
         @select="handleSelectSession"
         @create="handleNewSession"
         @archive="sessions.archive"
@@ -378,6 +429,7 @@ onUnmounted(() => {
         @remove="sessions.remove"
         @removeArchived="sessions.removeArchived"
         @projects="activeView = 'projects'"
+        @collections="activeView = 'collections'"
         @media="activeView = 'media'"
         @rename="handleRenameSession"
         @setIconSeed="sessions.setIconSeed"
@@ -413,7 +465,19 @@ onUnmounted(() => {
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
           <MissionBriefing v-if="chat.messages.value.length === 0" />
           <template v-else>
-            <MessageBubble v-for="msg in chat.messages.value" :key="msg.id" :msg="msg" @approve="chat.respondToApproval" @openActivity="activityExpanded = true" />
+            <template v-for="item in displayItems" :key="item.type === 'message' ? item.msg.id : item.id">
+              <span
+                v-if="item.type === 'activity-group'"
+                class="activity-group-summary"
+                @click="activityExpanded = true"
+              >Used {{ item.toolCount }} {{ item.toolCount === 1 ? 'tool' : 'tools' }}</span>
+              <MessageBubble
+                v-else
+                :msg="item.msg"
+                @approve="chat.respondToApproval"
+                @openActivity="activityExpanded = true"
+              />
+            </template>
           </template>
         </div>
 
@@ -427,7 +491,6 @@ onUnmounted(() => {
                 </BondButton>
               </div>
             </Transition>
-            <ActivityBar :activity="chat.activity.value" v-model:expanded="activityExpanded" />
             <TransitionGroup name="queued" tag="div" class="queued-list">
               <div v-for="msg in chat.currentQueue.value" :key="msg.id" class="queued-item" @click="chat.removeQueuedMessage(msg.id); chatInputRef?.setText(msg.text)">
                 <BondText size="xs" color="muted" truncate class="flex-1 min-w-0">{{ msg.text }}</BondText>
@@ -436,7 +499,8 @@ onUnmounted(() => {
                 </button>
               </div>
             </TransitionGroup>
-            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
+            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :trimBottom="chat.activity.value.type !== 'idle'" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
+            <ActivityBar :activity="chat.activity.value" v-model:expanded="activityExpanded" />
           </div>
         </template>
       </ViewShell>
@@ -464,6 +528,25 @@ onUnmounted(() => {
           </BondButton>
         </template>
       </ProjectsView>
+
+      <CollectionsView
+        v-show="activeView === 'collections'"
+        :collections="collections.activeCollections.value"
+        :archivedCollections="collections.archivedCollections.value"
+        :activeCollectionId="collections.activeCollectionId.value"
+        :insetStart="sidebarCollapsed"
+        @select="collections.select"
+        @archive="collections.archive"
+        @unarchive="collections.unarchive"
+        @remove="collections.remove"
+        @back="collections.select(null)"
+      >
+        <template #header-start>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
+            <PhSidebarSimple :size="16" weight="bold" />
+          </BondButton>
+        </template>
+      </CollectionsView>
 
       <MediaView v-show="activeView === 'media'" :insetStart="sidebarCollapsed">
         <template #header-start>
@@ -531,6 +614,20 @@ onUnmounted(() => {
   width: 100%;
   max-width: 720px;
   margin-inline: auto;
+}
+
+.activity-group-summary {
+  display: block;
+  text-align: center;
+  font-size: 11px;
+  color: var(--color-muted);
+  opacity: 0.55;
+  cursor: pointer;
+  padding: 2px 0;
+  transition: opacity var(--transition-fast);
+}
+.activity-group-summary:hover {
+  opacity: 0.85;
 }
 
 .panel-toggle-active {

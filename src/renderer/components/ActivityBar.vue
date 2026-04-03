@@ -79,7 +79,7 @@ function currentLabel(state: ActivityState): string {
       }
       return verb
     }
-    case 'done': return 'Activity'
+    case 'done': return 'Recent activity'
     default: return ''
   }
 }
@@ -106,10 +106,11 @@ const events = computed(() => {
       </Transition>
 
       <!-- Main bar row -->
-      <button class="activity-main" @click="toggle">
-        <span v-if="isActive" class="activity-dot" />
-        <span v-else class="activity-dot-done" />
-        <span class="activity-label">{{ currentLabel(activity) }}</span>
+      <button :class="['activity-main', { 'is-done': !isActive }]" @click="toggle">
+        <span class="activity-center">
+          <span v-if="isActive" class="activity-dot" />
+          <span class="activity-label">{{ currentLabel(activity) }}</span>
+        </span>
         <span v-if="formatElapsed(elapsed)" class="activity-timer">{{ formatElapsed(elapsed) }}</span>
         <PhCaretRight
           v-if="events.length"
@@ -127,22 +128,42 @@ const events = computed(() => {
 .activity-bar {
   display: flex;
   flex-direction: column;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  overflow: hidden;
 }
 
 .activity-main {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
   border: none;
   background: none;
   cursor: pointer;
-  border-radius: var(--radius-md);
   transition: background var(--transition-fast);
   min-height: 26px;
 }
 .activity-main:hover {
   background: var(--color-tint);
+}
+
+.activity-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* Done state: hide label via opacity, keep layout stable */
+.activity-main.is-done .activity-center {
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.activity-main.is-done:hover .activity-center {
+  opacity: 1;
 }
 
 .activity-dot {
@@ -154,15 +175,6 @@ const events = computed(() => {
   animation: activity-pulse 2s ease-in-out infinite;
 }
 
-.activity-dot-done {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-muted);
-  opacity: 0.4;
-  flex-shrink: 0;
-}
-
 @keyframes activity-pulse {
   0%, 100% { opacity: 0.4; transform: scale(0.9); }
   50% { opacity: 1; transform: scale(1); }
@@ -171,12 +183,7 @@ const events = computed(() => {
 .activity-label {
   font-size: 12px;
   color: var(--color-muted);
-  flex: 1;
-  min-width: 0;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
 }
 
 .activity-timer {
