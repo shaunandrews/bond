@@ -136,8 +136,13 @@ cmd_journal() {
   node "$PROJECT_DIR/out/cli/journal.js" "$@"
 }
 
+cmd_soul() {
+  _ensure_cli
+  node "$PROJECT_DIR/out/cli/soul.js" "$@"
+}
+
 _ensure_cli() {
-  if [[ ! -f "$PROJECT_DIR/out/cli/todo.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/media.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/project.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/screenshot.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/journal.js" ]]; then
+  if [[ ! -f "$PROJECT_DIR/out/cli/todo.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/media.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/project.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/screenshot.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/journal.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/soul.js" ]]; then
     cd "$PROJECT_DIR"
     npm run build:cli --silent 2>/dev/null
   fi
@@ -162,6 +167,7 @@ cmd_help() {
   echo -e "  ${G}todo${N}               Manage todos (list, add, done, undo, rm)"
   echo -e "  ${G}project${N}            Manage projects (list, add, show, edit, archive, rm, resource)"
   echo -e "  ${G}journal${N}            Manage journal (list, show, add, edit, rm, search, pin)"
+  echo -e "  ${G}soul${N}               Read/write Bond's personality (show, set, append, clear)"
   echo -e "  ${G}media${N}              Manage media (list, add, info, open, rm, purge)"
   echo -e "  ${G}screenshot${N}         Capture Bond window to /tmp/bond-screenshot.png"
   echo -e "  ${G}test${N}               Run tests"
@@ -182,6 +188,7 @@ case "${1:-help}" in
   media)   shift; cmd_media "$@" ;;
   collection) shift; cmd_collection "$@" ;;
   journal) shift; cmd_journal "$@" ;;
+  soul)    shift; cmd_soul "$@" ;;
   screenshot|ss) cmd_screenshot "${2:-/tmp/bond-screenshot.png}" ;;
   test)    cmd_test ;;
   help|-h|--help) cmd_help ;;

@@ -12,6 +12,7 @@ const components: Record<string, ReturnType<typeof defineAsyncComponent>> = {
   media: defineAsyncComponent(() => import('./embeds/MediaEmbed.vue')),
   collection: defineAsyncComponent(() => import('./embeds/CollectionEmbed.vue')),
   journal: defineAsyncComponent(() => import('./embeds/JournalEmbed.vue')),
+  soul: defineAsyncComponent(() => import('./embeds/SoulEmbed.vue')),
 }
 
 const component = computed(() => components[props.embedType] ?? null)
