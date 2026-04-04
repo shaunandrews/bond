@@ -90,7 +90,11 @@ const D = '\x1b[0;90m'
 const S = '\x1b[9m'  // strikethrough
 const N = '\x1b[0m'
 
-const FLAG_NAMES = new Set(['--notes', '--group', '--project'])
+const FLAG_NAMES = new Set(['--notes', '--note', '--group', '--project'])
+
+function isFlag(arg: string): boolean {
+  return FLAG_NAMES.has(arg) || arg.startsWith('--')
+}
 
 function extractFlags(args: string[]): { textArgs: string[]; notes: string | undefined; group: string | undefined; project: string | undefined } {
   let notes: string | undefined
@@ -99,20 +103,20 @@ function extractFlags(args: string[]): { textArgs: string[]; notes: string | und
   const textArgs: string[] = []
   let i = 0
   while (i < args.length) {
-    if (args[i] === '--notes') {
+    if (args[i] === '--notes' || args[i] === '--note') {
       i++
       const parts: string[] = []
-      while (i < args.length && !FLAG_NAMES.has(args[i])) { parts.push(args[i]); i++ }
+      while (i < args.length && !isFlag(args[i])) { parts.push(args[i]); i++ }
       notes = parts.join(' ')
     } else if (args[i] === '--group') {
       i++
       const parts: string[] = []
-      while (i < args.length && !FLAG_NAMES.has(args[i])) { parts.push(args[i]); i++ }
+      while (i < args.length && !isFlag(args[i])) { parts.push(args[i]); i++ }
       group = parts.join(' ')
     } else if (args[i] === '--project') {
       i++
       const parts: string[] = []
-      while (i < args.length && !FLAG_NAMES.has(args[i])) { parts.push(args[i]); i++ }
+      while (i < args.length && !isFlag(args[i])) { parts.push(args[i]); i++ }
       project = parts.join(' ')
     } else {
       textArgs.push(args[i])

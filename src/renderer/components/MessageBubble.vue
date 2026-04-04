@@ -92,7 +92,7 @@ function formatToolSummary(name: string, summary?: string): string {
     </div>
     <div
       v-if="msg.text"
-      class="user-markdown px-3.5 py-2.5 rounded-[10px] leading-relaxed bg-surface"
+      class="user-markdown px-3.5 py-2.5 rounded-[10px] leading-relaxed bg-surface shadow-sm"
       v-html="renderUserMarkdown(msg.text)"
     />
     <span v-if="msg.ts" class="msg-timestamp">{{ formatTime(msg.ts) }}</span>
