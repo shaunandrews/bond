@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry } from './session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry, JournalComment } from './session'
 import {
   makeRequest,
   isResponse,
@@ -411,6 +411,18 @@ export class BondClient {
 
   async generateJournalMeta(id: string): Promise<JournalEntry | null> {
     return await this.call('journal.generateMeta', { id }) as JournalEntry | null
+  }
+
+  async addJournalComment(entryId: string, author: 'user' | 'bond', body: string): Promise<JournalComment> {
+    return await this.call('journal.addComment', { entryId, author, body }) as JournalComment
+  }
+
+  async deleteJournalComment(id: string): Promise<boolean> {
+    return await this.call('journal.deleteComment', { id }) as boolean
+  }
+
+  async generateBondComment(entryId: string): Promise<JournalComment> {
+    return await this.call('journal.generateBondComment', { entryId }) as JournalComment
   }
 
   onJournalChanged(fn: JournalChangeListener): () => void {

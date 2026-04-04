@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { JournalEntry } from '../shared/session'
+import type { JournalEntry, JournalComment } from '../shared/session'
 import { getDb } from './db'
 
 interface JournalEntryRow {
@@ -15,7 +15,7 @@ interface JournalEntryRow {
   updated_at: string
 }
 
-function rowToEntry(r: JournalEntryRow): JournalEntry {
+function rowToEntry(r: JournalEntryRow, comments: JournalComment[] = []): JournalEntry {
   let tags: string[] = []
   try { tags = JSON.parse(r.tags) } catch { /* default empty */ }
   return {
@@ -27,9 +27,35 @@ function rowToEntry(r: JournalEntryRow): JournalEntry {
     projectId: r.project_id || undefined,
     sessionId: r.session_id || undefined,
     pinned: r.pinned === 1,
+    comments,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   }
+}
+
+interface JournalCommentRow {
+  id: string
+  entry_id: string
+  author: string
+  body: string
+  created_at: string
+}
+
+function rowToComment(r: JournalCommentRow): JournalComment {
+  return {
+    id: r.id,
+    entryId: r.entry_id,
+    author: r.author as 'user' | 'bond',
+    body: r.body,
+    createdAt: r.created_at
+  }
+}
+
+function getCommentsForEntry(db: ReturnType<typeof getDb>, entryId: string): JournalComment[] {
+  const rows = db.prepare(
+    'SELECT id, entry_id, author, body, created_at FROM journal_comments WHERE entry_id = ? ORDER BY created_at ASC'
+  ).all(entryId) as JournalCommentRow[]
+  return rows.map(rowToComment)
 }
 
 const ENTRY_COLS = 'id, author, title, body, tags, project_id, session_id, pinned, created_at, updated_at'
@@ -72,7 +98,9 @@ export function listEntries(opts?: {
 export function getEntry(id: string): JournalEntry | null {
   const db = getDb()
   const row = db.prepare(`SELECT ${ENTRY_COLS} FROM journal_entries WHERE id = ?`).get(id) as JournalEntryRow | undefined
-  return row ? rowToEntry(row) : null
+  if (!row) return null
+  const comments = getCommentsForEntry(db, id)
+  return rowToEntry(row, comments)
 }
 
 export function createEntry(params: {
@@ -143,5 +171,25 @@ export function searchEntries(query: string): JournalEntry[] {
   const rows = db.prepare(
     `SELECT ${ENTRY_COLS} FROM journal_entries WHERE title LIKE ? OR body LIKE ? ORDER BY pinned DESC, created_at DESC`
   ).all(pattern, pattern) as JournalEntryRow[]
-  return rows.map(rowToEntry)
+  return rows.map(r => rowToEntry(r))
+}
+
+// --- Comments ---
+
+export function addComment(entryId: string, author: 'user' | 'bond', body: string): JournalComment {
+  const db = getDb()
+  const id = randomUUID()
+  const now = new Date().toISOString()
+  db.prepare(
+    'INSERT INTO journal_comments (id, entry_id, author, body, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, entryId, author, body, now)
+  // Touch the parent entry's updated_at
+  db.prepare('UPDATE journal_entries SET updated_at = ? WHERE id = ?').run(now, entryId)
+  return { id, entryId, author, body, createdAt: now }
+}
+
+export function deleteComment(commentId: string): boolean {
+  const db = getDb()
+  const result = db.prepare('DELETE FROM journal_comments WHERE id = ?').run(commentId)
+  return result.changes > 0
 }

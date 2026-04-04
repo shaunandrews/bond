@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick } from 'vue'
 import type { JournalEntry } from '../../shared/session'
-import { PhPlus, PhArrowLeft, PhPushPin, PhTrash, PhPencilSimple, PhMagnifyingGlass, PhX, PhRobot, PhUser } from '@phosphor-icons/vue'
+import { PhPlus, PhArrowLeft, PhPushPin, PhTrash, PhPencilSimple, PhMagnifyingGlass, PhX, PhRobot, PhUser, PhChatCircle } from '@phosphor-icons/vue'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
 import BondInput from './BondInput.vue'
@@ -13,6 +13,7 @@ const props = defineProps<{
   entries: JournalEntry[]
   activeEntryId: string | null
   generatingMetaId: string | null
+  generatingBondCommentId: string | null
   loading: boolean
   insetStart?: boolean
 }>()
@@ -25,6 +26,9 @@ const emit = defineEmits<{
   search: [query: string]
   load: [opts?: { author?: string; projectId?: string; tag?: string; limit?: number }]
   togglePin: [id: string]
+  addComment: [entryId: string, body: string]
+  deleteComment: [entryId: string, commentId: string]
+  requestBondComment: [entryId: string]
 }>()
 
 const activeEntry = computed(() =>
@@ -43,6 +47,9 @@ const searchQuery = ref('')
 // Edit state
 const editing = ref(false)
 const editBody = ref('')
+
+// Comment input state
+const commentBody = ref('')
 
 function startCompose() {
   composing.value = true
@@ -96,6 +103,12 @@ function handleDelete(id: string) {
   emit('select', null)
 }
 
+function submitComment() {
+  if (!activeEntry.value || !commentBody.value.trim()) return
+  emit('addComment', activeEntry.value.id, commentBody.value.trim())
+  commentBody.value = ''
+}
+
 function formatDate(iso: string): string {
   const d = new Date(iso)
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -105,6 +118,10 @@ function formatTime(iso: string): string {
   const d = new Date(iso)
   return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
+
+const bondCommentBusy = computed(() =>
+  props.generatingBondCommentId === props.activeEntryId
+)
 </script>
 
 <template>
@@ -140,6 +157,9 @@ function formatTime(iso: string): string {
         </BondButton>
       </template>
       <template v-else-if="activeEntry.author === 'user'">
+        <BondButton variant="ghost" size="sm" icon :disabled="bondCommentBusy" @click="emit('requestBondComment', activeEntry.id)" v-tooltip="'Bond\'s perspective'">
+          <PhChatCircle :size="16" weight="bold" />
+        </BondButton>
         <BondButton variant="ghost" size="sm" icon @click="emit('togglePin', activeEntry.id)" v-tooltip="activeEntry.pinned ? 'Unpin' : 'Pin'">
           <PhPushPin :size="16" :weight="activeEntry.pinned ? 'fill' : 'bold'" />
         </BondButton>
@@ -151,6 +171,9 @@ function formatTime(iso: string): string {
         </BondButton>
       </template>
       <template v-else>
+        <BondButton variant="ghost" size="sm" icon :disabled="bondCommentBusy" @click="emit('requestBondComment', activeEntry.id)" v-tooltip="'Bond\'s perspective'">
+          <PhChatCircle :size="16" weight="bold" />
+        </BondButton>
         <BondButton variant="ghost" size="sm" icon @click="emit('togglePin', activeEntry.id)" v-tooltip="activeEntry.pinned ? 'Unpin' : 'Pin'">
           <PhPushPin :size="16" :weight="activeEntry.pinned ? 'fill' : 'bold'" />
         </BondButton>
@@ -203,6 +226,50 @@ function formatTime(iso: string): string {
       <div class="entry-body">
         <MarkdownMessage :text="activeEntry.body" :streaming="false" />
       </div>
+
+      <!-- Comments -->
+      <div v-if="activeEntry.comments.length > 0 || bondCommentBusy" class="comments-section">
+        <div class="comments-divider" />
+        <div class="comments-list">
+          <div v-for="comment in activeEntry.comments" :key="comment.id" class="comment">
+            <div class="comment-header">
+              <span class="entry-author-badge small" :class="comment.author">
+                <PhRobot v-if="comment.author === 'bond'" :size="10" />
+                <PhUser v-else :size="10" />
+              </span>
+              <BondText size="xs" weight="medium" :color="comment.author === 'bond' ? 'accent' : 'primary'">
+                {{ comment.author === 'bond' ? 'Bond' : 'You' }}
+              </BondText>
+              <BondText size="xs" color="muted">{{ formatDate(comment.createdAt) }} at {{ formatTime(comment.createdAt) }}</BondText>
+              <BondButton variant="ghost" size="sm" icon class="comment-delete" @click="emit('deleteComment', activeEntry!.id, comment.id)" v-tooltip="'Delete comment'">
+                <PhTrash :size="12" />
+              </BondButton>
+            </div>
+            <div class="comment-body">
+              <MarkdownMessage :text="comment.body" :streaming="false" />
+            </div>
+          </div>
+          <div v-if="bondCommentBusy" class="comment bond-generating">
+            <div class="comment-header">
+              <span class="entry-author-badge small bond">
+                <PhRobot :size="10" />
+              </span>
+              <BondText size="xs" weight="medium" color="accent">Bond</BondText>
+              <BondText size="xs" color="muted">thinking...</BondText>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Comment input -->
+      <div class="comment-input-row">
+        <BondInput
+          :modelValue="commentBody"
+          @update:modelValue="commentBody = $event"
+          placeholder="Add a comment..."
+          @keydown.enter="submitComment"
+        />
+      </div>
     </div>
 
     <!-- List view -->
@@ -227,6 +294,9 @@ function formatTime(iso: string): string {
               {{ generatingMetaId === entry.id ? 'Naming...' : entry.title }}
             </BondText>
             <PhPushPin v-if="entry.pinned" :size="12" weight="fill" class="pin-icon" />
+            <BondText v-if="entry.comments.length > 0" size="xs" color="muted" class="shrink-0">
+              <PhChatCircle :size="12" weight="bold" style="vertical-align: -1px" /> {{ entry.comments.length }}
+            </BondText>
             <BondText size="xs" color="muted" class="shrink-0">{{ formatDate(entry.createdAt) }}</BondText>
           </div>
           <BondText v-if="entry.body" size="xs" color="muted" truncate class="entry-preview">
@@ -348,6 +418,69 @@ function formatTime(iso: string): string {
 
 .entry-body {
   line-height: 1.6;
+}
+
+/* Comments */
+.comments-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.comments-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 0.25rem 0;
+}
+
+.comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.comment {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.comment-header {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.comment-delete {
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  margin-left: auto;
+}
+.comment:hover .comment-delete {
+  opacity: 1;
+}
+
+.comment-body {
+  padding-left: 1.625rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.bond-generating {
+  opacity: 0.6;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.3; }
+}
+.bond-generating .comment-header {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* Comment input */
+.comment-input-row {
+  margin-top: 0.25rem;
 }
 
 /* Compose / Edit form */

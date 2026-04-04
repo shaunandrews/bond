@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import type { JournalEntry } from '../../shared/session'
+import type { JournalEntry, JournalComment } from '../../shared/session'
 
 export interface JournalDeps {
   listJournalEntries: (opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }) => Promise<JournalEntry[]>
@@ -9,6 +9,9 @@ export interface JournalDeps {
   deleteJournalEntry: (id: string) => Promise<boolean>
   searchJournalEntries: (query: string) => Promise<JournalEntry[]>
   generateJournalMeta: (id: string) => Promise<JournalEntry | null>
+  addJournalComment: (entryId: string, author: 'user' | 'bond', body: string) => Promise<JournalComment>
+  deleteJournalComment: (id: string) => Promise<boolean>
+  generateBondComment: (entryId: string) => Promise<JournalComment>
   onJournalChanged: (fn: () => void) => () => void
 }
 
@@ -97,12 +100,56 @@ export function useJournal(deps: JournalDeps = window.bond) {
     }
   }
 
+  // --- Comments ---
+
+  const generatingBondCommentId = ref<string | null>(null)
+
+  async function addComment(entryId: string, body: string) {
+    const comment = await deps.addJournalComment(entryId, 'user', body)
+    // Append to the in-memory entry's comments
+    const entry = entries.value.find(e => e.id === entryId)
+    if (entry) entry.comments = [...entry.comments, comment]
+    return comment
+  }
+
+  async function deleteCommentFromEntry(entryId: string, commentId: string) {
+    const ok = await deps.deleteJournalComment(commentId)
+    if (ok) {
+      const entry = entries.value.find(e => e.id === entryId)
+      if (entry) entry.comments = entry.comments.filter(c => c.id !== commentId)
+    }
+  }
+
+  async function requestBondComment(entryId: string) {
+    generatingBondCommentId.value = entryId
+    try {
+      const comment = await deps.generateBondComment(entryId)
+      const entry = entries.value.find(e => e.id === entryId)
+      if (entry) entry.comments = [...entry.comments, comment]
+    } finally {
+      generatingBondCommentId.value = null
+    }
+  }
+
+  // When selecting an entry, load full data (with comments) from server
+  async function selectAndLoad(id: string | null) {
+    activeEntryId.value = id
+    if (id) {
+      const full = await deps.getJournalEntry(id)
+      if (full) {
+        const idx = entries.value.findIndex(e => e.id === id)
+        if (idx !== -1) entries.value[idx] = full
+      }
+    }
+  }
+
   return {
     entries,
     activeEntryId,
     activeEntry,
     pinnedEntries,
     generatingMetaId,
+    generatingBondCommentId,
     loading,
     load,
     create,
@@ -110,7 +157,10 @@ export function useJournal(deps: JournalDeps = window.bond) {
     update,
     remove,
     search,
-    select,
-    togglePin
+    select: selectAndLoad,
+    togglePin,
+    addComment,
+    deleteComment: deleteCommentFromEntry,
+    requestBondComment
   }
 }

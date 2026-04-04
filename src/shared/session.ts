@@ -91,6 +91,14 @@ export interface Project {
 
 // --- Journal ---
 
+export interface JournalComment {
+  id: string
+  entryId: string
+  author: 'user' | 'bond'
+  body: string
+  createdAt: string   // ISO 8601
+}
+
 export interface JournalEntry {
   id: string
   author: 'user' | 'bond'
@@ -100,6 +108,7 @@ export interface JournalEntry {
   projectId?: string
   sessionId?: string
   pinned: boolean
+  comments: JournalComment[]
   createdAt: string   // ISO 8601
   updatedAt: string   // ISO 8601
 }

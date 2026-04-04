@@ -11,6 +11,8 @@ export function getDb(): Database.Database {
 
   _db = new Database(getDbPath())
   _db.pragma('journal_mode = WAL')
+  _db.pragma('busy_timeout = 5000')
+  _db.pragma('synchronous = NORMAL')
   _db.pragma('foreign_keys = ON')
 
   createSchema(_db)
@@ -31,12 +33,16 @@ export function getDb(): Database.Database {
   migrateAddIconSeedColumn(_db)
   migrateCreateCollectionsTable(_db)
   migrateCreateJournalTable(_db)
+  migrateAddMessageUpdatedAt(_db)
+  migrateCreatePendingApprovalsTable(_db)
+  migrateCreateJournalCommentsTable(_db)
 
   return _db
 }
 
 export function closeDb(): void {
   if (_db) {
+    try { _db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* best effort */ }
     _db.close()
     _db = null
   }
@@ -308,6 +314,41 @@ function migrateCreateJournalTable(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_journal_created ON journal_entries(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_journal_project ON journal_entries(project_id);
     CREATE INDEX IF NOT EXISTS idx_journal_author ON journal_entries(author);
+  `)
+}
+
+function migrateAddMessageUpdatedAt(db: Database.Database): void {
+  const columns = db.pragma('table_info(messages)') as { name: string }[]
+  if (!columns.some(c => c.name === 'updated_at')) {
+    db.exec("ALTER TABLE messages ADD COLUMN updated_at TEXT")
+  }
+}
+
+function migrateCreatePendingApprovalsTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_approvals (
+      request_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      tool_name TEXT NOT NULL,
+      input TEXT,
+      title TEXT,
+      description TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_approvals_session ON pending_approvals(session_id);
+  `)
+}
+
+function migrateCreateJournalCommentsTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS journal_comments (
+      id TEXT PRIMARY KEY,
+      entry_id TEXT NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
+      author TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_journal_comments_entry ON journal_comments(entry_id, created_at ASC);
   `)
 }
 

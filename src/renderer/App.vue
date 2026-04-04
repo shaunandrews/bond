@@ -562,6 +562,7 @@ onUnmounted(() => {
         :entries="journal.entries.value"
         :activeEntryId="journal.activeEntryId.value"
         :generatingMetaId="journal.generatingMetaId.value"
+        :generatingBondCommentId="journal.generatingBondCommentId.value"
         :loading="journal.loading.value"
         :insetStart="sidebarCollapsed"
         @select="journal.select"
@@ -571,6 +572,9 @@ onUnmounted(() => {
         @search="journal.search"
         @load="journal.load"
         @togglePin="journal.togglePin"
+        @addComment="journal.addComment"
+        @deleteComment="journal.deleteComment"
+        @requestBondComment="journal.requestBondComment"
       >
         <template #header-start>
           <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">

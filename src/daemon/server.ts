@@ -34,7 +34,11 @@ import {
   deleteSession,
   deleteArchivedSessions,
   getMessages,
-  saveMessages
+  saveMessages,
+  savePendingApproval,
+  removePendingApproval,
+  clearSessionPendingApprovals,
+  getPendingApprovals
 } from './sessions'
 import { listTodos, createTodo, updateTodo, deleteTodo, reorderTodos } from './todos'
 import {
@@ -60,8 +64,9 @@ import {
   reorderItems,
   renameField
 } from './collections'
-import { listEntries, getEntry, createEntry, updateEntry, deleteEntry, searchEntries } from './journal'
+import { listEntries, getEntry, createEntry, updateEntry, deleteEntry, searchEntries, addComment, deleteComment } from './journal'
 import { generateJournalMeta } from './generate-journal-meta'
+import { generateBondComment } from './generate-journal-comment'
 import { parseTodoInput } from './parse-todo'
 import { generateTitleAndSummary } from './generate-title'
 import {
@@ -130,7 +135,7 @@ function broadcastChunk(sessionId: string, chunk: BondStreamChunk): void {
     }
   }
 
-  // Track pending approval chunks for replay
+  // Track pending approval chunks for replay (in-memory + SQLite)
   if (chunk.kind === 'tool_approval') {
     let pending = pendingApprovalChunks.get(sessionId)
     if (!pending) {
@@ -138,6 +143,7 @@ function broadcastChunk(sessionId: string, chunk: BondStreamChunk): void {
       pendingApprovalChunks.set(sessionId, pending)
     }
     pending.push(tagged)
+    try { savePendingApproval(sessionId, tagged) } catch { /* best effort */ }
   }
 }
 
@@ -187,9 +193,10 @@ function clearPendingApprovalChunk(requestId: string): void {
     if (idx !== -1) {
       chunks.splice(idx, 1)
       if (chunks.length === 0) pendingApprovalChunks.delete(sessionId)
-      return
+      break
     }
   }
+  try { removePendingApproval(requestId) } catch { /* best effort */ }
 }
 
 // --- RPC handler ---
@@ -309,6 +316,9 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
             knownSdkSessions.delete(sessionId)
           }
           activeQueries.delete(sessionId)
+          // Clear pending approvals — they're no longer actionable after query ends
+          pendingApprovalChunks.delete(sessionId)
+          try { clearSessionPendingApprovals(sessionId) } catch { /* best effort */ }
           broadcastChunk(sessionId, { kind: 'query_end', succeeded })
         })
 
@@ -322,6 +332,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           if (entry) {
             entry.ac.abort()
             clearSessionApprovals(sessionId)
+            pendingApprovalChunks.delete(sessionId)
+            try { clearSessionPendingApprovals(sessionId) } catch { /* best effort */ }
             try { await entry.promise } catch { /* already handled */ }
             activeQueries.delete(sessionId)
           }
@@ -329,6 +341,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           for (const [sid, entry] of activeQueries) {
             entry.ac.abort()
             clearSessionApprovals(sid)
+            pendingApprovalChunks.delete(sid)
+            try { clearSessionPendingApprovals(sid) } catch { /* best effort */ }
           }
           await Promise.allSettled([...activeQueries.values()].map(e => e.promise))
           activeQueries.clear()
@@ -352,8 +366,17 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (!sessionId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'sessionId is required'))
         subscribeTo(sessionId, ws)
 
-        // Replay pending approval chunks
-        const pending = pendingApprovalChunks.get(sessionId)
+        // Replay pending approval chunks — prefer in-memory, fall back to SQLite
+        let pending = pendingApprovalChunks.get(sessionId)
+        if (!pending || pending.length === 0) {
+          try {
+            const dbApprovals = getPendingApprovals(sessionId)
+            if (dbApprovals.length > 0) {
+              pending = dbApprovals
+              pendingApprovalChunks.set(sessionId, dbApprovals)
+            }
+          } catch { /* best effort */ }
+        }
         if (pending) {
           for (const chunk of pending) {
             if (ws.readyState === WebSocket.OPEN) {
@@ -775,6 +798,35 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const updated = updateEntry(eid, { title: meta.title, tags: meta.tags })
         broadcastJournalChanged()
         return JSON.stringify(makeResponse(id, updated))
+      }
+
+      case 'journal.addComment': {
+        const entryId = getStringParam(p, 'entryId')
+        const author = getStringParam(p, 'author') as 'user' | 'bond' | undefined
+        const body = getStringParam(p, 'body')
+        if (!entryId || !author || !body) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'entryId, author, and body are required'))
+        const comment = addComment(entryId, author, body)
+        broadcastJournalChanged()
+        return JSON.stringify(makeResponse(id, comment))
+      }
+
+      case 'journal.deleteComment': {
+        const cid = getStringParam(p, 'id')
+        if (!cid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const deleted = deleteComment(cid)
+        broadcastJournalChanged()
+        return JSON.stringify(makeResponse(id, deleted))
+      }
+
+      case 'journal.generateBondComment': {
+        const eid = getStringParam(p, 'entryId')
+        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'entryId is required'))
+        const entry = getEntry(eid)
+        if (!entry) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'entry not found'))
+        const commentBody = await generateBondComment(entry.body, entry.title)
+        const comment = addComment(eid, 'bond', commentBody)
+        broadcastJournalChanged()
+        return JSON.stringify(makeResponse(id, comment))
       }
 
       default:

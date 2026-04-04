@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry } from '../shared/session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry, JournalComment } from '../shared/session'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
@@ -97,6 +97,10 @@ contextBridge.exposeInMainWorld('bond', {
   deleteJournalEntry: (id: string) => ipcRenderer.invoke('journal:delete', id) as Promise<boolean>,
   searchJournalEntries: (query: string) => ipcRenderer.invoke('journal:search', query) as Promise<JournalEntry[]>,
   generateJournalMeta: (id: string) => ipcRenderer.invoke('journal:generateMeta', id) as Promise<JournalEntry | null>,
+  addJournalComment: (entryId: string, author: 'user' | 'bond', body: string) =>
+    ipcRenderer.invoke('journal:addComment', entryId, author, body) as Promise<JournalComment>,
+  deleteJournalComment: (id: string) => ipcRenderer.invoke('journal:deleteComment', id) as Promise<boolean>,
+  generateBondComment: (entryId: string) => ipcRenderer.invoke('journal:generateBondComment', entryId) as Promise<JournalComment>,
   onJournalChanged: (fn: () => void) => {
     const listener = () => fn()
     ipcRenderer.on('bond:journalChanged', listener)

@@ -595,6 +595,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('journal:delete', (_e, id: string) => client.deleteJournalEntry(id))
   ipcMain.handle('journal:search', (_e, query: string) => client.searchJournalEntries(query))
   ipcMain.handle('journal:generateMeta', (_e, id: string) => client.generateJournalMeta(id))
+  ipcMain.handle('journal:addComment', (_e, entryId: string, author: string, body: string) => client.addJournalComment(entryId, author as any, body))
+  ipcMain.handle('journal:deleteComment', (_e, id: string) => client.deleteJournalComment(id))
+  ipcMain.handle('journal:generateBondComment', (_e, entryId: string) => client.generateBondComment(entryId))
 
   ipcMain.handle('image:readLocal', (_e, filePath: string): string | null => {
     const EXT_TO_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
