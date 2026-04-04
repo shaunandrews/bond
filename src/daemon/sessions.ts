@@ -1,5 +1,6 @@
 import type { Session, SessionMessage, EditMode } from '../shared/session'
 import { DEFAULT_EDIT_MODE } from '../shared/session'
+import type { TaggedChunk } from '../shared/stream'
 import { getDb } from './db'
 import { deleteSessionImages } from './images'
 
@@ -151,16 +152,37 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
     }
   }
 
-  const save = db.transaction(() => {
-    db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId)
+  const now = new Date().toISOString()
 
-    const insert = db.prepare(
-      'INSERT INTO messages (id, session_id, position, role, text, streaming, kind, name, summary, status, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    )
+  const save = db.transaction(() => {
+    // Collect current message IDs so we can remove stale ones
+    const incomingIds = new Set(messages.map(m => m.id))
+
+    // Remove messages that are no longer in the array (e.g. filtered empty thinking)
+    const existingIds = db.prepare('SELECT id FROM messages WHERE session_id = ?').all(sessionId) as { id: string }[]
+    const staleIds = existingIds.filter(r => !incomingIds.has(r.id)).map(r => r.id)
+    if (staleIds.length > 0) {
+      const placeholders = staleIds.map(() => '?').join(',')
+      db.prepare(`DELETE FROM messages WHERE id IN (${placeholders})`).run(...staleIds)
+    }
+
+    // Upsert each message — INSERT if new, UPDATE if changed
+    const upsert = db.prepare(`
+      INSERT INTO messages (id, session_id, position, role, text, streaming, kind, name, summary, status, images, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        position = excluded.position,
+        text = excluded.text,
+        streaming = excluded.streaming,
+        summary = excluded.summary,
+        status = excluded.status,
+        images = excluded.images,
+        updated_at = excluded.updated_at
+    `)
 
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i]
-      insert.run(
+      upsert.run(
         m.id, sessionId, i, m.role,
         m.text ?? null,
         m.streaming ? 1 : null,
@@ -168,13 +190,57 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
         m.name ?? null,
         m.summary ?? null,
         m.status ?? null,
-        m.imageIds?.length ? JSON.stringify(m.imageIds) : m.images?.length ? JSON.stringify(m.images) : null
+        m.imageIds?.length ? JSON.stringify(m.imageIds) : m.images?.length ? JSON.stringify(m.images) : null,
+        now
       )
     }
 
-    db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), sessionId)
+    db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(now, sessionId)
   })
 
   save()
   return true
+}
+
+// --- Pending Approvals ---
+
+export function savePendingApproval(sessionId: string, chunk: TaggedChunk): void {
+  if (chunk.kind !== 'tool_approval') return
+  const db = getDb()
+  db.prepare(`
+    INSERT OR REPLACE INTO pending_approvals (request_id, session_id, tool_name, input, title, description, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    chunk.requestId,
+    sessionId,
+    chunk.toolName,
+    JSON.stringify(chunk.input ?? {}),
+    chunk.title ?? null,
+    chunk.description ?? null,
+    new Date().toISOString()
+  )
+}
+
+export function removePendingApproval(requestId: string): void {
+  const db = getDb()
+  db.prepare('DELETE FROM pending_approvals WHERE request_id = ?').run(requestId)
+}
+
+export function clearSessionPendingApprovals(sessionId: string): void {
+  const db = getDb()
+  db.prepare('DELETE FROM pending_approvals WHERE session_id = ?').run(sessionId)
+}
+
+export function getPendingApprovals(sessionId: string): TaggedChunk[] {
+  const db = getDb()
+  const rows = db.prepare('SELECT * FROM pending_approvals WHERE session_id = ?').all(sessionId) as Record<string, unknown>[]
+  return rows.map(r => ({
+    kind: 'tool_approval' as const,
+    sessionId: r.session_id as string,
+    requestId: r.request_id as string,
+    toolName: r.tool_name as string,
+    input: r.input ? JSON.parse(r.input as string) : {},
+    title: r.title as string | undefined,
+    description: r.description as string | undefined,
+  }))
 }
