@@ -103,11 +103,15 @@ const lightboxSrc = ref<string | null>(null)
 function handleClick(e: MouseEvent) {
   const target = e.target as HTMLElement
 
-  // Open links in default browser
+  // Links: Cmd+Click → system browser, regular click → in-app browser panel
   const anchor = target.closest('a') as HTMLAnchorElement | null
   if (anchor?.href) {
     e.preventDefault()
-    window.bond.openExternal(anchor.href)
+    if (e.metaKey || e.ctrlKey) {
+      window.bond.openExternal(anchor.href)
+    } else {
+      window.dispatchEvent(new CustomEvent('bond:openInBrowser', { detail: anchor.href }))
+    }
     return
   }
 

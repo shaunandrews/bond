@@ -8,9 +8,10 @@ import { useCollections } from './composables/useCollections'
 import { useJournal } from './composables/useJournal'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
+import { useBrowser } from './composables/useBrowser'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhX } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhGlobe, PhX } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
@@ -24,6 +25,7 @@ import ProjectPanelView from './components/ProjectPanelView.vue'
 import CollectionsView from './components/CollectionsView.vue'
 import JournalView from './components/JournalView.vue'
 import TodoView from './components/TodoView.vue'
+import BrowserView from './components/BrowserView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
@@ -35,6 +37,7 @@ const projects = useProjects()
 const collections = useCollections()
 const journal = useJournal()
 const { activeView } = useAppView()
+const browserComposable = useBrowser()
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
 
 function applyWindowOpacity(val: number) {
@@ -101,6 +104,7 @@ const displayItems = computed<DisplayItem[]>(() => {
   return result
 })
 
+const browserViewRef = ref<InstanceType<typeof BrowserView> | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
 const sidebarPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
@@ -119,7 +123,7 @@ function getInitialSidebarWidth(): number {
 const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === '1')
 const sidebarWidth = ref(getInitialSidebarWidth())
 
-type RightPanelContent = 'todos' | 'projects'
+type RightPanelContent = 'todos' | 'projects' | 'browser'
 const rightPanelCollapsed = ref(localStorage.getItem('bond:right-panel') === 'none' || !localStorage.getItem('bond:right-panel'))
 const rightPanelContent = ref<RightPanelContent>(
   (localStorage.getItem('bond:right-panel-content') as RightPanelContent) || 'todos'
@@ -283,6 +287,14 @@ async function handleProjectStartChat(projectId: string) {
   }
 }
 
+function handleOpenInBrowser(url: string) {
+  rightPanelContent.value = 'browser'
+  rightPanelCollapsed.value = false
+  localStorage.setItem('bond:right-panel', 'browser')
+  localStorage.setItem('bond:right-panel-content', 'browser')
+  nextTick(() => browserViewRef.value?.openUrl(url))
+}
+
 let removeCreateSkillListener: (() => void) | null = null
 let removeOpacityListener: (() => void) | null = null
 let removeAccentListener: (() => void) | null = null
@@ -328,6 +340,23 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault()
     toggleRightPanel()
   }
+  if (e.metaKey && e.shiftKey && e.key === 'k') {
+    e.preventDefault()
+    toggleRightPanel('browser')
+  }
+  if (e.metaKey && !e.shiftKey && e.key === 't') {
+    // Only intercept Cmd+T when browser panel is open
+    if (rightPanelContent.value === 'browser' && !rightPanelCollapsed.value) {
+      e.preventDefault()
+      browserComposable.createTab()
+    }
+  }
+  if (e.metaKey && !e.shiftKey && e.key === 'l') {
+    if (rightPanelContent.value === 'browser' && !rightPanelCollapsed.value) {
+      e.preventDefault()
+      browserViewRef.value?.focusUrlBar()
+    }
+  }
 }
 
 function handleBeforeUnload() {
@@ -335,9 +364,15 @@ function handleBeforeUnload() {
   chat.persistMessages()
 }
 
+function handleBrowserLinkEvent(e: Event) {
+  const url = (e as CustomEvent).detail
+  if (typeof url === 'string') handleOpenInBrowser(url)
+}
+
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('beforeunload', handleBeforeUnload)
+  window.addEventListener('bond:openInBrowser', handleBrowserLinkEvent)
   removeCreateSkillListener = window.bond.onCreateSkill(handleCreateSkill)
   removeOpacityListener = window.bond.onWindowOpacity(applyWindowOpacity)
   removeAccentListener = window.bond.onAccentColor(applyExternalAccent)
@@ -399,6 +434,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('bond:openInBrowser', handleBrowserLinkEvent)
   removeCreateSkillListener?.()
   removeOpacityListener?.()
   removeAccentListener?.()
@@ -447,7 +483,7 @@ onUnmounted(() => {
 
     <BondPanelHandle v-show="!sidebarCollapsed" id="handle-0" />
 
-    <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="420">
+    <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="rightPanelContent === 'browser' && !rightPanelCollapsed ? 300 : 420">
       <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
       <ViewShell
         v-show="activeView === 'chat'"
@@ -468,6 +504,9 @@ onUnmounted(() => {
           </BondButton>
           <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'todos' }" @click.stop="toggleRightPanel('todos')" v-tooltip="'Todos panel ⇧⌘B'">
             <PhChecks :size="16" weight="bold" />
+          </BondButton>
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'browser' }" @click.stop="toggleRightPanel('browser')" v-tooltip="'Browser panel ⇧⌘K'">
+            <PhGlobe :size="16" weight="bold" />
           </BondButton>
         </template>
 
@@ -595,7 +634,7 @@ onUnmounted(() => {
 
     <BondPanelHandle v-show="!rightPanelHidden" id="handle-1" />
 
-    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="260" :maxSize="640" :style="rightPanelStyle">
+    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="rightPanelContent === 'browser' ? 360 : 260" :maxSize="rightPanelContent === 'browser' ? 99999 : 640" :style="rightPanelStyle">
       <TodoView v-if="rightPanelContent === 'todos'" @startChat="handleTodoChat" />
       <ProjectPanelView v-else-if="rightPanelContent === 'projects'"
         :projects="projects.activeProjects.value"
@@ -605,6 +644,8 @@ onUnmounted(() => {
         @addResource="projects.addResource"
         @removeResource="projects.removeResource"
       />
+      <!-- BrowserView uses v-show so webview tabs stay alive when panel switches -->
+      <BrowserView v-show="rightPanelContent === 'browser'" ref="browserViewRef" />
     </BondPanel>
   </BondPanelGroup>
 </template>
