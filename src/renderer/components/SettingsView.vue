@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted } from 'vue'
-import { PhTrash, PhPlus } from '@phosphor-icons/vue'
+import { PhTrash, PhPlus, PhEye, PhEyeSlash } from '@phosphor-icons/vue'
 import { useAccentColor } from '../composables/useAccentColor'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 import BondSelect from './BondSelect.vue'
 import BondButton from './BondButton.vue'
+import BondText from './BondText.vue'
 
 interface SkillInfo { name: string; description: string; argumentHint: string }
 
@@ -24,6 +25,65 @@ const newSkillInputEl = ref<HTMLTextAreaElement | null>(null)
 const { accent, defaultAccent, setAccent, reset: resetAccent } = useAccentColor()
 
 const windowOpacity = ref(1)
+
+// Sense
+const senseEnabled = ref(false)
+const senseState = ref('disabled')
+const senseStorageBytes = ref(0)
+const senseCaptureCount = ref(0)
+const senseAutoContext = ref(false)
+const senseCaptureInterval = ref(15)
+const senseHasPermission = ref(false)
+
+async function loadSenseStatus() {
+  try {
+    const status = await window.bond.senseStatus()
+    senseEnabled.value = status.enabled
+    senseState.value = status.state
+    senseStorageBytes.value = status.storageBytes
+    senseCaptureCount.value = status.captureCount
+
+    const settings = await window.bond.senseSettings()
+    senseAutoContext.value = settings.autoContextInChat
+    senseCaptureInterval.value = settings.captureIntervalSeconds
+
+    senseHasPermission.value = await window.bond.hasScreenRecordingPermission()
+  } catch { /* sense not available */ }
+}
+
+async function toggleSense() {
+  if (senseEnabled.value) {
+    await window.bond.senseDisable()
+    senseEnabled.value = false
+    senseState.value = 'disabled'
+  } else {
+    await window.bond.senseEnable()
+    senseEnabled.value = true
+    senseState.value = 'armed'
+  }
+}
+
+async function toggleAutoContext() {
+  senseAutoContext.value = !senseAutoContext.value
+  await window.bond.senseUpdateSettings({ autoContextInChat: senseAutoContext.value })
+}
+
+async function handleIntervalChange(e: Event) {
+  const val = parseInt((e.target as HTMLInputElement).value, 10)
+  senseCaptureInterval.value = val
+  await window.bond.senseUpdateSettings({ captureIntervalSeconds: val })
+}
+
+async function clearSenseData() {
+  await window.bond.senseClear()
+  await loadSenseStatus()
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 async function loadWindowOpacity() {
   windowOpacity.value = await window.bond.getWindowOpacity()
@@ -56,7 +116,8 @@ onMounted(async () => {
     window.bond.getSoul(),
     window.bond.getModel(),
     window.bond.listSkills(),
-    loadWindowOpacity()
+    loadWindowOpacity(),
+    loadSenseStatus()
   ])
   soul.value = s
   originalSoul.value = s
@@ -163,6 +224,67 @@ function handleModelChange(model: string) {
             @input="handleOpacityInput"
           />
           <span class="text-xs text-muted">Less</span>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="section-header">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-text-primary">Sense</h2>
+            <div class="sense-state-badge" :class="senseState">
+              {{ senseState }}
+            </div>
+          </div>
+          <p class="text-xs text-muted mt-1">
+            Ambient screen awareness. Bond captures what's on screen and builds context automatically.
+            <span v-if="!senseHasPermission" class="text-err"> Requires Screen Recording permission.</span>
+          </p>
+        </div>
+
+        <div class="sense-controls">
+          <label class="sense-toggle-row">
+            <span class="text-sm text-text-primary">Enable Sense</span>
+            <button
+              type="button"
+              :class="['toggle-switch', { on: senseEnabled }]"
+              @click="toggleSense"
+            >
+              <span class="toggle-knob" />
+            </button>
+          </label>
+
+          <label class="sense-toggle-row" v-if="senseEnabled">
+            <span class="text-sm text-text-primary">Auto-context in chat</span>
+            <button
+              type="button"
+              :class="['toggle-switch', { on: senseAutoContext }]"
+              @click="toggleAutoContext"
+            >
+              <span class="toggle-knob" />
+            </button>
+          </label>
+
+          <div class="sense-toggle-row" v-if="senseEnabled">
+            <span class="text-sm text-text-primary">Capture interval</span>
+            <div class="flex items-center gap-2">
+              <input
+                type="range"
+                class="opacity-slider"
+                min="5"
+                max="60"
+                step="5"
+                :value="senseCaptureInterval"
+                @input="handleIntervalChange"
+              />
+              <BondText size="xs" color="muted" mono>{{ senseCaptureInterval }}s</BondText>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="senseEnabled" class="sense-stats-row">
+          <BondText size="xs" color="muted">{{ senseCaptureCount }} captures</BondText>
+          <BondText size="xs" color="muted">{{ formatBytes(senseStorageBytes) }}</BondText>
+          <button v-if="senseCaptureCount > 0" type="button" class="reset-btn" @click="clearSenseData">Clear data</button>
         </div>
       </section>
 
@@ -407,6 +529,77 @@ function handleModelChange(model: string) {
 }
 .reset-btn:hover {
   color: var(--color-text-primary);
+}
+
+.sense-state-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-tint);
+  color: var(--color-muted);
+}
+.sense-state-badge.recording {
+  background: color-mix(in srgb, var(--color-ok) 15%, transparent);
+  color: var(--color-ok);
+}
+.sense-state-badge.armed {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+}
+.sense-state-badge.paused {
+  background: color-mix(in srgb, var(--color-err) 10%, transparent);
+  color: var(--color-err);
+}
+
+.sense-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sense-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.toggle-switch {
+  all: unset;
+  cursor: pointer;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--color-border);
+  position: relative;
+  transition: background var(--transition-base);
+  flex-shrink: 0;
+}
+.toggle-switch.on {
+  background: var(--color-accent);
+}
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-base);
+}
+.toggle-switch.on .toggle-knob {
+  transform: translateX(16px);
+}
+
+.sense-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 
 .skill-list {

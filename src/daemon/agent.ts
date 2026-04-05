@@ -4,11 +4,14 @@ import { resolve, normalize } from 'node:path'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { BondStreamChunk } from '../shared/stream'
 import type { EditMode } from '../shared/session'
-import { getSoul } from './settings'
+import { getSoul, getSetting } from './settings'
 import { getImagePaths } from './images'
 import { getSkillsDir } from './paths'
 import { scanSkills, type SkillInfo } from './skills'
 import { listCollections, countItems } from './collections'
+import { getDb } from './db'
+import type { SenseSettings } from '../shared/sense'
+import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
 
 export function getCachedSkills(): SkillInfo[] {
   return scanSkills()
@@ -185,7 +188,8 @@ export async function runBondQuery(
     '- When you create todos for the user, associate them with the project by including the projectId\n\n' +
     'To look up project details, use the `bond project show <name>` CLI command or read the project\'s resource files directly. ' +
     'If the user mentions a project by name and this chat isn\'t already linked to one, offer to look it up. ' +
-    'Projects are managed via the Bond UI or the `bond project` CLI (list, add, show, edit, archive, rm, resource add/rm).\n\n' +
+    'Projects are managed via the Bond UI or the `bond project` CLI (list, add, show, edit, archive, rm, resource add/rm).\n' +
+    'To add a resource: `bond project resource add <project> <kind> <value> [label]` where kind is path, file, or link.\n\n' +
     'Todos can optionally belong to a project. To create a todo linked to a project:\n' +
     '  `bond todo add <text> --project <project-name>`\n' +
     'To link an existing todo to a project:\n' +
@@ -315,6 +319,69 @@ export async function runBondQuery(
     })
     basePrompt += '\nCurrent collections:\n' + lines.join('\n') + '\n'
   }
+
+  // Sense system prompt
+  basePrompt +=
+    '\nSENSE — SCREEN AWARENESS:\n' +
+    'Bond has built-in screen awareness that captures what the user sees.\n' +
+    '- `bond sense now` — current screen context\n' +
+    '- `bond sense today` / `bond sense yesterday` — daily summaries\n' +
+    '- `bond sense search <query>` — find when the user saw something specific\n' +
+    '- `bond sense apps [today|week]` — app usage breakdown\n' +
+    '- `bond sense timeline [range]` — chronological activity\n' +
+    'Use Sense data when the user references past activity, needs work summaries, ' +
+    'wants to recall something they saw, or when context would help you give better answers. ' +
+    'Don\'t dump raw OCR — synthesize and summarize.\n'
+
+  // Sense auto-context injection
+  try {
+    let senseSettings = DEFAULT_SENSE_SETTINGS
+    try {
+      const raw = getSetting('sense')
+      if (raw) senseSettings = { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
+    } catch { /* defaults */ }
+
+    if (senseSettings.enabled && senseSettings.autoContextInChat) {
+      const db = getDb()
+      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+
+      // Recent app activity
+      const recentApps = db.prepare(`
+        SELECT app_name, window_title, MAX(captured_at) as last_seen
+        FROM sense_captures
+        WHERE captured_at >= ? AND app_name IS NOT NULL
+        GROUP BY app_bundle_id
+        ORDER BY last_seen DESC
+        LIMIT 5
+      `).all(fiveMinAgo) as { app_name: string; window_title: string; last_seen: string }[]
+
+      if (recentApps.length > 0) {
+        const active = recentApps[0]
+        const previous = recentApps.slice(1).map(a => `${a.app_name} (${a.window_title})`).join(', ')
+
+        let contextBlock = '\nRECENT SCREEN CONTEXT (last 5 minutes):\n'
+        contextBlock += `- Active app: ${active.app_name} (${active.window_title})\n`
+        if (previous) contextBlock += `- Previously: ${previous}\n`
+
+        // Key visible text from most recent capture
+        const lastCapture = db.prepare(`
+          SELECT text_content FROM sense_captures
+          WHERE captured_at >= ? AND text_content IS NOT NULL AND text_status = 'done'
+          ORDER BY captured_at DESC LIMIT 1
+        `).get(fiveMinAgo) as { text_content: string } | undefined
+
+        if (lastCapture?.text_content) {
+          // Extract first few meaningful lines
+          const lines = lastCapture.text_content.split('\n').filter(l => l.trim().length > 3).slice(0, 5)
+          if (lines.length > 0) {
+            contextBlock += `- Key visible text: ${lines.map(l => `"${l.trim().slice(0, 80)}"`).join(', ')}\n`
+          }
+        }
+
+        basePrompt += contextBlock
+      }
+    }
+  } catch { /* non-fatal */ }
 
   const editMode = options.editMode ?? { type: 'full' }
   const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS
