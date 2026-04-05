@@ -206,6 +206,8 @@ contextBridge.exposeInMainWorld('bond', {
   senseSearch: (query: string, limit?: number) => ipcRenderer.invoke('sense:search', query, limit),
   senseApps: (range?: string) => ipcRenderer.invoke('sense:apps', range),
   senseTimeline: (from?: string, to?: string, limit?: number) => ipcRenderer.invoke('sense:timeline', from, to, limit),
+  senseCapture: (id: string) => ipcRenderer.invoke('sense:capture', id),
+  senseSessions: (from?: string, to?: string) => ipcRenderer.invoke('sense:sessions', from, to),
   senseSettings: () => ipcRenderer.invoke('sense:settings'),
   senseUpdateSettings: (updates: Record<string, unknown>) => ipcRenderer.invoke('sense:updateSettings', updates),
   senseClear: (range?: { from?: string; to?: string }) => ipcRenderer.invoke('sense:clear', range),

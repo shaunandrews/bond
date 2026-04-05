@@ -553,6 +553,14 @@ export class BondClient {
     return await this.call('sense.timeline', { from, to, limit }) as SenseCapture[]
   }
 
+  async senseCapture(id: string): Promise<{ capture: SenseCapture; image: string | null }> {
+    return await this.call('sense.capture', { id }) as { capture: SenseCapture; image: string | null }
+  }
+
+  async senseSessions(from?: string, to?: string): Promise<import('./sense').SenseSession[]> {
+    return await this.call('sense.sessions', { from, to }) as import('./sense').SenseSession[]
+  }
+
   async senseSettings(): Promise<SenseSettings> {
     return await this.call('sense.settings') as SenseSettings
   }

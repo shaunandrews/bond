@@ -81,6 +81,24 @@ declare global {
         captureTab: (tabId: string) => Promise<string>
         execInTab: (tabId: string, js: string) => Promise<unknown>
       }
+      // Sense
+      senseStatus: () => Promise<unknown>
+      senseEnable: () => Promise<unknown>
+      senseDisable: () => Promise<unknown>
+      sensePause: (minutes?: number) => Promise<unknown>
+      senseResume: () => Promise<unknown>
+      senseNow: () => Promise<unknown>
+      senseToday: () => Promise<unknown>
+      senseSearch: (query: string, limit?: number) => Promise<import('../../shared/sense').SenseCapture[]>
+      senseApps: (range?: string) => Promise<unknown>
+      senseTimeline: (from?: string, to?: string, limit?: number) => Promise<import('../../shared/sense').SenseCapture[]>
+      senseCapture: (id: string) => Promise<{ capture: import('../../shared/sense').SenseCapture; image: string | null }>
+      senseSessions: (from?: string, to?: string) => Promise<import('../../shared/sense').SenseSession[]>
+      senseSettings: () => Promise<import('../../shared/sense').SenseSettings>
+      senseUpdateSettings: (updates: Record<string, unknown>) => Promise<unknown>
+      senseClear: (range?: { from?: string; to?: string }) => Promise<unknown>
+      senseStats: () => Promise<unknown>
+      hasScreenRecordingPermission: () => Promise<boolean>
       // Connection status
       onConnectionLost: (fn: () => void) => () => void
       onConnectionRestored: (fn: () => void) => () => void

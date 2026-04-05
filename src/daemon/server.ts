@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import { createServer, type Server as HttpServer } from 'node:http'
-import { existsSync, unlinkSync } from 'node:fs'
+import { existsSync, unlinkSync, readFileSync } from 'node:fs'
 import type { TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage } from '../shared/session'
@@ -1031,14 +1031,41 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'sense.timeline': {
         const from = getStringParam(p, 'from')
         const to = getStringParam(p, 'to')
-        const limit = getNumberParam(p, 'limit') ?? 50
+        const limit = getNumberParam(p, 'limit') ?? 5000
         const db = getDb()
         let sql = 'SELECT * FROM sense_captures WHERE 1=1'
         const params: (string | number)[] = []
         if (from) { sql += ' AND captured_at >= ?'; params.push(from) }
         if (to) { sql += ' AND captured_at <= ?'; params.push(to) }
-        sql += ' ORDER BY captured_at DESC LIMIT ?'
+        sql += ' ORDER BY captured_at ASC LIMIT ?'
         params.push(limit)
+        const results = db.prepare(sql).all(...params)
+        return JSON.stringify(makeResponse(id, results))
+      }
+      case 'sense.capture': {
+        const captureId = getStringParam(p, 'id')
+        if (!captureId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id required'))
+        const db = getDb()
+        const capture = db.prepare('SELECT * FROM sense_captures WHERE id = ?').get(captureId) as Record<string, unknown> | undefined
+        if (!capture) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'capture not found'))
+        let image: string | null = null
+        const imgPath = capture.image_path as string | null
+        if (imgPath && existsSync(imgPath)) {
+          try {
+            image = readFileSync(imgPath).toString('base64')
+          } catch { /* image unreadable */ }
+        }
+        return JSON.stringify(makeResponse(id, { capture, image }))
+      }
+      case 'sense.sessions': {
+        const from = getStringParam(p, 'from')
+        const to = getStringParam(p, 'to')
+        const db = getDb()
+        let sql = 'SELECT * FROM sense_sessions WHERE 1=1'
+        const params: string[] = []
+        if (from) { sql += ' AND (ended_at >= ? OR ended_at IS NULL)'; params.push(from) }
+        if (to) { sql += ' AND started_at <= ?'; params.push(to) }
+        sql += ' ORDER BY started_at ASC'
         const results = db.prepare(sql).all(...params)
         return JSON.stringify(makeResponse(id, results))
       }
