@@ -10,6 +10,8 @@ export function getDb(): Database.Database {
   if (_db) return _db
 
   _db = new Database(getDbPath())
+  // Checkpoint any pending WAL from previous processes before setting up
+  try { _db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* best effort */ }
   _db.pragma('journal_mode = WAL')
   _db.pragma('busy_timeout = 5000')
   _db.pragma('synchronous = NORMAL')
@@ -36,6 +38,7 @@ export function getDb(): Database.Database {
   migrateAddMessageUpdatedAt(_db)
   migrateCreatePendingApprovalsTable(_db)
   migrateCreateJournalCommentsTable(_db)
+  migrateCreateSenseTables(_db)
 
   return _db
 }
@@ -350,6 +353,86 @@ function migrateCreateJournalCommentsTable(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_journal_comments_entry ON journal_comments(entry_id, created_at ASC);
   `)
+}
+
+function migrateCreateSenseTables(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sense_sessions (
+      id TEXT PRIMARY KEY,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      capture_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sense_captures (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sense_sessions(id) ON DELETE CASCADE,
+      captured_at TEXT NOT NULL,
+      image_path TEXT,
+      app_name TEXT,
+      app_bundle_id TEXT,
+      window_title TEXT,
+      visible_windows TEXT DEFAULT '[]',
+      text_source TEXT NOT NULL DEFAULT 'pending',
+      text_status TEXT NOT NULL DEFAULT 'pending',
+      text_content TEXT,
+      capture_trigger TEXT,
+      ambiguous INTEGER NOT NULL DEFAULT 0,
+      image_purged_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sense_captures_session ON sense_captures(session_id);
+    CREATE INDEX IF NOT EXISTS idx_sense_captures_time ON sense_captures(captured_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sense_captures_app ON sense_captures(app_name);
+    CREATE INDEX IF NOT EXISTS idx_sense_captures_status ON sense_captures(text_status);
+
+    CREATE TABLE IF NOT EXISTS sense_app_text_quality (
+      bundle_id TEXT PRIMARY KEY,
+      preferred_source TEXT NOT NULL DEFAULT 'accessibility',
+      avg_accessibility_chars INTEGER NOT NULL DEFAULT 0,
+      sample_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+  `)
+
+  // FTS5 virtual table — create only if it doesn't exist
+  // (virtual tables don't support IF NOT EXISTS in all SQLite versions)
+  const hasFts = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='sense_fts'"
+  ).get()
+
+  if (!hasFts) {
+    db.exec(`
+      CREATE VIRTUAL TABLE sense_fts USING fts5(
+        text_content,
+        app_name,
+        window_title,
+        content=sense_captures,
+        content_rowid=rowid
+      );
+
+      CREATE TRIGGER sense_fts_insert AFTER INSERT ON sense_captures
+        WHEN NEW.text_content IS NOT NULL BEGIN
+          INSERT INTO sense_fts(rowid, text_content, app_name, window_title)
+          VALUES (NEW.rowid, NEW.text_content, NEW.app_name, NEW.window_title);
+      END;
+
+      CREATE TRIGGER sense_fts_update AFTER UPDATE OF text_content ON sense_captures
+        WHEN NEW.text_content IS NOT NULL BEGIN
+          INSERT INTO sense_fts(sense_fts, rowid, text_content, app_name, window_title)
+          VALUES ('delete', OLD.rowid, OLD.text_content, OLD.app_name, OLD.window_title);
+          INSERT INTO sense_fts(rowid, text_content, app_name, window_title)
+          VALUES (NEW.rowid, NEW.text_content, NEW.app_name, NEW.window_title);
+      END;
+
+      CREATE TRIGGER sense_fts_delete AFTER DELETE ON sense_captures
+        WHEN OLD.text_content IS NOT NULL BEGIN
+          INSERT INTO sense_fts(sense_fts, rowid, text_content, app_name, window_title)
+          VALUES ('delete', OLD.rowid, OLD.text_content, OLD.app_name, OLD.window_title);
+      END;
+    `)
+  }
 }
 
 // --- One-time migration from file-based storage ---

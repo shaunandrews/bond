@@ -34,6 +34,12 @@ extraResources:
     filter:
       - "**/*"
 
+  # Sense native helpers
+  - from: out/daemon/bin/sense
+    to: daemon/bin/sense
+    filter:
+      - "**/*"
+
   # @anthropic-ai/claude-agent-sdk (sdk.mjs + cli.js are self-contained bundles)
   - from: node_modules/@anthropic-ai/claude-agent-sdk
     to: daemon/node_modules/@anthropic-ai/claude-agent-sdk
