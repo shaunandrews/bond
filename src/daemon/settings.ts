@@ -1,13 +1,13 @@
 import { MODEL_IDS, type ModelId } from '../shared/models'
 import { getDb } from './db'
 
-function getSetting(key: string): string | null {
+export function getSetting(key: string): string | null {
   const db = getDb()
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
   return row?.value ?? null
 }
 
-function setSetting(key: string, value: string): boolean {
+export function setSetting(key: string, value: string): boolean {
   const db = getDb()
   db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value)
   return true

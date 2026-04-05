@@ -25,7 +25,7 @@ import {
   refreshSkillsCache
 } from './agent'
 import { removeSkill } from './skills'
-import { closeDb } from './db'
+import { getDb, closeDb } from './db'
 import {
   listSessions,
   createSession,
@@ -65,6 +65,11 @@ import {
   renameField
 } from './collections'
 import { listEntries, getEntry, createEntry, updateEntry, deleteEntry, searchEntries, addComment, deleteComment } from './journal'
+import { createSenseController, type SenseController } from './sense/controller'
+import { getStats as getSenseStats, clearData as clearSenseData } from './sense/storage'
+import { getSetting, setSetting } from './settings'
+import type { SenseSettings } from '../shared/sense'
+import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
 import { generateJournalMeta } from './generate-journal-meta'
 import { generateBondComment } from './generate-journal-comment'
 import { parseTodoInput } from './parse-todo'
@@ -187,6 +192,51 @@ function broadcastJournalChanged(): void {
   }
 }
 
+// --- Sense ---
+
+let senseController: SenseController | null = null
+
+function getSenseController(): SenseController {
+  if (!senseController) {
+    // Load persisted settings
+    let settings = DEFAULT_SENSE_SETTINGS
+    try {
+      const raw = getSetting('sense')
+      if (raw) settings = { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
+    } catch { /* use defaults */ }
+
+    senseController = createSenseController(settings)
+
+    // Broadcast state changes and capture requests to all clients
+    senseController.on('stateChanged', (state) => {
+      broadcastSenseEvent('sense.stateChanged', { state })
+    })
+    senseController.on('requestCapture', (payload) => {
+      broadcastSenseEvent('sense.requestCapture', payload)
+    })
+
+    // Auto-enable if it was enabled before daemon restart
+    if (settings.enabled) {
+      senseController.enable()
+    }
+  }
+  return senseController
+}
+
+function persistSenseSettings(settings: SenseSettings): void {
+  setSetting('sense', JSON.stringify(settings))
+}
+
+function broadcastSenseEvent(method: string, params: unknown): void {
+  if (!serverWss) return
+  const msg = JSON.stringify(makeNotification(method, params))
+  for (const client of serverWss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg)
+    }
+  }
+}
+
 function clearPendingApprovalChunk(requestId: string): void {
   for (const [sessionId, chunks] of pendingApprovalChunks) {
     const idx = chunks.findIndex(c => c.kind === 'tool_approval' && c.requestId === requestId)
@@ -216,6 +266,11 @@ function getStringParam(params: RpcParams, key: string): string | undefined {
 function getBoolParam(params: RpcParams, key: string): boolean | undefined {
   const v = getParam(params, key)
   return typeof v === 'boolean' ? v : undefined
+}
+
+function getNumberParam(params: RpcParams, key: string): number | undefined {
+  const v = getParam(params, key)
+  return typeof v === 'number' ? v : undefined
 }
 
 async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string> {
@@ -829,6 +884,149 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, comment))
       }
 
+      // --- Sense ---
+      case 'sense.status': {
+        const ctrl = getSenseController()
+        const stats = getSenseStats()
+        return JSON.stringify(makeResponse(id, {
+          enabled: ctrl.getSettings().enabled,
+          state: ctrl.getState(),
+          ...stats,
+        }))
+      }
+      case 'sense.enable': {
+        const ctrl = getSenseController()
+        ctrl.enable()
+        persistSenseSettings(ctrl.getSettings())
+        return JSON.stringify(makeResponse(id, { ok: true }))
+      }
+      case 'sense.disable': {
+        const ctrl = getSenseController()
+        ctrl.disable()
+        persistSenseSettings(ctrl.getSettings())
+        return JSON.stringify(makeResponse(id, { ok: true }))
+      }
+      case 'sense.pause': {
+        const ctrl = getSenseController()
+        const minutes = getNumberParam(p, 'minutes') ?? 10
+        ctrl.pause(minutes)
+        return JSON.stringify(makeResponse(id, { ok: true, resumeAt: new Date(Date.now() + minutes * 60_000).toISOString() }))
+      }
+      case 'sense.resume': {
+        const ctrl = getSenseController()
+        ctrl.resume()
+        return JSON.stringify(makeResponse(id, { ok: true }))
+      }
+      case 'sense.captureReady': {
+        const ctrl = getSenseController()
+        const captureId = getStringParam(p, 'captureId')
+        const imagePath = getStringParam(p, 'imagePath')
+        if (!captureId || !imagePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'captureId and imagePath required'))
+        ctrl.onCaptureReady(captureId, imagePath)
+        return JSON.stringify(makeResponse(id, { ok: true }))
+      }
+      case 'sense.permissionChanged': {
+        // Main process notifies daemon about permission changes
+        return JSON.stringify(makeResponse(id, { ok: true }))
+      }
+      case 'sense.now': {
+        const db = getDb()
+        const capture = db.prepare(
+          'SELECT * FROM sense_captures ORDER BY captured_at DESC LIMIT 1'
+        ).get() as Record<string, unknown> | undefined
+        const ctrl = getSenseController()
+        return JSON.stringify(makeResponse(id, {
+          capture: capture ?? null,
+          state: ctrl.getState(),
+        }))
+      }
+      case 'sense.today': {
+        const db = getDb()
+        const today = new Date().toISOString().split('T')[0]
+        const sessions = db.prepare(
+          "SELECT * FROM sense_sessions WHERE started_at >= ? ORDER BY started_at ASC"
+        ).all(today + 'T00:00:00Z')
+        const apps = db.prepare(`
+          SELECT app_name, COUNT(*) as capture_count,
+            MIN(captured_at) as first_seen, MAX(captured_at) as last_seen
+          FROM sense_captures
+          WHERE captured_at >= ? AND app_name IS NOT NULL
+          GROUP BY app_name
+          ORDER BY capture_count DESC
+        `).all(today + 'T00:00:00Z')
+        return JSON.stringify(makeResponse(id, { sessions, apps }))
+      }
+      case 'sense.search': {
+        const query = getStringParam(p, 'query')
+        if (!query) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'query required'))
+        const limit = getNumberParam(p, 'limit') ?? 20
+        const db = getDb()
+        // LIKE-based search (FTS5 may be unavailable or out of sync)
+        const results = db.prepare(`
+          SELECT * FROM sense_captures
+          WHERE text_content LIKE ? OR app_name LIKE ? OR window_title LIKE ?
+          ORDER BY captured_at DESC
+          LIMIT ?
+        `).all(`%${query}%`, `%${query}%`, `%${query}%`, limit)
+        return JSON.stringify(makeResponse(id, results))
+      }
+      case 'sense.apps': {
+        const range = getStringParam(p, 'range') ?? 'today'
+        const db = getDb()
+        let since: string
+        const now = new Date()
+        if (range === 'week') {
+          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+          since = weekAgo.toISOString()
+        } else {
+          since = now.toISOString().split('T')[0] + 'T00:00:00Z'
+        }
+        const apps = db.prepare(`
+          SELECT app_name, app_bundle_id, COUNT(*) as capture_count,
+            MIN(captured_at) as first_seen, MAX(captured_at) as last_seen
+          FROM sense_captures
+          WHERE captured_at >= ? AND app_name IS NOT NULL
+          GROUP BY app_bundle_id
+          ORDER BY capture_count DESC
+        `).all(since)
+        return JSON.stringify(makeResponse(id, apps))
+      }
+      case 'sense.timeline': {
+        const from = getStringParam(p, 'from')
+        const to = getStringParam(p, 'to')
+        const limit = getNumberParam(p, 'limit') ?? 50
+        const db = getDb()
+        let sql = 'SELECT * FROM sense_captures WHERE 1=1'
+        const params: (string | number)[] = []
+        if (from) { sql += ' AND captured_at >= ?'; params.push(from) }
+        if (to) { sql += ' AND captured_at <= ?'; params.push(to) }
+        sql += ' ORDER BY captured_at DESC LIMIT ?'
+        params.push(limit)
+        const results = db.prepare(sql).all(...params)
+        return JSON.stringify(makeResponse(id, results))
+      }
+      case 'sense.settings': {
+        const ctrl = getSenseController()
+        return JSON.stringify(makeResponse(id, ctrl.getSettings()))
+      }
+      case 'sense.updateSettings': {
+        const updates = getParam(p, 'updates') as Partial<SenseSettings> | undefined
+        if (!updates) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'updates required'))
+        const ctrl = getSenseController()
+        const newSettings = ctrl.updateSettings(updates)
+        persistSenseSettings(newSettings)
+        return JSON.stringify(makeResponse(id, newSettings))
+      }
+      case 'sense.clear': {
+        const range = getParam(p, 'range') as { from?: string; to?: string } | undefined
+        const deleted = clearSenseData(range)
+        return JSON.stringify(makeResponse(id, { deletedCount: deleted }))
+      }
+      case 'sense.stats': {
+        const stats = getSenseStats()
+        return JSON.stringify(makeResponse(id, stats))
+      }
+
       default:
         return JSON.stringify(makeErrorResponse(id, RPC_METHOD_NOT_FOUND, `Unknown method: ${method}`))
     }
@@ -853,6 +1051,9 @@ export function startServer(socketPath: string): BondServer {
 
   // Load persisted model
   currentModel = getModelSetting()
+
+  // Eagerly initialize Sense controller so it auto-enables on daemon startup
+  getSenseController()
 
   const httpServer: HttpServer = createServer()
   const wss = new WebSocketServer({ server: httpServer })
@@ -894,6 +1095,12 @@ export function startServer(socketPath: string): BondServer {
       }
       activeQueries.clear()
       knownSdkSessions.clear()
+
+      // Clean up sense controller
+      if (senseController) {
+        senseController.destroy()
+        senseController = null
+      }
 
       wss.close(() => {
         httpServer.close(() => {

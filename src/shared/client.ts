@@ -1,6 +1,7 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
 import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry, JournalComment } from './session'
+import type { SenseStatus, SenseSettings, SenseCapture } from './sense'
 import {
   makeRequest,
   isResponse,
@@ -14,6 +15,8 @@ type TodoChangeListener = () => void
 type ProjectChangeListener = () => void
 type CollectionChangeListener = () => void
 type JournalChangeListener = () => void
+type SenseRequestCaptureListener = (payload: { captureDir: string; captureId: string }) => void
+type SenseStateChangedListener = (payload: { state: string }) => void
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -29,6 +32,8 @@ export class BondClient {
   private projectChangeListeners = new Set<ProjectChangeListener>()
   private collectionChangeListeners = new Set<CollectionChangeListener>()
   private journalChangeListeners = new Set<JournalChangeListener>()
+  private senseRequestCaptureListeners = new Set<SenseRequestCaptureListener>()
+  private senseStateChangedListeners = new Set<SenseStateChangedListener>()
   private disconnectListeners = new Set<() => void>()
   private socketPath: string
   private _connected = false
@@ -107,6 +112,16 @@ export class BondClient {
           } else if (msg.method === 'journal.changed') {
             for (const fn of this.journalChangeListeners) {
               fn()
+            }
+          } else if (msg.method === 'sense.requestCapture' && msg.params) {
+            const payload = msg.params as { captureDir: string; captureId: string }
+            for (const fn of this.senseRequestCaptureListeners) {
+              fn(payload)
+            }
+          } else if (msg.method === 'sense.stateChanged' && msg.params) {
+            const payload = msg.params as { state: string }
+            for (const fn of this.senseStateChangedListeners) {
+              fn(payload)
             }
           }
         }
@@ -428,6 +443,82 @@ export class BondClient {
   onJournalChanged(fn: JournalChangeListener): () => void {
     this.journalChangeListeners.add(fn)
     return () => this.journalChangeListeners.delete(fn)
+  }
+
+  // --- Sense ---
+
+  async senseStatus(): Promise<SenseStatus> {
+    return await this.call('sense.status') as SenseStatus
+  }
+
+  async senseEnable(): Promise<{ ok: boolean }> {
+    return await this.call('sense.enable') as { ok: boolean }
+  }
+
+  async senseDisable(): Promise<{ ok: boolean }> {
+    return await this.call('sense.disable') as { ok: boolean }
+  }
+
+  async sensePause(minutes?: number): Promise<{ ok: boolean; resumeAt: string }> {
+    return await this.call('sense.pause', { minutes }) as { ok: boolean; resumeAt: string }
+  }
+
+  async senseResume(): Promise<{ ok: boolean }> {
+    return await this.call('sense.resume') as { ok: boolean }
+  }
+
+  async senseCaptureReady(captureId: string, imagePath: string): Promise<{ ok: boolean }> {
+    return await this.call('sense.captureReady', { captureId, imagePath }) as { ok: boolean }
+  }
+
+  async sensePermissionChanged(screen: boolean, accessibility: boolean): Promise<{ ok: boolean }> {
+    return await this.call('sense.permissionChanged', { screen, accessibility }) as { ok: boolean }
+  }
+
+  async senseNow(): Promise<unknown> {
+    return await this.call('sense.now')
+  }
+
+  async senseToday(): Promise<unknown> {
+    return await this.call('sense.today')
+  }
+
+  async senseSearch(query: string, limit?: number): Promise<SenseCapture[]> {
+    return await this.call('sense.search', { query, limit }) as SenseCapture[]
+  }
+
+  async senseApps(range?: string): Promise<unknown> {
+    return await this.call('sense.apps', { range })
+  }
+
+  async senseTimeline(from?: string, to?: string, limit?: number): Promise<SenseCapture[]> {
+    return await this.call('sense.timeline', { from, to, limit }) as SenseCapture[]
+  }
+
+  async senseSettings(): Promise<SenseSettings> {
+    return await this.call('sense.settings') as SenseSettings
+  }
+
+  async senseUpdateSettings(updates: Partial<SenseSettings>): Promise<SenseSettings> {
+    return await this.call('sense.updateSettings', { updates }) as SenseSettings
+  }
+
+  async senseClear(range?: { from?: string; to?: string }): Promise<{ deletedCount: number }> {
+    return await this.call('sense.clear', { range }) as { deletedCount: number }
+  }
+
+  async senseStats(): Promise<{ storageBytes: number; captureCount: number; sessionCount: number; oldestCapture: string | null }> {
+    return await this.call('sense.stats') as { storageBytes: number; captureCount: number; sessionCount: number; oldestCapture: string | null }
+  }
+
+  onSenseRequestCapture(fn: SenseRequestCaptureListener): () => void {
+    this.senseRequestCaptureListeners.add(fn)
+    return () => this.senseRequestCaptureListeners.delete(fn)
+  }
+
+  onSenseStateChanged(fn: SenseStateChangedListener): () => void {
+    this.senseStateChangedListeners.add(fn)
+    return () => this.senseStateChangedListeners.delete(fn)
   }
 
   // --- Shell (client-side only, not proxied through daemon) ---
