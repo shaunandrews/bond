@@ -136,6 +136,11 @@ cmd_sense() {
   node "$PROJECT_DIR/out/cli/sense.js" "$@"
 }
 
+cmd_browser() {
+  _ensure_cli
+  node "$PROJECT_DIR/out/cli/browser.js" "$@"
+}
+
 cmd_journal() {
   _ensure_cli
   node "$PROJECT_DIR/out/cli/journal.js" "$@"
@@ -147,7 +152,12 @@ cmd_soul() {
 }
 
 _ensure_cli() {
-  if [[ ! -f "$PROJECT_DIR/out/cli/todo.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/media.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/project.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/screenshot.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/journal.js" ]] || [[ ! -f "$PROJECT_DIR/out/cli/soul.js" ]]; then
+  local cli_files=(todo media project screenshot journal soul browser collection sense)
+  local needs_build=false
+  for f in "${cli_files[@]}"; do
+    [[ ! -f "$PROJECT_DIR/out/cli/$f.js" ]] && needs_build=true && break
+  done
+  if $needs_build; then
     cd "$PROJECT_DIR"
     npm run build:cli --silent 2>/dev/null
   fi
@@ -174,6 +184,7 @@ cmd_help() {
   echo -e "  ${G}journal${N}            Manage journal (list, show, add, edit, rm, search, pin)"
   echo -e "  ${G}soul${N}               Read/write Bond's personality (show, set, append, clear)"
   echo -e "  ${G}media${N}              Manage media (list, add, info, open, rm, purge)"
+  echo -e "  ${G}browser${N}            Control in-app browser (open, tabs, read, screenshot, exec, ...)"
   echo -e "  ${G}screenshot${N}         Capture Bond window to /tmp/bond-screenshot.png"
   echo -e "  ${G}test${N}               Run tests"
   echo -e "  ${G}help${N}               This message"
@@ -195,6 +206,7 @@ case "${1:-help}" in
   journal) shift; cmd_journal "$@" ;;
   soul)    shift; cmd_soul "$@" ;;
   sense)   shift; cmd_sense "$@" ;;
+  browser) shift; cmd_browser "$@" ;;
   screenshot|ss) cmd_screenshot "${2:-/tmp/bond-screenshot.png}" ;;
   test)    cmd_test ;;
   help|-h|--help) cmd_help ;;

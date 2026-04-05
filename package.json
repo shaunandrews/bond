@@ -9,7 +9,7 @@
     "build": "electron-vite build && npm run build:daemon && npm run build:native",
     "build:native": "bash scripts/build-native-helpers.sh",
     "build:daemon": "esbuild src/daemon/main.ts --bundle --platform=node --format=esm --outfile=out/daemon/main.mjs --external:@anthropic-ai/claude-agent-sdk --external:better-sqlite3 --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
-    "build:cli": "esbuild src/cli/todo.ts src/cli/media.ts src/cli/project.ts src/cli/screenshot.ts src/cli/journal.ts src/cli/soul.ts src/cli/sense.ts --bundle --platform=node --format=esm --outdir=out/cli --external:ws --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
+    "build:cli": "esbuild src/cli/todo.ts src/cli/media.ts src/cli/project.ts src/cli/screenshot.ts src/cli/journal.ts src/cli/soul.ts src/cli/sense.ts src/cli/browser.ts src/cli/collection.ts --bundle --platform=node --format=esm --outdir=out/cli --external:ws --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
     "preview": "electron-vite preview",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
