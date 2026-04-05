@@ -99,7 +99,7 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `image.*` — list, get, import, delete
 - `settings.*` — soul, accent color, window opacity
 - `skills.*` — list, refresh, remove
-- `sense.*` — status, enable, disable, pause, resume, now, today, search, apps, timeline, settings, clear, stats
+- `sense.*` — status, enable, disable, pause, resume, now, today, search, apps, timeline, capture, sessions, settings, clear, stats
 - `browser.*` — open, navigate, close, tabs, read, screenshot, exec, console, dom, network
 
 **Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
@@ -189,7 +189,7 @@ src/
   main/                  # Electron main process (window, IPC proxy, daemon lifecycle, Sense capture)
   preload/               # contextBridge → window.bond API
   renderer/              # Vue 3 chat UI + Tailwind
-    composables/         # State and logic (useChat, useSessions, useProjects, useAutoScroll, useAccentColor, useAppView)
+    composables/         # State and logic (useChat, useSessions, useProjects, useAutoScroll, useAccentColor, useAppView, useSense)
     components/          # Vue components (primitives, layout, chat, views)
     types/               # Message types
     lib/                 # Utilities (highlight.js setup)

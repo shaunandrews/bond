@@ -153,8 +153,9 @@ src/
       useProjects.ts                 # Project CRUD, archive, resources
       useAutoScroll.ts               # Smart scroll-to-bottom
       useAccentColor.ts              # Dynamic accent color theming
-      useAppView.ts                  # View routing state (chat | projects | media)
+      useAppView.ts                  # View routing state (chat | projects | media | sense)
       useBrowser.ts                  # Browser tab state, favorites, console/network logs
+      useSense.ts                    # Sense timeline state, day loading, capture selection, search
     directives/
       tooltip.ts                     # v-tooltip directive (singleton, positioned tooltips)
     components/
@@ -191,6 +192,12 @@ src/
       DesignSystemView.vue           # Live design token browser
       BrowserView.vue                # Tabbed in-app browser with nav, favorites, webviews
       BrowserDevTools.vue            # Console + Network panel for browser
+      SenseView.vue                  # Sense timeline main view (day nav + detail + timeline dock)
+      SenseDayNav.vue                # Date navigation (prev/next/picker)
+      SenseTimeline.vue              # Density bar scrubber with playhead and hover preview
+      SenseDetail.vue                # Screenshot viewer with metadata and extracted text
+      SenseAppLegend.vue             # App color legend with filter chips
+      SenseSearch.vue                # Inline search with results flyout
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
 electron.vite.config.ts                  # Build config (main, preload, renderer)
@@ -347,6 +354,36 @@ Tabbed in-app browser embedded in the right panel. Includes tab bar, navigation 
 ### BrowserDevTools
 Console and Network inspection panel, shown in a vertical split below the webview. Console tab shows log entries with level filtering and a JS evaluation input. Network tab shows requests in a table (method, URL, status, type, size, time).
 
+### SenseView
+Main Sense timeline view. Two-zone vertical layout: header with day nav + search, detail viewer in the body, and a bottom dock with app legend + density bar timeline. Loads the current day's captures on mount.
+- **Props:** `insetStart?: boolean`
+- **Slots:** `header-start`
+
+### SenseDayNav
+Date navigation in the SenseView header. Shows formatted date with prev/next arrows and a hidden native date picker.
+- **Props:** `date: string`, `isToday: boolean`, `captureCount: number`, `sessionCount: number`
+- **Events:** `prev()`, `next()`, `pick(date: string)`
+
+### SenseTimeline
+Core density bar scrubber. Divides the day into 1440 minute-buckets, renders visible range as vertical bars (height = capture density, color = dominant app). Supports scroll-to-scrub (mouse wheel), keyboard nav (Left/Right, Shift+arrows for session boundaries), click-to-select, and hover preview tooltip.
+- **Props:** `captures: SenseCapture[]`, `sessions: SenseSession[]`, `activeCaptureId: string | null`, `appFilter: string | null`
+- **Events:** `select(id: string)`
+
+### SenseDetail
+Screenshot viewer above the timeline. Shows the selected capture's image (object-fit contain), metadata bar (app name, window title, time, trigger badge, ambiguity warning), and collapsible extracted text panel. Has states for loading, purged, and empty.
+- **Props:** `capture: SenseCapture | null`, `image: string | null`, `loadingImage: boolean`
+
+### SenseAppLegend
+Horizontal strip of colored chips for the top 8 apps active that day. Click a chip to filter the timeline to that app; click again to clear.
+- **Props:** `apps: AppSummary[]`, `activeFilter: string | null`
+- **Events:** `filter(bundleId: string)`
+
+### SenseSearch
+Inline search input in the header bar. Debounced 300ms text search with results in a BondFlyoutMenu dropdown. Each result shows app name, time, and highlighted text excerpt.
+- **Props:** `results: SenseCapture[]`, `query: string`
+- **Events:** `search(query: string)`, `select(capture: SenseCapture)`, `clear()`
+- **Expose:** `focus()`
+
 ### DevComponents
 Dev-only component catalog with live previews and prop/event documentation. Accessible from the Settings window Components tab. Not rendered in production flows.
 
@@ -385,6 +422,12 @@ View routing state. Persists to localStorage.
 Singleton browser tab state. Manages tabs, favorites, console/network logs. Persists tabs and favorites to localStorage. Handles agent commands from the IPC bridge.
 - **State:** `tabs`, `activeTabId`, `activeTab`, `favorites`, `consoleLogs`, `networkLogs`
 - **Methods:** `createTab(url?)`, `closeTab(id)`, `closeAllTabs()`, `switchTab(id)`, `navigate(id, url)`, `updateTab(id, updates)`, `addFavorite(url, title, favicon)`, `removeFavorite(url)`, `isFavorite(url)`, `addConsoleEntry()`, `addNetworkEntry()`, `getConsoleLog()`, `getNetworkLog()`
+
+### useSense()
+Singleton Sense timeline state. Loads a day's captures and sessions, selects individual captures with image fetching, text search, and app filtering. Normalizes snake_case DB rows to camelCase.
+- **State:** `date`, `captures`, `sessions`, `activeCapture`, `activeCaptureImage`, `searchQuery`, `searchResults`, `appFilter`, `apps`, `loading`, `loadingImage`, `filteredCaptures`, `isToday`
+- **Methods:** `loadDay(dateStr)`, `selectCapture(id)`, `search(query)`, `setAppFilter(bundleId?)`, `nextDay()`, `prevDay()`, `jumpToCapture(capture)`
+- **Exports:** `appHue(identifier)`, `appColor(identifier, isDark?)` — deterministic HSL color from bundle ID
 
 ## Icons
 
