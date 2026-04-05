@@ -11,7 +11,7 @@ const layers = [
   {
     name: 'Main Process',
     tech: 'Electron',
-    description: 'Window management, daemon lifecycle, IPC proxy, and Sense screenshot capture. Spawns the daemon on launch and bridges renderer calls to it.',
+    description: 'Window management, daemon lifecycle, IPC proxy, Sense screenshot capture, and browser webContents management. Spawns the daemon on launch and bridges renderer calls to it.',
     files: 'src/main/',
   },
   {
@@ -144,6 +144,7 @@ const dataPaths = [
         <div class="cli-row"><code>bond project</code><span>Manage projects (list, add, show, edit, archive, rm)</span></div>
         <div class="cli-row"><code>bond media</code><span>Manage media (list, info, open, rm, purge)</span></div>
         <div class="cli-row"><code>bond sense</code><span>Screen awareness (status, on, off, search, apps, timeline)</span></div>
+        <div class="cli-row"><code>bond browser</code><span>In-app browser (open, tabs, read, screenshot, exec, console, dom, network)</span></div>
       </div>
     </section>
 

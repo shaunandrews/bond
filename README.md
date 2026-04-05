@@ -33,6 +33,7 @@ bond todo                # Manage todos (list, add, done, undo, rm)
 bond project             # Manage projects (list, add, show, edit, archive, rm, resource)
 bond media               # Manage media (list, info, open, rm, purge)
 bond sense               # Ambient screen awareness (status, on, off, search, apps, timeline)
+bond browser             # In-app browser (open, tabs, read, screenshot, exec, console, dom, network)
 bond screenshot          # Capture Bond window to /tmp/bond-screenshot.png
 bond test                # Run tests
 bond help                # Show all commands
@@ -99,6 +100,7 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `settings.*` — soul, accent color, window opacity
 - `skills.*` — list, refresh, remove
 - `sense.*` — status, enable, disable, pause, resume, now, today, search, apps, timeline, settings, clear, stats
+- `browser.*` — open, navigate, close, tabs, read, screenshot, exec, console, dom, network
 
 **Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
 
@@ -112,13 +114,14 @@ Manages the Electron window and proxies IPC calls to the daemon via `BondClient`
 - Resolves the full user PATH via login shell for packaged mode
 - Waits for the socket to appear before connecting
 - Creates a BrowserWindow with native macOS vibrancy
-- Proxies all `bond:*`, `session:*`, `settings:*`, and `sense:*` IPC to the daemon
+- Proxies all `bond:*`, `session:*`, `settings:*`, `sense:*`, and `browser:*` IPC to the daemon
 - Sense screenshot capture via `desktopCapturer` + `NativeImage.toJPEG()` (daemon requests, main process captures)
 - Sense tray indicator (menu bar icon with recording state)
+- Browser webContents management — tab registry, screenshot capture, JS execution, command proxying between daemon and renderer
 
 ### 3. Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` to the renderer via `contextBridge` — a typed API surface covering chat, sessions, settings, model selection, and shell utilities.
+Exposes `window.bond` to the renderer via `contextBridge` — a typed API surface covering chat, sessions, settings, model selection, browser control, and shell utilities.
 
 ### 4. Renderer (`src/renderer/`)
 
@@ -137,6 +140,7 @@ Types and utilities shared across all layers:
 - `client.ts` — `BondClient` WebSocket client class
 - `session.ts` — Session, SessionMessage, EditMode, AttachedImage, Project, ProjectResource, TodoItem types
 - `sense.ts` — SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult, AccessibilityResult types
+- `browser.ts` — BrowserTab, BrowserCommand, ConsoleEntry, NetworkEntry types
 - `models.ts` — `ModelId` type (`'opus' | 'sonnet' | 'haiku'`)
 
 ## Data & Runtime

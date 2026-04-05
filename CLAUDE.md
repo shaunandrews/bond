@@ -34,7 +34,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | File | Purpose |
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `project.*`, `image.*`, `todo.*`, `settings.*`, `skills.*`, `sense.*`) |
+| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `project.*`, `image.*`, `todo.*`, `settings.*`, `skills.*`, `sense.*`, `browser.*`) |
 | `agent.ts` | Runs `query()` from Claude Agent SDK, streams chunks, handles tool approvals |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
 | `projects.ts` | Project CRUD + resource management (SQLite) |
@@ -60,11 +60,11 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 
 ### Main Process (`src/main/`)
 
-Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`) and tray indicator (`src/main/tray.ts`).
+Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), tray indicator (`src/main/tray.ts`), and browser webContents management (`src/main/browser.ts` — tab registry, screenshot capture, JS execution, command proxying between daemon and renderer).
 
 ### Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, projects, todos, settings, images, skills, model, sense, and shell utilities.
+Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, projects, todos, settings, images, skills, model, sense, browser, and shell utilities.
 
 ### Shared (`src/shared/`)
 
@@ -75,11 +75,12 @@ Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, proj
 | `client.ts` | `BondClient` WebSocket client class |
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Project, ProjectResource, TodoItem types |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
+| `browser.ts` | BrowserTab, BrowserCommand, ConsoleEntry, NetworkEntry types |
 | `models.ts` | `ModelId` type (`'opus' | 'sonnet' | 'haiku'`) |
 
 ### CLI (`bin/bond`)
 
-Bash CLI for daemon management and data: `bond status`, `bond start`, `bond stop`, `bond restart`, `bond dev`, `bond build`, `bond rebuild`, `bond log`, `bond todo`, `bond project`, `bond media`, `bond screenshot`, `bond sense`, `bond test`.
+Bash CLI for daemon management and data: `bond status`, `bond start`, `bond stop`, `bond restart`, `bond dev`, `bond build`, `bond rebuild`, `bond log`, `bond todo`, `bond project`, `bond media`, `bond screenshot`, `bond sense`, `bond browser`, `bond test`.
 
 ## Project Structure
 
@@ -94,6 +95,7 @@ src/
     media.ts                         # bond media — CLI for media management
     screenshot.ts                    # bond screenshot — capture Bond window
     sense.ts                         # bond sense — CLI for Sense ambient awareness
+    browser.ts                       # bond browser — CLI for in-app browser control
   native/
     window-helper.m                  # CGWindowList native helper (Obj-C)
     ocr-helper.m                     # Apple Vision OCR native helper (Obj-C)
@@ -129,6 +131,7 @@ src/
     index.ts                         # Electron main process
     sense.ts                         # Sense capture coordinator (desktopCapturer)
     tray.ts                          # Menu bar tray icon for Sense state
+    browser.ts                       # Browser IPC handlers, webContents registry, command proxy
   preload/index.ts                   # contextBridge API
   shared/
     protocol.ts                      # JSON-RPC 2.0 types
@@ -136,6 +139,7 @@ src/
     client.ts                        # BondClient WebSocket client
     session.ts                       # Session, SessionMessage, Project, ProjectResource, TodoItem, EditMode, AttachedImage types
     sense.ts                         # SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult types
+    browser.ts                       # BrowserTab, BrowserCommand, ConsoleEntry, NetworkEntry types
     models.ts                        # ModelId type
   renderer/
     App.vue                          # Root shell — panel layout + view routing
@@ -150,6 +154,7 @@ src/
       useAutoScroll.ts               # Smart scroll-to-bottom
       useAccentColor.ts              # Dynamic accent color theming
       useAppView.ts                  # View routing state (chat | projects | media)
+      useBrowser.ts                  # Browser tab state, favorites, console/network logs
     directives/
       tooltip.ts                     # v-tooltip directive (singleton, positioned tooltips)
     components/
@@ -184,6 +189,8 @@ src/
       SettingsView.vue               # Accent color, model, personality settings
       AboutView.vue                  # Architecture, tools, data paths, CLI reference
       DesignSystemView.vue           # Live design token browser
+      BrowserView.vue                # Tabbed in-app browser with nav, favorites, webviews
+      BrowserDevTools.vue            # Console + Network panel for browser
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
 electron.vite.config.ts                  # Build config (main, preload, renderer)
@@ -331,6 +338,15 @@ Interactive design token showcase. Displays color swatches, typography, radius, 
 ### AboutView
 In-app reference screen showing Bond's architecture (layered stack diagram), agent tools, edit modes, data paths, and CLI commands. Accessible from the sidebar gear menu.
 
+### BrowserView
+Tabbed in-app browser embedded in the right panel. Includes tab bar, navigation bar (back/forward/reload/URL/star/external), webview-per-tab rendering, new-tab page with favorites grid, and integrated DevTools panel. Links in chat open here by default (Cmd+Click for system browser). Agent controls it via `bond browser` CLI.
+- **Emits:** `openExternal(url: string)`
+- **Expose:** `openUrl(url: string)` — opens a URL in the browser panel
+- **Keyboard:** `⌘T` opens new tab (when browser panel is active), `⇧⌘K` toggles panel
+
+### BrowserDevTools
+Console and Network inspection panel, shown in a vertical split below the webview. Console tab shows log entries with level filtering and a JS evaluation input. Network tab shows requests in a table (method, URL, status, type, size, time).
+
 ### DevComponents
 Dev-only component catalog with live previews and prop/event documentation. Accessible from the Settings window Components tab. Not rendered in production flows.
 
@@ -364,6 +380,11 @@ Project CRUD, archive/unarchive, resources. Persists active project ID to localS
 ### useAppView()
 View routing state. Persists to localStorage.
 - **State:** `activeView` (`'chat' | 'projects' | 'media'`)
+
+### useBrowser()
+Singleton browser tab state. Manages tabs, favorites, console/network logs. Persists tabs and favorites to localStorage. Handles agent commands from the IPC bridge.
+- **State:** `tabs`, `activeTabId`, `activeTab`, `favorites`, `consoleLogs`, `networkLogs`
+- **Methods:** `createTab(url?)`, `closeTab(id)`, `closeAllTabs()`, `switchTab(id)`, `navigate(id, url)`, `updateTab(id, updates)`, `addFavorite(url, title, favicon)`, `removeFavorite(url)`, `isFavorite(url)`, `addConsoleEntry()`, `addNetworkEntry()`, `getConsoleLog()`, `getNetworkLog()`
 
 ## Icons
 
