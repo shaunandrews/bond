@@ -1,6 +1,6 @@
 import { ref, watch } from 'vue'
 
-export type AppView = 'chat' | 'projects' | 'media' | 'collections' | 'journal'
+export type AppView = 'chat' | 'projects' | 'media' | 'collections' | 'journal' | 'sense'
 
 const STORAGE_KEY = 'bond:activeView'
 

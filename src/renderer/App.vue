@@ -26,6 +26,7 @@ import CollectionsView from './components/CollectionsView.vue'
 import JournalView from './components/JournalView.vue'
 import TodoView from './components/TodoView.vue'
 import BrowserView from './components/BrowserView.vue'
+import SenseView from './components/SenseView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
@@ -476,6 +477,7 @@ onUnmounted(() => {
         @collections="activeView = 'collections'"
         @journal="activeView = 'journal'"
         @media="activeView = 'media'"
+        @sense="activeView = 'sense'"
         @rename="handleRenameSession"
         @setIconSeed="sessions.setIconSeed"
       />
@@ -629,6 +631,14 @@ onUnmounted(() => {
           </BondButton>
         </template>
       </MediaView>
+
+      <SenseView v-show="activeView === 'sense'" :insetStart="sidebarCollapsed">
+        <template #header-start>
+          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
+            <PhSidebarSimple :size="16" weight="bold" />
+          </BondButton>
+        </template>
+      </SenseView>
       </div>
     </BondPanel>
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhCube, PhListBullets, PhNotebook } from '@phosphor-icons/vue'
+import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhCube, PhListBullets, PhNotebook, PhClockCounterClockwise } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import SessionItem from './SessionItem.vue'
 import SessionCard from './SessionCard.vue'
@@ -58,6 +58,7 @@ const emit = defineEmits<{
   collections: []
   journal: []
   media: []
+  sense: []
   rename: [id: string, title: string]
   setIconSeed: [id: string, seed: number]
 }>()
@@ -200,6 +201,13 @@ const emit = defineEmits<{
         <PhNotebook :size="16" weight="bold" />
         <BondText size="sm">Journal</BondText>
         <span v-if="journalCount > 0" class="media-count-badge">{{ journalCount }}</span>
+      </button>
+      <button
+        :class="['sidebar-nav-item', { active: activeView === 'sense' }]"
+        @click="emit('sense')"
+      >
+        <PhClockCounterClockwise :size="16" weight="bold" />
+        <BondText size="sm">Sense</BondText>
       </button>
       <button
         :class="['sidebar-nav-item', { active: activeView === 'media' }]"
