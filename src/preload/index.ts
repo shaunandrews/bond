@@ -176,6 +176,25 @@ contextBridge.exposeInMainWorld('bond', {
     return () => ipcRenderer.removeListener('bond:windowOpacity', listener)
   },
 
+  // Browser
+  browser: {
+    onCommand: (fn: (cmd: import('../shared/browser').BrowserCommand) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, cmd: import('../shared/browser').BrowserCommand) => fn(cmd)
+      ipcRenderer.on('bond:browserCommand', handler)
+      return () => ipcRenderer.removeListener('bond:browserCommand', handler)
+    },
+    commandResult: (requestId: string, result: unknown) =>
+      ipcRenderer.invoke('browser:commandResult', requestId, result) as Promise<void>,
+    registerWebContents: (tabId: string, webContentsId: number) =>
+      ipcRenderer.invoke('browser:registerWebContents', tabId, webContentsId) as Promise<void>,
+    unregisterWebContents: (tabId: string) =>
+      ipcRenderer.invoke('browser:unregisterWebContents', tabId) as Promise<void>,
+    captureTab: (tabId: string) =>
+      ipcRenderer.invoke('browser:captureTab', tabId) as Promise<string>,
+    execInTab: (tabId: string, js: string) =>
+      ipcRenderer.invoke('browser:execInTab', tabId, js) as Promise<unknown>,
+  },
+
   // Sense
   senseStatus: () => ipcRenderer.invoke('sense:status'),
   senseEnable: () => ipcRenderer.invoke('sense:enable'),

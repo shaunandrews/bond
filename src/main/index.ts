@@ -7,6 +7,7 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { BondClient } from '../shared/client'
 import { initSense, destroySense } from './sense'
 import { initTray, destroyTray } from './tray'
+import { initBrowser, destroyBrowser } from './browser'
 import type { TaggedChunk } from '../shared/stream'
 import type { AttachedImage } from '../shared/session'
 
@@ -430,6 +431,7 @@ app.whenReady().then(async () => {
   initTray(client)
 
   createWindow()
+  initBrowser(mainWindow!, client)
 
   // --- Dev: capture screenshot via file trigger ---
   // Touch /tmp/bond-capture to trigger, result lands at /tmp/bond-screenshot.png
@@ -667,5 +669,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   destroyTray()
   destroySense()
+  destroyBrowser()
   client?.close()
 })

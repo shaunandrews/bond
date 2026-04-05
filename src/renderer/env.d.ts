@@ -72,6 +72,15 @@ declare global {
       deleteCollectionItem: (id: string) => Promise<boolean>
       reorderCollectionItems: (ids: string[]) => Promise<boolean>
       onCollectionsChanged: (fn: () => void) => () => void
+      // Browser
+      browser: {
+        onCommand: (fn: (cmd: import('../../shared/browser').BrowserCommand) => void) => () => void
+        commandResult: (requestId: string, result: unknown) => Promise<void>
+        registerWebContents: (tabId: string, webContentsId: number) => Promise<void>
+        unregisterWebContents: (tabId: string) => Promise<void>
+        captureTab: (tabId: string) => Promise<string>
+        execInTab: (tabId: string, js: string) => Promise<unknown>
+      }
       // Connection status
       onConnectionLost: (fn: () => void) => () => void
       onConnectionRestored: (fn: () => void) => () => void

@@ -10,5 +10,6 @@ declare namespace JSX {
     partition?: string
     allowpopups?: boolean
     ref?: unknown
+    useragent?: string
   }
 }
