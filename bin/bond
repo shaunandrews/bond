@@ -131,6 +131,11 @@ cmd_collection() {
   node "$PROJECT_DIR/out/cli/collection.js" "$@"
 }
 
+cmd_sense() {
+  _ensure_cli
+  node "$PROJECT_DIR/out/cli/sense.js" "$@"
+}
+
 cmd_journal() {
   _ensure_cli
   node "$PROJECT_DIR/out/cli/journal.js" "$@"
@@ -189,6 +194,7 @@ case "${1:-help}" in
   collection) shift; cmd_collection "$@" ;;
   journal) shift; cmd_journal "$@" ;;
   soul)    shift; cmd_soul "$@" ;;
+  sense)   shift; cmd_sense "$@" ;;
   screenshot|ss) cmd_screenshot "${2:-/tmp/bond-screenshot.png}" ;;
   test)    cmd_test ;;
   help|-h|--help) cmd_help ;;
