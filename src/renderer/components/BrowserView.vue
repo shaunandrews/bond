@@ -16,6 +16,7 @@ import {
 
 const emit = defineEmits<{
   openExternal: [url: string]
+  ensureVisible: []
 }>()
 
 const browser = useBrowser()
@@ -30,10 +31,25 @@ const devtoolsOpen = ref(false)
 // Map tabId → webview element ref
 const webviewRefs = ref<Map<string, HTMLElement>>(new Map())
 const boundWebviews = new Set<string>()
+// Snapshot of initial URL per tab — prevents reactive :src from causing reload loops
+const initialUrls = ref<Map<string, string>>(new Map())
 
 const activeTab = computed(() => browser.activeTab.value)
 const isNewTab = computed(() => activeTab.value?.url === 'about:blank')
 const newTabInputRef = ref<HTMLInputElement | null>(null)
+
+// Track initial URLs for new tabs (prevents reactive :src reload loops)
+watch(tabs, (newTabs) => {
+  for (const tab of newTabs) {
+    if (!initialUrls.value.has(tab.id)) {
+      initialUrls.value.set(tab.id, tab.url)
+    }
+  }
+  // Clean up removed tabs
+  for (const id of initialUrls.value.keys()) {
+    if (!newTabs.some(t => t.id === id)) initialUrls.value.delete(id)
+  }
+}, { immediate: true, deep: true })
 
 // Auto-focus new tab input
 watch(isNewTab, (val) => {
@@ -63,12 +79,20 @@ function normalizeUrl(input: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
 }
 
+// Navigate a tab by calling loadURL on the webview element directly
+// (not via reactive :src which causes reload loops)
+function navigateTab(tabId: string, url: string) {
+  browser.navigate(tabId, url)
+  const wv = getWebview(tabId)
+  if (wv) (wv as any).loadURL(url)
+}
+
 function handleUrlSubmit() {
   const url = normalizeUrl(urlInput.value)
   if (browser.tabs.value.length === 0) {
     browser.createTab(url)
   } else if (activeTab.value) {
-    browser.navigate(activeTab.value.id, url)
+    navigateTab(activeTab.value.id, url)
   }
   urlInputRef.value?.blur()
 }
@@ -81,13 +105,13 @@ function handleEmptyUrlSubmit() {
 function handleNewTabSubmit() {
   const url = normalizeUrl(urlInput.value)
   if (activeTab.value) {
-    browser.navigate(activeTab.value.id, url)
+    navigateTab(activeTab.value.id, url)
   }
 }
 
 function openFavoriteInTab(url: string) {
   if (activeTab.value && isNewTab.value) {
-    browser.navigate(activeTab.value.id, url)
+    navigateTab(activeTab.value.id, url)
   } else {
     browser.createTab(url)
   }
@@ -224,8 +248,12 @@ function bindWebviewEvents(tabId: string, el: HTMLElement) {
   })
 
   wv.addEventListener('new-window', (e: any) => {
+    const url: string = e.url ?? ''
+    // about:blank popups are often OAuth/auth flows that need window.opener — let them through
+    if (!url || url === 'about:blank') return
+    // Open link popups (target="_blank") in a new tab instead
     e.preventDefault()
-    browser.createTab(e.url)
+    browser.createTab(url)
   })
 
   wv.addEventListener('console-message', (e: any) => {
@@ -259,6 +287,7 @@ function setupCommandListener() {
     switch (cmd.type) {
       case 'open': {
         const tabId = browser.createTab(cmd.url)
+        emit('ensureVisible')
         // Wait for load
         await waitForLoad(tabId, 10000)
         const tab = browser.tabs.value.find(t => t.id === tabId)
@@ -266,7 +295,7 @@ function setupCommandListener() {
         break
       }
       case 'navigate': {
-        browser.navigate(cmd.tabId, cmd.url)
+        navigateTab(cmd.tabId, cmd.url)
         await waitForLoad(cmd.tabId, 10000)
         const tab = browser.tabs.value.find(t => t.id === cmd.tabId)
         result = { title: tab?.title ?? '', url: tab?.url ?? cmd.url }
@@ -387,7 +416,7 @@ function openUrl(url: string) {
   if (browser.tabs.value.length === 0) {
     browser.createTab(url)
   } else if (activeTab.value) {
-    browser.navigate(activeTab.value.id, url)
+    navigateTab(activeTab.value.id, url)
   } else {
     browser.createTab(url)
   }
@@ -546,7 +575,7 @@ defineExpose({ openUrl, focusUrlBar })
           <template v-for="tab in tabs" :key="tab.id">
             <webview
               :ref="(el: any) => { if (el?.$el || el) { const node = el.$el || el; setWebviewRef(tab.id, node); if (!boundWebviews.has(tab.id)) { boundWebviews.add(tab.id); bindWebviewEvents(tab.id, node) } } }"
-              :src="tab.url"
+              :src="initialUrls.get(tab.id) ?? 'about:blank'"
               partition="persist:browser"
               allowpopups
               :class="['browser-webview', { 'browser-webview--hidden': tab.id !== activeTabId }]"
