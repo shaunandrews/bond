@@ -51,10 +51,11 @@ describe('SessionSidebar', () => {
   })
 
   describe('chats header', () => {
-    it('renders chat count in header', () => {
+    it('renders Chats header without count', () => {
       const w = mount(SessionSidebar, { props: defaultProps })
       const chatsPanel = w.find('[data-panel-id="chats"]')
-      expect(chatsPanel.find('.bond-panel__header-label').text()).toContain('Chats (1)')
+      expect(chatsPanel.find('.bond-panel__header-label').text()).toContain('Chats')
+      expect(chatsPanel.find('.bond-panel__header-label').text()).not.toMatch(/\(\d+\)/)
       w.unmount()
     })
 
