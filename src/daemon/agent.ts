@@ -333,6 +333,23 @@ export async function runBondQuery(
     'wants to recall something they saw, or when context would help you give better answers. ' +
     'Don\'t dump raw OCR — synthesize and summarize.\n'
 
+  basePrompt +=
+    '\nIN-APP BROWSER:\n' +
+    'Bond has a built-in browser in the right panel. You can control it:\n' +
+    '- `bond browser open <url>` — open URL in new tab, returns tab id\n' +
+    '- `bond browser tabs` — list open tabs\n' +
+    '- `bond browser read [tab]` — get page text (active tab if omitted)\n' +
+    '- `bond browser screenshot [tab]` — capture page as PNG, returns file path\n' +
+    '- `bond browser exec [tab] "<js>"` — run JavaScript in page, return result\n' +
+    '- `bond browser console [tab]` — get console output\n' +
+    '- `bond browser dom [tab] [selector]` — read page HTML or query elements\n' +
+    '- `bond browser network [tab]` — recent network requests\n' +
+    '- `bond browser navigate <tab> <url>` — navigate existing tab\n' +
+    '- `bond browser close <tab>` — close tab\n' +
+    'The browser panel opens automatically when you open a tab.\n' +
+    'When the user says "look at this page" or "check what I have open", ' +
+    'use `bond browser read` and/or `bond browser screenshot` on the active tab.\n'
+
   // Sense auto-context injection
   try {
     let senseSettings = DEFAULT_SENSE_SETTINGS

@@ -192,6 +192,43 @@ function broadcastJournalChanged(): void {
   }
 }
 
+// --- Browser command proxy ---
+
+import { randomUUID } from 'node:crypto'
+import type { BrowserCommand } from '../shared/browser'
+
+const pendingBrowserCommands = new Map<string, { resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout> }>()
+
+function sendBrowserCommand(cmd: BrowserCommand): Promise<unknown> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingBrowserCommands.delete(cmd.requestId)
+      resolve({ error: 'Browser command timed out' })
+    }, 30000)
+
+    pendingBrowserCommands.set(cmd.requestId, { resolve, timer })
+
+    // Send as notification to all connected clients (the Electron main process)
+    if (serverWss) {
+      const msg = JSON.stringify(makeNotification('browser.command', cmd))
+      for (const client of serverWss.clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(msg)
+        }
+      }
+    }
+  })
+}
+
+function resolveBrowserCommand(requestId: string, result: unknown): void {
+  const pending = pendingBrowserCommands.get(requestId)
+  if (pending) {
+    clearTimeout(pending.timer)
+    pendingBrowserCommands.delete(requestId)
+    pending.resolve(result)
+  }
+}
+
 // --- Sense ---
 
 let senseController: SenseController | null = null
@@ -1025,6 +1062,77 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'sense.stats': {
         const stats = getSenseStats()
         return JSON.stringify(makeResponse(id, stats))
+      }
+
+      // --- Browser ---
+
+      case 'browser.open': {
+        const url = getParam(p, 'url') as string
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'open', requestId, url })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.navigate': {
+        const tabId = getParam(p, 'tabId') as string
+        const url = getParam(p, 'url') as string
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'navigate', requestId, tabId, url })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.close': {
+        const tabId = getParam(p, 'tabId') as string
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'close', requestId, tabId })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.tabs': {
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'tabs', requestId })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.read': {
+        const tabId = getParam(p, 'tabId') as string | undefined
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'read', requestId, tabId })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.screenshot': {
+        const tabId = getParam(p, 'tabId') as string | undefined
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'screenshot', requestId, tabId })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.exec': {
+        const tabId = getParam(p, 'tabId') as string | undefined
+        const js = getParam(p, 'js') as string
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'exec', requestId, tabId, js })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.console': {
+        const tabId = getParam(p, 'tabId') as string | undefined
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'console', requestId, tabId })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.dom': {
+        const tabId = getParam(p, 'tabId') as string | undefined
+        const selector = getParam(p, 'selector') as string | undefined
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'dom', requestId, tabId, selector })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.network': {
+        const tabId = getParam(p, 'tabId') as string | undefined
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'network', requestId, tabId })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.commandResult': {
+        const requestId = getParam(p, 'requestId') as string
+        const result = getParam(p, 'result')
+        resolveBrowserCommand(requestId, result)
+        return JSON.stringify(makeResponse(id, { ok: true }))
       }
 
       default:

@@ -15,6 +15,7 @@ type TodoChangeListener = () => void
 type ProjectChangeListener = () => void
 type CollectionChangeListener = () => void
 type JournalChangeListener = () => void
+type BrowserCommandListener = (cmd: import('./browser').BrowserCommand) => void
 type SenseRequestCaptureListener = (payload: { captureDir: string; captureId: string }) => void
 type SenseStateChangedListener = (payload: { state: string }) => void
 
@@ -32,6 +33,7 @@ export class BondClient {
   private projectChangeListeners = new Set<ProjectChangeListener>()
   private collectionChangeListeners = new Set<CollectionChangeListener>()
   private journalChangeListeners = new Set<JournalChangeListener>()
+  private browserCommandListeners = new Set<BrowserCommandListener>()
   private senseRequestCaptureListeners = new Set<SenseRequestCaptureListener>()
   private senseStateChangedListeners = new Set<SenseStateChangedListener>()
   private disconnectListeners = new Set<() => void>()
@@ -112,6 +114,11 @@ export class BondClient {
           } else if (msg.method === 'journal.changed') {
             for (const fn of this.journalChangeListeners) {
               fn()
+            }
+          } else if (msg.method === 'browser.command' && msg.params) {
+            const cmd = msg.params as import('./browser').BrowserCommand
+            for (const fn of this.browserCommandListeners) {
+              fn(cmd)
             }
           } else if (msg.method === 'sense.requestCapture' && msg.params) {
             const payload = msg.params as { captureDir: string; captureId: string }
@@ -443,6 +450,57 @@ export class BondClient {
   onJournalChanged(fn: JournalChangeListener): () => void {
     this.journalChangeListeners.add(fn)
     return () => this.journalChangeListeners.delete(fn)
+  }
+
+  // --- Browser ---
+
+  async browserOpen(url: string): Promise<unknown> {
+    return await this.call('browser.open', { url })
+  }
+
+  async browserNavigate(tabId: string, url: string): Promise<unknown> {
+    return await this.call('browser.navigate', { tabId, url })
+  }
+
+  async browserClose(tabId: string): Promise<unknown> {
+    return await this.call('browser.close', { tabId })
+  }
+
+  async browserTabs(): Promise<unknown> {
+    return await this.call('browser.tabs')
+  }
+
+  async browserRead(tabId?: string): Promise<unknown> {
+    return await this.call('browser.read', { tabId })
+  }
+
+  async browserScreenshot(tabId?: string): Promise<unknown> {
+    return await this.call('browser.screenshot', { tabId })
+  }
+
+  async browserExec(tabId: string | undefined, js: string): Promise<unknown> {
+    return await this.call('browser.exec', { tabId, js })
+  }
+
+  async browserConsole(tabId?: string): Promise<unknown> {
+    return await this.call('browser.console', { tabId })
+  }
+
+  async browserDom(tabId?: string, selector?: string): Promise<unknown> {
+    return await this.call('browser.dom', { tabId, selector })
+  }
+
+  async browserNetwork(tabId?: string): Promise<unknown> {
+    return await this.call('browser.network', { tabId })
+  }
+
+  async browserCommandResult(requestId: string, result: unknown): Promise<void> {
+    await this.call('browser.commandResult', { requestId, result })
+  }
+
+  onBrowserCommand(fn: BrowserCommandListener): () => void {
+    this.browserCommandListeners.add(fn)
+    return () => this.browserCommandListeners.delete(fn)
   }
 
   // --- Sense ---
