@@ -18,8 +18,8 @@
  *   bond project archive <id|name>                       Archive a project
  *   bond project unarchive <id|name>                     Unarchive a project
  *   bond project rm <id|name>                            Delete a project
- *   bond project resource add <id|name> <kind> <value>   Add a resource (kind: path|file|link)
- *   bond project resource rm <id|name> <resourceId>      Remove a resource
+ *   bond project resource add <id|name> <kind> <value> [label]  Add a resource (kind: path|file|link)
+ *   bond project resource rm <id|name> <resourceId>             Remove a resource
  */
 
 import { join } from 'node:path'
@@ -270,15 +270,18 @@ async function main() {
       case 'res': {
         const resSub = args[1]
         if (resSub === 'add') {
-          // bond project resource add <project> <kind> <value> [--label <l>]
+          // bond project resource add <project> <kind> <value> [label]
+          // Also accepts --label <l> as a flag override
           const { textArgs, flags } = extractFlags(args.slice(2))
           if (textArgs.length < 3) {
-            console.error(`${R}Usage:${N} bond project resource add <project> <kind> <value> [--label <l>]`)
+            console.error(`${R}Usage:${N} bond project resource add <project> <kind> <value> [label]`)
             process.exit(1)
           }
           const projectQuery = textArgs[0]
           const kind = textArgs[1]
-          const value = textArgs.slice(2).join(' ')
+          const value = textArgs[2]
+          // Label: --label flag takes precedence, then positional args after value
+          const positionalLabel = textArgs.length > 3 ? textArgs.slice(3).join(' ') : undefined
 
           if (!['path', 'file', 'link'].includes(kind)) {
             console.error(`${R}Invalid kind:${N} ${kind} (use path, file, or link)`)
@@ -289,13 +292,15 @@ async function main() {
           const project = findProject(projects, projectQuery)
           if (!project) { console.error(`${R}No matching project:${N} ${projectQuery}`); process.exit(1) }
 
+          const label = flags.label || positionalLabel
           const resource = await call(ws, 'project.addResource', {
             projectId: project.id,
             kind,
             value,
-            label: flags.label
+            label
           }) as Resource
-          console.log(`${G}Added${N}  [${kind}] ${value} to ${project.name}  ${D}(${resource.id.slice(0, 8)})${N}`)
+          const labelDisplay = label ? `${label} — ` : ''
+          console.log(`${G}Added${N}  [${kind}] ${labelDisplay}${value} to ${project.name}  ${D}(${resource.id.slice(0, 8)})${N}`)
         } else if (resSub === 'rm' || resSub === 'remove') {
           // bond project resource rm <project> <resourceId>
           const projectQuery = args[2]
