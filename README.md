@@ -32,6 +32,7 @@ bond log                 # Tail daemon log
 bond todo                # Manage todos (list, add, done, undo, rm)
 bond project             # Manage projects (list, add, show, edit, archive, rm, resource)
 bond media               # Manage media (list, info, open, rm, purge)
+bond sense               # Ambient screen awareness (status, on, off, search, apps, timeline)
 bond screenshot          # Capture Bond window to /tmp/bond-screenshot.png
 bond test                # Run tests
 bond help                # Show all commands
@@ -44,6 +45,8 @@ bond help                # Show all commands
 | `npm run dev`       | Build daemon + electron-vite dev server              |
 | `npm run build`     | Production build (electron-vite + daemon)            |
 | `npm run build:daemon` | Build daemon only (esbuild → `out/daemon/main.mjs`) |
+| `npm run build:native` | Compile Obj-C native helpers (→ `out/daemon/bin/sense/`) |
+| `npm run build:cli`  | Build CLI modules (esbuild → `out/cli/`)              |
 | `npm run preview`   | Run electron-vite preview                            |
 | `npm run pack`      | Build + package as unpacked `.app` (`dist/mac-arm64/`) |
 | `npm run dist`      | Build + package as `.dmg`                             |
@@ -95,8 +98,11 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `image.*` — list, get, import, delete
 - `settings.*` — soul, accent color, window opacity
 - `skills.*` — list, refresh, remove
+- `sense.*` — status, enable, disable, pause, resume, now, today, search, apps, timeline, settings, clear, stats
 
 **Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
+
+**Sense (ambient screen awareness):** The daemon runs a capture pipeline — window detection via native helpers, screenshot capture (requested from Electron main process), OCR via Apple Vision, accessibility tree extraction, security redaction, and SQLite indexing. Three Objective-C native binaries (`bond-window-helper`, `bond-ocr-helper`, `bond-accessibility-helper`) live in `src/native/` and compile via `scripts/build-native-helpers.sh`.
 
 ### 2. Main Process (`src/main/`)
 
@@ -106,8 +112,9 @@ Manages the Electron window and proxies IPC calls to the daemon via `BondClient`
 - Resolves the full user PATH via login shell for packaged mode
 - Waits for the socket to appear before connecting
 - Creates a BrowserWindow with native macOS vibrancy
-- Proxies all `bond:*`, `session:*`, and `settings:*` IPC to the daemon
-- Screenshot capture support for dev tooling
+- Proxies all `bond:*`, `session:*`, `settings:*`, and `sense:*` IPC to the daemon
+- Sense screenshot capture via `desktopCapturer` + `NativeImage.toJPEG()` (daemon requests, main process captures)
+- Sense tray indicator (menu bar icon with recording state)
 
 ### 3. Preload (`src/preload/index.ts`)
 
@@ -129,6 +136,7 @@ Types and utilities shared across all layers:
 - `stream.ts` — `BondStreamChunk` union type (text, tool, approval, error, system)
 - `client.ts` — `BondClient` WebSocket client class
 - `session.ts` — Session, SessionMessage, EditMode, AttachedImage, Project, ProjectResource, TodoItem types
+- `sense.ts` — SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult, AccessibilityResult types
 - `models.ts` — `ModelId` type (`'opus' | 'sonnet' | 'haiku'`)
 
 ## Data & Runtime
@@ -141,7 +149,12 @@ Types and utilities shared across all layers:
   tmp-images/        # Temporary attached images
 
 ~/Library/Application Support/bond/
-  bond.db            # SQLite (sessions, messages, settings)
+  bond.db            # SQLite (sessions, messages, settings, sense captures)
+  images/            # Stored chat images
+  sense/
+    stills/          # Screenshot JPEGs organized by date
+      2026-04-05/
+        {timestamp}.jpg
 ```
 
 ## Build tooling
@@ -162,16 +175,21 @@ Recipients need Node.js 20+ and Claude Code installed and authenticated. Unsigne
 
 ```
 bin/bond                 # CLI for daemon management
+scripts/
+  build-native-helpers.sh  # Compiles Obj-C native helpers
 src/
+  cli/                   # CLI modules (todo, project, media, sense, etc.)
+  native/                # Objective-C native helpers (window, OCR, accessibility)
   daemon/                # Standalone daemon (Agent SDK, SQLite, WebSocket server)
-  main/                  # Electron main process (window, IPC proxy, daemon lifecycle)
+    sense/               # Sense ambient awareness (controller, capture pipeline, OCR, storage)
+  main/                  # Electron main process (window, IPC proxy, daemon lifecycle, Sense capture)
   preload/               # contextBridge → window.bond API
   renderer/              # Vue 3 chat UI + Tailwind
     composables/         # State and logic (useChat, useSessions, useProjects, useAutoScroll, useAccentColor, useAppView)
     components/          # Vue components (primitives, layout, chat, views)
     types/               # Message types
     lib/                 # Utilities (highlight.js setup)
-  shared/                # Protocol, stream chunks, client, session types, models
+  shared/                # Protocol, stream chunks, client, session/sense types, models
 electron.vite.config.ts
 electron-builder.yml             # Packaging config (macOS DMG, extraResources)
 vitest.config.ts

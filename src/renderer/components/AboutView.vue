@@ -11,13 +11,13 @@ const layers = [
   {
     name: 'Main Process',
     tech: 'Electron',
-    description: 'Window management, daemon lifecycle, and IPC proxy. Spawns the daemon on launch and bridges renderer calls to it.',
+    description: 'Window management, daemon lifecycle, IPC proxy, and Sense screenshot capture. Spawns the daemon on launch and bridges renderer calls to it.',
     files: 'src/main/',
   },
   {
     name: 'Daemon',
     tech: 'Node.js + WebSocket + SQLite',
-    description: 'Standalone process on a Unix socket. Runs agent queries via the Claude Agent SDK, streams responses, and persists sessions to a local database.',
+    description: 'Standalone process on a Unix socket. Runs agent queries via the Claude Agent SDK, streams responses, persists sessions, and runs the Sense ambient awareness pipeline (screen capture, OCR, indexing).',
     files: 'src/daemon/',
   },
   {
@@ -49,7 +49,8 @@ const dataPaths = [
   { path: '~/.bond/bond.sock', purpose: 'Unix domain socket for daemon communication' },
   { path: '~/.bond/daemon.pid', purpose: 'Process ID of the running daemon' },
   { path: '~/.bond/daemon.log', purpose: 'Daemon output log' },
-  { path: '~/Library/Application Support/bond/bond.db', purpose: 'SQLite database (sessions, messages, settings)' },
+  { path: '~/Library/Application Support/bond/bond.db', purpose: 'SQLite database (sessions, messages, settings, sense captures)' },
+  { path: '~/Library/Application Support/bond/sense/stills/', purpose: 'Sense screenshot JPEGs organized by date' },
 ]
 </script>
 
@@ -142,6 +143,7 @@ const dataPaths = [
         <div class="cli-row"><code>bond todo</code><span>Manage todos (list, add, done, undo, rm)</span></div>
         <div class="cli-row"><code>bond project</code><span>Manage projects (list, add, show, edit, archive, rm)</span></div>
         <div class="cli-row"><code>bond media</code><span>Manage media (list, info, open, rm, purge)</span></div>
+        <div class="cli-row"><code>bond sense</code><span>Screen awareness (status, on, off, search, apps, timeline)</span></div>
       </div>
     </section>
 

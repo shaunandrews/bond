@@ -34,7 +34,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | File | Purpose |
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `project.*`, `image.*`, `todo.*`, `settings.*`, `skills.*`) |
+| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `project.*`, `image.*`, `todo.*`, `settings.*`, `skills.*`, `sense.*`) |
 | `agent.ts` | Runs `query()` from Claude Agent SDK, streams chunks, handles tool approvals |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
 | `projects.ts` | Project CRUD + resource management (SQLite) |
@@ -45,14 +45,26 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `generate-title.ts` | Auto-generates session titles via Haiku |
 | `paths.ts` | Data directory resolution |
 | `skills.ts` | Skill scanning from ~/.bond/skills/ |
+| `sense/controller.ts` | Sense state machine (disabled/armed/recording/idle/paused/suspended) |
+| `sense/presence.ts` | Idle detection via `ioreg -c IOHIDSystem` polling |
+| `sense/window-detector.ts` | App/window polling via `bond-window-helper` native binary |
+| `sense/clipboard.ts` | Clipboard mirroring via async `pbpaste` polling |
+| `sense/privacy.ts` | Blacklist checking + ambiguity detection |
+| `sense/accessibility.ts` | Accessibility tree extraction via `bond-accessibility-helper` |
+| `sense/ocr.ts` | OCR extraction via `bond-ocr-helper` (max 2 parallel) |
+| `sense/text-router.ts` | Accessibility vs. OCR routing with per-app quality cache |
+| `sense/redaction.ts` | Security redaction (API keys, tokens, cards, SSNs) |
+| `sense/worker.ts` | Queue-based text extraction worker |
+| `sense/storage.ts` | Retention enforcement, auto-cleanup, storage stats |
+| `sense/helpers.ts` | Native binary path resolution |
 
 ### Main Process (`src/main/`)
 
-Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`.
+Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`) and tray indicator (`src/main/tray.ts`).
 
 ### Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, projects, todos, settings, images, skills, model, and shell utilities.
+Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, projects, todos, settings, images, skills, model, sense, and shell utilities.
 
 ### Shared (`src/shared/`)
 
@@ -62,22 +74,30 @@ Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, proj
 | `stream.ts` | `BondStreamChunk` union type (text, thinking, tool, approval, error, system) |
 | `client.ts` | `BondClient` WebSocket client class |
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Project, ProjectResource, TodoItem types |
+| `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
 | `models.ts` | `ModelId` type (`'opus' | 'sonnet' | 'haiku'`) |
 
 ### CLI (`bin/bond`)
 
-Bash CLI for daemon management and data: `bond status`, `bond start`, `bond stop`, `bond restart`, `bond dev`, `bond build`, `bond rebuild`, `bond log`, `bond todo`, `bond project`, `bond media`, `bond screenshot`, `bond test`.
+Bash CLI for daemon management and data: `bond status`, `bond start`, `bond stop`, `bond restart`, `bond dev`, `bond build`, `bond rebuild`, `bond log`, `bond todo`, `bond project`, `bond media`, `bond screenshot`, `bond sense`, `bond test`.
 
 ## Project Structure
 
 ```
 bin/bond                             # CLI for daemon management
+scripts/
+  build-native-helpers.sh            # Compiles Obj-C native helpers → out/daemon/bin/sense/
 src/
   cli/
     todo.ts                          # bond todo — CLI for todo management
     project.ts                       # bond project — CLI for project management
     media.ts                         # bond media — CLI for media management
     screenshot.ts                    # bond screenshot — capture Bond window
+    sense.ts                         # bond sense — CLI for Sense ambient awareness
+  native/
+    window-helper.m                  # CGWindowList native helper (Obj-C)
+    ocr-helper.m                     # Apple Vision OCR native helper (Obj-C)
+    accessibility-helper.m           # AXUIElement tree walker native helper (Obj-C)
   daemon/
     main.ts                          # Daemon entry point
     server.ts                        # WebSocket JSON-RPC server
@@ -92,13 +112,30 @@ src/
     parse-todo.ts                    # AI-powered todo input parsing
     paths.ts                         # Data directory paths
     skills.ts                        # Skill scanning from ~/.bond/skills/
-  main/index.ts                      # Electron main process
+    sense/
+      controller.ts                  # State machine (disabled/armed/recording/idle/paused/suspended)
+      presence.ts                    # Idle detection via ioreg
+      window-detector.ts             # App/window polling via bond-window-helper
+      clipboard.ts                   # Clipboard mirroring via pbpaste
+      privacy.ts                     # Blacklist checking + ambiguity detection
+      accessibility.ts               # Accessibility tree extraction wrapper
+      ocr.ts                         # OCR extraction wrapper
+      text-router.ts                 # Accessibility vs. OCR routing
+      redaction.ts                   # Security redaction engine
+      worker.ts                      # Queue-based text extraction worker
+      storage.ts                     # Retention enforcement + auto-cleanup
+      helpers.ts                     # Native binary path resolution
+  main/
+    index.ts                         # Electron main process
+    sense.ts                         # Sense capture coordinator (desktopCapturer)
+    tray.ts                          # Menu bar tray icon for Sense state
   preload/index.ts                   # contextBridge API
   shared/
     protocol.ts                      # JSON-RPC 2.0 types
     stream.ts                        # BondStreamChunk types (incl. thinking_text)
     client.ts                        # BondClient WebSocket client
     session.ts                       # Session, SessionMessage, Project, ProjectResource, TodoItem, EditMode, AttachedImage types
+    sense.ts                         # SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult types
     models.ts                        # ModelId type
   renderer/
     App.vue                          # Root shell — panel layout + view routing
