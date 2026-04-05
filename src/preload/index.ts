@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
 import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry, JournalComment } from '../shared/session'
+import type { Operative, OperativeEvent, SpawnOperativeOptions } from '../shared/operative'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
@@ -193,6 +194,32 @@ contextBridge.exposeInMainWorld('bond', {
       ipcRenderer.invoke('browser:captureTab', tabId) as Promise<string>,
     execInTab: (tabId: string, js: string) =>
       ipcRenderer.invoke('browser:execInTab', tabId, js) as Promise<unknown>,
+  },
+
+  // Operatives
+  listOperatives: (filters?: { status?: string; sessionId?: string }) =>
+    ipcRenderer.invoke('operative:list', filters) as Promise<Operative[]>,
+  getOperative: (id: string) =>
+    ipcRenderer.invoke('operative:get', id) as Promise<Operative | null>,
+  spawnOperative: (opts: SpawnOperativeOptions) =>
+    ipcRenderer.invoke('operative:spawn', opts) as Promise<Operative>,
+  getOperativeEvents: (id: string, afterId?: number, limit?: number) =>
+    ipcRenderer.invoke('operative:events', id, afterId, limit) as Promise<OperativeEvent[]>,
+  cancelOperative: (id: string) =>
+    ipcRenderer.invoke('operative:cancel', id) as Promise<{ ok: boolean }>,
+  removeOperative: (id: string) =>
+    ipcRenderer.invoke('operative:remove', id) as Promise<{ ok: boolean }>,
+  clearOperatives: (status?: string) =>
+    ipcRenderer.invoke('operative:clear', status) as Promise<{ deleted: number }>,
+  onOperativeChanged: (fn: () => void) => {
+    const listener = () => fn()
+    ipcRenderer.on('bond:operativeChanged', listener)
+    return () => ipcRenderer.removeListener('bond:operativeChanged', listener)
+  },
+  onOperativeEvent: (fn: (payload: { operativeId: string; event: OperativeEvent }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, payload: { operativeId: string; event: OperativeEvent }) => fn(payload)
+    ipcRenderer.on('bond:operativeEvent', listener)
+    return () => ipcRenderer.removeListener('bond:operativeEvent', listener)
   },
 
   // Sense

@@ -99,6 +99,16 @@ declare global {
       senseClear: (range?: { from?: string; to?: string }) => Promise<unknown>
       senseStats: () => Promise<unknown>
       hasScreenRecordingPermission: () => Promise<boolean>
+      // Operatives
+      listOperatives: (filters?: { status?: string; sessionId?: string }) => Promise<import('../../shared/operative').Operative[]>
+      getOperative: (id: string) => Promise<import('../../shared/operative').Operative | null>
+      spawnOperative: (opts: import('../../shared/operative').SpawnOperativeOptions) => Promise<import('../../shared/operative').Operative>
+      getOperativeEvents: (id: string, afterId?: number, limit?: number) => Promise<import('../../shared/operative').OperativeEvent[]>
+      cancelOperative: (id: string) => Promise<{ ok: boolean }>
+      removeOperative: (id: string) => Promise<{ ok: boolean }>
+      clearOperatives: (status?: string) => Promise<{ deleted: number }>
+      onOperativeChanged: (fn: () => void) => () => void
+      onOperativeEvent: (fn: (payload: { operativeId: string; event: import('../../shared/operative').OperativeEvent }) => void) => () => void
       // Connection status
       onConnectionLost: (fn: () => void) => () => void
       onConnectionRestored: (fn: () => void) => () => void

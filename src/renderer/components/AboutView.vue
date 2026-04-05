@@ -145,6 +145,7 @@ const dataPaths = [
         <div class="cli-row"><code>bond media</code><span>Manage media (list, info, open, rm, purge)</span></div>
         <div class="cli-row"><code>bond sense</code><span>Screen awareness (status, on, off, search, apps, timeline)</span></div>
         <div class="cli-row"><code>bond browser</code><span>In-app browser (open, tabs, read, screenshot, exec, console, dom, network)</span></div>
+        <div class="cli-row"><code>bond operative</code><span>Manage operatives (ls, spawn, show, logs, cancel, rm, clear)</span></div>
       </div>
     </section>
 

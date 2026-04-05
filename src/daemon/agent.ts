@@ -350,6 +350,31 @@ export async function runBondQuery(
     'When the user says "look at this page" or "check what I have open", ' +
     'use `bond browser read` and/or `bond browser screenshot` on the active tab.\n'
 
+  basePrompt +=
+    '\nOPERATIVES — BACKGROUND AGENTS:\n' +
+    'Bond can dispatch operatives — autonomous Claude agents that work on coding tasks in the background.\n' +
+    'Each operative gets its own context window and works independently while Bond monitors progress.\n\n' +
+    'Spawn via CLI:\n' +
+    '- `bond operative spawn "<prompt>" --name "<name>" --dir <working-dir>` — spawn an operative\n' +
+    '- `bond operative spawn "<prompt>" -w` — spawn with git worktree isolation\n' +
+    '- `bond operative spawn "<prompt>" --budget 5` — set a $5 spend cap\n' +
+    '- `bond operative ls` — list all operatives\n' +
+    '- `bond operative ls --running` — list running operatives\n' +
+    '- `bond operative show <id|number>` — show details + recent events\n' +
+    '- `bond operative logs <id|number>` — stream live events\n' +
+    '- `bond operative cancel <id|number>` — cancel a running operative\n\n' +
+    'When to spawn operatives:\n' +
+    '- User explicitly asks ("spin up an operative to refactor the auth module")\n' +
+    '- Task is substantial (multi-file changes, test writing, full feature build)\n' +
+    '- Parallelism is beneficial ("I\'ll spawn two operatives — one for frontend, one for API")\n\n' +
+    'When spawning, provide rich context in the prompt:\n' +
+    '- Project conventions, relevant CLAUDE.md rules\n' +
+    '- Specific file paths and structure\n' +
+    '- Requirements, constraints, and what NOT to touch\n' +
+    '- If other operatives are running, warn about file conflicts\n\n' +
+    'For git repos, use -w (worktree) to isolate changes when multiple operatives work on the same repo.\n' +
+    'Operatives run autonomously — they don\'t ask for permission. Be specific in prompts to avoid unwanted changes.\n'
+
   // Sense auto-context injection
   try {
     let senseSettings = DEFAULT_SENSE_SETTINGS

@@ -34,7 +34,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | File | Purpose |
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `project.*`, `image.*`, `todo.*`, `settings.*`, `skills.*`, `sense.*`, `browser.*`) |
+| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `project.*`, `image.*`, `todo.*`, `settings.*`, `skills.*`, `sense.*`, `browser.*`, `operative.*`) |
 | `agent.ts` | Runs `query()` from Claude Agent SDK, streams chunks, handles tool approvals |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
 | `projects.ts` | Project CRUD + resource management (SQLite) |
@@ -45,6 +45,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `generate-title.ts` | Auto-generates session titles via Haiku |
 | `paths.ts` | Data directory resolution |
 | `skills.ts` | Skill scanning from ~/.bond/skills/ |
+| `operatives.ts` | Operative CRUD, spawn, cancel, event storage, concurrency queue |
 | `sense/controller.ts` | Sense state machine (disabled/armed/recording/idle/paused/suspended) |
 | `sense/presence.ts` | Idle detection via `ioreg -c IOHIDSystem` polling |
 | `sense/window-detector.ts` | App/window polling via `bond-window-helper` native binary |
@@ -76,11 +77,12 @@ Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, proj
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Project, ProjectResource, TodoItem types |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
 | `browser.ts` | BrowserTab, BrowserCommand, ConsoleEntry, NetworkEntry types |
+| `operative.ts` | Operative, OperativeEvent, SpawnOperativeOptions types |
 | `models.ts` | `ModelId` type (`'opus' | 'sonnet' | 'haiku'`) |
 
 ### CLI (`bin/bond`)
 
-Bash CLI for daemon management and data: `bond status`, `bond start`, `bond stop`, `bond restart`, `bond dev`, `bond build`, `bond rebuild`, `bond log`, `bond todo`, `bond project`, `bond media`, `bond screenshot`, `bond sense`, `bond browser`, `bond test`.
+Bash CLI for daemon management and data: `bond status`, `bond start`, `bond stop`, `bond restart`, `bond dev`, `bond build`, `bond rebuild`, `bond log`, `bond todo`, `bond project`, `bond media`, `bond screenshot`, `bond sense`, `bond browser`, `bond operative`, `bond test`.
 
 ## Project Structure
 
@@ -96,6 +98,7 @@ src/
     screenshot.ts                    # bond screenshot — capture Bond window
     sense.ts                         # bond sense — CLI for Sense ambient awareness
     browser.ts                       # bond browser — CLI for in-app browser control
+    operative.ts                     # bond operative — CLI for operative management
   native/
     window-helper.m                  # CGWindowList native helper (Obj-C)
     ocr-helper.m                     # Apple Vision OCR native helper (Obj-C)
@@ -114,6 +117,7 @@ src/
     parse-todo.ts                    # AI-powered todo input parsing
     paths.ts                         # Data directory paths
     skills.ts                        # Skill scanning from ~/.bond/skills/
+    operatives.ts                    # Operative CRUD, spawn, cancel, events
     sense/
       controller.ts                  # State machine (disabled/armed/recording/idle/paused/suspended)
       presence.ts                    # Idle detection via ioreg
@@ -140,6 +144,7 @@ src/
     session.ts                       # Session, SessionMessage, Project, ProjectResource, TodoItem, EditMode, AttachedImage types
     sense.ts                         # SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult types
     browser.ts                       # BrowserTab, BrowserCommand, ConsoleEntry, NetworkEntry types
+    operative.ts                     # Operative, OperativeEvent, SpawnOperativeOptions types
     models.ts                        # ModelId type
   renderer/
     App.vue                          # Root shell — panel layout + view routing
@@ -156,6 +161,8 @@ src/
       useAppView.ts                  # View routing state (chat | projects | media | sense)
       useBrowser.ts                  # Browser tab state, favorites, console/network logs
       useSense.ts                    # Sense timeline state, day loading, capture selection, search
+      useOperatives.ts               # Operative list state, spawn, cancel, live updates
+      useOperativeEvents.ts          # Operative event streaming for detail view
     directives/
       tooltip.ts                     # v-tooltip directive (singleton, positioned tooltips)
     components/
@@ -198,6 +205,8 @@ src/
       SenseDetail.vue                # Screenshot viewer with metadata and extracted text
       SenseAppLegend.vue             # App color legend with filter chips
       SenseSearch.vue                # Inline search with results flyout
+      OperativesView.vue             # Operative list with status, filters, actions
+      OperativeDetail.vue            # Operative detail with streaming event feed
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
 electron.vite.config.ts                  # Build config (main, preload, renderer)
@@ -384,6 +393,17 @@ Inline search input in the header bar. Debounced 300ms text search with results 
 - **Events:** `search(query: string)`, `select(capture: SenseCapture)`, `clear()`
 - **Expose:** `focus()`
 
+### OperativesView
+Main view for listing operatives with status indicators, filter tabs, and action buttons.
+- **Props:** `operatives: Operative[]`, `activeOperativeId: string | null`, `insetStart?: boolean`
+- **Events:** `select(id)`, `cancel(id)`, `remove(id)`, `clear()`, `back()`
+- **Slots:** `header-start`
+
+### OperativeDetail
+Detail panel for a selected operative. Shows status header, prompt, and streaming activity feed (tool calls, text, errors, results).
+- **Props:** `operative: Operative`, `events: OperativeEvent[]`
+- **Events:** `cancel(id)`, `remove(id)`, `back()`
+
 ### DevComponents
 Dev-only component catalog with live previews and prop/event documentation. Accessible from the Settings window Components tab. Not rendered in production flows.
 
@@ -428,6 +448,15 @@ Singleton Sense timeline state. Loads a day's captures and sessions, selects ind
 - **State:** `date`, `captures`, `sessions`, `activeCapture`, `activeCaptureImage`, `searchQuery`, `searchResults`, `appFilter`, `apps`, `loading`, `loadingImage`, `filteredCaptures`, `isToday`
 - **Methods:** `loadDay(dateStr)`, `selectCapture(id)`, `search(query)`, `setAppFilter(bundleId?)`, `nextDay()`, `prevDay()`, `jumpToCapture(capture)`
 - **Exports:** `appHue(identifier)`, `appColor(identifier, isDark?)` — deterministic HSL color from bundle ID
+
+### useOperatives()
+Singleton operative list state. Loads on mount, subscribes to operative.changed for live updates.
+- **State:** `operatives`, `activeOperativeId`, `activeOperative`, `runningOperatives`, `queuedOperatives`, `runningCount`, `loading`
+- **Methods:** `load()`, `spawn(opts)`, `cancel(id)`, `remove(id)`, `clear()`, `select(id)`
+
+### useOperativeEvents(operativeId: Ref<string | null>)
+Streams events for a specific operative. Loads initial events and appends from operative.event notifications.
+- **State:** `events`, `loading`
 
 ## Icons
 

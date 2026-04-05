@@ -86,7 +86,7 @@ cmd_build() {
 
 cmd_rebuild() {
   cmd_stop
-  cmd_build "${1:-daemon}"
+  cmd_build "${1:-all}"
   sleep 0.3
   cmd_start
 }
@@ -151,8 +151,13 @@ cmd_soul() {
   node "$PROJECT_DIR/out/cli/soul.js" "$@"
 }
 
+cmd_operative() {
+  _ensure_cli
+  node "$PROJECT_DIR/out/cli/operative.js" "$@"
+}
+
 _ensure_cli() {
-  local cli_files=(todo media project screenshot journal soul browser collection sense)
+  local cli_files=(todo media project screenshot journal soul browser collection sense operative)
   local needs_build=false
   for f in "${cli_files[@]}"; do
     [[ ! -f "$PROJECT_DIR/out/cli/$f.js" ]] && needs_build=true && break
@@ -185,6 +190,7 @@ cmd_help() {
   echo -e "  ${G}soul${N}               Read/write Bond's personality (show, set, append, clear)"
   echo -e "  ${G}media${N}              Manage media (list, add, info, open, rm, purge)"
   echo -e "  ${G}browser${N}            Control in-app browser (open, tabs, read, screenshot, exec, ...)"
+  echo -e "  ${G}operative${N}          Manage operatives (ls, spawn, show, logs, cancel, rm, clear)"
   echo -e "  ${G}screenshot${N}         Capture Bond window to /tmp/bond-screenshot.png"
   echo -e "  ${G}test${N}               Run tests"
   echo -e "  ${G}help${N}               This message"
@@ -207,6 +213,7 @@ case "${1:-help}" in
   soul)    shift; cmd_soul "$@" ;;
   sense)   shift; cmd_sense "$@" ;;
   browser) shift; cmd_browser "$@" ;;
+  operative|op) shift; cmd_operative "$@" ;;
   screenshot|ss) cmd_screenshot "${2:-/tmp/bond-screenshot.png}" ;;
   test)    cmd_test ;;
   help|-h|--help) cmd_help ;;

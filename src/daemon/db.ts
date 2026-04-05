@@ -39,6 +39,7 @@ export function getDb(): Database.Database {
   migrateCreatePendingApprovalsTable(_db)
   migrateCreateJournalCommentsTable(_db)
   migrateCreateSenseTables(_db)
+  migrateCreateOperativesTable(_db)
 
   return _db
 }
@@ -433,6 +434,48 @@ function migrateCreateSenseTables(db: Database.Database): void {
       END;
     `)
   }
+}
+
+function migrateCreateOperativesTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS operatives (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      working_dir TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      session_id TEXT,
+      sdk_session_id TEXT,
+      worktree TEXT,
+      branch TEXT,
+      model TEXT,
+      result_summary TEXT,
+      error_message TEXT,
+      exit_code INTEGER,
+      input_tokens INTEGER DEFAULT 0,
+      output_tokens INTEGER DEFAULT 0,
+      cost_usd REAL DEFAULT 0,
+      timeout_ms INTEGER,
+      max_budget_usd REAL,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_operatives_status ON operatives(status);
+    CREATE INDEX IF NOT EXISTS idx_operatives_session ON operatives(session_id);
+
+    CREATE TABLE IF NOT EXISTS operative_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operative_id TEXT NOT NULL REFERENCES operatives(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      data TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_operative_events_operative ON operative_events(operative_id, id);
+  `)
 }
 
 // --- One-time migration from file-based storage ---

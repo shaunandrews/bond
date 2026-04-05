@@ -9,9 +9,11 @@ import { useJournal } from './composables/useJournal'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
 import { useBrowser } from './composables/useBrowser'
+import { useOperatives } from './composables/useOperatives'
+import { useOperativeEvents } from './composables/useOperativeEvents'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhGlobe, PhX } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhGlobe, PhX, PhRobot } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
@@ -27,10 +29,14 @@ import JournalView from './components/JournalView.vue'
 import TodoView from './components/TodoView.vue'
 import BrowserView from './components/BrowserView.vue'
 import SenseView from './components/SenseView.vue'
+import OperativesView from './components/OperativesView.vue'
+import OperativeDetail from './components/OperativeDetail.vue'
+import OperativePanelView from './components/OperativePanelView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
 import BondPanelHandle from './components/BondPanelHandle.vue'
+import FieldManual from './components/FieldManual.vue'
 
 const chat = useChat()
 const sessions = useSessions()
@@ -39,6 +45,8 @@ const collections = useCollections()
 const journal = useJournal()
 const { activeView } = useAppView()
 const browserComposable = useBrowser()
+const operativesComposable = useOperatives()
+const operativeEvents = useOperativeEvents(computed(() => operativesComposable.activeOperativeId.value))
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
 
 function applyWindowOpacity(val: number) {
@@ -54,6 +62,7 @@ async function loadWindowOpacity() {
 const selectedModel = ref<ModelId>('sonnet')
 const activityExpanded = ref(false)
 const mediaCount = ref(0)
+const fieldManualOpen = ref(false)
 
 async function refreshMediaCount() {
   try {
@@ -124,7 +133,7 @@ function getInitialSidebarWidth(): number {
 const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === '1')
 const sidebarWidth = ref(getInitialSidebarWidth())
 
-type RightPanelContent = 'todos' | 'projects' | 'browser'
+type RightPanelContent = 'todos' | 'projects' | 'browser' | 'operatives'
 const rightPanelCollapsed = ref(localStorage.getItem('bond:right-panel') === 'none' || !localStorage.getItem('bond:right-panel'))
 const rightPanelContent = ref<RightPanelContent>(
   (localStorage.getItem('bond:right-panel-content') as RightPanelContent) || 'todos'
@@ -171,6 +180,15 @@ function toggleRightPanel(panel?: RightPanelContent) {
   }
   localStorage.setItem('bond:right-panel', rightPanelCollapsed.value ? 'none' : rightPanelContent.value)
   localStorage.setItem('bond:right-panel-content', rightPanelContent.value)
+}
+
+function ensureBrowserPanel() {
+  if (rightPanelCollapsed.value || rightPanelContent.value !== 'browser') {
+    rightPanelContent.value = 'browser'
+    rightPanelCollapsed.value = false
+    localStorage.setItem('bond:right-panel', 'browser')
+    localStorage.setItem('bond:right-panel-content', 'browser')
+  }
 }
 
 function syncRightPanelWidth() {
@@ -358,6 +376,10 @@ function onKeyDown(e: KeyboardEvent) {
       browserViewRef.value?.focusUrlBar()
     }
   }
+  if (e.metaKey && e.key === '/') {
+    e.preventDefault()
+    fieldManualOpen.value = !fieldManualOpen.value
+  }
 }
 
 function handleBeforeUnload() {
@@ -465,6 +487,7 @@ onUnmounted(() => {
         :projectCount="projects.activeProjects.value.length"
         :collectionCount="collections.activeCollections.value.length"
         :journalCount="journal.entries.value.length"
+        :operativeRunningCount="operativesComposable.runningCount.value"
         @select="handleSelectSession"
         @create="handleNewSession"
         @archive="sessions.archive"
@@ -478,6 +501,7 @@ onUnmounted(() => {
         @journal="activeView = 'journal'"
         @media="activeView = 'media'"
         @sense="activeView = 'sense'"
+        @operatives="activeView = 'operatives'"
         @rename="handleRenameSession"
         @setIconSeed="sessions.setIconSeed"
       />
@@ -506,6 +530,9 @@ onUnmounted(() => {
           </BondButton>
           <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'todos' }" @click.stop="toggleRightPanel('todos')" v-tooltip="'Todos panel ⇧⌘B'">
             <PhChecks :size="16" weight="bold" />
+          </BondButton>
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'operatives' }" @click.stop="toggleRightPanel('operatives')" v-tooltip="'Operatives panel'">
+            <PhRobot :size="16" weight="bold" />
           </BondButton>
           <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'browser' }" @click.stop="toggleRightPanel('browser')" v-tooltip="'Browser panel ⇧⌘K'">
             <PhGlobe :size="16" weight="bold" />
@@ -639,12 +666,45 @@ onUnmounted(() => {
           </BondButton>
         </template>
       </SenseView>
+
+      <template v-if="activeView === 'operatives'">
+        <OperativeDetail
+          v-if="operativesComposable.activeOperative.value"
+          :operative="operativesComposable.activeOperative.value"
+          :events="operativeEvents.events.value"
+          @cancel="operativesComposable.cancel"
+          @remove="(id) => { operativesComposable.remove(id); operativesComposable.select(null) }"
+          @back="operativesComposable.select(null)"
+        >
+          <template #header-start>
+            <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
+              <PhSidebarSimple :size="16" weight="bold" />
+            </BondButton>
+          </template>
+        </OperativeDetail>
+        <OperativesView
+          v-else
+          :operatives="operativesComposable.operatives.value"
+          :activeOperativeId="operativesComposable.activeOperativeId.value"
+          :insetStart="sidebarCollapsed"
+          @select="operativesComposable.select"
+          @cancel="operativesComposable.cancel"
+          @remove="operativesComposable.remove"
+          @clear="operativesComposable.clear"
+        >
+          <template #header-start>
+            <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
+              <PhSidebarSimple :size="16" weight="bold" />
+            </BondButton>
+          </template>
+        </OperativesView>
+      </template>
       </div>
     </BondPanel>
 
     <BondPanelHandle v-show="!rightPanelHidden" id="handle-1" />
 
-    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="rightPanelContent === 'browser' ? 360 : 260" :maxSize="rightPanelContent === 'browser' ? 99999 : 640" :style="rightPanelStyle">
+    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="rightPanelContent === 'browser' ? 360 : 260" :maxSize="99999" :style="rightPanelStyle">
       <TodoView v-if="rightPanelContent === 'todos'" @startChat="handleTodoChat" />
       <ProjectPanelView v-else-if="rightPanelContent === 'projects'"
         :projects="projects.activeProjects.value"
@@ -654,10 +714,20 @@ onUnmounted(() => {
         @addResource="projects.addResource"
         @removeResource="projects.removeResource"
       />
+      <OperativePanelView v-else-if="rightPanelContent === 'operatives'"
+        :operatives="operativesComposable.operatives.value"
+        :activeOperativeId="operativesComposable.activeOperativeId.value"
+        :events="operativeEvents.events.value"
+        @select="operativesComposable.select"
+        @cancel="operativesComposable.cancel"
+        @remove="operativesComposable.remove"
+      />
       <!-- BrowserView uses v-show so webview tabs stay alive when panel switches -->
-      <BrowserView v-show="rightPanelContent === 'browser'" ref="browserViewRef" />
+      <BrowserView v-show="rightPanelContent === 'browser'" ref="browserViewRef" @ensureVisible="ensureBrowserPanel" />
     </BondPanel>
   </BondPanelGroup>
+
+  <FieldManual :open="fieldManualOpen" @close="fieldManualOpen = false" />
 </template>
 
 <style>

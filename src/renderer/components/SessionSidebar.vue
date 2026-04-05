@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhCube, PhListBullets, PhNotebook, PhClockCounterClockwise } from '@phosphor-icons/vue'
+import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhCube, PhListBullets, PhNotebook, PhClockCounterClockwise, PhRobot } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import SessionItem from './SessionItem.vue'
 import SessionCard from './SessionCard.vue'
@@ -22,6 +22,7 @@ const props = defineProps<{
   projectCount: number
   collectionCount: number
   journalCount: number
+  operativeRunningCount?: number
 }>()
 
 const chatCount = computed(() => props.sessions.length)
@@ -59,6 +60,7 @@ const emit = defineEmits<{
   journal: []
   media: []
   sense: []
+  operatives: []
   rename: [id: string, title: string]
   setIconSeed: [id: string, seed: number]
 }>()
@@ -83,7 +85,7 @@ const emit = defineEmits<{
 
     <BondPanelGroup direction="vertical" class="flex-1 min-h-0">
       <!-- Chats list -->
-      <BondPanel id="chats" :defaultSize="100" :header="`Chats (${chatCount})`">
+      <BondPanel id="chats" :defaultSize="100" header="Chats">
         <template #header-extra>
           <BondButton
             ref="archiveBtnRef"
@@ -203,6 +205,14 @@ const emit = defineEmits<{
         <span v-if="journalCount > 0" class="media-count-badge">{{ journalCount }}</span>
       </button>
       <button
+        :class="['sidebar-nav-item', { active: activeView === 'operatives' }]"
+        @click="emit('operatives')"
+      >
+        <PhRobot :size="16" weight="bold" />
+        <BondText size="sm">Operatives</BondText>
+        <span v-if="operativeRunningCount && operativeRunningCount > 0" class="media-count-badge running-badge">{{ operativeRunningCount }}</span>
+      </button>
+      <button
         :class="['sidebar-nav-item', { active: activeView === 'sense' }]"
         @click="emit('sense')"
       >
@@ -310,6 +320,15 @@ const emit = defineEmits<{
   background: var(--color-accent, var(--color-text-primary));
   color: var(--color-bg, #fff);
   margin-left: auto;
+}
+
+.running-badge {
+  animation: pulse-badge 2s ease-in-out infinite;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 </style>

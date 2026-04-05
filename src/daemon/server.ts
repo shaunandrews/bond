@@ -24,6 +24,18 @@ import {
   getCachedSkills,
   refreshSkillsCache
 } from './agent'
+import {
+  listOperatives,
+  getOperative,
+  getOperativeEvents,
+  spawnOperative,
+  cancelOperative,
+  removeOperative,
+  clearOperatives,
+  recoverOrphanedOperatives,
+  abortAllOperatives
+} from './operatives'
+import type { SpawnOperativeOptions } from '../shared/operative'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
 import {
@@ -185,6 +197,26 @@ function broadcastCollectionsChanged(): void {
 function broadcastJournalChanged(): void {
   if (!serverWss) return
   const msg = JSON.stringify(makeNotification('journal.changed', {}))
+  for (const client of serverWss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg)
+    }
+  }
+}
+
+function broadcastOperativeChanged(): void {
+  if (!serverWss) return
+  const msg = JSON.stringify(makeNotification('operative.changed', {}))
+  for (const client of serverWss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg)
+    }
+  }
+}
+
+function broadcastOperativeEvent(payload: { operativeId: string; event: unknown }): void {
+  if (!serverWss) return
+  const msg = JSON.stringify(makeNotification('operative.event', payload))
   for (const client of serverWss.clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(msg)
@@ -1091,6 +1123,66 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, stats))
       }
 
+      // --- Operatives ---
+      case 'operative.list': {
+        const status = getStringParam(p, 'status')
+        const sessionId = getStringParam(p, 'sessionId')
+        return JSON.stringify(makeResponse(id, listOperatives({ status, sessionId })))
+      }
+
+      case 'operative.get': {
+        const oid = getStringParam(p, 'id')
+        if (!oid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        return JSON.stringify(makeResponse(id, getOperative(oid)))
+      }
+
+      case 'operative.events': {
+        const oid = getStringParam(p, 'id')
+        if (!oid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const afterId = getNumberParam(p, 'afterId')
+        const limit = getNumberParam(p, 'limit')
+        return JSON.stringify(makeResponse(id, getOperativeEvents(oid, afterId, limit)))
+      }
+
+      case 'operative.spawn': {
+        const opts = p as unknown as SpawnOperativeOptions
+        if (!opts?.name || !opts?.prompt || !opts?.workingDir) {
+          return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name, prompt, and workingDir are required'))
+        }
+        const op = spawnOperative(
+          opts,
+          currentModel,
+          () => broadcastOperativeChanged(),
+          (operativeId, event) => broadcastOperativeEvent({ operativeId, event }),
+          (sessionId, text) => broadcastChunk(sessionId, { kind: 'system', subtype: 'operative_completed', text })
+        )
+        broadcastOperativeChanged()
+        return JSON.stringify(makeResponse(id, op))
+      }
+
+      case 'operative.cancel': {
+        const oid = getStringParam(p, 'id')
+        if (!oid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const cancelled = cancelOperative(oid)
+        broadcastOperativeChanged()
+        return JSON.stringify(makeResponse(id, { ok: cancelled }))
+      }
+
+      case 'operative.remove': {
+        const oid = getStringParam(p, 'id')
+        if (!oid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const removed = removeOperative(oid)
+        broadcastOperativeChanged()
+        return JSON.stringify(makeResponse(id, { ok: removed }))
+      }
+
+      case 'operative.clear': {
+        const status = getStringParam(p, 'status')
+        const deleted = clearOperatives(status)
+        broadcastOperativeChanged()
+        return JSON.stringify(makeResponse(id, { deleted }))
+      }
+
       // --- Browser ---
 
       case 'browser.open': {
@@ -1190,6 +1282,9 @@ export function startServer(socketPath: string): BondServer {
   // Eagerly initialize Sense controller so it auto-enables on daemon startup
   getSenseController()
 
+  // Recover orphaned operatives from previous daemon process
+  recoverOrphanedOperatives()
+
   const httpServer: HttpServer = createServer()
   const wss = new WebSocketServer({ server: httpServer })
   serverWss = wss
@@ -1230,6 +1325,9 @@ export function startServer(socketPath: string): BondServer {
       }
       activeQueries.clear()
       knownSdkSessions.clear()
+
+      // Abort all running operatives
+      abortAllOperatives()
 
       // Clean up sense controller
       if (senseController) {

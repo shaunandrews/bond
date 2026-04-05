@@ -2,6 +2,7 @@ import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
 import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry, JournalComment } from './session'
 import type { SenseStatus, SenseSettings, SenseCapture } from './sense'
+import type { Operative, OperativeEvent, SpawnOperativeOptions } from './operative'
 import {
   makeRequest,
   isResponse,
@@ -18,6 +19,8 @@ type JournalChangeListener = () => void
 type BrowserCommandListener = (cmd: import('./browser').BrowserCommand) => void
 type SenseRequestCaptureListener = (payload: { captureDir: string; captureId: string }) => void
 type SenseStateChangedListener = (payload: { state: string }) => void
+type OperativeChangeListener = () => void
+type OperativeEventListener = (payload: { operativeId: string; event: OperativeEvent }) => void
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -36,6 +39,8 @@ export class BondClient {
   private browserCommandListeners = new Set<BrowserCommandListener>()
   private senseRequestCaptureListeners = new Set<SenseRequestCaptureListener>()
   private senseStateChangedListeners = new Set<SenseStateChangedListener>()
+  private operativeChangeListeners = new Set<OperativeChangeListener>()
+  private operativeEventListeners = new Set<OperativeEventListener>()
   private disconnectListeners = new Set<() => void>()
   private socketPath: string
   private _connected = false
@@ -128,6 +133,15 @@ export class BondClient {
           } else if (msg.method === 'sense.stateChanged' && msg.params) {
             const payload = msg.params as { state: string }
             for (const fn of this.senseStateChangedListeners) {
+              fn(payload)
+            }
+          } else if (msg.method === 'operative.changed') {
+            for (const fn of this.operativeChangeListeners) {
+              fn()
+            }
+          } else if (msg.method === 'operative.event' && msg.params) {
+            const payload = msg.params as { operativeId: string; event: OperativeEvent }
+            for (const fn of this.operativeEventListeners) {
               fn(payload)
             }
           }
@@ -585,6 +599,46 @@ export class BondClient {
   onSenseStateChanged(fn: SenseStateChangedListener): () => void {
     this.senseStateChangedListeners.add(fn)
     return () => this.senseStateChangedListeners.delete(fn)
+  }
+
+  // --- Operatives ---
+
+  async listOperatives(filters?: { status?: string; sessionId?: string }): Promise<Operative[]> {
+    return await this.call('operative.list', filters) as Operative[]
+  }
+
+  async getOperative(id: string): Promise<Operative | null> {
+    return await this.call('operative.get', { id }) as Operative | null
+  }
+
+  async getOperativeEvents(id: string, afterId?: number, limit?: number): Promise<OperativeEvent[]> {
+    return await this.call('operative.events', { id, afterId, limit }) as OperativeEvent[]
+  }
+
+  async spawnOperative(opts: SpawnOperativeOptions): Promise<Operative> {
+    return await this.call('operative.spawn', opts) as Operative
+  }
+
+  async cancelOperative(id: string): Promise<{ ok: boolean }> {
+    return await this.call('operative.cancel', { id }) as { ok: boolean }
+  }
+
+  async removeOperative(id: string): Promise<{ ok: boolean }> {
+    return await this.call('operative.remove', { id }) as { ok: boolean }
+  }
+
+  async clearOperatives(status?: string): Promise<{ deleted: number }> {
+    return await this.call('operative.clear', { status }) as { deleted: number }
+  }
+
+  onOperativeChanged(fn: OperativeChangeListener): () => void {
+    this.operativeChangeListeners.add(fn)
+    return () => this.operativeChangeListeners.delete(fn)
+  }
+
+  onOperativeEvent(fn: OperativeEventListener): () => void {
+    this.operativeEventListeners.add(fn)
+    return () => this.operativeEventListeners.delete(fn)
   }
 
   // --- Shell (client-side only, not proxied through daemon) ---

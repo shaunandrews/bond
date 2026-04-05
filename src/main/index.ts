@@ -243,6 +243,18 @@ function createWindow(): void {
     }
   })
 
+  client.onOperativeChanged(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:operativeChanged')
+    }
+  })
+
+  client.onOperativeEvent((payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('bond:operativeEvent', payload)
+    }
+  })
+
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
@@ -655,6 +667,15 @@ app.whenReady().then(async () => {
     const { hasScreenRecordingPermission } = require('./sense') as typeof import('./sense')
     return hasScreenRecordingPermission()
   })
+
+  // --- Operatives ---
+  ipcMain.handle('operative:list', (_e, filters?) => client.listOperatives(filters))
+  ipcMain.handle('operative:get', (_e, id: string) => client.getOperative(id))
+  ipcMain.handle('operative:spawn', (_e, opts) => client.spawnOperative(opts))
+  ipcMain.handle('operative:events', (_e, id: string, afterId?: number, limit?: number) => client.getOperativeEvents(id, afterId, limit))
+  ipcMain.handle('operative:cancel', (_e, id: string) => client.cancelOperative(id))
+  ipcMain.handle('operative:remove', (_e, id: string) => client.removeOperative(id))
+  ipcMain.handle('operative:clear', (_e, status?: string) => client.clearOperatives(status))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

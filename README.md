@@ -34,6 +34,7 @@ bond project             # Manage projects (list, add, show, edit, archive, rm, 
 bond media               # Manage media (list, info, open, rm, purge)
 bond sense               # Ambient screen awareness (status, on, off, search, apps, timeline)
 bond browser             # In-app browser (open, tabs, read, screenshot, exec, console, dom, network)
+bond operative           # Manage operatives (ls, spawn, show, logs, cancel, rm, clear)
 bond screenshot          # Capture Bond window to /tmp/bond-screenshot.png
 bond test                # Run tests
 bond help                # Show all commands
@@ -101,6 +102,7 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `skills.*` — list, refresh, remove
 - `sense.*` — status, enable, disable, pause, resume, now, today, search, apps, timeline, capture, sessions, settings, clear, stats
 - `browser.*` — open, navigate, close, tabs, read, screenshot, exec, console, dom, network
+- `operative.*` — spawn, list, show, logs, cancel, remove, clear
 
 **Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
 
