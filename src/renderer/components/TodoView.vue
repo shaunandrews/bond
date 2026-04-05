@@ -4,6 +4,7 @@ import { PhPlus, PhTrash, PhChatCircle, PhNotePencil, PhTag, PhSpinner, PhFolder
 import type { TodoItem, Project } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
+import BondToolbar from './BondToolbar.vue'
 
 const emit = defineEmits<{
   startChat: [text: string]
@@ -276,11 +277,14 @@ function onDragEnd() {
 
 <template>
   <div class="todo-panel">
-    <div class="todo-panel-header">
-      <BondText size="sm" weight="medium" color="muted">Todos</BondText>
-      <span v-if="pending.length" class="todo-panel-badge">{{ pending.length }}</span>
-    </div>
     <div class="todo-view">
+      <BondToolbar label="Todos" drag blur class="todo-panel-toolbar">
+        <template #start>
+          <BondText size="sm" weight="medium" color="muted">Todos</BondText>
+          <span v-if="pending.length" class="todo-panel-badge">{{ pending.length }}</span>
+        </template>
+      </BondToolbar>
+      <div class="todo-view-content">
       <div v-if="loading" class="todo-empty">
         <BondText size="sm" color="muted">Loading...</BondText>
       </div>
@@ -490,6 +494,7 @@ function onDragEnd() {
           </ul>
         </template>
       </template>
+      </div>
     </div>
   </div>
 </template>
@@ -504,14 +509,10 @@ function onDragEnd() {
   background: var(--color-bg);
 }
 
-.todo-panel-header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  height: var(--toolbar-height);
-  padding-inline: 1rem;
-  -webkit-app-region: drag;
+.todo-panel-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .todo-panel-badge {
@@ -532,6 +533,10 @@ function onDragEnd() {
 .todo-view {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
+}
+
+.todo-view-content {
   padding: 0.75rem 1rem 2rem;
 }
 

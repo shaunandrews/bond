@@ -18,6 +18,7 @@ const emit = defineEmits<{
   addResource: [projectId: string, kind: 'path' | 'file' | 'link', value: string, label?: string]
   removeResource: [projectId: string, resourceId: string]
   updateDeadline: [projectId: string, deadline: string]
+  viewMarkdown: [filePath: string]
 }>()
 
 const todos = ref<TodoItem[]>([])
@@ -126,7 +127,7 @@ function openResource(kind: string, value: string) {
   if (kind === 'link') {
     window.bond.openExternal(value)
   } else if (value.endsWith('.md') || value.endsWith('.markdown')) {
-    window.bond.openViewer(value)
+    emit('viewMarkdown', value)
   } else {
     window.bond.openPath(value)
   }

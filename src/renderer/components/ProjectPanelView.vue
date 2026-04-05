@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { PhArrowLeft, PhChatCircle, PhGlobe, PhCode, PhPresentation, PhCube } from '@phosphor-icons/vue'
 import type { Project, ProjectType } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
+import BondToolbar from './BondToolbar.vue'
 import ProjectDetail from './ProjectDetail.vue'
+import MarkdownViewer from './MarkdownViewer.vue'
 
 const props = defineProps<{
   projects: Project[]
@@ -22,6 +24,20 @@ const activeProject = computed(() =>
   props.projects.find(p => p.id === props.activeProjectId) ?? null
 )
 
+// Inline markdown viewer state
+const viewingFile = ref<string | null>(null)
+const viewingFileName = computed(() =>
+  viewingFile.value ? viewingFile.value.split('/').pop() ?? 'File' : ''
+)
+
+function openMarkdown(filePath: string) {
+  viewingFile.value = filePath
+}
+
+function closeMarkdown() {
+  viewingFile.value = null
+}
+
 const TYPE_META: Record<ProjectType, { label: string; icon: typeof PhCube }> = {
   wordpress: { label: 'WordPress', icon: PhGlobe },
   web: { label: 'Web', icon: PhCode },
@@ -32,54 +48,79 @@ const TYPE_META: Record<ProjectType, { label: string; icon: typeof PhCube }> = {
 
 <template>
   <div class="project-panel">
-    <!-- Detail view -->
-    <template v-if="activeProject">
-      <div class="project-panel-header">
-        <BondButton variant="ghost" size="sm" icon @click="emit('select', null)" v-tooltip="'Back to list'" class="panel-back-btn">
-          <PhArrowLeft :size="14" weight="bold" />
-        </BondButton>
-        <BondText size="sm" weight="medium" truncate>{{ activeProject.name }}</BondText>
-        <BondButton variant="ghost" size="sm" icon class="panel-chat-btn" @click="emit('startChat', activeProject!.id)" v-tooltip="'Start chat'">
-          <PhChatCircle :size="14" weight="bold" />
-        </BondButton>
-      </div>
-
+    <!-- Markdown viewer -->
+    <template v-if="viewingFile">
       <div class="project-panel-scroll">
+        <BondToolbar label="Markdown viewer" drag blur class="project-panel-toolbar">
+          <template #start>
+            <BondButton variant="ghost" size="sm" icon @click="closeMarkdown" v-tooltip="'Back to project'">
+              <PhArrowLeft :size="14" weight="bold" />
+            </BondButton>
+            <BondText size="sm" weight="medium" truncate>{{ viewingFileName }}</BondText>
+          </template>
+        </BondToolbar>
+
+        <MarkdownViewer :filePath="viewingFile" />
+      </div>
+    </template>
+
+    <!-- Detail view -->
+    <template v-else-if="activeProject">
+      <div class="project-panel-scroll">
+        <BondToolbar label="Project detail" drag blur class="project-panel-toolbar">
+          <template #start>
+            <BondButton variant="ghost" size="sm" icon @click="emit('select', null)" v-tooltip="'Back to list'">
+              <PhArrowLeft :size="14" weight="bold" />
+            </BondButton>
+            <BondText size="sm" weight="medium" truncate>{{ activeProject.name }}</BondText>
+          </template>
+          <template #end>
+            <BondButton variant="ghost" size="sm" icon @click="emit('startChat', activeProject!.id)" v-tooltip="'Start chat'">
+              <PhChatCircle :size="14" weight="bold" />
+            </BondButton>
+          </template>
+        </BondToolbar>
+
         <ProjectDetail
           :project="activeProject"
           compact
           @addResource="(...args: any[]) => emit('addResource', args[0], args[1], args[2], args[3])"
           @removeResource="(...args: any[]) => emit('removeResource', args[0], args[1])"
+          @viewMarkdown="openMarkdown"
         />
       </div>
     </template>
 
     <!-- List view -->
     <template v-else>
-      <div class="project-panel-header">
-        <BondText size="sm" weight="medium" color="muted">Projects</BondText>
-        <span v-if="projects.length" class="project-panel-badge">{{ projects.length }}</span>
-      </div>
+      <div class="project-panel-scroll">
+        <BondToolbar label="Projects" drag blur class="project-panel-toolbar">
+          <template #start>
+            <BondText size="sm" weight="medium" color="muted">Projects</BondText>
+            <span v-if="projects.length" class="project-panel-badge">{{ projects.length }}</span>
+          </template>
+        </BondToolbar>
 
-      <div class="project-panel-scroll project-panel-body">
-        <div v-if="projects.length === 0" class="project-panel-empty">
-          <BondText size="sm" color="muted">No projects yet.</BondText>
+        <div class="project-panel-body">
+          <div v-if="projects.length === 0" class="project-panel-empty">
+            <BondText size="sm" color="muted">No projects yet.</BondText>
+          </div>
+
+          <nav v-else class="project-panel-list">
+            <button
+              v-for="p in projects"
+              :key="p.id"
+              class="project-panel-item"
+              @click="emit('select', p.id)"
+            >
+              <component :is="TYPE_META[p.type].icon" :size="14" weight="bold" class="project-panel-item-icon" />
+              <div class="project-panel-item-body">
+                <BondText size="sm">{{ p.name }}</BondText>
+                <BondText v-if="p.goal" size="xs" color="muted" truncate>{{ p.goal }}</BondText>
+              </div>
+            </button>
+          </nav>
         </div>
-
-        <nav v-else class="project-panel-list">
-          <button
-            v-for="p in projects"
-            :key="p.id"
-            class="project-panel-item"
-            @click="emit('select', p.id)"
-          >
-            <component :is="TYPE_META[p.type].icon" :size="14" weight="bold" class="project-panel-item-icon" />
-            <div class="project-panel-item-body">
-              <BondText size="sm">{{ p.name }}</BondText>
-              <BondText v-if="p.goal" size="xs" color="muted" truncate>{{ p.goal }}</BondText>
-            </div>
-          </button>
-        </nav>
       </div>
     </template>
   </div>
@@ -95,23 +136,16 @@ const TYPE_META: Record<ProjectType, { label: string; icon: typeof PhCube }> = {
   background: var(--color-bg);
 }
 
-.project-panel-header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  height: var(--toolbar-height);
-  padding-inline: 0.5rem 1rem;
-  -webkit-app-region: drag;
+.project-panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
-.project-panel-header > .panel-back-btn {
-  -webkit-app-region: no-drag;
-}
-
-.project-panel-header > .panel-chat-btn {
-  margin-left: auto;
-  -webkit-app-region: no-drag;
+.project-panel-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .project-panel-badge {
@@ -127,12 +161,6 @@ const TYPE_META: Record<ProjectType, { label: string; icon: typeof PhCube }> = {
   border-radius: 999px;
   background: var(--color-accent, var(--color-text-primary));
   color: var(--color-bg, #fff);
-}
-
-.project-panel-scroll {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
 }
 
 .project-panel-body {

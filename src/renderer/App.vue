@@ -595,7 +595,7 @@ onUnmounted(() => {
 
     <BondPanelHandle v-show="!rightPanelHidden" id="handle-1" />
 
-    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="260" :maxSize="480" :style="rightPanelStyle">
+    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="260" :maxSize="640" :style="rightPanelStyle">
       <TodoView v-if="rightPanelContent === 'todos'" @startChat="handleTodoChat" />
       <ProjectPanelView v-else-if="rightPanelContent === 'projects'"
         :projects="projects.activeProjects.value"
