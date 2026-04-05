@@ -1,16 +1,28 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { PhCheck, PhCircle, PhCalendarBlank, PhFolder, PhLink, PhFile } from '@phosphor-icons/vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { PhCheck, PhCircle, PhCalendarBlank, PhFolder, PhLink, PhFile, PhCaretRight } from '@phosphor-icons/vue'
 import type { TodoItem, Project } from '../../../shared/session'
 
 const props = defineProps<{
   name?: string        // single name, comma-separated names, or omit for all
   filter?: string      // "active" (default) or "archived"
+  todos?: string       // "true" to show todos by default, omit or "false" to collapse
 }>()
 
 const allProjects = ref<Project[]>([])
 const todos = ref<TodoItem[]>([])
 const loading = ref(true)
+const todosExpanded = reactive<Record<string, boolean>>({})
+
+const showTodosByDefault = computed(() => props.todos === 'true')
+
+function isTodosExpanded(projectId: string): boolean {
+  return todosExpanded[projectId] ?? showTodosByDefault.value
+}
+
+function toggleTodos(projectId: string) {
+  todosExpanded[projectId] = !isTodosExpanded(projectId)
+}
 
 const matched = computed(() => {
   const archived = props.filter === 'archived'
@@ -147,18 +159,24 @@ function openResource(kind: string, value: string) {
           </a>
         </div>
 
-        <!-- Todos (compact) -->
+        <!-- Todos (collapsible) -->
         <div v-if="todosForProject(project).length > 0" class="project-todos">
-          <div
-            v-for="todo in todosForProject(project)"
-            :key="todo.id"
-            class="todo-row"
-            :class="{ 'todo-row--done': todo.done }"
-            @click="toggleTodo(todo)"
-          >
-            <PhCheck v-if="todo.done" :size="14" weight="bold" class="todo-icon todo-icon--done" />
-            <PhCircle v-else :size="14" weight="regular" class="todo-icon todo-icon--pending" />
-            <span class="todo-text">{{ todo.text }}</span>
+          <button class="todos-toggle" @click="toggleTodos(project.id)">
+            <PhCaretRight :size="12" weight="bold" class="todos-toggle-icon" :class="{ 'todos-toggle-icon--open': isTodosExpanded(project.id) }" />
+            <span>{{ totalCount(project) }} todos</span>
+          </button>
+          <div v-if="isTodosExpanded(project.id)" class="todos-list">
+            <div
+              v-for="todo in todosForProject(project)"
+              :key="todo.id"
+              class="todo-row"
+              :class="{ 'todo-row--done': todo.done }"
+              @click="toggleTodo(todo)"
+            >
+              <PhCheck v-if="todo.done" :size="14" weight="bold" class="todo-icon todo-icon--done" />
+              <PhCircle v-else :size="14" weight="regular" class="todo-icon todo-icon--pending" />
+              <span class="todo-text">{{ todo.text }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -266,6 +284,32 @@ function openResource(kind: string, value: string) {
   margin-top: 0.4em;
   padding-top: 0.4em;
   border-top: 1px solid var(--color-border);
+}
+
+.todos-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  background: none;
+  border: none;
+  padding: 0.15em 0;
+  font-size: 0.75em;
+  color: var(--color-muted);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: color var(--transition-fast);
+}
+.todos-toggle:hover { color: var(--color-text-primary); }
+
+.todos-toggle-icon {
+  transition: transform var(--transition-fast);
+}
+.todos-toggle-icon--open {
+  transform: rotate(90deg);
+}
+
+.todos-list {
+  margin-top: 0.2em;
 }
 
 .todo-row {
