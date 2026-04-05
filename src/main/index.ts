@@ -5,6 +5,8 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { BondClient } from '../shared/client'
+import { initSense, destroySense } from './sense'
+import { initTray, destroyTray } from './tray'
 import type { TaggedChunk } from '../shared/stream'
 import type { AttachedImage } from '../shared/session'
 
@@ -424,6 +426,8 @@ app.whenReady().then(async () => {
   await ensureDaemon()
   await connectClient()
   setupAutoReconnect()
+  initSense(client)
+  initTray(client)
 
   createWindow()
 
@@ -628,6 +632,26 @@ app.whenReady().then(async () => {
     return result
   })
 
+  // Sense IPC handlers — proxy to daemon via BondClient
+  ipcMain.handle('sense:status', () => client.senseStatus())
+  ipcMain.handle('sense:enable', () => client.senseEnable())
+  ipcMain.handle('sense:disable', () => client.senseDisable())
+  ipcMain.handle('sense:pause', (_e, minutes?: number) => client.sensePause(minutes))
+  ipcMain.handle('sense:resume', () => client.senseResume())
+  ipcMain.handle('sense:now', () => client.senseNow())
+  ipcMain.handle('sense:today', () => client.senseToday())
+  ipcMain.handle('sense:search', (_e, query: string, limit?: number) => client.senseSearch(query, limit))
+  ipcMain.handle('sense:apps', (_e, range?: string) => client.senseApps(range))
+  ipcMain.handle('sense:timeline', (_e, from?: string, to?: string, limit?: number) => client.senseTimeline(from, to, limit))
+  ipcMain.handle('sense:settings', () => client.senseSettings())
+  ipcMain.handle('sense:updateSettings', (_e, updates: Record<string, unknown>) => client.senseUpdateSettings(updates))
+  ipcMain.handle('sense:clear', (_e, range?: { from?: string; to?: string }) => client.senseClear(range))
+  ipcMain.handle('sense:stats', () => client.senseStats())
+  ipcMain.handle('sense:hasPermission', () => {
+    const { hasScreenRecordingPermission } = require('./sense') as typeof import('./sense')
+    return hasScreenRecordingPermission()
+  })
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -641,5 +665,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  destroyTray()
+  destroySense()
   client?.close()
 })

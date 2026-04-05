@@ -176,4 +176,21 @@ contextBridge.exposeInMainWorld('bond', {
     return () => ipcRenderer.removeListener('bond:windowOpacity', listener)
   },
 
+  // Sense
+  senseStatus: () => ipcRenderer.invoke('sense:status'),
+  senseEnable: () => ipcRenderer.invoke('sense:enable'),
+  senseDisable: () => ipcRenderer.invoke('sense:disable'),
+  sensePause: (minutes?: number) => ipcRenderer.invoke('sense:pause', minutes),
+  senseResume: () => ipcRenderer.invoke('sense:resume'),
+  senseNow: () => ipcRenderer.invoke('sense:now'),
+  senseToday: () => ipcRenderer.invoke('sense:today'),
+  senseSearch: (query: string, limit?: number) => ipcRenderer.invoke('sense:search', query, limit),
+  senseApps: (range?: string) => ipcRenderer.invoke('sense:apps', range),
+  senseTimeline: (from?: string, to?: string, limit?: number) => ipcRenderer.invoke('sense:timeline', from, to, limit),
+  senseSettings: () => ipcRenderer.invoke('sense:settings'),
+  senseUpdateSettings: (updates: Record<string, unknown>) => ipcRenderer.invoke('sense:updateSettings', updates),
+  senseClear: (range?: { from?: string; to?: string }) => ipcRenderer.invoke('sense:clear', range),
+  senseStats: () => ipcRenderer.invoke('sense:stats'),
+  hasScreenRecordingPermission: () => ipcRenderer.invoke('sense:hasPermission'),
+
 })
