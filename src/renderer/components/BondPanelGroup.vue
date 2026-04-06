@@ -206,10 +206,12 @@ function clampSize(id: string, size: number): number {
 function registerPanel(reg: PanelRegistration) {
   const existing = panels.value.findIndex((p) => p.id === reg.id)
   if (existing !== -1) {
+    // Updating constraints for an already-registered panel — replace registration
+    // but do NOT redistribute defaults (that would reset sizes from localStorage).
     panels.value[existing] = reg
-  } else {
-    panels.value = [...panels.value, reg]
+    return
   }
+  panels.value = [...panels.value, reg]
   distributeDefaults()
 }
 

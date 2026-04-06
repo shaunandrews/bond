@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, ref, onMounted, onUnmounted, computed } from 'vue'
+import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { PhCaretRight } from '@phosphor-icons/vue'
 import { PANEL_GROUP_KEY, type PanelUnit } from './panelTypes'
 
@@ -68,6 +68,24 @@ onMounted(() => {
     },
   })
 })
+
+watch(
+  () => [props.defaultSize, props.minSize, props.maxSize, props.minSizePx, props.unit, props.collapsible, props.collapsedSize],
+  () => {
+    group.registerPanel({
+      id: props.id,
+      constraints: {
+        defaultSize: props.defaultSize,
+        minSize: props.minSize,
+        maxSize: props.maxSize,
+        minSizePx: props.minSizePx,
+        unit: props.unit,
+        collapsible: props.header ? false : props.collapsible,
+        collapsedSize: props.collapsedSize,
+      },
+    })
+  }
+)
 
 onUnmounted(() => {
   group.unregisterPanel(props.id)
