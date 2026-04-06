@@ -9,6 +9,9 @@ const emit = defineEmits<{ 'update:expanded': [value: boolean] }>()
 const elapsed = ref(0)
 let timer: ReturnType<typeof setInterval> | undefined
 
+/** Set of event indices that are expanded to show detail */
+const expandedEvents = ref(new Set<number>())
+
 const isActive = computed(() =>
   props.activity.type !== 'idle' && props.activity.type !== 'done'
 )
@@ -34,6 +37,7 @@ watch(() => props.activity, (state) => {
 watch(() => props.activity.type, (cur, prev) => {
   if (cur === 'working' && prev === 'done') {
     emit('update:expanded', false)
+    expandedEvents.value = new Set()
   }
 })
 
@@ -41,6 +45,35 @@ onUnmounted(() => clearInterval(timer))
 
 function toggle() {
   emit('update:expanded', !props.expanded)
+}
+
+function toggleEvent(index: number) {
+  const next = new Set(expandedEvents.value)
+  if (next.has(index)) next.delete(index)
+  else next.add(index)
+  expandedEvents.value = next
+}
+
+function hasDetail(evt: { type: string; input?: Record<string, unknown>; output?: string }): boolean {
+  return evt.type === 'tool' && !!(evt.input || evt.output)
+}
+
+function formatInput(evt: { toolName?: string; input?: Record<string, unknown> }): string {
+  if (!evt.input) return ''
+  const name = evt.toolName ?? ''
+  if (name === 'Bash') return String(evt.input.command ?? '')
+  if (name === 'Read') return String(evt.input.file_path ?? '')
+  if (name === 'Edit') {
+    const fp = String(evt.input.file_path ?? '')
+    const old = String(evt.input.old_string ?? '').slice(0, 100)
+    return fp + (old ? `\n${old}${String(evt.input.old_string ?? '').length > 100 ? '…' : ''}` : '')
+  }
+  if (name === 'Write') return String(evt.input.file_path ?? '')
+  if (name === 'Glob') return String(evt.input.pattern ?? '')
+  if (name === 'Grep') return String(evt.input.pattern ?? '')
+  if (name === 'WebSearch') return String(evt.input.query ?? '')
+  if (name === 'WebFetch') return String(evt.input.url ?? '')
+  try { return JSON.stringify(evt.input, null, 2).slice(0, 500) } catch { return '' }
 }
 
 function formatElapsed(sec: number): string {
@@ -97,10 +130,34 @@ const events = computed(() => {
       <!-- Expanded event list -->
       <Transition name="events-expand">
         <div v-if="expanded && events.length" class="activity-events">
-          <div v-for="(evt, i) in events" :key="i" class="activity-event">
-            <span class="event-time">{{ formatTime(evt.ts) }}</span>
-            <span class="event-label">{{ evt.label }}</span>
-            <span v-if="evt.durationSec" class="event-duration">{{ evt.durationSec }}s</span>
+          <div v-for="(evt, i) in events" :key="i" class="activity-event-wrapper">
+            <div
+              :class="['activity-event', { 'has-detail': hasDetail(evt), 'is-expanded': expandedEvents.has(i) }]"
+              @click="hasDetail(evt) && toggleEvent(i)"
+            >
+              <span class="event-time">{{ formatTime(evt.ts) }}</span>
+              <span class="event-label">{{ evt.label }}</span>
+              <span v-if="evt.durationSec" class="event-duration">{{ evt.durationSec }}s</span>
+              <PhCaretRight
+                v-if="hasDetail(evt)"
+                :size="8"
+                weight="bold"
+                class="event-chevron"
+                :class="{ expanded: expandedEvents.has(i) }"
+              />
+            </div>
+            <Transition name="detail-expand">
+              <div v-if="expandedEvents.has(i) && hasDetail(evt)" class="event-detail">
+                <div v-if="formatInput(evt)" class="detail-section">
+                  <span class="detail-heading">Input</span>
+                  <pre class="detail-content">{{ formatInput(evt) }}</pre>
+                </div>
+                <div v-if="evt.output" class="detail-section">
+                  <span class="detail-heading">Output</span>
+                  <pre class="detail-content">{{ evt.output }}</pre>
+                </div>
+              </div>
+            </Transition>
           </div>
         </div>
       </Transition>
@@ -211,8 +268,13 @@ const events = computed(() => {
   flex-direction: column;
   gap: 1px;
   padding: 4px 8px 2px;
-  max-height: 200px;
+  max-height: 400px;
   overflow-y: auto;
+}
+
+.activity-event-wrapper {
+  display: flex;
+  flex-direction: column;
 }
 
 .activity-event {
@@ -221,6 +283,16 @@ const events = computed(() => {
   gap: 8px;
   padding: 2px 0;
   font-size: 11px;
+  border-radius: 3px;
+}
+
+.activity-event.has-detail {
+  cursor: pointer;
+  padding: 2px 4px;
+  margin: 0 -4px;
+}
+.activity-event.has-detail:hover {
+  background: var(--color-tint);
 }
 
 .event-time {
@@ -246,6 +318,57 @@ const events = computed(() => {
   opacity: 0.45;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
+}
+
+.event-chevron {
+  color: var(--color-muted);
+  opacity: 0.4;
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+  transform: rotate(90deg);
+}
+.event-chevron.expanded {
+  transform: rotate(-90deg);
+}
+
+/* Event detail panel */
+.event-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 4px 6px 4px;
+  margin: 0 -4px 2px;
+}
+
+.detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detail-heading {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+  opacity: 0.5;
+  font-weight: 600;
+}
+
+.detail-content {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--color-muted);
+  opacity: 0.75;
+  background: var(--color-tint);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 /* Transitions */
@@ -276,6 +399,21 @@ const events = computed(() => {
 }
 .events-expand-enter-to,
 .events-expand-leave-from {
-  max-height: 200px;
+  max-height: 400px;
+}
+
+.detail-expand-enter-active,
+.detail-expand-leave-active {
+  transition: opacity var(--transition-fast), max-height var(--transition-fast);
+  overflow: hidden;
+}
+.detail-expand-enter-from,
+.detail-expand-leave-to {
+  opacity: 0;
+  max-height: 0;
+}
+.detail-expand-enter-to,
+.detail-expand-leave-from {
+  max-height: 420px;
 }
 </style>

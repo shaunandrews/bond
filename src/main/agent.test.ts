@@ -63,7 +63,7 @@ describe('bondMessageToChunks', () => {
       ])
       const chunks = [...bondMessageToChunks(msg as any)]
       expect(chunks).toEqual([
-        { kind: 'assistant_tool', name: 'Read', summary: '/tmp/test.txt' },
+        { kind: 'assistant_tool', name: 'Read', summary: '/tmp/test.txt', input: { file_path: '/tmp/test.txt' } },
       ])
     })
   })

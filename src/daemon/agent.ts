@@ -78,9 +78,32 @@ function* flattenToolBlocks(msg: SDKMessage): Generator<BondStreamChunk> {
         'input' in block && block.input && typeof block.input === 'object'
           ? (block.input as Record<string, unknown>)
           : {}
-      yield { kind: 'assistant_tool', name, summary: summarizeToolInput(input) }
+      yield { kind: 'assistant_tool', name, summary: summarizeToolInput(input), input }
     }
   }
+}
+
+function extractToolResultText(message: { message?: { content?: unknown[] } }): string | undefined {
+  const content = message?.message?.content
+  if (!Array.isArray(content)) return undefined
+  const parts: string[] = []
+  for (const block of content) {
+    if (typeof block === 'string') { parts.push(block); continue }
+    if (block && typeof block === 'object') {
+      if ('type' in block && block.type === 'tool_result' && 'content' in block) {
+        const c = block.content
+        if (typeof c === 'string') { parts.push(c); continue }
+        if (Array.isArray(c)) {
+          for (const sub of c) {
+            if (typeof sub === 'string') parts.push(sub)
+            else if (sub && typeof sub === 'object' && 'text' in sub && typeof sub.text === 'string') parts.push(sub.text)
+          }
+        }
+      }
+      if ('text' in block && typeof block.text === 'string') parts.push(block.text)
+    }
+  }
+  return parts.length > 0 ? parts.join('\n') : undefined
 }
 
 function extractStreamDelta(msg: SDKMessage): BondStreamChunk | null {
@@ -106,6 +129,18 @@ export function* bondMessageToChunks(message: SDKMessage): Generator<BondStreamC
   if (message.type === 'assistant') {
     // Text was already streamed via deltas — only emit tool blocks
     yield* flattenToolBlocks(message)
+    return
+  }
+  if (message.type === 'user' && message.parent_tool_use_id) {
+    const output = extractToolResultText(message as any)
+    if (output !== undefined) {
+      yield {
+        kind: 'tool_result',
+        toolName: '',
+        toolUseId: message.parent_tool_use_id,
+        output: output.length > 4000 ? output.slice(0, 4000) + '\n…(truncated)' : output
+      }
+    }
     return
   }
   if (message.type === 'result') {

@@ -1,7 +1,8 @@
 export type BondStreamChunk =
   | { kind: 'assistant_text'; text: string }
   | { kind: 'thinking_text'; text: string }
-  | { kind: 'assistant_tool'; name: string; summary?: string }
+  | { kind: 'assistant_tool'; name: string; summary?: string; input?: Record<string, unknown> }
+  | { kind: 'tool_result'; toolName: string; toolUseId: string; output?: string }
   | { kind: 'system'; subtype: string; text?: string }
   | { kind: 'auth_status'; authenticating: boolean; lines: string[]; error?: string }
   | { kind: 'result'; subtype: string; result?: string; errors?: string[] }

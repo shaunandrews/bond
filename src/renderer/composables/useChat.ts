@@ -9,6 +9,9 @@ export interface ActivityEvent {
   label: string
   ts: number
   durationSec?: number
+  toolName?: string
+  input?: Record<string, unknown>
+  output?: string
 }
 
 export type ActivityState =
@@ -392,11 +395,23 @@ export function useChat(deps: ChatDeps = window.bond) {
       }
 
       case 'assistant_tool':
-        _getEvents(sid).push({ type: 'tool', label: _formatToolLabel(chunk.name, chunk.summary), ts: Date.now() })
+        _getEvents(sid).push({ type: 'tool', label: _formatToolLabel(chunk.name, chunk.summary), ts: Date.now(), toolName: chunk.name, input: chunk.input })
         _setActivity(sid, { type: 'tool', name: chunk.name, detail: chunk.summary, startedAt: _getStartedAt(sid) })
         addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'tool', name: chunk.name, summary: chunk.summary })
         schedulePersistFor(sid)
         break
+
+      case 'tool_result': {
+        // Attach output to the most recent tool event
+        const evts = _getEvents(sid)
+        for (let i = evts.length - 1; i >= 0; i--) {
+          if (evts[i].type === 'tool' && !evts[i].output) {
+            evts[i].output = chunk.output
+            break
+          }
+        }
+        break
+      }
 
       case 'tool_approval':
         addMessageTo(msgs, {
