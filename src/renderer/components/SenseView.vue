@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { useSense } from '../composables/useSense'
 import BondToolbar from './BondToolbar.vue'
 import SenseDayNav from './SenseDayNav.vue'
@@ -15,11 +15,46 @@ defineProps<{
 
 const sense = useSense()
 
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+const REFRESH_INTERVAL = 30_000 // 30 seconds
+
+function startAutoRefresh() {
+  stopAutoRefresh()
+  if (sense.isToday.value) {
+    refreshTimer = setInterval(() => {
+      if (!sense.loading.value) {
+        sense.loadDay(sense.date.value)
+      }
+    }, REFRESH_INTERVAL)
+  }
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+// Re-evaluate auto-refresh when the viewed date changes
+watch(() => sense.isToday.value, (isToday) => {
+  if (isToday) {
+    startAutoRefresh()
+  } else {
+    stopAutoRefresh()
+  }
+})
+
 onMounted(() => {
   // Load today's data if not already loaded
   if (sense.captures.value.length === 0 && !sense.loading.value) {
     sense.loadDay(sense.date.value)
   }
+  startAutoRefresh()
+})
+
+onUnmounted(() => {
+  stopAutoRefresh()
 })
 </script>
 

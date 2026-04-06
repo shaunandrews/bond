@@ -7,16 +7,23 @@ export interface AppSummary {
   captureCount: number
 }
 
+/** Format a Date as a local YYYY-MM-DD string. */
+function localDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 function todayISO(): string {
-  return new Date().toISOString().split('T')[0]
+  return localDateStr(new Date())
 }
 
 function dayStart(dateStr: string): string {
-  return `${dateStr}T00:00:00.000Z`
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Date(y, m - 1, d, 0, 0, 0, 0).toISOString()
 }
 
 function dayEnd(dateStr: string): string {
-  return `${dateStr}T23:59:59.999Z`
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Date(y, m - 1, d, 23, 59, 59, 999).toISOString()
 }
 
 /** Deterministic hue from a string (bundle ID or app name) */
@@ -145,22 +152,24 @@ function setAppFilter(bundleId: string | null) {
 }
 
 function nextDay() {
-  const d = new Date(date.value)
-  d.setDate(d.getDate() + 1)
-  const next = d.toISOString().split('T')[0]
-  if (next <= todayISO()) {
-    loadDay(next)
+  const [y, m, d] = date.value.split('-').map(Number)
+  const next = new Date(y, m - 1, d + 1)
+  const nextStr = localDateStr(next)
+  if (nextStr <= todayISO()) {
+    loadDay(nextStr)
   }
 }
 
 function prevDay() {
-  const d = new Date(date.value)
-  d.setDate(d.getDate() - 1)
-  loadDay(d.toISOString().split('T')[0])
+  const [y, m, d] = date.value.split('-').map(Number)
+  const prev = new Date(y, m - 1, d - 1)
+  const prevStr = localDateStr(prev)
+  loadDay(prevStr)
 }
 
 function jumpToCapture(capture: SenseCapture) {
-  const capDate = capture.capturedAt.split('T')[0]
+  const local = new Date(capture.capturedAt)
+  const capDate = localDateStr(local)
   if (capDate !== date.value) {
     loadDay(capDate).then(() => {
       activeCapture.value = capture
