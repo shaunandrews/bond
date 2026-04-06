@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bond-on-the-Go Prototype</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* === Bond design tokens (dark mode) === */
+  :root {
+    --color-bg: #0f1114;
+    --color-surface: #181b21;
+    --color-border: #343b45;
+    --color-text-primary: #e8eaed;
+    --color-muted: #8b939e;
+    --color-accent: #c4a07c;
+    --color-err: #ef9a9a;
+    --color-ok: #a5d6a7;
+    --color-tint: rgba(255,255,255,0.08);
+
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.3);
+    --shadow-lg: 0 4px 16px rgba(0,0,0,0.4);
+
+    --transition-fast: 0.12s ease;
+    --transition-base: 0.15s ease;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--font-sans);
+    height: 100vh;
+    overflow: hidden;
+    color: var(--color-text-primary);
+  }
+
+  /* === macOS Desktop === */
+  .desktop {
+    position: fixed;
+    inset: 0;
+    background: url('/tmp/desktop-wallpaper.png') center/cover no-repeat;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Fake menu bar */
+  .menu-bar {
+    height: 25px;
+    background: rgba(0,0,0,0.35);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.85);
+    gap: 18px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  .menu-bar .apple { font-size: 15px; }
+
+  .menu-bar .right {
+    margin-left: auto;
+    font-weight: 400;
+    font-size: 12px;
+    display: flex;
+    gap: 16px;
+    color: rgba(255,255,255,0.7);
+  }
+
+  /* Desktop content area */
+  .desktop-content {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+
+  .desktop-hint {
+    color: rgba(255,255,255,0.25);
+    font-size: 14px;
+    letter-spacing: 0.3px;
+    user-select: none;
+    text-align: center;
+    line-height: 2.2;
+  }
+
+  .desktop-hint kbd {
+    display: inline-block;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  /* Fake dock */
+  .dock {
+    position: fixed;
+    bottom: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 56px;
+    background: rgba(255,255,255,0.08);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    gap: 4px;
+    z-index: 10;
+  }
+
+  .dock-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    cursor: default;
+    transition: transform 0.15s;
+  }
+  .dock-icon:hover { transform: scale(1.15) translateY(-4px); }
+
+  .dock-sep {
+    width: 1px;
+    height: 36px;
+    background: rgba(255,255,255,0.1);
+    margin: 0 4px;
+  }
+
+  /* === Blur backdrop — faked with a blurred copy of the wallpaper === */
+  /*
+    backdrop-filter doesn't work in webviews for blurring desktop content.
+    Instead: render a pre-blurred copy of the wallpaper, masked with a
+    radial gradient so the blur radiates seamlessly from the panel center.
+    In the real Electron app, native vibrancy handles this.
+  */
+  .blur-field {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    overflow: hidden;
+  }
+
+  .blur-field.visible { opacity: 1; }
+
+  /* The mask goes on the blur-field itself, clipping the blurred image inside */
+  .blur-field {
+    -webkit-mask-image: radial-gradient(
+      ellipse 50% 60% at 78% 60%,
+      black 20%,
+      rgba(0,0,0,0.7) 40%,
+      rgba(0,0,0,0.3) 58%,
+      transparent 75%
+    );
+    mask-image: radial-gradient(
+      ellipse 50% 60% at 78% 60%,
+      black 20%,
+      rgba(0,0,0,0.7) 40%,
+      rgba(0,0,0,0.3) 58%,
+      transparent 75%
+    );
+  }
+
+  .blur-field__img {
+    position: absolute;
+    inset: -120px;
+    background: url('/tmp/desktop-wallpaper.png') center/cover no-repeat;
+    filter: blur(80px) saturate(1.5) brightness(1.35);
+  }
+
+  /* Scrim for text contrast — also radially masked to fade with the blur */
+  .blur-field__scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  /* === Quick Chat Panel — bottom right, widget-style === */
+  .quick-panel {
+    position: fixed;
+    bottom: 20px;
+    right: 12px;
+    width: 380px;
+    height: 68%;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: visible;
+    background: transparent;
+
+    /* Entry animation */
+    opacity: 0;
+    transform: translateY(20px) scale(0.97);
+    transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+                transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: none;
+  }
+
+  .quick-panel.visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+  }
+
+  /* Context bar */
+  .context-bar {
+    padding: 16px 18px 6px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.5);
+    letter-spacing: 0.2px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .context-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--color-ok);
+    opacity: 0.6;
+    flex-shrink: 0;
+  }
+
+  /* Messages area */
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 0 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    scrollbar-width: none;
+  }
+  .messages::-webkit-scrollbar { display: none; }
+
+  .message {
+    max-width: 100%;
+    animation: msgIn 0.25s ease-out;
+  }
+
+  @keyframes msgIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* User message */
+  .message.user {
+    align-self: flex-end;
+    max-width: 92%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    padding: 0 14px;
+  }
+
+  .message.user .bubble {
+    padding: 10px 14px;
+    border-radius: 10px;
+    line-height: 1.5;
+    font-size: 14px;
+    background: rgba(255,255,255,0.08);
+    color: var(--color-text-primary);
+  }
+
+  .msg-timestamp {
+    font-size: 10px;
+    color: var(--color-muted);
+    opacity: 0.6;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Bond message */
+  .message.bond {
+    align-self: flex-start;
+    width: 100%;
+  }
+
+  .message.bond .bubble {
+    padding: 10px 14px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--color-text-primary);
+  }
+
+  .message.bond .bubble p { margin: 0; }
+  .message.bond .bubble p + p { margin-top: 0.5em; }
+
+  .message.bond .bubble code {
+    background: rgba(255,255,255,0.08);
+    padding: 0.1em 0.35em;
+    border-radius: var(--radius-sm);
+    font-size: 0.88em;
+    font-family: var(--font-mono);
+  }
+
+  /* Tool activity */
+  .activity-summary {
+    display: block;
+    text-align: center;
+    font-size: 11px;
+    color: var(--color-muted);
+    opacity: 0.55;
+    padding: 1px 0;
+  }
+
+  /* Thinking indicator */
+  .thinking {
+    display: flex;
+    gap: 4px;
+    padding: 8px 14px;
+    align-items: center;
+  }
+
+  .thinking span {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--color-muted);
+    animation: blink 1.2s infinite;
+  }
+  .thinking span:nth-child(2) { animation-delay: 0.2s; }
+  .thinking span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes blink {
+    0%, 60%, 100% { opacity: 0.2; }
+    30% { opacity: 0.7; }
+  }
+
+  /* === Input area === */
+  .input-area {
+    padding: 6px 12px 14px;
+    flex-shrink: 0;
+  }
+
+  .chat-box {
+    border-radius: 18px 18px 22px 12px;
+    padding: 6px;
+    background: rgba(255,255,255,0.06);
+    transition: all var(--transition-fast);
+  }
+
+  .chat-box.focused {
+    box-shadow: 0 0 0 2px var(--color-accent);
+    background: rgba(255,255,255,0.1);
+  }
+
+  .chat-textarea {
+    display: block;
+    width: 100%;
+    resize: none;
+    max-height: 12rem;
+    overflow-y: auto;
+    padding: 0.75rem 0.75rem 0.5rem;
+    border-radius: var(--radius-xl);
+    border: none;
+    background: transparent;
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: 1rem;
+    outline: none;
+  }
+
+  .chat-textarea::placeholder {
+    color: rgba(255,255,255,0.3);
+  }
+
+  /* Toolbar row */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 4px 2px 2px;
+  }
+
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .tool-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    border: none;
+    background: none;
+    color: var(--color-muted);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    font-size: 16px;
+  }
+  .tool-btn:hover {
+    background: var(--color-tint);
+    color: var(--color-text-primary);
+  }
+
+  .model-label {
+    font-size: 12px;
+    color: rgba(255,255,255,0.4);
+    padding: 4px 8px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+  .model-label:hover {
+    background: var(--color-tint);
+    color: var(--color-text-primary);
+  }
+
+  .send-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    background: var(--color-accent);
+    color: white;
+    cursor: pointer;
+    transition: opacity var(--transition-fast);
+  }
+  .send-btn:hover { opacity: 0.85; }
+  .send-btn svg { width: 16px; height: 16px; }
+
+  /* Escape hint */
+  .escape-hint {
+    position: fixed;
+    bottom: 72px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: rgba(255,255,255,0.2);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    opacity: 0;
+    transition: opacity 0.4s;
+    pointer-events: none;
+    z-index: 200;
+  }
+  .escape-hint.visible { opacity: 1; }
+  .escape-hint kbd {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: var(--font-sans);
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+
+<!-- macOS Desktop -->
+<div class="desktop">
+  <div class="menu-bar">
+    <span class="apple"></span>
+    <span>Finder</span>
+    <span>File</span>
+    <span>Edit</span>
+    <span>View</span>
+    <span>Go</span>
+    <span>Window</span>
+    <span>Help</span>
+    <div class="right">
+      <span></span>
+      <span></span>
+      <span id="clock"></span>
+    </div>
+  </div>
+
+  <div class="desktop-content" id="desktopContent">
+    <div class="desktop-hint">
+      Press <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Space</kbd> to summon Bond<br>
+      <span style="font-size: 12px; opacity: 0.6;">(click anywhere to simulate)</span>
+    </div>
+  </div>
+
+  <div class="dock">
+    <div class="dock-icon">📁</div>
+    <div class="dock-icon">🌐</div>
+    <div class="dock-icon">💬</div>
+    <div class="dock-icon">📧</div>
+    <div class="dock-icon">🎵</div>
+    <div class="dock-icon">📝</div>
+    <div class="dock-sep"></div>
+    <div class="dock-icon">⬇️</div>
+    <div class="dock-icon">🗑️</div>
+  </div>
+</div>
+
+<!-- Blur field — blurred wallpaper copy, radially masked -->
+<div class="blur-field" id="blurField">
+  <div class="blur-field__img"></div>
+  <div class="blur-field__scrim"></div>
+</div>
+
+<!-- Quick Chat Panel -->
+<div class="quick-panel" id="panel">
+  <div class="context-bar">
+    <span class="context-dot"></span>
+    Watching: Figma, VS Code — last 5 min
+  </div>
+
+  <div class="messages" id="messages"></div>
+
+  <div class="input-area">
+    <div class="chat-box" id="chatBox">
+      <textarea
+        id="input"
+        class="chat-textarea"
+        rows="2"
+        placeholder="Ask Bond something…"
+        spellcheck="false"
+      ></textarea>
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <button class="tool-btn" title="Attach image">📎</button>
+          <span class="model-label">Opus</span>
+          <span class="model-label">Full access</span>
+        </div>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="19" x2="12" y2="5"></line>
+            <polyline points="5 12 12 5 19 12"></polyline>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="escape-hint" id="escapeHint">
+  <kbd>esc</kbd> to dismiss &nbsp;·&nbsp; <kbd>⌘⇧Space</kbd> to toggle
+</div>
+
+<script>
+const panel = document.getElementById('panel')
+const messages = document.getElementById('messages')
+const input = document.getElementById('input')
+const chatBox = document.getElementById('chatBox')
+const escapeHint = document.getElementById('escapeHint')
+const clockEl = document.getElementById('clock')
+const blurField = document.getElementById('blurField')
+let isOpen = false
+let conversationStep = 0
+
+function updateClock() {
+  const now = new Date()
+  clockEl.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+updateClock()
+setInterval(updateClock, 30000)
+
+input.addEventListener('focus', () => chatBox.classList.add('focused'))
+input.addEventListener('blur', () => chatBox.classList.remove('focused'))
+
+const demoConversation = [
+  { role: 'user', text: 'why is the spacing off on the card grid?', time: '8:14 PM' },
+  { role: 'tool', text: 'Read CardGrid.vue' },
+  {
+    role: 'bond',
+    html: '<p>Your Figma frame is using auto layout with 16px gap, but the CSS in <code>CardGrid.vue</code> has <code>gap: 12px</code>. The Figma component was updated 3 minutes ago — looks like the design token wasn\'t synced.</p><p>Change line 42 to <code>gap: var(--spacing-4)</code> to pull from the token instead of a hardcoded value.</p>'
+  },
+  { role: 'user', text: 'fix it', time: '8:14 PM' },
+  { role: 'tool', text: 'Edited CardGrid.vue' },
+  {
+    role: 'bond',
+    html: '<p>Done. Swapped <code>gap: 12px</code> for <code>gap: var(--spacing-4)</code> on line 42. Resolves to 16px, matching your Figma spec.</p>'
+  }
+]
+
+function toggle() {
+  if (isOpen) dismiss()
+  else summon()
+}
+
+function summon() {
+  isOpen = true
+  conversationStep = 0
+  messages.innerHTML = ''
+  input.value = ''
+
+  blurField.classList.add('visible')
+
+  panel.classList.add('visible')
+  escapeHint.classList.add('visible')
+  setTimeout(() => input.focus(), 350)
+}
+
+function dismiss() {
+  isOpen = false
+  panel.classList.remove('visible')
+  escapeHint.classList.remove('visible')
+
+  blurField.classList.remove('visible')
+}
+
+function addUserMessage(text, time) {
+  const div = document.createElement('div')
+  div.className = 'message user'
+  div.innerHTML = `
+    <div class="bubble">${escapeHtml(text)}</div>
+    <span class="msg-timestamp">${time}</span>
+  `
+  messages.appendChild(div)
+  messages.scrollTop = messages.scrollHeight
+}
+
+function addBondMessage(html) {
+  const div = document.createElement('div')
+  div.className = 'message bond'
+  div.innerHTML = `<div class="bubble">${html}</div>`
+  messages.appendChild(div)
+  messages.scrollTop = messages.scrollHeight
+}
+
+function addToolActivity(text) {
+  const span = document.createElement('span')
+  span.className = 'activity-summary'
+  span.textContent = text
+  messages.appendChild(span)
+  messages.scrollTop = messages.scrollHeight
+}
+
+function showThinking() {
+  const div = document.createElement('div')
+  div.className = 'thinking'
+  div.id = 'thinking'
+  div.innerHTML = '<span></span><span></span><span></span>'
+  messages.appendChild(div)
+  messages.scrollTop = messages.scrollHeight
+}
+
+function removeThinking() {
+  const el = document.getElementById('thinking')
+  if (el) el.remove()
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div')
+  d.textContent = text
+  return d.innerHTML
+}
+
+function sendMessage() {
+  if (conversationStep >= demoConversation.length) return
+  const step = demoConversation[conversationStep]
+  if (step.role === 'user') {
+    addUserMessage(step.text, step.time)
+    input.value = ''
+    input.style.height = 'auto'
+    conversationStep++
+    playResponses()
+  }
+}
+
+function playResponses() {
+  if (conversationStep >= demoConversation.length) return
+  const step = demoConversation[conversationStep]
+
+  if (step.role === 'tool') {
+    setTimeout(() => {
+      addToolActivity(step.text)
+      conversationStep++
+      playResponses()
+    }, 400)
+  } else if (step.role === 'bond') {
+    showThinking()
+    setTimeout(() => {
+      removeThinking()
+      addBondMessage(step.html)
+      conversationStep++
+      if (conversationStep < demoConversation.length && demoConversation[conversationStep].role === 'user') {
+        setTimeout(() => { input.value = demoConversation[conversationStep].text }, 300)
+      }
+    }, 1000)
+  }
+}
+
+document.getElementById('desktopContent').addEventListener('click', (e) => {
+  if (e.target.closest('.quick-panel')) return
+  toggle()
+})
+
+panel.addEventListener('click', (e) => e.stopPropagation())
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isOpen) dismiss()
+  if (e.key === 'Enter' && !e.shiftKey && isOpen) {
+    e.preventDefault()
+    sendMessage()
+  }
+})
+
+input.addEventListener('input', () => {
+  input.style.height = 'auto'
+  input.style.height = Math.min(input.scrollHeight, 192) + 'px'
+})
+
+const origSummon = summon
+summon = function() {
+  origSummon()
+  setTimeout(() => {
+    if (conversationStep === 0) input.value = demoConversation[0].text
+  }, 400)
+}
+</script>
+</body>
+</html>
