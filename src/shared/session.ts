@@ -23,6 +23,7 @@ export interface Session {
   summary: string
   archived: boolean
   favorited: boolean
+  quick?: boolean
   iconSeed?: number
   editMode: EditMode
   projectId?: string  // optional link to a project

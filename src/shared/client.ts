@@ -243,7 +243,7 @@ export class BondClient {
     return await this.call('session.get', { id }) as Session | null
   }
 
-  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'iconSeed' | 'editMode' | 'projectId'>>): Promise<Session | null> {
+  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode' | 'projectId'>>): Promise<Session | null> {
     return await this.call('session.update', { id, updates }) as Session | null
   }
 

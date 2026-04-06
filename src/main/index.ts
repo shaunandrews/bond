@@ -8,6 +8,8 @@ import { BondClient } from '../shared/client'
 import { initSense, destroySense } from './sense'
 import { initTray, destroyTray } from './tray'
 import { initBrowser, destroyBrowser } from './browser'
+import { initQuickChat, destroyQuickChat } from './quick-chat'
+import { registerWindow, registerSessionWindow, routeChunk, broadcast } from './window-router'
 import type { TaggedChunk } from '../shared/stream'
 import type { AttachedImage } from '../shared/session'
 
@@ -213,47 +215,21 @@ function createWindow(): void {
     mainWindow = null
   })
 
+  // Register mainWindow with the window router for chunk routing and broadcasts
+  registerWindow(mainWindow)
+
+  // Route chunks via the window router (supports quick chat and future multi-window)
   client.onChunk((chunk: TaggedChunk) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:chunk', chunk)
-    }
+    routeChunk(chunk)
   })
 
-  client.onTodoChanged(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:todoChanged')
-    }
-  })
-
-  client.onProjectsChanged(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:projectsChanged')
-    }
-  })
-
-  client.onCollectionsChanged(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:collectionsChanged')
-    }
-  })
-
-  client.onJournalChanged(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:journalChanged')
-    }
-  })
-
-  client.onOperativeChanged(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:operativeChanged')
-    }
-  })
-
-  client.onOperativeEvent((payload) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:operativeEvent', payload)
-    }
-  })
+  // Broadcast entity change events to all windows
+  client.onTodoChanged(() => broadcast('bond:todoChanged'))
+  client.onProjectsChanged(() => broadcast('bond:projectsChanged'))
+  client.onCollectionsChanged(() => broadcast('bond:collectionsChanged'))
+  client.onJournalChanged(() => broadcast('bond:journalChanged'))
+  client.onOperativeChanged(() => broadcast('bond:operativeChanged'))
+  client.onOperativeEvent((payload) => broadcast('bond:operativeEvent', payload))
 
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
@@ -407,9 +383,7 @@ function setupAutoReconnect(): void {
     if (isReconnecting) return
     isReconnecting = true
     console.warn('[bond] daemon connection lost, attempting reconnect...')
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:connectionLost')
-    }
+    broadcast('bond:connectionLost')
     attemptReconnect()
   })
 }
@@ -423,9 +397,7 @@ async function attemptReconnect(): Promise<void> {
       setupAutoReconnect()
       isReconnecting = false
       console.log('[bond] reconnected to daemon')
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('bond:connectionRestored')
-      }
+      broadcast('bond:connectionRestored')
       return
     } catch {
       // Keep trying
@@ -435,12 +407,26 @@ async function attemptReconnect(): Promise<void> {
   console.error('[bond] failed to reconnect after 30 attempts')
 }
 
+// Prevent duplicate instances — second launch focuses the existing window
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
+
 app.whenReady().then(async () => {
   await ensureDaemon()
   await connectClient()
   setupAutoReconnect()
   initSense(client)
   initTray(client)
+  initQuickChat(client)
 
   createWindow()
   initBrowser(mainWindow!, client)
@@ -514,6 +500,13 @@ app.whenReady().then(async () => {
 
   // --- Chat (proxied to daemon) ---
   ipcMain.handle('bond:send', async (_event, text: string, sessionId?: string, images?: AttachedImage[]) => {
+    // Register the session with the window router so chunks go to the right window
+    if (sessionId) {
+      const senderWindow = BrowserWindow.fromWebContents(_event.sender)
+      if (senderWindow) {
+        registerSessionWindow(sessionId, senderWindow)
+      }
+    }
     return client.send(text, sessionId, images)
   })
 
@@ -528,9 +521,7 @@ app.whenReady().then(async () => {
   // --- Model ---
   ipcMain.handle('bond:setModel', async (_e, model: string) => {
     const result = await client.setModel(model)
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:modelChanged', model)
-    }
+    broadcast('bond:modelChanged', model)
     return result
   })
 
@@ -632,17 +623,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('settings:getAccentColor', () => client.getAccentColor())
   ipcMain.handle('settings:saveAccentColor', async (_e, hex: string) => {
     const result = await client.saveAccentColor(hex)
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:accentColor', hex)
-    }
+    broadcast('bond:accentColor', hex)
     return result
   })
   ipcMain.handle('settings:getWindowOpacity', () => client.getWindowOpacity())
   ipcMain.handle('settings:saveWindowOpacity', async (_e, opacity: number) => {
     const result = await client.saveWindowOpacity(opacity)
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('bond:windowOpacity', opacity)
-    }
+    broadcast('bond:windowOpacity', opacity)
     return result
   })
 
@@ -690,6 +677,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  destroyQuickChat()
   destroyTray()
   destroySense()
   destroyBrowser()

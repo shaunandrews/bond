@@ -40,6 +40,7 @@ export function getDb(): Database.Database {
   migrateCreateJournalCommentsTable(_db)
   migrateCreateSenseTables(_db)
   migrateCreateOperativesTable(_db)
+  migrateAddQuickColumn(_db)
 
   return _db
 }
@@ -476,6 +477,13 @@ function migrateCreateOperativesTable(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_operative_events_operative ON operative_events(operative_id, id);
   `)
+}
+
+function migrateAddQuickColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(sessions)') as { name: string }[]
+  if (!columns.some(c => c.name === 'quick')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN quick INTEGER DEFAULT 0')
+  }
 }
 
 // --- One-time migration from file-based storage ---

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import QuickChat from './components/QuickChat.vue'
 import { useChat } from './composables/useChat'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
@@ -37,6 +38,8 @@ import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
 import BondPanelHandle from './components/BondPanelHandle.vue'
 import FieldManual from './components/FieldManual.vue'
+
+const isQuickChatMode = new URLSearchParams(window.location.search).get('mode') === 'quick-chat'
 
 const chat = useChat()
 const sessions = useSessions()
@@ -474,7 +477,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
+  <QuickChat v-if="isQuickChatMode" />
+  <BondPanelGroup v-else direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
     <BondPanel ref="sidebarPanelRef" id="sidebar" unit="px" :defaultSize="260" :minSize="220" :maxSize="400" :style="sidebarStyle">
       <SessionSidebar
         :sessions="sessions.activeSessions.value"
@@ -727,7 +731,7 @@ onUnmounted(() => {
     </BondPanel>
   </BondPanelGroup>
 
-  <FieldManual :open="fieldManualOpen" @close="fieldManualOpen = false" />
+  <FieldManual v-if="!isQuickChatMode" :open="fieldManualOpen" @close="fieldManualOpen = false" />
 </template>
 
 <style>

@@ -32,7 +32,7 @@ contextBridge.exposeInMainWorld('bond', {
   listSessions: () => ipcRenderer.invoke('session:list') as Promise<Session[]>,
   createSession: (options?: { title?: string; projectId?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
   getSession: (id: string) => ipcRenderer.invoke('session:get', id) as Promise<Session | null>,
-  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'iconSeed' | 'editMode' | 'projectId'>>) => ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
+  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode' | 'projectId'>>) => ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id) as Promise<boolean>,
   deleteArchivedSessions: () => ipcRenderer.invoke('session:deleteArchived') as Promise<{ ok: boolean; count: number }>,
   getMessages: (sessionId: string) => ipcRenderer.invoke('session:getMessages', sessionId) as Promise<SessionMessage[]>,
@@ -221,6 +221,19 @@ contextBridge.exposeInMainWorld('bond', {
     ipcRenderer.on('bond:operativeEvent', listener)
     return () => ipcRenderer.removeListener('bond:operativeEvent', listener)
   },
+
+  // Quick Chat
+  onQuickChatInit: (fn: (data: { sessionId: string; senseApps: string[] }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: { sessionId: string; senseApps: string[] }) => fn(data)
+    ipcRenderer.on('bond:quickChatInit', listener)
+    return () => ipcRenderer.removeListener('bond:quickChatInit', listener)
+  },
+  onQuickChatDismiss: (fn: () => void) => {
+    const listener = () => fn()
+    ipcRenderer.on('bond:quickChatDismiss', listener)
+    return () => ipcRenderer.removeListener('bond:quickChatDismiss', listener)
+  },
+  quickChatDismissed: () => ipcRenderer.invoke('quickChat:dismiss') as Promise<void>,
 
   // Sense
   senseStatus: () => ipcRenderer.invoke('sense:status'),
