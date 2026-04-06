@@ -1,6 +1,6 @@
 import { ref, computed, watch } from 'vue'
 import type { BrowserTab, BrowserCommand, ConsoleEntry, NetworkEntry } from '../../shared/browser'
-import { MAX_TABS } from '../../shared/browser'
+import { MAX_TABS, MAX_HIDDEN_TABS } from '../../shared/browser'
 
 const STORAGE_KEY = 'bond:browser-tabs'
 const FAVORITES_KEY = 'bond:browser-favorites'
@@ -47,6 +47,7 @@ function loadPersistedTabs(): { tabs: BrowserTab[]; activeTabId: string | null }
         canGoBack: false,
         canGoForward: false,
         error: null,
+        hidden: false,
       }))
     const activeTabId = tabs.some((t: BrowserTab) => t.id === data.activeTabId) ? data.activeTabId : (tabs[0]?.id ?? null)
     return { tabs, activeTabId }
@@ -58,7 +59,7 @@ function loadPersistedTabs(): { tabs: BrowserTab[]; activeTabId: string | null }
 function persistTabs(): void {
   const data = {
     tabs: tabs.value
-      .filter(t => t.url && t.url !== 'about:blank')
+      .filter(t => t.url && t.url !== 'about:blank' && !t.hidden)
       .map(t => ({ id: t.id, url: t.url, title: t.title, favicon: t.favicon })),
     activeTabId: activeTabId.value,
   }
@@ -76,18 +77,37 @@ const activeTab = computed(() =>
   tabs.value.find(t => t.id === activeTabId.value) ?? null
 )
 
+const visibleTabs = computed(() =>
+  tabs.value.filter(t => !t.hidden)
+)
+
+const hiddenTabs = computed(() =>
+  tabs.value.filter(t => t.hidden)
+)
+
 const favorites = ref<BrowserFavorite[]>(loadFavorites())
 
 // Persist on change
 watch([tabs, activeTabId], persistTabs, { deep: true })
 watch(favorites, persistFavorites, { deep: true })
 
-function createTab(url = 'about:blank'): string {
-  if (tabs.value.length >= MAX_TABS) {
-    // Close oldest tab to make room
-    const oldest = tabs.value[0]
-    closeTab(oldest.id)
+function createTab(url = 'about:blank', options?: { hidden?: boolean }): string {
+  const hidden = options?.hidden ?? false
+
+  if (hidden) {
+    // Enforce hidden tab cap
+    if (hiddenTabs.value.length >= MAX_HIDDEN_TABS) {
+      const oldest = hiddenTabs.value[0]
+      closeTab(oldest.id)
+    }
+  } else {
+    if (visibleTabs.value.length >= MAX_TABS) {
+      // Close oldest visible tab to make room
+      const oldest = visibleTabs.value[0]
+      closeTab(oldest.id)
+    }
   }
+
   const id = crypto.randomUUID()
   const tab: BrowserTab = {
     id,
@@ -98,12 +118,22 @@ function createTab(url = 'about:blank'): string {
     canGoBack: false,
     canGoForward: false,
     error: null,
+    hidden,
   }
   tabs.value.push(tab)
-  activeTabId.value = id
+  if (!hidden) {
+    activeTabId.value = id
+  }
   consoleLogs.value.set(id, [])
   networkLogs.value.set(id, [])
   return id
+}
+
+function promoteTab(id: string): void {
+  const tab = tabs.value.find(t => t.id === id)
+  if (!tab || !tab.hidden) return
+  tab.hidden = false
+  activeTabId.value = id
 }
 
 function closeTab(id: string): void {
@@ -114,10 +144,11 @@ function closeTab(id: string): void {
   networkLogs.value.delete(id)
 
   if (activeTabId.value === id) {
-    if (tabs.value.length > 0) {
-      // Switch to nearest tab
-      const next = Math.min(idx, tabs.value.length - 1)
-      activeTabId.value = tabs.value[next].id
+    // Pick next visible tab
+    const visible = tabs.value.filter(t => !t.hidden)
+    if (visible.length > 0) {
+      const visibleIdx = Math.min(idx, visible.length - 1)
+      activeTabId.value = visible[visibleIdx].id
     } else {
       activeTabId.value = null
     }
@@ -225,6 +256,8 @@ export function useBrowser() {
     tabs,
     activeTabId,
     activeTab,
+    visibleTabs,
+    hiddenTabs,
     favorites,
     consoleLogs,
     networkLogs,
@@ -234,6 +267,7 @@ export function useBrowser() {
     switchTab,
     navigate,
     updateTab,
+    promoteTab,
     addFavorite,
     removeFavorite,
     isFavorite,

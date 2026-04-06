@@ -64,7 +64,7 @@ async function main() {
   if (!sub || sub === 'help' || sub === '-h') {
     console.log(`${G}bond browser${N} — in-app browser control
 
-  ${G}open${N} <url>              Open URL in new tab
+  ${G}open${N} <url> [--hidden]    Open URL in new tab (--hidden for background)
   ${G}tabs${N}                     List open tabs
   ${G}navigate${N} <tab> <url>    Navigate existing tab
   ${G}close${N} <tab>              Close tab
@@ -88,11 +88,13 @@ async function main() {
   try {
     switch (sub) {
       case 'open': {
-        const url = args[1]
-        if (!url) { console.error(`${R}Usage:${N} bond browser open <url>`); break }
-        const result = await call(ws, 'browser.open', { url }) as any
+        const hidden = args.includes('--hidden')
+        const url = args.slice(1).find(a => a !== '--hidden')
+        if (!url) { console.error(`${R}Usage:${N} bond browser open <url> [--hidden]`); break }
+        const result = await call(ws, 'browser.open', { url, hidden }) as any
         if (result?.error) { console.error(`${R}Error:${N} ${result.error}`); break }
-        console.log(`${G}Opened${N} tab ${D}${result.tabId}${N}`)
+        const label = hidden ? `${G}Opened${N} hidden tab` : `${G}Opened${N} tab`
+        console.log(`${label} ${D}${result.tabId}${N}`)
         if (result.title) console.log(`  title: ${result.title}`)
         if (result.url) console.log(`  url: ${result.url}`)
         break
@@ -106,8 +108,11 @@ async function main() {
         }
         for (const tab of tabs) {
           const marker = tab.active ? `${G}*${N}` : ' '
-          const status = tab.loading ? `${Y}loading${N}` : ''
-          console.log(`${marker} ${D}${tab.id.slice(0, 8)}${N}  ${tab.title || '(untitled)'}  ${D}${tab.url}${N}  ${status}`)
+          const flags = [
+            tab.loading ? `${Y}loading${N}` : '',
+            tab.hidden ? `${D}[hidden]${N}` : '',
+          ].filter(Boolean).join(' ')
+          console.log(`${marker} ${D}${tab.id.slice(0, 8)}${N}  ${tab.title || '(untitled)'}  ${D}${tab.url}${N}  ${flags}`)
         }
         break
       }

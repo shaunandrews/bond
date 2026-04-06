@@ -12,6 +12,7 @@ import BrowserDevTools from './BrowserDevTools.vue'
 import {
   PhPlus, PhX, PhArrowLeft, PhArrowRight, PhArrowClockwise,
   PhStop, PhGlobe, PhArrowSquareOut, PhTerminal, PhStar,
+  PhEyeSlash,
 } from '@phosphor-icons/vue'
 
 const emit = defineEmits<{
@@ -20,7 +21,8 @@ const emit = defineEmits<{
 }>()
 
 const browser = useBrowser()
-const { tabs, activeTabId, favorites } = browser
+const { tabs, activeTabId, favorites, visibleTabs, hiddenTabs } = browser
+const hiddenTabsMenuOpen = ref(false)
 
 const urlInput = ref('')
 const urlInputRef = ref<HTMLInputElement | null>(null)
@@ -286,12 +288,13 @@ function setupCommandListener() {
 
     switch (cmd.type) {
       case 'open': {
-        const tabId = browser.createTab(cmd.url)
-        emit('ensureVisible')
+        const hidden = cmd.hidden ?? false
+        const tabId = browser.createTab(cmd.url, { hidden })
+        if (!hidden) emit('ensureVisible')
         // Wait for load
         await waitForLoad(tabId, 10000)
         const tab = browser.tabs.value.find(t => t.id === tabId)
-        result = { tabId, title: tab?.title ?? '', url: tab?.url ?? cmd.url }
+        result = { tabId, title: tab?.title ?? '', url: tab?.url ?? cmd.url, hidden }
         break
       }
       case 'navigate': {
@@ -310,6 +313,7 @@ function setupCommandListener() {
         result = browser.tabs.value.map(t => ({
           id: t.id, url: t.url, title: t.title, loading: t.loading,
           active: t.id === browser.activeTabId.value,
+          hidden: t.hidden,
         }))
         break
       }
@@ -431,8 +435,50 @@ defineExpose({ openUrl, focusUrlBar })
 </script>
 
 <template>
-  <!-- Empty state — no tabs open -->
-  <div v-if="tabs.length === 0" class="browser-empty">
+  <!-- Hidden tab webviews — always rendered so they stay alive -->
+  <template v-for="tab in hiddenTabs" :key="'hidden-' + tab.id">
+    <webview
+      :ref="(el: any) => { if (el?.$el || el) { const node = el.$el || el; setWebviewRef(tab.id, node); if (!boundWebviews.has(tab.id)) { boundWebviews.add(tab.id); bindWebviewEvents(tab.id, node) } } }"
+      :src="initialUrls.get(tab.id) ?? 'about:blank'"
+      partition="persist:browser"
+      allowpopups
+      class="browser-webview browser-webview--hidden"
+    />
+  </template>
+
+  <!-- Empty state — no visible tabs open -->
+  <div v-if="visibleTabs.length === 0" class="browser-empty">
+    <!-- Hidden tabs button in empty state -->
+    <div v-if="hiddenTabs.length > 0" class="browser-empty-hidden-tabs">
+      <div class="browser-hidden-tabs-wrap">
+        <button
+          class="browser-tab-new"
+          @click="hiddenTabsMenuOpen = !hiddenTabsMenuOpen"
+          v-tooltip="'Background tabs'"
+        >
+          <PhEyeSlash :size="12" />
+          <span class="browser-hidden-badge">{{ hiddenTabs.length }}</span>
+        </button>
+        <div v-if="hiddenTabsMenuOpen" class="browser-hidden-menu" @mouseleave="hiddenTabsMenuOpen = false">
+          <div class="browser-hidden-menu-header">Background tabs</div>
+          <div
+            v-for="tab in hiddenTabs"
+            :key="tab.id"
+            class="browser-hidden-menu-item"
+            @click="browser.promoteTab(tab.id); hiddenTabsMenuOpen = false; emit('ensureVisible')"
+          >
+            <img v-if="tab.favicon" :src="tab.favicon" class="browser-tab-favicon" />
+            <PhGlobe v-else :size="12" class="browser-tab-favicon-placeholder" />
+            <span class="browser-hidden-menu-title">{{ tab.title || getDomain(tab.url) }}</span>
+            <span class="browser-hidden-menu-url">{{ getDomain(tab.url) }}</span>
+            <button class="browser-tab-close browser-hidden-menu-close" @click.stop="browser.closeTab(tab.id)">
+              <PhX :size="10" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="browser-empty-inner">
       <form class="browser-empty-form" @submit.prevent="handleEmptyUrlSubmit">
         <input
@@ -471,7 +517,7 @@ defineExpose({ openUrl, focusUrlBar })
     <div class="browser-tab-bar">
       <div class="browser-tabs-scroll">
         <div
-          v-for="tab in tabs"
+          v-for="tab in visibleTabs"
           :key="tab.id"
           :class="['browser-tab', { 'browser-tab--active': tab.id === activeTabId }]"
           @click="browser.switchTab(tab.id)"
@@ -485,6 +531,36 @@ defineExpose({ openUrl, focusUrlBar })
           </button>
         </div>
       </div>
+
+      <!-- Hidden tabs menu -->
+      <div v-if="hiddenTabs.length > 0" class="browser-hidden-tabs-wrap">
+        <button
+          class="browser-tab-new"
+          @click="hiddenTabsMenuOpen = !hiddenTabsMenuOpen"
+          v-tooltip="'Background tabs'"
+        >
+          <PhEyeSlash :size="12" />
+          <span class="browser-hidden-badge">{{ hiddenTabs.length }}</span>
+        </button>
+        <div v-if="hiddenTabsMenuOpen" class="browser-hidden-menu" @mouseleave="hiddenTabsMenuOpen = false">
+          <div class="browser-hidden-menu-header">Background tabs</div>
+          <div
+            v-for="tab in hiddenTabs"
+            :key="tab.id"
+            class="browser-hidden-menu-item"
+            @click="browser.promoteTab(tab.id); hiddenTabsMenuOpen = false"
+          >
+            <img v-if="tab.favicon" :src="tab.favicon" class="browser-tab-favicon" />
+            <PhGlobe v-else :size="12" class="browser-tab-favicon-placeholder" />
+            <span class="browser-hidden-menu-title">{{ tab.title || getDomain(tab.url) }}</span>
+            <span class="browser-hidden-menu-url">{{ getDomain(tab.url) }}</span>
+            <button class="browser-tab-close browser-hidden-menu-close" @click.stop="browser.closeTab(tab.id)">
+              <PhX :size="10" />
+            </button>
+          </div>
+        </div>
+      </div>
+
       <button class="browser-tab-new" @click="handleNewTab" v-tooltip="'New tab'">
         <PhPlus :size="12" />
       </button>
@@ -571,8 +647,8 @@ defineExpose({ openUrl, focusUrlBar })
             <BondText size="sm" color="err">{{ activeTab.error }}</BondText>
           </div>
 
-          <!-- One webview per tab, hidden with width:0/height:0 for inactive -->
-          <template v-for="tab in tabs" :key="tab.id">
+          <!-- One webview per visible tab, hidden with width:0/height:0 for inactive -->
+          <template v-for="tab in visibleTabs" :key="tab.id">
             <webview
               :ref="(el: any) => { if (el?.$el || el) { const node = el.$el || el; setWebviewRef(tab.id, node); if (!boundWebviews.has(tab.id)) { boundWebviews.add(tab.id); bindWebviewEvents(tab.id, node) } } }"
               :src="initialUrls.get(tab.id) ?? 'about:blank'"
@@ -898,5 +974,102 @@ defineExpose({ openUrl, focusUrlBar })
   background: color-mix(in srgb, var(--color-err) 10%, var(--color-surface));
   border-bottom: 1px solid color-mix(in srgb, var(--color-err) 30%, transparent);
   z-index: 1;
+}
+
+/* Hidden tabs */
+.browser-hidden-tabs-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.browser-hidden-badge {
+  font-size: 9px;
+  font-weight: 600;
+  min-width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent);
+  color: #fff;
+  border-radius: 7px;
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  padding: 0 3px;
+  pointer-events: none;
+}
+
+.browser-hidden-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 260px;
+  max-width: 340px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.browser-hidden-menu-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-muted);
+  padding: 8px 12px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.browser-hidden-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.browser-hidden-menu-item:hover {
+  background: var(--color-tint);
+}
+
+.browser-hidden-menu-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+
+.browser-hidden-menu-url {
+  font-size: 11px;
+  color: var(--color-muted);
+  flex-shrink: 0;
+}
+
+.browser-hidden-menu-close {
+  opacity: 0;
+}
+
+.browser-hidden-menu-item:hover .browser-hidden-menu-close {
+  opacity: 1;
+}
+
+/* Hidden tabs button in empty state */
+.browser-empty-hidden-tabs {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+}
+
+.browser-empty {
+  position: relative;
 }
 </style>

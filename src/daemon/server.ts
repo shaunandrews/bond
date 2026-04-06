@@ -1011,10 +1011,11 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       }
       case 'sense.today': {
         const db = getDb()
-        const today = new Date().toISOString().split('T')[0]
+        const now = new Date()
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString()
         const sessions = db.prepare(
           "SELECT * FROM sense_sessions WHERE started_at >= ? ORDER BY started_at ASC"
-        ).all(today + 'T00:00:00Z')
+        ).all(todayStart)
         const apps = db.prepare(`
           SELECT app_name, COUNT(*) as capture_count,
             MIN(captured_at) as first_seen, MAX(captured_at) as last_seen
@@ -1022,7 +1023,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           WHERE captured_at >= ? AND app_name IS NOT NULL
           GROUP BY app_name
           ORDER BY capture_count DESC
-        `).all(today + 'T00:00:00Z')
+        `).all(todayStart)
         return JSON.stringify(makeResponse(id, { sessions, apps }))
       }
       case 'sense.search': {
@@ -1048,7 +1049,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
           since = weekAgo.toISOString()
         } else {
-          since = now.toISOString().split('T')[0] + 'T00:00:00Z'
+          since = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString()
         }
         const apps = db.prepare(`
           SELECT app_name, app_bundle_id, COUNT(*) as capture_count,
@@ -1187,8 +1188,9 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
       case 'browser.open': {
         const url = getParam(p, 'url') as string
+        const hidden = getBoolParam(p, 'hidden') === true
         const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'open', requestId, url })
+        const result = await sendBrowserCommand({ type: 'open', requestId, url, hidden })
         return JSON.stringify(makeResponse(id, result))
       }
       case 'browser.navigate': {

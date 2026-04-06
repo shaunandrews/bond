@@ -7,10 +7,11 @@ export interface BrowserTab {
   canGoBack: boolean
   canGoForward: boolean
   error: string | null
+  hidden: boolean
 }
 
 export type BrowserCommand =
-  | { type: 'open'; requestId: string; url: string }
+  | { type: 'open'; requestId: string; url: string; hidden?: boolean }
   | { type: 'navigate'; requestId: string; tabId: string; url: string }
   | { type: 'close'; requestId: string; tabId: string }
   | { type: 'tabs'; requestId: string }
@@ -43,4 +44,5 @@ export interface NetworkEntry {
 }
 
 export const MAX_TABS = 8
+export const MAX_HIDDEN_TABS = 5
 export const DEFAULT_URL = 'about:blank'
