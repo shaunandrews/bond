@@ -34,6 +34,12 @@ const imagePurged = computed(() => {
 const hasText = computed(() => {
   return props.capture?.textContent && props.capture.textContent.trim().length > 0
 })
+
+function openInPreview() {
+  if (props.capture?.imagePath) {
+    window.bond.openPath(props.capture.imagePath)
+  }
+}
 </script>
 
 <template>
@@ -63,7 +69,10 @@ const hasText = computed(() => {
           v-else-if="image"
           :src="'data:image/jpeg;base64,' + image"
           class="screenshot-img"
+          :class="{ 'clickable': capture?.imagePath }"
           alt="Screen capture"
+          :title="capture?.imagePath ? 'Click to open in Preview' : undefined"
+          @click="openInPreview"
         />
         <!-- No image yet -->
         <div v-else class="screenshot-placeholder">
@@ -140,6 +149,15 @@ const hasText = computed(() => {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+.screenshot-img.clickable {
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+}
+
+.screenshot-img.clickable:hover {
+  opacity: 0.85;
 }
 
 .screenshot-placeholder {
