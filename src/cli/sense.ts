@@ -163,8 +163,8 @@ async function main(): Promise<void> {
         if (cmd === 'yesterday') {
           const yesterday = new Date()
           yesterday.setDate(yesterday.getDate() - 1)
-          const from = yesterday.toISOString().split('T')[0] + 'T00:00:00Z'
-          const to = yesterday.toISOString().split('T')[0] + 'T23:59:59Z'
+          const from = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 0, 0, 0, 0).toISOString()
+          const to = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59, 999).toISOString()
           const timeline = await call(ws, 'sense.timeline', { from, to, limit: 100 }) as
             { app_name: string; captured_at: string }[]
           printTimeline(timeline, 'Yesterday')
@@ -273,8 +273,8 @@ async function main(): Promise<void> {
         const what = args[1] ?? 'today'
         let range: { from?: string; to?: string } | undefined
         if (what === 'today') {
-          const today = new Date().toISOString().split('T')[0]
-          range = { from: today + 'T00:00:00Z' }
+          const now = new Date()
+          range = { from: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString() }
         } else if (what !== 'all') {
           range = { from: what }
         }

@@ -13,8 +13,8 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BondClient } from '../shared/client'
 
-const JPEG_QUALITY = 80 // 0-100, passed to NativeImage.toJPEG()
-const CAPTURE_SCALE = 0.5 // Half resolution
+const JPEG_QUALITY = 90 // 0-100, passed to NativeImage.toJPEG()
+const CAPTURE_SCALE = 0.75 // Three-quarter resolution
 
 let cleanupFns: (() => void)[] = []
 
