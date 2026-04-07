@@ -204,10 +204,13 @@ export async function runBondQuery(
     'Write operations require user approval before they execute. Stay concise. ' +
     'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.\n\n' +
     'Skills extend your capabilities. They live in ~/.bond/skills/<name>/SKILL.md. ' +
-    'Each SKILL.md has YAML frontmatter (name, description, argument-hint) and a body with instructions. ' +
+    'Each SKILL.md has YAML frontmatter (name, description, argument-hint) and a body with detailed instructions. ' +
+    'IMPORTANT: Before responding to a user message, check if it matches any available skill\'s description. ' +
+    'If it does, read ~/.bond/skills/<name>/SKILL.md and follow its instructions automatically. ' +
+    'Users can also invoke skills explicitly with /skill-name in chat. ' +
     'You can create, edit, list, and remove skills by reading/writing files in ~/.bond/skills/. ' +
     'To create a skill: mkdir the directory, write a SKILL.md with frontmatter and instructions. ' +
-    'The user invokes skills by typing /skill-name in chat. After creating or modifying skills, tell the user to restart the daemon for changes to take effect.\n\n' +
+    'After creating or modifying skills, tell the user to restart the daemon for changes to take effect.\n\n' +
     'Projects organize work into named collections with context. Each project has:\n' +
     '- **Name**: what the project is called\n' +
     '- **Goal**: a description of the project\'s purpose — use this to stay focused and understand intent\n' +
@@ -343,6 +346,18 @@ export async function runBondQuery(
     '<bond-embed type="journal" search="connectors" />          — search results\n' +
     '<bond-embed type="journal" limit="5" />                    — cap results\n\n'
 
+  // Inject available skills so the AI can match user requests proactively
+  const skills = getCachedSkills()
+  if (skills.length > 0) {
+    basePrompt += '\nAvailable skills:\n'
+    for (const s of skills) {
+      basePrompt += '- /' + s.name + ': ' + s.description
+      if (s.argumentHint) basePrompt += ' ' + s.argumentHint
+      basePrompt += '\n'
+    }
+    basePrompt += 'When a user request clearly matches a skill, read its SKILL.md and follow the instructions without being asked.\n'
+  }
+
   // Inject current collections context
   const collections = listCollections().filter(c => !c.archived)
   if (collections.length > 0) {
@@ -459,6 +474,12 @@ export async function runBondQuery(
       }
     }
   } catch { /* non-fatal */ }
+
+  // Current date and time with day of week
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  basePrompt += `\nCURRENT DATE AND TIME: ${dateStr}, ${timeStr}\n`
 
   const editMode = options.editMode ?? { type: 'full' }
   const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS
