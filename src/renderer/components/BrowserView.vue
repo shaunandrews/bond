@@ -187,8 +187,18 @@ function getActiveWebview(): HTMLElement | null {
   return webviewRefs.value.get(browser.activeTabId.value) ?? null
 }
 
+function resolveTabId(id: string): string {
+  // Exact match first
+  if (browser.tabs.value.some(t => t.id === id)) return id
+  // Short prefix match
+  const matches = browser.tabs.value.filter(t => t.id.startsWith(id))
+  if (matches.length === 1) return matches[0].id
+  return id // return as-is, getWebview will return null
+}
+
 function getWebview(tabId: string): HTMLElement | null {
-  return webviewRefs.value.get(tabId) ?? null
+  const resolved = resolveTabId(tabId)
+  return webviewRefs.value.get(resolved) ?? null
 }
 
 function setWebviewRef(tabId: string, el: HTMLElement | null) {
@@ -373,6 +383,63 @@ function setupCommandListener() {
       }
       case 'network': {
         result = browser.getNetworkLog(cmd.tabId)
+        break
+      }
+      case 'download': {
+        const wv = getWebview(cmd.tabId ?? browser.activeTabId.value ?? '')
+        if (wv) {
+          try {
+            // Use the webview's session to fetch the URL (inherits cookies/auth)
+            const js = `
+              (async () => {
+                const r = await fetch(${JSON.stringify(cmd.url)}, { credentials: 'same-origin' });
+                if (!r.ok) return { error: 'HTTP ' + r.status + ' ' + r.statusText };
+                const contentType = r.headers.get('content-type')?.split(';')[0]?.trim() || 'application/octet-stream';
+                const buf = await r.arrayBuffer();
+                const bytes = new Uint8Array(buf);
+                const chunks = [];
+                for (let i = 0; i < bytes.length; i += 8192) {
+                  chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + 8192)));
+                }
+                const b64 = btoa(chunks.join(''));
+                return { data: b64, contentType, size: buf.byteLength };
+              })()
+            `
+            const dlResult = await (wv as any).executeJavaScript(js)
+            if (dlResult?.error) {
+              result = dlResult
+            } else if (dlResult?.data) {
+              // Send base64 data back — the daemon will handle file writing
+              result = {
+                data: dlResult.data,
+                contentType: dlResult.contentType,
+                size: dlResult.size,
+                outPath: cmd.outPath,
+              }
+            }
+          } catch (e: any) {
+            result = { error: e.message }
+          }
+        } else {
+          result = { error: 'No active tab' }
+        }
+        break
+      }
+      case 'cookies': {
+        const wv = getWebview(cmd.tabId ?? browser.activeTabId.value ?? '')
+        if (wv) {
+          try {
+            const js = `document.cookie`
+            const cookies = await (wv as any).executeJavaScript(js)
+            // Also get the current URL for context
+            const url = await (wv as any).executeJavaScript('window.location.href')
+            result = { cookies, url }
+          } catch (e: any) {
+            result = { error: e.message }
+          }
+        } else {
+          result = { error: 'No active tab' }
+        }
         break
       }
     }
@@ -799,10 +866,7 @@ defineExpose({ openUrl, focusUrlBar })
 .browser-tab-bar {
   display: flex;
   align-items: center;
-  height: 38px;
-  padding: 0 6px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg);
+  padding: 6px 6px 2px;
   flex-shrink: 0;
   gap: 2px;
 }
@@ -812,7 +876,7 @@ defineExpose({ openUrl, focusUrlBar })
   flex: 1;
   min-width: 0;
   overflow-x: auto;
-  gap: 1px;
+  gap: 4px;
   scrollbar-width: none;
 }
 .browser-tabs-scroll::-webkit-scrollbar {
@@ -843,7 +907,7 @@ defineExpose({ openUrl, focusUrlBar })
 }
 
 .browser-tab--active {
-  background: var(--color-surface);
+  background: var(--color-tint);
   color: var(--color-text-primary);
 }
 
@@ -914,7 +978,7 @@ defineExpose({ openUrl, focusUrlBar })
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 4px 6px;
+  padding: 2px 6px 6px;
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
 }

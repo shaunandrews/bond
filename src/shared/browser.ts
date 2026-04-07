@@ -21,6 +21,8 @@ export type BrowserCommand =
   | { type: 'console'; requestId: string; tabId?: string }
   | { type: 'dom'; requestId: string; tabId?: string; selector?: string }
   | { type: 'network'; requestId: string; tabId?: string }
+  | { type: 'download'; requestId: string; tabId?: string; url: string; outPath?: string }
+  | { type: 'cookies'; requestId: string; tabId?: string }
 
 export interface ConsoleEntry {
   level: 'log' | 'warn' | 'error' | 'info' | 'debug'

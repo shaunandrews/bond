@@ -342,6 +342,16 @@ function getNumberParam(params: RpcParams, key: string): number | undefined {
   return typeof v === 'number' ? v : undefined
 }
 
+function guessExt(contentType: string): string {
+  const map: Record<string, string> = {
+    'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
+    'image/webp': '.webp', 'image/svg+xml': '.svg',
+    'application/pdf': '.pdf', 'text/html': '.html',
+    'application/json': '.json', 'text/plain': '.txt',
+  }
+  return map[contentType] || ''
+}
+
 async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string> {
   const { id, method, params } = req
   const p = params as RpcParams
@@ -1247,6 +1257,28 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const tabId = getParam(p, 'tabId') as string | undefined
         const requestId = randomUUID()
         const result = await sendBrowserCommand({ type: 'network', requestId, tabId })
+        return JSON.stringify(makeResponse(id, result))
+      }
+      case 'browser.download': {
+        const tabId = getParam(p, 'tabId') as string | undefined
+        const url = getParam(p, 'url') as string
+        const outPath = getStringParam(p, 'outPath')
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'download', requestId, tabId, url, outPath }) as any
+        if (result?.error) return JSON.stringify(makeResponse(id, result))
+        if (result?.data) {
+          const buf = Buffer.from(result.data, 'base64')
+          const dest = outPath || `/tmp/bond-download-${randomUUID().slice(0, 8)}${guessExt(result.contentType)}`
+          const { writeFileSync } = await import('node:fs')
+          writeFileSync(dest, buf)
+          return JSON.stringify(makeResponse(id, { path: dest, size: buf.length, contentType: result.contentType }))
+        }
+        return JSON.stringify(makeResponse(id, { error: 'No data received' }))
+      }
+      case 'browser.cookies': {
+        const tabId = getParam(p, 'tabId') as string | undefined
+        const requestId = randomUUID()
+        const result = await sendBrowserCommand({ type: 'cookies', requestId, tabId })
         return JSON.stringify(makeResponse(id, result))
       }
       case 'browser.commandResult': {

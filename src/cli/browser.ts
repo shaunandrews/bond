@@ -71,6 +71,8 @@ async function main() {
   ${G}read${N} [tab]               Get page text
   ${G}screenshot${N} [tab]         Capture page as PNG
   ${G}exec${N} [tab] "<js>"        Run JavaScript in page
+  ${G}download${N} [tab] <url> [--out path]  Download URL using tab's session
+  ${G}cookies${N} [tab]            Get cookies from tab's session
   ${G}console${N} [tab]            Get console output
   ${G}dom${N} [tab] [selector]     Read page HTML / query elements
   ${G}network${N} [tab]            Recent network requests`)
@@ -213,6 +215,46 @@ async function main() {
         for (const e of entries) {
           const statusColor = e.status >= 400 ? R : e.status >= 300 ? Y : G
           console.log(`${e.method.padEnd(6)} ${statusColor}${e.status ?? '...'}${N}  ${D}${e.timing}ms${N}  ${e.url}`)
+        }
+        break
+      }
+
+      case 'download': case 'dl': {
+        // bond browser download [tabId] <url> [--out path]
+        const outIdx = args.indexOf('--out')
+        const outPath = outIdx !== -1 ? args[outIdx + 1] : undefined
+        const filteredArgs = args.filter((a, i) => a !== '--out' && (outIdx === -1 || i !== outIdx + 1))
+        let tabId: string | undefined
+        let url: string
+        if (filteredArgs.length >= 3) {
+          tabId = filteredArgs[1]
+          url = filteredArgs[2]
+        } else {
+          url = filteredArgs[1] || ''
+        }
+        if (!url) { console.error(`${R}Usage:${N} bond browser download [tab] <url> [--out path]`); break }
+        const result = await call(ws, 'browser.download', { tabId, url, outPath }) as any
+        if (result?.error) { console.error(`${R}Error:${N} ${result.error}`); break }
+        console.log(`${G}Downloaded${N}  ${result.path}  ${D}${(result.size / 1024).toFixed(1)} KB${N}  ${D}${result.contentType}${N}`)
+        break
+      }
+
+      case 'cookies': {
+        const tabId = args[1] || undefined
+        const result = await call(ws, 'browser.cookies', { tabId }) as any
+        if (result?.error) { console.error(`${R}Error:${N} ${result.error}`); break }
+        if (result?.url) console.log(`${D}${result.url}${N}`)
+        if (result?.cookies) {
+          const pairs = result.cookies.split('; ').filter(Boolean)
+          if (pairs.length === 0) {
+            console.log(`${D}No cookies${N}`)
+          } else {
+            for (const pair of pairs) {
+              const [name, ...rest] = pair.split('=')
+              const value = rest.join('=')
+              console.log(`  ${name}${D}=${value.length > 60 ? value.slice(0, 60) + '...' : value}${N}`)
+            }
+          }
         }
         break
       }
