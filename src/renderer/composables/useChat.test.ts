@@ -226,6 +226,96 @@ describe('useChat', () => {
       const bondMsg = chat.messages.value.find(m => m.role === 'bond')
       expect(bondMsg).toMatchObject({ text: 'partial...', streaming: true })
     })
+
+    it('preserves background buffer when query_end fires for non-current session', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      // Submit in sess-1
+      await chat.submit('hello')
+
+      // Switch to sess-2
+      await chat.loadSession('sess-2')
+
+      // Response completes for sess-1 in background
+      handler({ kind: 'assistant_text', text: 'full response', sessionId: 'sess-1' })
+      handler({ kind: 'result', subtype: 'success', sessionId: 'sess-1' })
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+
+      // Wait for async flush to complete
+      await new Promise(r => setTimeout(r, 10))
+
+      // Switch back — should still get the buffer (not prematurely deleted)
+      await chat.loadSession('sess-1')
+      const bondMsg = chat.messages.value.find(m => m.role === 'bond')
+      expect(bondMsg).toMatchObject({ text: 'full response' })
+    })
+
+    it('query_end arriving after loadSession does not lose messages', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      // Submit in sess-1 and get a partial response
+      await chat.submit('hello')
+      handler({ kind: 'assistant_text', text: 'partial', sessionId: 'sess-1' })
+
+      // Switch to sess-2 (stashes sess-1 to background)
+      await chat.loadSession('sess-2')
+
+      // Now query_end arrives for sess-1 (persists to DB)
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+      await new Promise(r => setTimeout(r, 10))
+
+      // Switch back to sess-1 — should have the data
+      // Either from background buffer or from DB (both are valid)
+      await chat.loadSession('sess-1')
+      expect(chat.messages.value.length).toBeGreaterThanOrEqual(2) // user + bond at minimum
+    })
+
+    it('rapid session switching (A → B → A) preserves messages', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      // Submit in sess-1
+      await chat.submit('hello from sess-1')
+      handler({ kind: 'assistant_text', text: 'response 1', sessionId: 'sess-1' })
+
+      // Rapidly: switch to sess-2, then back to sess-1
+      await chat.loadSession('sess-2')
+      await chat.loadSession('sess-1')
+
+      // Should restore sess-1 messages from background buffer
+      const userMsg = chat.messages.value.find(m => m.role === 'user')
+      expect(userMsg).toMatchObject({ text: 'hello from sess-1' })
+      const bondMsg = chat.messages.value.find(m => m.role === 'bond')
+      expect(bondMsg).toMatchObject({ text: 'response 1' })
+    })
+
+    it('deep-copies messages when stashing to prevent mutation races', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      // Submit and get a streaming response
+      await chat.submit('hello')
+      handler({ kind: 'assistant_text', text: 'initial', sessionId: 'sess-1' })
+
+      // Get a reference to the current bond message
+      const bondMsgBefore = chat.messages.value.find(m => m.role === 'bond')
+
+      // Switch to sess-2 (stashes sess-1 with deep copy)
+      await chat.loadSession('sess-2')
+
+      // More chunks arrive for sess-1 in background — these mutate the background buffer
+      handler({ kind: 'assistant_text', text: ' more text', sessionId: 'sess-1' })
+
+      // The original object reference should NOT have been mutated by background chunks
+      // (because we deep-copied when stashing)
+      expect(bondMsgBefore!.text).toBe('initial')
+    })
   })
 
   describe('onQueryEnd', () => {

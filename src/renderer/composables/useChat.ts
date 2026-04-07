@@ -207,6 +207,9 @@ export function useChat(deps: ChatDeps = window.bond) {
   const streamingStashTimers = new Map<string, ReturnType<typeof setInterval>>()
   const queryEndCallbacks: Array<(sessionId: string) => void> = []
 
+  /** Tracks the latest persist promise per session so loadSession can await it */
+  const lastPersistPromise = new Map<string, Promise<void>>()
+
   /** Periodically stash messages to localStorage during streaming.
    *  Survives hard renderer crashes (OOM, GPU crash) where beforeunload never fires. */
   function startStreamingStash(sessionId: string) {
@@ -262,7 +265,9 @@ export function useChat(deps: ChatDeps = window.bond) {
       clearTimeout(timer)
       persistTimers.delete(sessionId)
     }
-    return persistMessagesFor(sessionId)
+    const promise = persistMessagesFor(sessionId)
+    lastPersistPromise.set(sessionId, promise)
+    return promise
   }
 
   function addMessageTo(msgs: Message[], msg: Message) {
@@ -318,14 +323,11 @@ export function useChat(deps: ChatDeps = window.bond) {
       const msgs = getMessagesFor(chunk.sessionId)
       finalizeThinkingOn(msgs, chunk.sessionId)
       endStreamingOn(msgs)
-      // Persist synchronously (within the chunk handler's microtask) then clean up.
-      // Using an async IIFE ensures the flush completes before background buffer cleanup,
-      // preventing the race where loadSession reads stale DB data.
-      ;(async () => {
+      // Persist then handle queue. The promise is tracked in lastPersistPromise
+      // so loadSession can await it before reading from DB.
+      // Background buffer is NOT deleted here — loadSession is the sole consumer.
+      const endPromise = (async () => {
         await flushPersistFor(chunk.sessionId)
-        if (chunk.sessionId !== currentSessionId.value) {
-          backgroundMessages.delete(chunk.sessionId)
-        }
         // Auto-send next queued message for this session
         if (chunk.sessionId === currentSessionId.value) {
           const nextIdx = queuedMessages.value.findIndex(m => m.sessionId === chunk.sessionId)
@@ -336,6 +338,7 @@ export function useChat(deps: ChatDeps = window.bond) {
           }
         }
       })()
+      lastPersistPromise.set(chunk.sessionId, endPromise)
       return
     }
 
@@ -455,34 +458,41 @@ export function useChat(deps: ChatDeps = window.bond) {
     }
   }
 
-  async function persistMessagesFor(sessionId: string) {
+  function persistMessagesFor(sessionId: string): Promise<void> {
     const msgs = sessionId === currentSessionId.value
       ? messages.value
       : backgroundMessages.get(sessionId)
-    if (!msgs || !msgs.length) return
+    if (!msgs || !msgs.length) return Promise.resolve()
 
-    const data = toSessionMessages(msgs)
-    let saved = false
-    try {
-      saved = await deps.saveMessages(sessionId, data)
-    } catch { /* network/IPC failure */ }
+    // Snapshot messages immediately to avoid mutation races with ongoing streaming
+    const data = toSessionMessages(msgs.map(m => ({ ...m })))
 
-    // Retry once on failure
-    if (!saved) {
+    const promise = (async () => {
+      let saved = false
       try {
         saved = await deps.saveMessages(sessionId, data)
-      } catch { /* still failing */ }
-    }
+      } catch { /* network/IPC failure */ }
 
-    if (!saved) {
-      console.warn(`[bond] persistMessagesFor failed for session ${sessionId} — data is in memory only`)
-      // Stash to localStorage as a safety net
-      try {
-        const key = `bond:msg-backup:${sessionId}`
-        localStorage.setItem(key, JSON.stringify(data))
-        localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
-      } catch { /* quota exceeded — best effort */ }
-    }
+      // Retry once on failure
+      if (!saved) {
+        try {
+          saved = await deps.saveMessages(sessionId, data)
+        } catch { /* still failing */ }
+      }
+
+      if (!saved) {
+        console.warn(`[bond] persistMessagesFor failed for session ${sessionId} — data is in memory only`)
+        // Stash to localStorage as a safety net
+        try {
+          const key = `bond:msg-backup:${sessionId}`
+          localStorage.setItem(key, JSON.stringify(data))
+          localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
+        } catch { /* quota exceeded — best effort */ }
+      }
+    })()
+
+    lastPersistPromise.set(sessionId, promise)
+    return promise
   }
 
   async function persistMessages() {
@@ -495,9 +505,10 @@ export function useChat(deps: ChatDeps = window.bond) {
     const oldSid = currentSessionId.value
     if (oldSid) {
       await flushPersistFor(oldSid)
-      // Stash current messages if the old session is still busy (receiving chunks)
+      // Stash current messages if the old session is still busy (receiving chunks).
+      // Deep-copy message objects to prevent mutation races with ongoing streaming.
       if (busySessions.value.has(oldSid)) {
-        backgroundMessages.set(oldSid, [...messages.value])
+        backgroundMessages.set(oldSid, messages.value.map(m => ({ ...m })))
       }
     }
 
@@ -508,6 +519,24 @@ export function useChat(deps: ChatDeps = window.bond) {
     const bg = backgroundMessages.get(sessionId)
     if (bg) {
       messages.value = bg
+      backgroundMessages.delete(sessionId)
+      return
+    }
+
+    // Await any pending persist for this session before reading from DB.
+    // This prevents the race where query_end's flush hasn't completed yet,
+    // causing us to read stale/partial data from the database.
+    const pending = lastPersistPromise.get(sessionId)
+    if (pending) {
+      await pending
+      lastPersistPromise.delete(sessionId)
+    }
+
+    // Re-check background buffer — it may have been populated while we awaited the persist
+    // (e.g. chunks arrived between our first check and the persist completing)
+    const bgAfterAwait = backgroundMessages.get(sessionId)
+    if (bgAfterAwait) {
+      messages.value = bgAfterAwait
       backgroundMessages.delete(sessionId)
       return
     }
@@ -676,7 +705,8 @@ export function useChat(deps: ChatDeps = window.bond) {
     }
   }
 
-  /** Restore messages from localStorage backup if DB has fewer.
+  /** Restore messages from localStorage backup if DB has fewer or less content.
+   *  Compares both message count and total text length to catch truncated responses.
    *  Returns true if backup was applied. */
   async function restoreFromBackupIfNeeded(sessionId: string): Promise<boolean> {
     try {
@@ -687,8 +717,12 @@ export function useChat(deps: ChatDeps = window.bond) {
       const backed: SessionMessage[] = JSON.parse(raw)
       const dbMsgs = await deps.getMessages(sessionId)
 
-      if (backed.length > dbMsgs.length) {
-        // Backup has more messages — save it to DB
+      const textLen = (msgs: SessionMessage[]) =>
+        msgs.reduce((sum, m) => sum + (m.text?.length ?? 0), 0)
+
+      // Prefer backup if it has more messages OR significantly more text content
+      // (catches truncated responses where message count is the same)
+      if (backed.length > dbMsgs.length || textLen(backed) > textLen(dbMsgs) + 50) {
         await deps.saveMessages(sessionId, backed)
         localStorage.removeItem(key)
         return true
