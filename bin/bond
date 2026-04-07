@@ -160,8 +160,24 @@ _ensure_cli() {
   local cli_files=(todo media project screenshot journal soul browser collection sense operative)
   local needs_build=false
   for f in "${cli_files[@]}"; do
-    [[ ! -f "$PROJECT_DIR/out/cli/$f.js" ]] && needs_build=true && break
+    local src="$PROJECT_DIR/src/cli/$f.ts"
+    local out="$PROJECT_DIR/out/cli/$f.js"
+    # Build if output missing or source is newer
+    if [[ ! -f "$out" ]] || [[ -f "$src" && "$src" -nt "$out" ]]; then
+      needs_build=true
+      break
+    fi
   done
+  # Also check shared types that CLIs depend on
+  if ! $needs_build; then
+    for f in "${cli_files[@]}"; do
+      local out="$PROJECT_DIR/out/cli/$f.js"
+      if [[ -f "$out" ]] && [[ "$PROJECT_DIR/src/shared/browser.ts" -nt "$out" ]]; then
+        needs_build=true
+        break
+      fi
+    done
+  fi
   if $needs_build; then
     cd "$PROJECT_DIR"
     npm run build:cli --silent 2>/dev/null
