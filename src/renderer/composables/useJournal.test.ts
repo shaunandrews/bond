@@ -1,40 +1,48 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createApp, defineComponent } from 'vue'
-import { useJournal, type JournalDeps } from './useJournal'
-import type { JournalEntry, JournalComment } from '../../shared/session'
+import { useJournal, getEntryTitle, getEntryPinned, getEntryComments, type JournalDeps } from './useJournal'
+import type { CollectionItem, ItemComment } from '../../shared/session'
 
-const COMMENT_1: JournalComment = {
+const COMMENT_1: ItemComment = {
   id: 'c1',
-  entryId: 'e1',
+  itemId: 'e1',
   author: 'bond',
   body: 'Good thoughts',
   createdAt: '2026-04-01T11:00:00Z'
 }
 
-const ENTRY_1: JournalEntry = {
+const ENTRY_1: CollectionItem = {
   id: 'e1',
-  author: 'user',
-  title: 'First entry',
-  body: 'Hello world',
-  tags: ['test'],
-  pinned: false,
+  collectionId: 'journal-col',
+  data: {
+    title: 'First entry',
+    body: 'Hello world',
+    author: 'user',
+    tags: ['test'],
+    pinned: false,
+  },
+  sortOrder: 0,
   comments: [],
   createdAt: '2026-04-01T10:00:00Z',
   updatedAt: '2026-04-01T10:00:00Z'
 }
 
-const ENTRY_1_WITH_COMMENTS: JournalEntry = {
+const ENTRY_1_WITH_COMMENTS: CollectionItem = {
   ...ENTRY_1,
   comments: [COMMENT_1]
 }
 
-const ENTRY_2: JournalEntry = {
+const ENTRY_2: CollectionItem = {
   id: 'e2',
-  author: 'bond',
-  title: 'Bond summary',
-  body: 'Session recap',
-  tags: ['summary'],
-  pinned: true,
+  collectionId: 'journal-col',
+  data: {
+    title: 'Bond summary',
+    body: 'Session recap',
+    author: 'bond',
+    tags: ['summary'],
+    pinned: true,
+  },
+  sortOrder: 1,
   comments: [],
   createdAt: '2026-04-02T10:00:00Z',
   updatedAt: '2026-04-02T10:00:00Z'
@@ -45,7 +53,7 @@ function mockDeps(): JournalDeps {
     listJournalEntries: vi.fn().mockResolvedValue([ENTRY_1, ENTRY_2]),
     getJournalEntry: vi.fn().mockResolvedValue(ENTRY_1_WITH_COMMENTS),
     createJournalEntry: vi.fn().mockResolvedValue(ENTRY_1),
-    updateJournalEntry: vi.fn().mockResolvedValue({ ...ENTRY_1, title: 'Updated', comments: [] }),
+    updateJournalEntry: vi.fn().mockResolvedValue({ ...ENTRY_1, data: { ...ENTRY_1.data, title: 'Updated' }, comments: [] }),
     deleteJournalEntry: vi.fn().mockResolvedValue(true),
     searchJournalEntries: vi.fn().mockResolvedValue([ENTRY_1]),
     generateJournalMeta: vi.fn().mockResolvedValue(ENTRY_1),
@@ -105,7 +113,7 @@ describe('useJournal', () => {
     await journal.load()
     await journal.update('e1', { title: 'Updated' })
     expect(deps.updateJournalEntry).toHaveBeenCalledWith('e1', { title: 'Updated' })
-    expect(journal.entries.value[0].title).toBe('Updated')
+    expect(getEntryTitle(journal.entries.value[0])).toBe('Updated')
   })
 
   it('removes an entry', async () => {
@@ -129,7 +137,7 @@ describe('useJournal', () => {
     expect(journal.activeEntryId.value).toBe('e1')
     expect(deps.getJournalEntry).toHaveBeenCalledWith('e1')
     // Should have loaded comments from getEntry
-    expect(journal.activeEntry.value?.comments).toEqual([COMMENT_1])
+    expect(getEntryComments(journal.activeEntry.value!)).toEqual([COMMENT_1])
   })
 
   it('deselects entry', async () => {
@@ -155,7 +163,7 @@ describe('useJournal', () => {
     await journal.load()
     await journal.addComment('e1', 'Nice one')
     expect(deps.addJournalComment).toHaveBeenCalledWith('e1', 'user', 'Nice one')
-    expect(journal.entries.value[0].comments).toEqual([COMMENT_1])
+    expect(getEntryComments(journal.entries.value[0])).toEqual([COMMENT_1])
   })
 
   it('deletes a comment from an entry', async () => {
@@ -164,7 +172,7 @@ describe('useJournal', () => {
     await journal.addComment('e1', 'Nice one')
     await journal.deleteComment('e1', 'c1')
     expect(deps.deleteJournalComment).toHaveBeenCalledWith('c1')
-    expect(journal.entries.value[0].comments).toEqual([])
+    expect(getEntryComments(journal.entries.value[0])).toEqual([])
   })
 
   it('requests a Bond comment', async () => {
@@ -172,7 +180,7 @@ describe('useJournal', () => {
     expect(journal.generatingBondCommentId.value).toBeNull()
     await journal.requestBondComment('e1')
     expect(deps.generateBondComment).toHaveBeenCalledWith('e1')
-    expect(journal.entries.value[0].comments).toEqual([COMMENT_1])
+    expect(getEntryComments(journal.entries.value[0])).toEqual([COMMENT_1])
     expect(journal.generatingBondCommentId.value).toBeNull()
   })
 })

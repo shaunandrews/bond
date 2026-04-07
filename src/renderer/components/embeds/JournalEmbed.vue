@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import type { JournalEntry } from '../../../shared/session'
+import type { CollectionItem } from '../../../shared/session'
+import { getEntryTitle, getEntryBody, getEntryAuthor, getEntryTags, getEntryPinned } from '../../composables/useJournal'
 import { PhRobot, PhUser, PhPushPin } from '@phosphor-icons/vue'
 import BondText from '../BondText.vue'
 import MarkdownMessage from '../MarkdownMessage.vue'
@@ -13,7 +14,7 @@ const props = defineProps<{
   limit?: string
 }>()
 
-const entries = ref<JournalEntry[]>([])
+const entries = ref<CollectionItem[]>([])
 const loading = ref(true)
 
 const maxItems = computed(() => {
@@ -31,7 +32,7 @@ onMounted(async () => {
     if (props.ids) {
       const idList = props.ids.split(',').map(s => s.trim()).filter(Boolean)
       const results = await Promise.all(idList.map(id => window.bond.getJournalEntry(id)))
-      entries.value = results.filter(Boolean) as JournalEntry[]
+      entries.value = results.filter(Boolean) as CollectionItem[]
     } else if (props.search) {
       entries.value = await window.bond.searchJournalEntries(props.search)
       entries.value = entries.value.slice(0, maxItems.value)
@@ -63,20 +64,20 @@ onMounted(async () => {
     <div v-else class="journal-embed-list">
       <div v-for="entry in entries" :key="entry.id" class="journal-embed-entry">
         <div class="journal-embed-header">
-          <span class="author-badge" :class="entry.author">
-            <PhRobot v-if="entry.author === 'bond'" :size="10" />
+          <span class="author-badge" :class="getEntryAuthor(entry)">
+            <PhRobot v-if="getEntryAuthor(entry) === 'bond'" :size="10" />
             <PhUser v-else :size="10" />
-            {{ entry.author === 'bond' ? 'Bond' : 'You' }}
+            {{ getEntryAuthor(entry) === 'bond' ? 'Bond' : 'You' }}
           </span>
-          <BondText size="sm" weight="medium" class="flex-1 min-w-0">{{ entry.title }}</BondText>
-          <PhPushPin v-if="entry.pinned" :size="12" weight="fill" class="pin-icon" />
+          <BondText size="sm" weight="medium" class="flex-1 min-w-0">{{ getEntryTitle(entry) }}</BondText>
+          <PhPushPin v-if="getEntryPinned(entry)" :size="12" weight="fill" class="pin-icon" />
           <BondText size="xs" color="muted" class="shrink-0">{{ formatDate(entry.createdAt) }}</BondText>
         </div>
         <div class="journal-embed-body">
-          <MarkdownMessage :text="entry.body" :streaming="false" />
+          <MarkdownMessage :text="getEntryBody(entry)" :streaming="false" />
         </div>
-        <div v-if="entry.tags.length" class="journal-embed-tags">
-          <span v-for="tag in entry.tags" :key="tag" class="embed-tag">{{ tag }}</span>
+        <div v-if="getEntryTags(entry).length" class="journal-embed-tags">
+          <span v-for="tag in getEntryTags(entry)" :key="tag" class="embed-tag">{{ tag }}</span>
         </div>
       </div>
     </div>

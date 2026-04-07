@@ -235,7 +235,7 @@ function createWindow(): void {
   client.onTodoChanged(() => broadcast('bond:todoChanged'))
   client.onProjectsChanged(() => broadcast('bond:projectsChanged'))
   client.onCollectionsChanged(() => broadcast('bond:collectionsChanged'))
-  client.onJournalChanged(() => broadcast('bond:journalChanged'))
+  // Journal changes now flow through collections channel
   client.onOperativeChanged(() => broadcast('bond:operativeChanged'))
   client.onOperativeEvent((payload) => broadcast('bond:operativeEvent', payload))
 
@@ -604,11 +604,15 @@ app.whenReady().then(async () => {
   ipcMain.handle('collection:deleteItem', (_e, id: string) => client.deleteCollectionItem(id))
   ipcMain.handle('collection:reorderItems', (_e, ids: string[]) => client.reorderCollectionItems(ids))
 
-  // --- Journal ---
+  // --- Collection item comments ---
+  ipcMain.handle('collection:addItemComment', (_e, itemId: string, author: string, body: string) => client.addItemComment(itemId, author as any, body))
+  ipcMain.handle('collection:deleteItemComment', (_e, id: string) => client.deleteItemComment(id))
+
+  // --- Journal (backed by Journal collection) ---
   ipcMain.handle('journal:list', (_e, opts?: Record<string, unknown>) => client.listJournalEntries(opts as any))
   ipcMain.handle('journal:get', (_e, id: string) => client.getJournalEntry(id))
   ipcMain.handle('journal:create', (_e, params: Record<string, unknown>) => client.createJournalEntry(params as any))
-  ipcMain.handle('journal:update', (_e, id: string, updates: Record<string, unknown>) => client.updateJournalEntry(id, updates as any))
+  ipcMain.handle('journal:update', (_e, id: string, updates: Record<string, unknown>) => client.updateJournalEntry(id, updates))
   ipcMain.handle('journal:delete', (_e, id: string) => client.deleteJournalEntry(id))
   ipcMain.handle('journal:search', (_e, query: string) => client.searchJournalEntries(query))
   ipcMain.handle('journal:generateMeta', (_e, id: string) => client.generateJournalMeta(id))

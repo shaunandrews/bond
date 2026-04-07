@@ -2,6 +2,7 @@
 
 /**
  * bond journal — CLI for managing Bond journal entries via the daemon.
+ * Journal is now backed by the "Journal" collection.
  *
  * Usage:
  *   bond journal                                       List recent entries (last 20)
@@ -46,17 +47,33 @@ function call(ws: WebSocket, method: string, params?: unknown): Promise<unknown>
   })
 }
 
-interface JournalEntry {
+// CollectionItem shape returned by the daemon
+interface CollectionItem {
   id: string
-  author: 'user' | 'bond'
-  title: string
-  body: string
-  tags: string[]
+  collectionId: string
+  data: Record<string, unknown>
   projectId?: string
-  sessionId?: string
-  pinned: boolean
+  sortOrder: number
+  comments?: Array<{ id: string; itemId: string; author: string; body: string; createdAt: string }>
   createdAt: string
   updatedAt: string
+}
+
+// Helpers to extract journal fields from CollectionItem.data
+function getTitle(item: CollectionItem): string {
+  return (item.data.title as string) || 'Untitled'
+}
+function getBody(item: CollectionItem): string {
+  return (item.data.body as string) || ''
+}
+function getAuthor(item: CollectionItem): string {
+  return (item.data.author as string) || 'user'
+}
+function getTags(item: CollectionItem): string[] {
+  return (item.data.tags as string[]) || []
+}
+function getPinned(item: CollectionItem): boolean {
+  return (item.data.pinned as boolean) || false
 }
 
 interface Project {
@@ -72,7 +89,7 @@ function connect(): Promise<WebSocket> {
   })
 }
 
-function findEntry(entries: JournalEntry[], query: string): JournalEntry | undefined {
+function findEntry(entries: CollectionItem[], query: string): CollectionItem | undefined {
   // Try exact ID prefix match
   const byId = entries.find(e => e.id.toLowerCase().startsWith(query.toLowerCase()))
   if (byId) return byId
@@ -81,7 +98,7 @@ function findEntry(entries: JournalEntry[], query: string): JournalEntry | undef
   if (!isNaN(idx) && idx >= 1 && idx <= entries.length) return entries[idx - 1]
   // Try case-insensitive title substring
   const lower = query.toLowerCase()
-  return entries.find(e => e.title.toLowerCase().includes(lower))
+  return entries.find(e => getTitle(e).toLowerCase().includes(lower))
 }
 
 const R = '\x1b[0;31m'
@@ -202,7 +219,7 @@ async function main() {
         const { author, project, tag } = extractFlags(args.slice(1))
         let projectId: string | undefined
         if (project) projectId = await resolveProjectId(ws, project)
-        const entries = await call(ws, 'journal.list', { author, projectId, tag, limit: 20 }) as JournalEntry[]
+        const entries = await call(ws, 'journal.list', { author, projectId, tag, limit: 20 }) as CollectionItem[]
         if (entries.length === 0) {
           const filterDesc = author ? ` by ${author}` : project ? ` in project "${project}"` : tag ? ` tagged "${tag}"` : ''
           console.log(`${D}No journal entries${filterDesc}${N}`)
@@ -215,14 +232,15 @@ async function main() {
           projectNames.set(pid, await getProjectName(ws, pid))
         }
         entries.forEach((e, i) => {
-          const pin = e.pinned ? `${Y}*${N} ` : '  '
-          const authorTag = e.author === 'bond' ? `${C}bond${N}` : `${D}you${N}`
+          const pin = getPinned(e) ? `${Y}*${N} ` : '  '
+          const authorTag = getAuthor(e) === 'bond' ? `${C}bond${N}` : `${D}you${N}`
           const date = `${D}${formatDate(e.createdAt)}${N}`
-          const tagsStr = e.tags.length > 0 ? ` ${D}[${e.tags.join(', ')}]${N}` : ''
+          const tags = getTags(e)
+          const tagsStr = tags.length > 0 ? ` ${D}[${tags.join(', ')}]${N}` : ''
           const projTag = e.projectId ? ` ${Y}← ${projectNames.get(e.projectId) ?? '?'}${N}` : ''
-          console.log(`${pin}${D}${i + 1}.${N} ${B}${e.title}${N}  ${authorTag}  ${date}${tagsStr}${projTag}`)
+          console.log(`${pin}${D}${i + 1}.${N} ${B}${getTitle(e)}${N}  ${authorTag}  ${date}${tagsStr}${projTag}`)
           // Show first line of body as preview
-          const firstLine = e.body.split('\n')[0]
+          const firstLine = getBody(e).split('\n')[0]
           if (firstLine) {
             const preview = firstLine.length > 80 ? firstLine.slice(0, 80) + '...' : firstLine
             console.log(`     ${D}${preview}${N}`)
@@ -235,21 +253,22 @@ async function main() {
       case 'view': {
         const query = args.slice(1).join(' ')
         if (!query) { console.error(`${R}Usage:${N} bond journal show <id|number|title>`); process.exit(1) }
-        const entries = await call(ws, 'journal.list', { limit: 100 }) as JournalEntry[]
+        const entries = await call(ws, 'journal.list', { limit: 100 }) as CollectionItem[]
         const entry = findEntry(entries, query)
         if (!entry) { console.error(`${R}No matching entry:${N} ${query}`); process.exit(1) }
-        const authorTag = entry.author === 'bond' ? `${C}bond${N}` : `${D}you${N}`
+        const authorTag = getAuthor(entry) === 'bond' ? `${C}bond${N}` : `${D}you${N}`
         const date = formatDate(entry.createdAt)
-        const pin = entry.pinned ? ` ${Y}(pinned)${N}` : ''
-        console.log(`\n${B}${entry.title}${N}${pin}`)
+        const pin = getPinned(entry) ? ` ${Y}(pinned)${N}` : ''
+        console.log(`\n${B}${getTitle(entry)}${N}${pin}`)
         console.log(`${authorTag}  ${D}${date}${N}`)
-        if (entry.tags.length > 0) console.log(`${D}Tags: ${entry.tags.join(', ')}${N}`)
+        const tags = getTags(entry)
+        if (tags.length > 0) console.log(`${D}Tags: ${tags.join(', ')}${N}`)
         if (entry.projectId) {
           const projName = await getProjectName(ws, entry.projectId)
           console.log(`${Y}Project: ${projName}${N}`)
         }
         console.log()
-        console.log(entry.body)
+        console.log(getBody(entry))
         console.log()
         break
       }
@@ -276,14 +295,15 @@ async function main() {
         const title = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine || 'Untitled'
         const entry = await call(ws, 'journal.create', {
           author: 'user', title, body: entryBody, tags: parsedTags, projectId, sessionId: session
-        }) as JournalEntry
+        }) as CollectionItem
         // Auto-generate title + tags in the background
         console.log(`${G}Created${N}  ${D}generating title...${N}`)
         try {
-          const updated = await call(ws, 'journal.generateMeta', { id: entry.id }) as JournalEntry | null
+          const updated = await call(ws, 'journal.generateMeta', { id: entry.id }) as CollectionItem | null
           if (updated) {
-            const tagsStr = updated.tags.length > 0 ? ` ${D}[${updated.tags.join(', ')}]${N}` : ''
-            console.log(`${G}  →${N}  ${B}${updated.title}${N}${tagsStr}`)
+            const updatedTags = getTags(updated)
+            const tagsStr = updatedTags.length > 0 ? ` ${D}[${updatedTags.join(', ')}]${N}` : ''
+            console.log(`${G}  →${N}  ${B}${getTitle(updated)}${N}${tagsStr}`)
           }
         } catch {
           // Non-fatal — entry was still created with placeholder title
@@ -295,7 +315,7 @@ async function main() {
         const { textArgs, body, tags } = extractFlags(args.slice(1))
         const query = textArgs.join(' ')
         if (!query) { console.error(`${R}Usage:${N} bond journal edit <id|number|title> [--body "..."] [--tags "a,b"]`); process.exit(1) }
-        const entries = await call(ws, 'journal.list', { limit: 100 }) as JournalEntry[]
+        const entries = await call(ws, 'journal.list', { limit: 100 }) as CollectionItem[]
         const entry = findEntry(entries, query)
         if (!entry) { console.error(`${R}No matching entry:${N} ${query}`); process.exit(1) }
         const updates: Record<string, unknown> = {}
@@ -307,7 +327,7 @@ async function main() {
           process.exit(1)
         }
         await call(ws, 'journal.update', { id: entry.id, updates })
-        console.log(`${G}Updated${N}  ${B}${entry.title}${N}`)
+        console.log(`${G}Updated${N}  ${B}${getTitle(entry)}${N}`)
         break
       }
 
@@ -316,11 +336,11 @@ async function main() {
       case 'delete': {
         const query = args.slice(1).join(' ')
         if (!query) { console.error(`${R}Usage:${N} bond journal rm <id|number|title>`); process.exit(1) }
-        const entries = await call(ws, 'journal.list', { limit: 100 }) as JournalEntry[]
+        const entries = await call(ws, 'journal.list', { limit: 100 }) as CollectionItem[]
         const entry = findEntry(entries, query)
         if (!entry) { console.error(`${R}No matching entry:${N} ${query}`); process.exit(1) }
         await call(ws, 'journal.delete', { id: entry.id })
-        console.log(`${R}Deleted${N}  ${entry.title}`)
+        console.log(`${R}Deleted${N}  ${getTitle(entry)}`)
         break
       }
 
@@ -328,15 +348,15 @@ async function main() {
       case 'find': {
         const query = args.slice(1).join(' ')
         if (!query) { console.error(`${R}Usage:${N} bond journal search <query>`); process.exit(1) }
-        const entries = await call(ws, 'journal.search', { query }) as JournalEntry[]
+        const entries = await call(ws, 'journal.search', { query }) as CollectionItem[]
         if (entries.length === 0) {
           console.log(`${D}No entries matching "${query}"${N}`)
           break
         }
         entries.forEach((e, i) => {
-          const authorTag = e.author === 'bond' ? `${C}bond${N}` : `${D}you${N}`
+          const authorTag = getAuthor(e) === 'bond' ? `${C}bond${N}` : `${D}you${N}`
           const date = `${D}${formatDate(e.createdAt)}${N}`
-          console.log(`  ${D}${i + 1}.${N} ${B}${e.title}${N}  ${authorTag}  ${date}`)
+          console.log(`  ${D}${i + 1}.${N} ${B}${getTitle(e)}${N}  ${authorTag}  ${date}`)
         })
         break
       }
@@ -344,15 +364,15 @@ async function main() {
       case 'pin': {
         const query = args.slice(1).join(' ')
         if (!query) { console.error(`${R}Usage:${N} bond journal pin <id|number|title>`); process.exit(1) }
-        const entries = await call(ws, 'journal.list', { limit: 100 }) as JournalEntry[]
+        const entries = await call(ws, 'journal.list', { limit: 100 }) as CollectionItem[]
         const entry = findEntry(entries, query)
         if (!entry) { console.error(`${R}No matching entry:${N} ${query}`); process.exit(1) }
-        const newPinned = !entry.pinned
+        const newPinned = !getPinned(entry)
         await call(ws, 'journal.update', { id: entry.id, updates: { pinned: newPinned } })
         if (newPinned) {
-          console.log(`${Y}Pinned${N}  ${entry.title}`)
+          console.log(`${Y}Pinned${N}  ${getTitle(entry)}`)
         } else {
-          console.log(`${D}Unpinned${N}  ${entry.title}`)
+          console.log(`${D}Unpinned${N}  ${getTitle(entry)}`)
         }
         break
       }

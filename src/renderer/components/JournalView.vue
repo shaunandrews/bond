@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick } from 'vue'
-import type { JournalEntry } from '../../shared/session'
+import type { CollectionItem } from '../../shared/session'
+import { getEntryTitle, getEntryBody, getEntryAuthor, getEntryTags, getEntryPinned, getEntryComments } from '../composables/useJournal'
 import { PhPlus, PhArrowLeft, PhPushPin, PhTrash, PhPencilSimple, PhMagnifyingGlass, PhX, PhRobot, PhUser, PhChatCircle } from '@phosphor-icons/vue'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
@@ -10,7 +11,7 @@ import ViewShell from './ViewShell.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 
 const props = defineProps<{
-  entries: JournalEntry[]
+  entries: CollectionItem[]
   activeEntryId: string | null
   generatingMetaId: string | null
   generatingBondCommentId: string | null
@@ -21,7 +22,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [id: string | null]
   createAndGenerate: [body: string, projectId?: string]
-  update: [id: string, updates: Partial<Pick<JournalEntry, 'title' | 'body' | 'tags' | 'pinned' | 'projectId'>>]
+  update: [id: string, updates: Record<string, unknown>]
   remove: [id: string]
   search: [query: string]
   load: [opts?: { author?: string; projectId?: string; tag?: string; limit?: number }]
@@ -85,7 +86,7 @@ function clearSearch() {
 function startEdit() {
   if (!activeEntry.value) return
   editing.value = true
-  editBody.value = activeEntry.value.body
+  editBody.value = getEntryBody(activeEntry.value)
 }
 
 function cancelEdit() {
@@ -126,7 +127,7 @@ const bondCommentBusy = computed(() =>
 
 <template>
   <ViewShell
-    :title="activeEntry ? activeEntry.title : 'Journal'"
+    :title="activeEntry ? getEntryTitle(activeEntry) : 'Journal'"
     :insetStart="insetStart"
   >
     <template #header-start>
@@ -156,12 +157,12 @@ const bondCommentBusy = computed(() =>
           <PhPlus :size="16" weight="bold" />
         </BondButton>
       </template>
-      <template v-else-if="activeEntry.author === 'user'">
+      <template v-else-if="getEntryAuthor(activeEntry) === 'user'">
         <BondButton variant="ghost" size="sm" icon :disabled="bondCommentBusy" @click="emit('requestBondComment', activeEntry.id)" v-tooltip="'Bond\'s perspective'">
           <PhChatCircle :size="16" weight="bold" />
         </BondButton>
-        <BondButton variant="ghost" size="sm" icon @click="emit('togglePin', activeEntry.id)" v-tooltip="activeEntry.pinned ? 'Unpin' : 'Pin'">
-          <PhPushPin :size="16" :weight="activeEntry.pinned ? 'fill' : 'bold'" />
+        <BondButton variant="ghost" size="sm" icon @click="emit('togglePin', activeEntry.id)" v-tooltip="getEntryPinned(activeEntry) ? 'Unpin' : 'Pin'">
+          <PhPushPin :size="16" :weight="getEntryPinned(activeEntry) ? 'fill' : 'bold'" />
         </BondButton>
         <BondButton variant="ghost" size="sm" icon @click="startEdit" v-tooltip="'Edit'">
           <PhPencilSimple :size="16" weight="bold" />
@@ -174,8 +175,8 @@ const bondCommentBusy = computed(() =>
         <BondButton variant="ghost" size="sm" icon :disabled="bondCommentBusy" @click="emit('requestBondComment', activeEntry.id)" v-tooltip="'Bond\'s perspective'">
           <PhChatCircle :size="16" weight="bold" />
         </BondButton>
-        <BondButton variant="ghost" size="sm" icon @click="emit('togglePin', activeEntry.id)" v-tooltip="activeEntry.pinned ? 'Unpin' : 'Pin'">
-          <PhPushPin :size="16" :weight="activeEntry.pinned ? 'fill' : 'bold'" />
+        <BondButton variant="ghost" size="sm" icon @click="emit('togglePin', activeEntry.id)" v-tooltip="getEntryPinned(activeEntry) ? 'Unpin' : 'Pin'">
+          <PhPushPin :size="16" :weight="getEntryPinned(activeEntry) ? 'fill' : 'bold'" />
         </BondButton>
       </template>
     </template>
@@ -212,26 +213,26 @@ const bondCommentBusy = computed(() =>
     <!-- Detail view -->
     <div v-else-if="activeEntry" class="entry-detail">
       <div class="entry-meta">
-        <span class="entry-author-badge" :class="activeEntry.author">
-          <PhRobot v-if="activeEntry.author === 'bond'" :size="12" />
+        <span class="entry-author-badge" :class="getEntryAuthor(activeEntry)">
+          <PhRobot v-if="getEntryAuthor(activeEntry) === 'bond'" :size="12" />
           <PhUser v-else :size="12" />
-          {{ activeEntry.author === 'bond' ? 'Bond' : 'You' }}
+          {{ getEntryAuthor(activeEntry) === 'bond' ? 'Bond' : 'You' }}
         </span>
         <BondText size="xs" color="muted">{{ formatDate(activeEntry.createdAt) }} at {{ formatTime(activeEntry.createdAt) }}</BondText>
-        <PhPushPin v-if="activeEntry.pinned" :size="12" weight="fill" class="pin-icon" />
+        <PhPushPin v-if="getEntryPinned(activeEntry)" :size="12" weight="fill" class="pin-icon" />
       </div>
-      <div v-if="activeEntry.tags.length" class="entry-tags">
-        <span v-for="tag in activeEntry.tags" :key="tag" class="entry-tag">{{ tag }}</span>
+      <div v-if="getEntryTags(activeEntry).length" class="entry-tags">
+        <span v-for="tag in getEntryTags(activeEntry)" :key="tag" class="entry-tag">{{ tag }}</span>
       </div>
       <div class="entry-body">
-        <MarkdownMessage :text="activeEntry.body" :streaming="false" />
+        <MarkdownMessage :text="getEntryBody(activeEntry)" :streaming="false" />
       </div>
 
       <!-- Comments -->
-      <div v-if="activeEntry.comments.length > 0 || bondCommentBusy" class="comments-section">
+      <div v-if="getEntryComments(activeEntry).length > 0 || bondCommentBusy" class="comments-section">
         <div class="comments-divider" />
         <div class="comments-list">
-          <div v-for="comment in activeEntry.comments" :key="comment.id" class="comment">
+          <div v-for="comment in getEntryComments(activeEntry)" :key="comment.id" class="comment">
             <div class="comment-header">
               <span class="entry-author-badge small" :class="comment.author">
                 <PhRobot v-if="comment.author === 'bond'" :size="10" />
@@ -286,24 +287,24 @@ const bondCommentBusy = computed(() =>
           @click="emit('select', entry.id)"
         >
           <div class="entry-card-header">
-            <span class="entry-author-badge small" :class="entry.author">
-              <PhRobot v-if="entry.author === 'bond'" :size="10" />
+            <span class="entry-author-badge small" :class="getEntryAuthor(entry)">
+              <PhRobot v-if="getEntryAuthor(entry) === 'bond'" :size="10" />
               <PhUser v-else :size="10" />
             </span>
             <BondText size="sm" weight="medium" truncate class="flex-1 min-w-0" :color="generatingMetaId === entry.id ? 'muted' : 'primary'">
-              {{ generatingMetaId === entry.id ? 'Naming...' : entry.title }}
+              {{ generatingMetaId === entry.id ? 'Naming...' : getEntryTitle(entry) }}
             </BondText>
-            <PhPushPin v-if="entry.pinned" :size="12" weight="fill" class="pin-icon" />
-            <BondText v-if="entry.comments.length > 0" size="xs" color="muted" class="shrink-0">
-              <PhChatCircle :size="12" weight="bold" style="vertical-align: -1px" /> {{ entry.comments.length }}
+            <PhPushPin v-if="getEntryPinned(entry)" :size="12" weight="fill" class="pin-icon" />
+            <BondText v-if="getEntryComments(entry).length > 0" size="xs" color="muted" class="shrink-0">
+              <PhChatCircle :size="12" weight="bold" style="vertical-align: -1px" /> {{ getEntryComments(entry).length }}
             </BondText>
             <BondText size="xs" color="muted" class="shrink-0">{{ formatDate(entry.createdAt) }}</BondText>
           </div>
-          <BondText v-if="entry.body" size="xs" color="muted" truncate class="entry-preview">
-            {{ entry.body.split('\n')[0].slice(0, 120) }}
+          <BondText v-if="getEntryBody(entry)" size="xs" color="muted" truncate class="entry-preview">
+            {{ getEntryBody(entry).split('\n')[0].slice(0, 120) }}
           </BondText>
-          <div v-if="entry.tags.length" class="entry-tags compact">
-            <span v-for="tag in entry.tags" :key="tag" class="entry-tag small">{{ tag }}</span>
+          <div v-if="getEntryTags(entry).length" class="entry-tags compact">
+            <span v-for="tag in getEntryTags(entry)" :key="tag" class="entry-tag small">{{ tag }}</span>
           </div>
         </button>
       </div>

@@ -41,6 +41,10 @@ export function getDb(): Database.Database {
   migrateCreateSenseTables(_db)
   migrateCreateOperativesTable(_db)
   migrateAddQuickColumn(_db)
+  migrateAddCollectionFeatures(_db)
+  migrateCreateCollectionItemCommentsTable(_db)
+  migrateAddCollectionItemProjectId(_db)
+  migrateJournalToCollection(_db)
 
   return _db
 }
@@ -484,6 +488,115 @@ function migrateAddQuickColumn(db: Database.Database): void {
   if (!columns.some(c => c.name === 'quick')) {
     db.exec('ALTER TABLE sessions ADD COLUMN quick INTEGER DEFAULT 0')
   }
+}
+
+function migrateAddCollectionFeatures(db: Database.Database): void {
+  const columns = db.pragma('table_info(collections)') as { name: string }[]
+  if (!columns.some(c => c.name === 'features')) {
+    db.exec("ALTER TABLE collections ADD COLUMN features TEXT NOT NULL DEFAULT '[]'")
+  }
+}
+
+function migrateCreateCollectionItemCommentsTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS collection_item_comments (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
+      author TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_collection_item_comments_item ON collection_item_comments(item_id, created_at ASC);
+  `)
+}
+
+function migrateAddCollectionItemProjectId(db: Database.Database): void {
+  const columns = db.pragma('table_info(collection_items)') as { name: string }[]
+  if (!columns.some(c => c.name === 'project_id')) {
+    db.exec('ALTER TABLE collection_items ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL')
+  }
+}
+
+function migrateJournalToCollection(db: Database.Database): void {
+  // Check if journal_entries table exists
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='journal_entries'").all() as { name: string }[]
+  if (tables.length === 0) return
+
+  // Check if we've already migrated
+  const migrated = db.prepare("SELECT value FROM settings WHERE key = 'journal_migrated_to_collection'").get() as { value: string } | undefined
+  if (migrated) return
+
+  const now = new Date().toISOString()
+
+  // Check if a "Journal" collection already exists
+  const existing = db.prepare("SELECT id FROM collections WHERE name = 'Journal'").get() as { id: string } | undefined
+
+  const collectionId = existing?.id ?? randomUUID()
+
+  if (!existing) {
+    const schema = JSON.stringify([
+      { name: 'title', type: 'text', primary: true },
+      { name: 'body', type: 'longtext' },
+      { name: 'author', type: 'select', options: ['user', 'bond'] },
+      { name: 'tags', type: 'tags' },
+      { name: 'pinned', type: 'boolean' }
+    ])
+    const features = JSON.stringify(['comments', 'projectLink', 'autoMeta', 'bondComment'])
+    db.prepare(
+      'INSERT INTO collections (id, name, icon, schema, features, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)'
+    ).run(collectionId, 'Journal', '📓', schema, features, now, now)
+  }
+
+  // Migrate entries
+  const entries = db.prepare(
+    'SELECT id, author, title, body, tags, project_id, session_id, pinned, created_at, updated_at FROM journal_entries ORDER BY created_at ASC'
+  ).all() as Array<{
+    id: string; author: string; title: string; body: string; tags: string
+    project_id: string | null; session_id: string | null; pinned: number
+    created_at: string; updated_at: string
+  }>
+
+  const insertItem = db.prepare(
+    'INSERT OR IGNORE INTO collection_items (id, collection_id, data, project_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  )
+
+  const insertComment = db.prepare(
+    'INSERT OR IGNORE INTO collection_item_comments (id, item_id, author, body, created_at) VALUES (?, ?, ?, ?, ?)'
+  )
+
+  db.transaction(() => {
+    entries.forEach((entry, i) => {
+      let tags: string[] = []
+      try { tags = JSON.parse(entry.tags) } catch { /* empty */ }
+
+      const data: Record<string, unknown> = {
+        title: entry.title,
+        body: entry.body,
+        author: entry.author,
+        tags,
+        pinned: entry.pinned === 1,
+      }
+      if (entry.session_id) {
+        data.sessionId = entry.session_id
+      }
+
+      insertItem.run(
+        entry.id, collectionId, JSON.stringify(data),
+        entry.project_id, i, entry.created_at, entry.updated_at
+      )
+
+      // Migrate comments for this entry
+      const comments = db.prepare(
+        'SELECT id, author, body, created_at FROM journal_comments WHERE entry_id = ? ORDER BY created_at ASC'
+      ).all(entry.id) as Array<{ id: string; author: string; body: string; created_at: string }>
+
+      for (const comment of comments) {
+        insertComment.run(comment.id, entry.id, comment.author, comment.body, comment.created_at)
+      }
+    })
+
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('journal_migrated_to_collection', '1')
+  })()
 }
 
 // --- One-time migration from file-based storage ---

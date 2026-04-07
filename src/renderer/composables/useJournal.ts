@@ -1,22 +1,42 @@
 import { ref, computed } from 'vue'
-import type { JournalEntry, JournalComment } from '../../shared/session'
+import type { CollectionItem, ItemComment } from '../../shared/session'
 
 export interface JournalDeps {
-  listJournalEntries: (opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }) => Promise<JournalEntry[]>
-  getJournalEntry: (id: string) => Promise<JournalEntry | null>
-  createJournalEntry: (params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }) => Promise<JournalEntry>
-  updateJournalEntry: (id: string, updates: Partial<Pick<JournalEntry, 'title' | 'body' | 'tags' | 'pinned' | 'projectId'>>) => Promise<JournalEntry | null>
+  listJournalEntries: (opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }) => Promise<CollectionItem[]>
+  getJournalEntry: (id: string) => Promise<CollectionItem | null>
+  createJournalEntry: (params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }) => Promise<CollectionItem>
+  updateJournalEntry: (id: string, updates: Record<string, unknown>) => Promise<CollectionItem | null>
   deleteJournalEntry: (id: string) => Promise<boolean>
-  searchJournalEntries: (query: string) => Promise<JournalEntry[]>
-  generateJournalMeta: (id: string) => Promise<JournalEntry | null>
-  addJournalComment: (entryId: string, author: 'user' | 'bond', body: string) => Promise<JournalComment>
+  searchJournalEntries: (query: string) => Promise<CollectionItem[]>
+  generateJournalMeta: (id: string) => Promise<CollectionItem | null>
+  addJournalComment: (entryId: string, author: 'user' | 'bond', body: string) => Promise<ItemComment>
   deleteJournalComment: (id: string) => Promise<boolean>
-  generateBondComment: (entryId: string) => Promise<JournalComment>
+  generateBondComment: (entryId: string) => Promise<ItemComment>
   onJournalChanged: (fn: () => void) => () => void
 }
 
+// Helper to extract journal-specific fields from CollectionItem.data
+export function getEntryTitle(item: CollectionItem): string {
+  return (item.data.title as string) || 'Untitled'
+}
+export function getEntryBody(item: CollectionItem): string {
+  return (item.data.body as string) || ''
+}
+export function getEntryAuthor(item: CollectionItem): 'user' | 'bond' {
+  return (item.data.author as 'user' | 'bond') || 'user'
+}
+export function getEntryTags(item: CollectionItem): string[] {
+  return (item.data.tags as string[]) || []
+}
+export function getEntryPinned(item: CollectionItem): boolean {
+  return (item.data.pinned as boolean) || false
+}
+export function getEntryComments(item: CollectionItem): ItemComment[] {
+  return item.comments || []
+}
+
 export function useJournal(deps: JournalDeps = window.bond) {
-  const entries = ref<JournalEntry[]>([])
+  const entries = ref<CollectionItem[]>([])
   const activeEntryId = ref<string | null>(null)
   const loading = ref(false)
 
@@ -25,7 +45,7 @@ export function useJournal(deps: JournalDeps = window.bond) {
   )
 
   const pinnedEntries = computed(() =>
-    entries.value.filter(e => e.pinned)
+    entries.value.filter(e => getEntryPinned(e))
   )
 
   async function load(opts?: { author?: string; projectId?: string; tag?: string; limit?: number }) {
@@ -37,7 +57,7 @@ export function useJournal(deps: JournalDeps = window.bond) {
     }
   }
 
-  async function create(params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }): Promise<JournalEntry> {
+  async function create(params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }): Promise<CollectionItem> {
     const entry = await deps.createJournalEntry(params)
     entries.value.unshift(entry)
     return entry
@@ -45,7 +65,7 @@ export function useJournal(deps: JournalDeps = window.bond) {
 
   const generatingMetaId = ref<string | null>(null)
 
-  async function createAndGenerate(body: string, projectId?: string): Promise<JournalEntry> {
+  async function createAndGenerate(body: string, projectId?: string): Promise<CollectionItem> {
     // Create with first-line placeholder title
     const firstLine = body.split('\n')[0].trim()
     const placeholder = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine || 'Untitled'
@@ -63,7 +83,7 @@ export function useJournal(deps: JournalDeps = window.bond) {
     return entry
   }
 
-  async function update(id: string, updates: Partial<Pick<JournalEntry, 'title' | 'body' | 'tags' | 'pinned' | 'projectId'>>) {
+  async function update(id: string, updates: Record<string, unknown>) {
     const updated = await deps.updateJournalEntry(id, updates)
     if (updated) {
       const idx = entries.value.findIndex(e => e.id === id)
@@ -96,7 +116,7 @@ export function useJournal(deps: JournalDeps = window.bond) {
   async function togglePin(id: string) {
     const entry = entries.value.find(e => e.id === id)
     if (entry) {
-      await update(id, { pinned: !entry.pinned })
+      await update(id, { pinned: !getEntryPinned(entry) })
     }
   }
 
@@ -108,7 +128,7 @@ export function useJournal(deps: JournalDeps = window.bond) {
     const comment = await deps.addJournalComment(entryId, 'user', body)
     // Append to the in-memory entry's comments
     const entry = entries.value.find(e => e.id === entryId)
-    if (entry) entry.comments = [...entry.comments, comment]
+    if (entry) entry.comments = [...(entry.comments || []), comment]
     return comment
   }
 
@@ -116,7 +136,7 @@ export function useJournal(deps: JournalDeps = window.bond) {
     const ok = await deps.deleteJournalComment(commentId)
     if (ok) {
       const entry = entries.value.find(e => e.id === entryId)
-      if (entry) entry.comments = entry.comments.filter(c => c.id !== commentId)
+      if (entry) entry.comments = (entry.comments || []).filter(c => c.id !== commentId)
     }
   }
 
@@ -125,7 +145,7 @@ export function useJournal(deps: JournalDeps = window.bond) {
     try {
       const comment = await deps.generateBondComment(entryId)
       const entry = entries.value.find(e => e.id === entryId)
-      if (entry) entry.comments = [...entry.comments, comment]
+      if (entry) entry.comments = [...(entry.comments || []), comment]
     } finally {
       generatingBondCommentId.value = null
     }

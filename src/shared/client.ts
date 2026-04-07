@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, JournalEntry, JournalComment } from './session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, ItemComment } from './session'
 import type { SenseStatus, SenseSettings, SenseCapture } from './sense'
 import type { Operative, OperativeEvent, SpawnOperativeOptions } from './operative'
 import {
@@ -15,7 +15,6 @@ type ChunkListener = (chunk: TaggedChunk) => void
 type TodoChangeListener = () => void
 type ProjectChangeListener = () => void
 type CollectionChangeListener = () => void
-type JournalChangeListener = () => void
 type BrowserCommandListener = (cmd: import('./browser').BrowserCommand) => void
 type SenseRequestCaptureListener = (payload: { captureDir: string; captureId: string }) => void
 type SenseStateChangedListener = (payload: { state: string }) => void
@@ -35,7 +34,6 @@ export class BondClient {
   private todoChangeListeners = new Set<TodoChangeListener>()
   private projectChangeListeners = new Set<ProjectChangeListener>()
   private collectionChangeListeners = new Set<CollectionChangeListener>()
-  private journalChangeListeners = new Set<JournalChangeListener>()
   private browserCommandListeners = new Set<BrowserCommandListener>()
   private senseRequestCaptureListeners = new Set<SenseRequestCaptureListener>()
   private senseStateChangedListeners = new Set<SenseStateChangedListener>()
@@ -114,10 +112,6 @@ export class BondClient {
             }
           } else if (msg.method === 'collection.changed') {
             for (const fn of this.collectionChangeListeners) {
-              fn()
-            }
-          } else if (msg.method === 'journal.changed') {
-            for (const fn of this.journalChangeListeners) {
               fn()
             }
           } else if (msg.method === 'browser.command' && msg.params) {
@@ -419,51 +413,68 @@ export class BondClient {
     return () => this.collectionChangeListeners.delete(fn)
   }
 
-  // --- Journal ---
+  // --- Collection item comments ---
 
-  async listJournalEntries(opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }): Promise<JournalEntry[]> {
-    return await this.call('journal.list', opts) as JournalEntry[]
+  async addItemComment(itemId: string, author: 'user' | 'bond', body: string): Promise<ItemComment> {
+    return await this.call('collection.addItemComment', { itemId, author, body }) as ItemComment
   }
 
-  async getJournalEntry(id: string): Promise<JournalEntry | null> {
-    return await this.call('journal.get', { id }) as JournalEntry | null
+  async deleteItemComment(id: string): Promise<boolean> {
+    return await this.call('collection.deleteItemComment', { id }) as boolean
   }
 
-  async createJournalEntry(params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }): Promise<JournalEntry> {
-    return await this.call('journal.create', params) as JournalEntry
+  async listItemComments(itemId: string): Promise<ItemComment[]> {
+    return await this.call('collection.listItemComments', { itemId }) as ItemComment[]
   }
 
-  async updateJournalEntry(id: string, updates: Partial<Pick<JournalEntry, 'title' | 'body' | 'tags' | 'pinned' | 'projectId'>>): Promise<JournalEntry | null> {
-    return await this.call('journal.update', { id, updates }) as JournalEntry | null
+  async searchCollectionItems(collectionId: string, query: string): Promise<CollectionItem[]> {
+    return await this.call('collection.searchItems', { collectionId, query }) as CollectionItem[]
+  }
+
+  async getCollectionByName(name: string): Promise<Collection | null> {
+    return await this.call('collection.getByName', { name }) as Collection | null
+  }
+
+  // --- Journal (backed by Journal collection) ---
+
+  async listJournalEntries(opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }): Promise<CollectionItem[]> {
+    return await this.call('journal.list', opts) as CollectionItem[]
+  }
+
+  async getJournalEntry(id: string): Promise<CollectionItem | null> {
+    return await this.call('journal.get', { id }) as CollectionItem | null
+  }
+
+  async createJournalEntry(params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }): Promise<CollectionItem> {
+    return await this.call('journal.create', params) as CollectionItem
+  }
+
+  async updateJournalEntry(id: string, updates: Record<string, unknown>): Promise<CollectionItem | null> {
+    return await this.call('journal.update', { id, updates }) as CollectionItem | null
   }
 
   async deleteJournalEntry(id: string): Promise<boolean> {
     return await this.call('journal.delete', { id }) as boolean
   }
 
-  async searchJournalEntries(query: string): Promise<JournalEntry[]> {
-    return await this.call('journal.search', { query }) as JournalEntry[]
+  async searchJournalEntries(query: string): Promise<CollectionItem[]> {
+    return await this.call('journal.search', { query }) as CollectionItem[]
   }
 
-  async generateJournalMeta(id: string): Promise<JournalEntry | null> {
-    return await this.call('journal.generateMeta', { id }) as JournalEntry | null
+  async generateJournalMeta(id: string): Promise<CollectionItem | null> {
+    return await this.call('journal.generateMeta', { id }) as CollectionItem | null
   }
 
-  async addJournalComment(entryId: string, author: 'user' | 'bond', body: string): Promise<JournalComment> {
-    return await this.call('journal.addComment', { entryId, author, body }) as JournalComment
+  async addJournalComment(entryId: string, author: 'user' | 'bond', body: string): Promise<ItemComment> {
+    return await this.call('journal.addComment', { entryId, author, body }) as ItemComment
   }
 
   async deleteJournalComment(id: string): Promise<boolean> {
     return await this.call('journal.deleteComment', { id }) as boolean
   }
 
-  async generateBondComment(entryId: string): Promise<JournalComment> {
-    return await this.call('journal.generateBondComment', { entryId }) as JournalComment
-  }
-
-  onJournalChanged(fn: JournalChangeListener): () => void {
-    this.journalChangeListeners.add(fn)
-    return () => this.journalChangeListeners.delete(fn)
+  async generateBondComment(entryId: string): Promise<ItemComment> {
+    return await this.call('journal.generateBondComment', { entryId }) as ItemComment
   }
 
   // --- Browser ---

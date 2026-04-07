@@ -90,30 +90,6 @@ export interface Project {
   updatedAt: string
 }
 
-// --- Journal ---
-
-export interface JournalComment {
-  id: string
-  entryId: string
-  author: 'user' | 'bond'
-  body: string
-  createdAt: string   // ISO 8601
-}
-
-export interface JournalEntry {
-  id: string
-  author: 'user' | 'bond'
-  title: string
-  body: string
-  tags: string[]
-  projectId?: string
-  sessionId?: string
-  pinned: boolean
-  comments: JournalComment[]
-  createdAt: string   // ISO 8601
-  updatedAt: string   // ISO 8601
-}
-
 // --- Collections ---
 
 export type FieldType = 'text' | 'longtext' | 'number' | 'date' | 'boolean' | 'select' | 'multiselect' | 'rating' | 'url' | 'tags' | 'image'
@@ -134,16 +110,27 @@ export interface Collection {
   name: string
   icon: string
   schema: FieldDef[]
+  features: string[]   // e.g. ['comments', 'projectLink']
   archived: boolean
   createdAt: string
   updatedAt: string
+}
+
+export interface ItemComment {
+  id: string
+  itemId: string
+  author: 'user' | 'bond'
+  body: string
+  createdAt: string   // ISO 8601
 }
 
 export interface CollectionItem {
   id: string
   collectionId: string
   data: Record<string, unknown>
+  projectId?: string
   sortOrder: number
+  comments?: ItemComment[]
   createdAt: string
   updatedAt: string
 }

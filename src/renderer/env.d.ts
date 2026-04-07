@@ -71,7 +71,21 @@ declare global {
       updateCollectionItem: (id: string, data: Record<string, unknown>) => Promise<import('../../shared/session').CollectionItem | null>
       deleteCollectionItem: (id: string) => Promise<boolean>
       reorderCollectionItems: (ids: string[]) => Promise<boolean>
+      addItemComment: (itemId: string, author: 'user' | 'bond', body: string) => Promise<import('../../shared/session').ItemComment>
+      deleteItemComment: (id: string) => Promise<boolean>
       onCollectionsChanged: (fn: () => void) => () => void
+      // Journal (backed by Journal collection)
+      listJournalEntries: (opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }) => Promise<import('../../shared/session').CollectionItem[]>
+      getJournalEntry: (id: string) => Promise<import('../../shared/session').CollectionItem | null>
+      createJournalEntry: (params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }) => Promise<import('../../shared/session').CollectionItem>
+      updateJournalEntry: (id: string, updates: Record<string, unknown>) => Promise<import('../../shared/session').CollectionItem | null>
+      deleteJournalEntry: (id: string) => Promise<boolean>
+      searchJournalEntries: (query: string) => Promise<import('../../shared/session').CollectionItem[]>
+      generateJournalMeta: (id: string) => Promise<import('../../shared/session').CollectionItem | null>
+      addJournalComment: (entryId: string, author: 'user' | 'bond', body: string) => Promise<import('../../shared/session').ItemComment>
+      deleteJournalComment: (id: string) => Promise<boolean>
+      generateBondComment: (entryId: string) => Promise<import('../../shared/session').ItemComment>
+      onJournalChanged: (fn: () => void) => () => void
       // Browser
       browser: {
         onCommand: (fn: (cmd: import('../../shared/browser').BrowserCommand) => void) => () => void
