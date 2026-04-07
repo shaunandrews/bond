@@ -125,7 +125,7 @@ function submitResource() {
 
 function openResource(kind: string, value: string) {
   if (kind === 'link') {
-    window.bond.openExternal(value)
+    window.dispatchEvent(new CustomEvent('bond:openInBrowser', { detail: value }))
   } else if (value.endsWith('.md') || value.endsWith('.markdown')) {
     emit('viewMarkdown', value)
   } else {

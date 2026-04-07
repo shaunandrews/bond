@@ -101,9 +101,13 @@ function resourceIcon(kind: string) {
 }
 
 function openResource(kind: string, value: string) {
-  if (kind === 'link') window.bond.openExternal(value)
-  else if (kind === 'file' && /\.(md|markdown)$/i.test(value)) window.bond.openViewer(value)
-  else window.bond.openPath(value)
+  if (kind === 'link') {
+    window.dispatchEvent(new CustomEvent('bond:openInBrowser', { detail: value }))
+  } else if (kind === 'file' && /\.(md|markdown)$/i.test(value)) {
+    window.bond.openViewer(value)
+  } else {
+    window.bond.openPath(value)
+  }
 }
 </script>
 
