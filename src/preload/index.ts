@@ -138,6 +138,13 @@ contextBridge.exposeInMainWorld('bond', {
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url) as Promise<void>,
   openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath) as Promise<string>,
 
+  // Fullscreen
+  onFullscreenChanged: (fn: (isFullScreen: boolean) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, isFullScreen: boolean) => fn(isFullScreen)
+    ipcRenderer.on('bond:fullscreenChanged', listener)
+    return () => ipcRenderer.removeListener('bond:fullscreenChanged', listener)
+  },
+
   // Settings window
   openSettings: () => ipcRenderer.invoke('window:openSettings') as Promise<void>,
   createSkillViaChat: (description: string) => ipcRenderer.invoke('settings:createSkillViaChat', description) as Promise<void>,

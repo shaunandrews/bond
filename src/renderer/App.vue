@@ -134,6 +134,7 @@ function getInitialSidebarWidth(): number {
 }
 
 const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === '1')
+const isFullScreen = ref(false)
 const sidebarWidth = ref(getInitialSidebarWidth())
 
 type RightPanelContent = 'todos' | 'projects' | 'browser' | 'operatives'
@@ -326,6 +327,27 @@ let removeCollectionsListener: (() => void) | null = null
 let removeJournalListener: (() => void) | null = null
 let removeConnectionLostListener: (() => void) | null = null
 let removeConnectionRestoredListener: (() => void) | null = null
+let removeFullscreenListener: (() => void) | null = null
+
+async function handleSessionRemoved() {
+  const next = sessions.activeSessionId.value
+  if (next) {
+    await chat.loadSession(next)
+    nextTick(scrollToBottom)
+  } else {
+    await handleNewSession()
+  }
+}
+
+async function handleArchiveSession(id: string) {
+  await sessions.archive(id)
+  await handleSessionRemoved()
+}
+
+async function handleRemoveSession(id: string) {
+  await sessions.remove(id)
+  await handleSessionRemoved()
+}
 
 async function handleSelectSession(id: string) {
   activeView.value = 'chat'
@@ -411,6 +433,9 @@ onMounted(async () => {
   removeConnectionLostListener = window.bond.onConnectionLost(() => {
     chat.stashToLocalStorage()
   })
+  removeFullscreenListener = window.bond.onFullscreenChanged((fs: boolean) => {
+    isFullScreen.value = fs
+  })
   removeConnectionRestoredListener = window.bond.onConnectionRestored(async () => {
     // Re-persist all in-memory messages that survived the disconnect
     await chat.repersistAll()
@@ -441,12 +466,21 @@ onMounted(async () => {
 
   if (savedSession) {
     sessions.select(savedSession.id)
-    if (!hasHmrState) await chat.loadSession(savedSession.id)
+    if (!hasHmrState) {
+      await chat.loadSession(savedSession.id)
+      // Restore any messages from localStorage backup (e.g. after crash/rebuild)
+      const restored = await chat.restoreFromBackupIfNeeded(savedSession.id)
+      if (restored) await chat.loadSession(savedSession.id)
+    }
     nextTick(scrollToBottom)
   } else if (sessions.activeSessions.value.length > 0) {
     const first = sessions.activeSessions.value[0]
     sessions.select(first.id)
-    if (!hasHmrState) await chat.loadSession(first.id)
+    if (!hasHmrState) {
+      await chat.loadSession(first.id)
+      const restored = await chat.restoreFromBackupIfNeeded(first.id)
+      if (restored) await chat.loadSession(first.id)
+    }
     nextTick(scrollToBottom)
   } else if (sessions.sessions.value.length === 0) {
     // True first run — no sessions at all
@@ -470,6 +504,7 @@ onUnmounted(() => {
   removeJournalListener?.()
   removeConnectionLostListener?.()
   removeConnectionRestoredListener?.()
+  removeFullscreenListener?.()
   chat.stashToLocalStorage()
   chat.persistMessages()
   chat.unsubscribe()
@@ -494,11 +529,11 @@ onUnmounted(() => {
         :operativeRunningCount="operativesComposable.runningCount.value"
         @select="handleSelectSession"
         @create="handleNewSession"
-        @archive="sessions.archive"
+        @archive="handleArchiveSession"
         @unarchive="sessions.unarchive"
         @favorite="sessions.favorite"
         @unfavorite="sessions.unfavorite"
-        @remove="sessions.remove"
+        @remove="handleRemoveSession"
         @removeArchived="sessions.removeArchived"
         @projects="activeView = 'projects'"
         @collections="activeView = 'collections'"
@@ -519,7 +554,7 @@ onUnmounted(() => {
         v-show="activeView === 'chat'"
         ref="chatShellRef"
         :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
-        :insetStart="sidebarCollapsed"
+        :insetStart="sidebarCollapsed && !isFullScreen"
         :titleEditable="!!sessions.activeSessionId.value && sessions.generatingTitleId.value !== sessions.activeSessionId.value"
         @rename="sessions.activeSessionId.value && handleRenameSession(sessions.activeSessionId.value, $event)"
       >
@@ -591,7 +626,7 @@ onUnmounted(() => {
         :projects="projects.activeProjects.value"
         :archivedProjects="projects.archivedProjects.value"
         :activeProjectId="projects.activeProjectId.value"
-        :insetStart="sidebarCollapsed"
+        :insetStart="sidebarCollapsed && !isFullScreen"
         @select="projects.select"
         @create="handleProjectCreate"
         @archive="projects.archive"
@@ -615,7 +650,7 @@ onUnmounted(() => {
         :collections="collections.activeCollections.value"
         :archivedCollections="collections.archivedCollections.value"
         :activeCollectionId="collections.activeCollectionId.value"
-        :insetStart="sidebarCollapsed"
+        :insetStart="sidebarCollapsed && !isFullScreen"
         @select="collections.select"
         @archive="collections.archive"
         @unarchive="collections.unarchive"
@@ -636,7 +671,7 @@ onUnmounted(() => {
         :generatingMetaId="journal.generatingMetaId.value"
         :generatingBondCommentId="journal.generatingBondCommentId.value"
         :loading="journal.loading.value"
-        :insetStart="sidebarCollapsed"
+        :insetStart="sidebarCollapsed && !isFullScreen"
         @select="journal.select"
         @createAndGenerate="journal.createAndGenerate"
         @update="journal.update"
@@ -655,7 +690,7 @@ onUnmounted(() => {
         </template>
       </JournalView>
 
-      <MediaView v-show="activeView === 'media'" :insetStart="sidebarCollapsed">
+      <MediaView v-show="activeView === 'media'" :insetStart="sidebarCollapsed && !isFullScreen">
         <template #header-start>
           <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
             <PhSidebarSimple :size="16" weight="bold" />
@@ -663,7 +698,7 @@ onUnmounted(() => {
         </template>
       </MediaView>
 
-      <SenseView v-show="activeView === 'sense'" :insetStart="sidebarCollapsed">
+      <SenseView v-show="activeView === 'sense'" :insetStart="sidebarCollapsed && !isFullScreen">
         <template #header-start>
           <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
             <PhSidebarSimple :size="16" weight="bold" />
@@ -690,7 +725,7 @@ onUnmounted(() => {
           v-else
           :operatives="operativesComposable.operatives.value"
           :activeOperativeId="operativesComposable.activeOperativeId.value"
-          :insetStart="sidebarCollapsed"
+          :insetStart="sidebarCollapsed && !isFullScreen"
           @select="operativesComposable.select"
           @cancel="operativesComposable.cancel"
           @remove="operativesComposable.remove"

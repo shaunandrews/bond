@@ -256,6 +256,7 @@ function onInputKeydown(e: KeyboardEvent) {
   border-radius: 50%;
   background: var(--color-accent);
   flex-shrink: 0;
+  margin-right: 8px;
   animation: session-pulse 2s ease-in-out infinite;
 }
 
