@@ -4,6 +4,7 @@ import { PhTrash, PhStar, PhPlus, PhSortAscending, PhSortDescending } from '@pho
 import type { Collection, CollectionItem, FieldDef } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
+import CollectionItemDetail from './CollectionItemDetail.vue'
 
 const props = defineProps<{
   collection: Collection
@@ -13,6 +14,7 @@ const items = ref<CollectionItem[]>([])
 const loading = ref(true)
 const addingItem = ref(false)
 const newItemData = ref<Record<string, string>>({})
+const selectedItemId = ref<string | null>(null)
 
 // Sorting
 const sortField = ref<string | null>(null)
@@ -167,7 +169,16 @@ function formatValue(value: unknown, field: FieldDef): string {
 
 <template>
   <div class="collection-detail">
-    <div v-if="loading" class="detail-loading">
+    <!-- Item detail view -->
+    <CollectionItemDetail
+      v-if="selectedItemId"
+      :collection="collection"
+      :itemId="selectedItemId"
+      @back="selectedItemId = null"
+      @deleted="selectedItemId = null"
+    />
+
+    <div v-else-if="loading" class="detail-loading">
       <BondText size="sm" color="muted">Loading items...</BondText>
     </div>
 
@@ -228,7 +239,7 @@ function formatValue(value: unknown, field: FieldDef): string {
             </div>
 
             <!-- Rows -->
-            <div v-for="item in group.items" :key="item.id" class="table-row">
+            <div v-for="item in group.items" :key="item.id" class="table-row" @click="selectedItemId = item.id">
               <div v-if="primaryField" class="td td-primary">
                 {{ getItemLabel(item) }}
               </div>
@@ -242,7 +253,7 @@ function formatValue(value: unknown, field: FieldDef): string {
                   </span>
                 </template>
                 <template v-else-if="f.type === 'boolean'">
-                  <button class="bool-toggle" @click="toggleBoolean(item, f.name)">
+                  <button class="bool-toggle" @click.stop="toggleBoolean(item, f.name)">
                     {{ item.data[f.name] ? '✓' : '—' }}
                   </button>
                 </template>
@@ -250,14 +261,14 @@ function formatValue(value: unknown, field: FieldDef): string {
                   <span class="field-badge">{{ item.data[f.name] ?? '' }}</span>
                 </template>
                 <template v-else-if="f.type === 'url' && item.data[f.name]">
-                  <a class="field-link" @click.prevent="window.bond.openExternal(String(item.data[f.name]))">link</a>
+                  <a class="field-link" @click.prevent.stop="window.bond.openExternal(String(item.data[f.name]))">link</a>
                 </template>
                 <template v-else>
                   {{ formatValue(item.data[f.name], f) }}
                 </template>
               </div>
               <div class="td td-actions">
-                <BondButton variant="ghost" size="sm" icon @click="deleteItem(item.id)" v-tooltip="'Delete'">
+                <BondButton variant="ghost" size="sm" icon @click.stop="deleteItem(item.id)" v-tooltip="'Delete'">
                   <PhTrash :size="12" />
                 </BondButton>
               </div>
@@ -401,6 +412,12 @@ function formatValue(value: unknown, field: FieldDef): string {
   border-bottom: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
   align-items: center;
   font-size: 0.8125rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+.table-row:hover {
+  background: var(--color-tint);
 }
 .table-row:last-child {
   border-bottom: none;
