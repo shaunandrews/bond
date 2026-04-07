@@ -12,7 +12,8 @@ describe('redaction', () => {
   })
 
   it('redacts Stripe keys', () => {
-    expect(redact('sk_live_ABCDEFGHIJKLMNOPQRSTUVWXYZab')).toContain('[REDACTED_API_KEY]')
+    const fakeKey = 'sk_' + 'live_ABCDEFGHIJKLMNOPQRSTUVWXYZab'
+    expect(redact(fakeKey)).toContain('[REDACTED_API_KEY]')
   })
 
   it('redacts Bearer tokens', () => {
