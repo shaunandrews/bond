@@ -5,16 +5,17 @@
  *
  * Usage:
  *   bond media                     List all images
- *   bond media add <url>           Download image from URL and import
+ *   bond media add <path|url>      Import from local file or URL (also accepts - for stdin)
  *   bond media info <id|number>    Show details for an image
  *   bond media open <id|number>    Open an image in Preview
  *   bond media rm <id|number>      Delete an image
  *   bond media purge               Delete all images
  */
 
-import { join } from 'node:path'
+import { join, extname } from 'node:path'
 import { homedir } from 'node:os'
 import { execSync } from 'node:child_process'
+import { readFileSync, existsSync, statSync } from 'node:fs'
 import WebSocket from 'ws'
 
 const SOCK = join(homedir(), '.bond', 'bond.sock')
@@ -77,6 +78,15 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
     month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit'
   })
+}
+
+function detectMediaType(buf: Buffer): string | undefined {
+  if (buf[0] === 0xFF && buf[1] === 0xD8) return 'image/jpeg'
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png'
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif'
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'image/webp'
+  return undefined
 }
 
 const R = '\x1b[0;31m'
@@ -147,45 +157,82 @@ async function main() {
 
       case 'add':
       case 'download': {
-        const url = args[1]
-        if (!url) { console.error(`${R}Usage:${N} bond media add <url>`); process.exit(1) }
-
-        // Fetch the image
-        let response: Response
-        try {
-          response = await fetch(url, {
-            headers: { 'User-Agent': 'Bond/1.0' },
-            redirect: 'follow'
-          })
-        } catch (err) {
-          console.error(`${R}Failed to fetch:${N} ${err instanceof Error ? err.message : err}`)
+        const source = args[1]
+        if (!source) {
+          console.error(`${R}Usage:${N} bond media add <path|url>`)
+          console.error(`  Accepts local files, URLs, or stdin (bond media add -)`)
           process.exit(1)
         }
 
-        if (!response.ok) {
-          console.error(`${R}HTTP ${response.status}${N} ${response.statusText}`)
-          process.exit(1)
-        }
-
-        // Determine media type from Content-Type header or URL extension
-        const contentType = response.headers.get('content-type')?.split(';')[0]?.trim()
         const extMap: Record<string, string> = {
           '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-          '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp'
+          '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
+          '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
         }
-        const urlExt = '.' + url.split('?')[0].split('.').pop()?.toLowerCase()
-        const mediaType = (contentType && ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(contentType))
-          ? contentType
-          : extMap[urlExt]
+        const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+
+        let buf: Buffer
+        let mediaType: string | undefined
+
+        if (source === '-') {
+          // Read from stdin
+          const chunks: Buffer[] = []
+          for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
+          buf = Buffer.concat(chunks)
+          // Try to detect from magic bytes
+          mediaType = detectMediaType(buf)
+        } else if (/^https?:\/\//i.test(source)) {
+          // URL — fetch it
+          let response: Response
+          try {
+            response = await fetch(source, {
+              headers: { 'User-Agent': 'Bond/1.0' },
+              redirect: 'follow'
+            })
+          } catch (err) {
+            console.error(`${R}Failed to fetch:${N} ${err instanceof Error ? err.message : err}`)
+            process.exit(1)
+          }
+
+          if (!response.ok) {
+            console.error(`${R}HTTP ${response.status}${N} ${response.statusText}`)
+            process.exit(1)
+          }
+
+          const contentType = response.headers.get('content-type')?.split(';')[0]?.trim()
+          const urlExt = '.' + source.split('?')[0].split('.').pop()?.toLowerCase()
+          mediaType = (contentType && supportedTypes.includes(contentType))
+            ? contentType
+            : extMap[urlExt]
+
+          buf = Buffer.from(await response.arrayBuffer())
+        } else {
+          // Local file path — resolve ~ and check existence
+          const filePath = source.startsWith('~') ? join(homedir(), source.slice(1)) : source
+          if (!existsSync(filePath)) {
+            console.error(`${R}File not found:${N} ${filePath}`)
+            process.exit(1)
+          }
+          const stat = statSync(filePath)
+          if (!stat.isFile()) {
+            console.error(`${R}Not a file:${N} ${filePath}`)
+            process.exit(1)
+          }
+
+          const ext = extname(filePath).toLowerCase()
+          mediaType = extMap[ext]
+          buf = readFileSync(filePath)
+
+          // Fall back to magic byte detection
+          if (!mediaType) mediaType = detectMediaType(buf)
+        }
 
         if (!mediaType) {
-          console.error(`${R}Unsupported image type:${N} ${contentType || 'unknown'} (supported: jpeg, png, gif, webp)`)
+          console.error(`${R}Unsupported image type${N} (supported: jpeg, png, gif, webp)`)
           process.exit(1)
         }
 
-        const buf = Buffer.from(await response.arrayBuffer())
         const data = buf.toString('base64')
-
         const result = await call(ws, 'image.import', { data, mediaType }) as ImageRecord
         console.log(`${G}Added${N}  ${formatSize(buf.length)}  ${D}${result.id}${N}`)
         break
