@@ -6,7 +6,6 @@ import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useProjects } from './composables/useProjects'
 import { useCollections } from './composables/useCollections'
-import { useJournal } from './composables/useJournal'
 import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
 import { useBrowser } from './composables/useBrowser'
@@ -26,7 +25,6 @@ import MediaView from './components/MediaView.vue'
 import ProjectsView from './components/ProjectsView.vue'
 import ProjectPanelView from './components/ProjectPanelView.vue'
 import CollectionsView from './components/CollectionsView.vue'
-import JournalView from './components/JournalView.vue'
 import TodoView from './components/TodoView.vue'
 import BrowserView from './components/BrowserView.vue'
 import SenseView from './components/SenseView.vue'
@@ -45,7 +43,6 @@ const chat = useChat()
 const sessions = useSessions()
 const projects = useProjects()
 const collections = useCollections()
-const journal = useJournal()
 const { activeView } = useAppView()
 const browserComposable = useBrowser()
 const operativesComposable = useOperatives()
@@ -324,7 +321,6 @@ let removeAccentListener: (() => void) | null = null
 let removeModelListener: (() => void) | null = null
 let removeProjectsListener: (() => void) | null = null
 let removeCollectionsListener: (() => void) | null = null
-let removeJournalListener: (() => void) | null = null
 let removeConnectionLostListener: (() => void) | null = null
 let removeConnectionRestoredListener: (() => void) | null = null
 let removeFullscreenListener: (() => void) | null = null
@@ -429,7 +425,6 @@ onMounted(async () => {
   })
   removeProjectsListener = window.bond.onProjectsChanged(() => projects.load())
   removeCollectionsListener = window.bond.onCollectionsChanged(() => collections.load())
-  removeJournalListener = window.bond.onJournalChanged(() => journal.load())
   removeConnectionLostListener = window.bond.onConnectionLost(() => {
     chat.stashToLocalStorage()
   })
@@ -452,7 +447,6 @@ onMounted(async () => {
   refreshMediaCount()
   projects.load()
   collections.load()
-  journal.load()
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
 
@@ -501,7 +495,6 @@ onUnmounted(() => {
   removeModelListener?.()
   removeProjectsListener?.()
   removeCollectionsListener?.()
-  removeJournalListener?.()
   removeConnectionLostListener?.()
   removeConnectionRestoredListener?.()
   removeFullscreenListener?.()
@@ -525,7 +518,6 @@ onUnmounted(() => {
         :mediaCount="mediaCount"
         :projectCount="projects.activeProjects.value.length"
         :collectionCount="collections.activeCollections.value.length"
-        :journalCount="journal.entries.value.length"
         :operativeRunningCount="operativesComposable.runningCount.value"
         @select="handleSelectSession"
         @create="handleNewSession"
@@ -537,7 +529,6 @@ onUnmounted(() => {
         @removeArchived="sessions.removeArchived"
         @projects="activeView = 'projects'"
         @collections="activeView = 'collections'"
-        @journal="activeView = 'journal'"
         @media="activeView = 'media'"
         @sense="activeView = 'sense'"
         @operatives="activeView = 'operatives'"
@@ -663,32 +654,6 @@ onUnmounted(() => {
           </BondButton>
         </template>
       </CollectionsView>
-
-      <JournalView
-        v-show="activeView === 'journal'"
-        :entries="journal.entries.value"
-        :activeEntryId="journal.activeEntryId.value"
-        :generatingMetaId="journal.generatingMetaId.value"
-        :generatingBondCommentId="journal.generatingBondCommentId.value"
-        :loading="journal.loading.value"
-        :insetStart="sidebarCollapsed && !isFullScreen"
-        @select="journal.select"
-        @createAndGenerate="journal.createAndGenerate"
-        @update="journal.update"
-        @remove="journal.remove"
-        @search="journal.search"
-        @load="journal.load"
-        @togglePin="journal.togglePin"
-        @addComment="journal.addComment"
-        @deleteComment="journal.deleteComment"
-        @requestBondComment="journal.requestBondComment"
-      >
-        <template #header-start>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-      </JournalView>
 
       <MediaView v-show="activeView === 'media'" :insetStart="sidebarCollapsed && !isFullScreen">
         <template #header-start>
