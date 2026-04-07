@@ -653,17 +653,27 @@ export function useChat(deps: ChatDeps = window.bond) {
     }
   }
 
-  /** Stash current messages to localStorage as an emergency backup.
+  /** Stash all in-memory messages to localStorage as an emergency backup.
    *  Called on beforeunload and connection loss. */
   function stashToLocalStorage() {
+    const ts = String(Date.now())
+    // Stash current session
     const sid = currentSessionId.value
-    if (!sid || !messages.value.length) return
-    try {
-      const key = `bond:msg-backup:${sid}`
-      const data = JSON.stringify(toSessionMessages(messages.value))
-      localStorage.setItem(key, data)
-      localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
-    } catch { /* quota exceeded — best effort */ }
+    if (sid && messages.value.length) {
+      try {
+        const key = `bond:msg-backup:${sid}`
+        localStorage.setItem(key, JSON.stringify(toSessionMessages(messages.value)))
+        localStorage.setItem('bond:msg-backup-ts', ts)
+      } catch { /* quota exceeded — best effort */ }
+    }
+    // Stash background sessions too
+    for (const [bgSid, msgs] of backgroundMessages) {
+      if (!msgs.length) continue
+      try {
+        const key = `bond:msg-backup:${bgSid}`
+        localStorage.setItem(key, JSON.stringify(toSessionMessages(msgs)))
+      } catch { /* quota exceeded — stop trying */ break }
+    }
   }
 
   /** Restore messages from localStorage backup if DB has fewer.
