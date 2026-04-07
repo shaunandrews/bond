@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { resolve, normalize } from 'node:path'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
@@ -21,6 +22,23 @@ export function refreshSkillsCache(): SkillInfo[] {
   return scanSkills()
 }
 
+/**
+ * Load MCP server configs from ~/.claude.json (same format Claude Code uses).
+ * Returns a record suitable for the SDK's mcpServers option.
+ */
+function loadMcpServers(): Record<string, unknown> | undefined {
+  try {
+    const raw = readFileSync(resolve(homedir(), '.claude.json'), 'utf-8')
+    const cfg = JSON.parse(raw)
+    const servers = cfg?.mcpServers
+    if (!servers || typeof servers !== 'object' || Object.keys(servers).length === 0) return undefined
+    console.log('[bond] loaded MCP servers:', Object.keys(servers).join(', '))
+    return servers
+  } catch {
+    return undefined
+  }
+}
+
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'Bash'])
 const READ_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch']
 const ALL_TOOLS = [...READ_TOOLS, 'Edit', 'Write', 'Bash']
@@ -38,14 +56,16 @@ function isWithinAllowedPaths(targetPath: string, allowedPaths: string[]): boole
   })
 }
 
-type ApprovalResolve = (result: { behavior: 'allow' } | { behavior: 'deny'; message: string }) => void
+type AllowResult = { behavior: 'allow'; updatedInput?: Record<string, unknown> }
+type DenyResult = { behavior: 'deny'; message: string }
+type ApprovalResolve = (result: AllowResult | DenyResult) => void
 const pendingApprovals = new Map<string, { resolve: ApprovalResolve; sessionId: string }>()
 
-export function resolvePendingApproval(requestId: string, approved: boolean): void {
+export function resolvePendingApproval(requestId: string, approved: boolean, input?: Record<string, unknown>): void {
   const entry = pendingApprovals.get(requestId)
   if (!entry) return
   pendingApprovals.delete(requestId)
-  entry.resolve(approved ? { behavior: 'allow' } : { behavior: 'deny', message: 'User denied this action' })
+  entry.resolve(approved ? { behavior: 'allow', ...(input ? { updatedInput: input } : {}) } : { behavior: 'deny', message: 'User denied this action' })
 }
 
 export function clearSessionApprovals(sessionId: string): void {
@@ -511,10 +531,10 @@ export async function runBondQuery(
     canUseTool: async (
       toolName: string,
       input: Record<string, unknown>,
-      sdkOptions: { title?: string; description?: string }
+      sdkOptions: { title?: string; displayName?: string; description?: string; toolUseID: string }
     ) => {
       if (!WRITE_TOOLS.has(toolName)) {
-        return { behavior: 'allow' as const }
+        return { behavior: 'allow' as const, updatedInput: input }
       }
       if (editMode.type === 'readonly') {
         return { behavior: 'deny' as const, message: 'Session is in read-only mode' }
@@ -531,10 +551,10 @@ export async function runBondQuery(
         requestId,
         toolName,
         input,
-        title: sdkOptions.title,
+        title: sdkOptions.title ?? sdkOptions.displayName,
         description: sdkOptions.description
       })
-      return new Promise<{ behavior: 'allow' } | { behavior: 'deny'; message: string }>((resolve) => {
+      return new Promise<AllowResult | DenyResult>((resolve) => {
         pendingApprovals.set(requestId, { resolve, sessionId: options.sessionId ?? '' })
       })
     },
@@ -547,6 +567,7 @@ export async function runBondQuery(
     plugins: [
       { type: 'local', path: resolve(getSkillsDir(), '..') }
     ],
+    mcpServers: loadMcpServers(),
     env: {
       ...process.env,
       CLAUDE_AGENT_SDK_CLIENT_APP: 'bond-electron/0.1.0'
