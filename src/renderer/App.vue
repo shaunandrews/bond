@@ -6,30 +6,27 @@ import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useProjects } from './composables/useProjects'
 import { useCollections } from './composables/useCollections'
-import { useAppView } from './composables/useAppView'
 import { useAccentColor } from './composables/useAccentColor'
 import { useBrowser } from './composables/useBrowser'
 import { useOperatives } from './composables/useOperatives'
 import { useOperativeEvents } from './composables/useOperativeEvents'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhGlobe, PhX, PhRobot } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhGlobe, PhX, PhRobot, PhDotsThree, PhListBullets, PhClockCounterClockwise, PhImages } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
+import BondFlyoutMenu from './components/BondFlyoutMenu.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import MissionBriefing from './components/MissionBriefing.vue'
 import ChatInput from './components/ChatInput.vue'
 import ActivityBar from './components/ActivityBar.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import MediaView from './components/MediaView.vue'
-import ProjectsView from './components/ProjectsView.vue'
 import ProjectPanelView from './components/ProjectPanelView.vue'
 import CollectionsView from './components/CollectionsView.vue'
 import TodoView from './components/TodoView.vue'
 import BrowserView from './components/BrowserView.vue'
-import SenseView from './components/SenseView.vue'
-import OperativesView from './components/OperativesView.vue'
-import OperativeDetail from './components/OperativeDetail.vue'
+import SensePanelView from './components/SensePanelView.vue'
 import OperativePanelView from './components/OperativePanelView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
@@ -43,7 +40,6 @@ const chat = useChat()
 const sessions = useSessions()
 const projects = useProjects()
 const collections = useCollections()
-const { activeView } = useAppView()
 const browserComposable = useBrowser()
 const operativesComposable = useOperatives()
 const operativeEvents = useOperativeEvents(computed(() => operativesComposable.activeOperativeId.value))
@@ -134,12 +130,12 @@ const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === 
 const isFullScreen = ref(false)
 const sidebarWidth = ref(getInitialSidebarWidth())
 
-type RightPanelContent = 'todos' | 'projects' | 'browser' | 'operatives'
+type RightPanelContent = 'todos' | 'projects' | 'browser' | 'operatives' | 'collections' | 'sense' | 'media'
 const rightPanelCollapsed = ref(localStorage.getItem('bond:right-panel') === 'none' || !localStorage.getItem('bond:right-panel'))
 const rightPanelContent = ref<RightPanelContent>(
   (localStorage.getItem('bond:right-panel-content') as RightPanelContent) || 'todos'
 )
-const rightPanelOpen = computed(() => !rightPanelCollapsed.value && activeView.value === 'chat')
+const rightPanelOpen = computed(() => !rightPanelCollapsed.value)
 const rightPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
 
 function getInitialRightPanelWidth(): number {
@@ -154,7 +150,7 @@ function getInitialRightPanelWidth(): number {
 }
 const rightPanelWidth = ref(getInitialRightPanelWidth())
 
-const rightPanelHidden = computed(() => rightPanelCollapsed.value || activeView.value !== 'chat')
+const rightPanelHidden = computed(() => rightPanelCollapsed.value)
 
 const rightPanelStyle = computed(() => ({
   marginRight: rightPanelHidden.value ? `-${rightPanelWidth.value}px` : '0',
@@ -195,6 +191,15 @@ function ensureBrowserPanel() {
 function syncRightPanelWidth() {
   const actual = rightPanelRef.value?.getSize()
   if (actual != null) rightPanelWidth.value = actual
+}
+
+// Overflow menu for extra panel types
+const overflowMenuOpen = ref(false)
+const overflowBtnRef = ref<InstanceType<typeof BondButton> | null>(null)
+
+function openPanelFromOverflow(panel: RightPanelContent) {
+  overflowMenuOpen.value = false
+  toggleRightPanel(panel)
 }
 
 const sidebarStyle = computed(() => ({
@@ -264,7 +269,6 @@ async function handleEditModeChange(mode: EditMode) {
 async function handleNewSession() {
   const session = await sessions.create()
   await chat.loadSession(session.id)
-  activeView.value = 'chat'
   const model = await window.bond.getModel() as ModelId
   selectedModel.value = model
   nextTick(() => chatInputRef.value?.focus())
@@ -273,7 +277,6 @@ async function handleNewSession() {
 async function handleCreateSkill(description: string) {
   const session = await sessions.create()
   await chat.loadSession(session.id)
-  activeView.value = 'chat'
   nextTick(() => {
     const prompt = `Create a new Bond skill based on this description:\n\n${description}\n\nWrite the SKILL.md file to ~/.bond/skills/ with a good name, clear description, and useful instructions. After creating it, tell me the skill name so I know how to use it.`
     chat.submit(prompt)
@@ -283,7 +286,6 @@ async function handleCreateSkill(description: string) {
 async function handleTodoChat(text: string) {
   const session = await sessions.create()
   await chat.loadSession(session.id)
-  activeView.value = 'chat'
   nextTick(() => {
     chat.submit(text)
   })
@@ -297,7 +299,6 @@ async function handleProjectStartChat(projectId: string) {
   const project = projects.projects.value.find(p => p.id === projectId)
   const session = await sessions.create({ projectId })
   await chat.loadSession(session.id)
-  activeView.value = 'chat'
   if (project?.goal) {
     nextTick(() => {
       chat.submit(`I'm working on the "${project.name}" project. Goal: ${project.goal}`)
@@ -346,7 +347,6 @@ async function handleRemoveSession(id: string) {
 }
 
 async function handleSelectSession(id: string) {
-  activeView.value = 'chat'
   if (id === sessions.activeSessionId.value) return
   sessions.select(id)
   await chat.loadSession(id)
@@ -383,6 +383,14 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.metaKey && e.shiftKey && e.key === 'k') {
     e.preventDefault()
     toggleRightPanel('browser')
+  }
+  if (e.metaKey && e.shiftKey && e.key === 'p') {
+    e.preventDefault()
+    toggleRightPanel('projects')
+  }
+  if (e.metaKey && e.shiftKey && e.key === 'o') {
+    e.preventDefault()
+    toggleRightPanel('operatives')
   }
   if (e.metaKey && !e.shiftKey && e.key === 't') {
     // Only intercept Cmd+T when browser panel is open
@@ -481,7 +489,6 @@ onMounted(async () => {
     await handleNewSession()
   } else {
     // All sessions archived — show empty chat without auto-creating
-    activeView.value = 'chat'
   }
 })
 
@@ -512,13 +519,8 @@ onUnmounted(() => {
         :sessions="sessions.activeSessions.value"
         :archivedSessions="sessions.archivedSessions.value"
         :activeSessionId="sessions.activeSessionId.value"
-        :activeView="activeView"
         :generatingTitleId="sessions.generatingTitleId.value"
         :busySessionIds="chat.busySessionIds.value"
-        :mediaCount="mediaCount"
-        :projectCount="projects.activeProjects.value.length"
-        :collectionCount="collections.activeCollections.value.length"
-        :operativeRunningCount="operativesComposable.runningCount.value"
         @select="handleSelectSession"
         @create="handleNewSession"
         @archive="handleArchiveSession"
@@ -527,11 +529,6 @@ onUnmounted(() => {
         @unfavorite="sessions.unfavorite"
         @remove="handleRemoveSession"
         @removeArchived="sessions.removeArchived"
-        @projects="activeView = 'projects'"
-        @collections="activeView = 'collections'"
-        @media="activeView = 'media'"
-        @sense="activeView = 'sense'"
-        @operatives="activeView = 'operatives'"
         @rename="handleRenameSession"
         @setIconSeed="sessions.setIconSeed"
       />
@@ -542,7 +539,6 @@ onUnmounted(() => {
     <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="rightPanelContent === 'browser' && !rightPanelCollapsed ? 300 : 420">
       <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
       <ViewShell
-        v-show="activeView === 'chat'"
         ref="chatShellRef"
         :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
         :insetStart="sidebarCollapsed && !isFullScreen"
@@ -555,18 +551,39 @@ onUnmounted(() => {
           </BondButton>
         </template>
         <template #header-end>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'projects' }" @click.stop="toggleRightPanel('projects')" v-tooltip="'Projects panel'">
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'projects' }" @click.stop="toggleRightPanel('projects')" v-tooltip="'Projects ⇧⌘P'">
             <PhCube :size="16" weight="bold" />
           </BondButton>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'todos' }" @click.stop="toggleRightPanel('todos')" v-tooltip="'Todos panel ⇧⌘B'">
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'todos' }" @click.stop="toggleRightPanel('todos')" v-tooltip="'Todos ⇧⌘B'">
             <PhChecks :size="16" weight="bold" />
           </BondButton>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'operatives' }" @click.stop="toggleRightPanel('operatives')" v-tooltip="'Operatives panel'">
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'operatives' }" @click.stop="toggleRightPanel('operatives')" v-tooltip="'Operatives ⇧⌘O'">
             <PhRobot :size="16" weight="bold" />
           </BondButton>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'browser' }" @click.stop="toggleRightPanel('browser')" v-tooltip="'Browser panel ⇧⌘K'">
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'browser' }" @click.stop="toggleRightPanel('browser')" v-tooltip="'Browser ⇧⌘K'">
             <PhGlobe :size="16" weight="bold" />
           </BondButton>
+          <BondButton ref="overflowBtnRef" variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && ['collections', 'sense', 'media'].includes(rightPanelContent) }" @click.stop="overflowMenuOpen = !overflowMenuOpen" v-tooltip="'More panels'">
+            <PhDotsThree :size="16" weight="bold" />
+          </BondButton>
+          <BondFlyoutMenu :open="overflowMenuOpen" :anchor="overflowBtnRef?.$el" :width="180" @close="overflowMenuOpen = false">
+            <nav class="overflow-menu">
+              <button :class="['overflow-menu-item', { active: rightPanelOpen && rightPanelContent === 'collections' }]" @click="openPanelFromOverflow('collections')">
+                <PhListBullets :size="14" weight="bold" />
+                <span>Collections</span>
+                <span v-if="collections.activeCollections.value.length" class="overflow-badge">{{ collections.activeCollections.value.length }}</span>
+              </button>
+              <button :class="['overflow-menu-item', { active: rightPanelOpen && rightPanelContent === 'sense' }]" @click="openPanelFromOverflow('sense')">
+                <PhClockCounterClockwise :size="14" weight="bold" />
+                <span>Sense</span>
+              </button>
+              <button :class="['overflow-menu-item', { active: rightPanelOpen && rightPanelContent === 'media' }]" @click="openPanelFromOverflow('media')">
+                <PhImages :size="14" weight="bold" />
+                <span>Media</span>
+                <span v-if="mediaCount" class="overflow-badge">{{ mediaCount }}</span>
+              </button>
+            </nav>
+          </BondFlyoutMenu>
         </template>
 
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
@@ -606,117 +623,31 @@ onUnmounted(() => {
                 </button>
               </div>
             </TransitionGroup>
-            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :trimBottom="chat.activity.value.type !== 'idle'" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
+            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :trimBottom="chat.activity.value.type !== 'idle'" :contextUsage="chat.contextUsage.value" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
             <ActivityBar :activity="chat.activity.value" v-model:expanded="activityExpanded" />
           </div>
         </template>
       </ViewShell>
-
-      <ProjectsView
-        v-show="activeView === 'projects'"
-        :projects="projects.activeProjects.value"
-        :archivedProjects="projects.archivedProjects.value"
-        :activeProjectId="projects.activeProjectId.value"
-        :insetStart="sidebarCollapsed && !isFullScreen"
-        @select="projects.select"
-        @create="handleProjectCreate"
-        @archive="projects.archive"
-        @unarchive="projects.unarchive"
-        @remove="projects.remove"
-        @addResource="projects.addResource"
-        @removeResource="projects.removeResource"
-        @updateDeadline="(id, d) => projects.update(id, { deadline: d })"
-        @startChat="handleProjectStartChat"
-        @back="projects.select(null)"
-      >
-        <template #header-start>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-      </ProjectsView>
-
-      <CollectionsView
-        v-show="activeView === 'collections'"
-        :collections="collections.activeCollections.value"
-        :archivedCollections="collections.archivedCollections.value"
-        :activeCollectionId="collections.activeCollectionId.value"
-        :insetStart="sidebarCollapsed && !isFullScreen"
-        @select="collections.select"
-        @archive="collections.archive"
-        @unarchive="collections.unarchive"
-        @remove="collections.remove"
-        @back="collections.select(null)"
-      >
-        <template #header-start>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-      </CollectionsView>
-
-      <MediaView v-show="activeView === 'media'" :insetStart="sidebarCollapsed && !isFullScreen">
-        <template #header-start>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-      </MediaView>
-
-      <SenseView v-show="activeView === 'sense'" :insetStart="sidebarCollapsed && !isFullScreen">
-        <template #header-start>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
-      </SenseView>
-
-      <template v-if="activeView === 'operatives'">
-        <OperativeDetail
-          v-if="operativesComposable.activeOperative.value"
-          :operative="operativesComposable.activeOperative.value"
-          :events="operativeEvents.events.value"
-          @cancel="operativesComposable.cancel"
-          @remove="(id) => { operativesComposable.remove(id); operativesComposable.select(null) }"
-          @back="operativesComposable.select(null)"
-        >
-          <template #header-start>
-            <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
-              <PhSidebarSimple :size="16" weight="bold" />
-            </BondButton>
-          </template>
-        </OperativeDetail>
-        <OperativesView
-          v-else
-          :operatives="operativesComposable.operatives.value"
-          :activeOperativeId="operativesComposable.activeOperativeId.value"
-          :insetStart="sidebarCollapsed && !isFullScreen"
-          @select="operativesComposable.select"
-          @cancel="operativesComposable.cancel"
-          @remove="operativesComposable.remove"
-          @clear="operativesComposable.clear"
-        >
-          <template #header-start>
-            <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
-              <PhSidebarSimple :size="16" weight="bold" />
-            </BondButton>
-          </template>
-        </OperativesView>
-      </template>
       </div>
     </BondPanel>
 
     <BondPanelHandle v-show="!rightPanelHidden" id="handle-1" />
 
-    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="rightPanelContent === 'browser' ? 360 : 260" :maxSize="99999" :style="rightPanelStyle">
+    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="rightPanelContent === 'browser' ? 360 : rightPanelContent === 'sense' ? 300 : 260" :maxSize="99999" :style="rightPanelStyle">
       <TodoView v-if="rightPanelContent === 'todos'" @startChat="handleTodoChat" />
       <ProjectPanelView v-else-if="rightPanelContent === 'projects'"
         :projects="projects.activeProjects.value"
+        :archivedProjects="projects.archivedProjects.value"
         :activeProjectId="projects.activeProjectId.value"
         @select="projects.select"
+        @create="handleProjectCreate"
+        @archive="projects.archive"
+        @unarchive="projects.unarchive"
+        @remove="projects.remove"
         @startChat="handleProjectStartChat"
         @addResource="projects.addResource"
         @removeResource="projects.removeResource"
+        @updateDeadline="(id: string, d: string) => projects.update(id, { deadline: d })"
       />
       <OperativePanelView v-else-if="rightPanelContent === 'operatives'"
         :operatives="operativesComposable.operatives.value"
@@ -725,7 +656,20 @@ onUnmounted(() => {
         @select="operativesComposable.select"
         @cancel="operativesComposable.cancel"
         @remove="operativesComposable.remove"
+        @clear="operativesComposable.clear"
       />
+      <CollectionsView v-else-if="rightPanelContent === 'collections'"
+        :collections="collections.activeCollections.value"
+        :archivedCollections="collections.archivedCollections.value"
+        :activeCollectionId="collections.activeCollectionId.value"
+        @select="collections.select"
+        @archive="collections.archive"
+        @unarchive="collections.unarchive"
+        @remove="collections.remove"
+        @back="collections.select(null)"
+      />
+      <SensePanelView v-else-if="rightPanelContent === 'sense'" />
+      <MediaView v-else-if="rightPanelContent === 'media'" />
       <!-- BrowserView uses v-show so webview tabs stay alive when panel switches -->
       <BrowserView v-show="rightPanelContent === 'browser'" ref="browserViewRef" @ensureVisible="ensureBrowserPanel" />
     </BondPanel>
@@ -836,5 +780,51 @@ onUnmounted(() => {
 .queued-leave-to {
   opacity: 0;
   transform: translateY(4px);
+}
+
+/* Overflow menu for extra panel types */
+.overflow-menu {
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+}
+
+.overflow-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.625rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+  width: 100%;
+  text-align: left;
+}
+.overflow-menu-item:hover {
+  background: var(--color-tint);
+}
+.overflow-menu-item.active {
+  color: var(--color-accent, var(--color-text-primary));
+}
+
+.overflow-badge {
+  margin-left: auto;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  min-width: 1.125rem;
+  height: 1.125rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.3125rem;
+  border-radius: 999px;
+  background: var(--color-accent, var(--color-text-primary));
+  color: var(--color-bg, #fff);
 }
 </style>

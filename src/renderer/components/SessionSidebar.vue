@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash, PhImages, PhCube, PhListBullets, PhClockCounterClockwise, PhRobot } from '@phosphor-icons/vue'
+import { PhPlus, PhArchive, PhArrowLineUp, PhGear, PhTrash } from '@phosphor-icons/vue'
 import type { Session } from '../../shared/session'
 import SessionItem from './SessionItem.vue'
 import SessionCard from './SessionCard.vue'
@@ -15,13 +15,8 @@ const props = defineProps<{
   sessions: Session[]
   archivedSessions: Session[]
   activeSessionId: string | null
-  activeView: string
   generatingTitleId: string | null
   busySessionIds: Set<string>
-  mediaCount: number
-  projectCount: number
-  collectionCount: number
-  operativeRunningCount?: number
 }>()
 
 const chatCount = computed(() => props.sessions.length)
@@ -54,11 +49,6 @@ const emit = defineEmits<{
   removeArchived: []
   favorite: [id: string]
   unfavorite: [id: string]
-  projects: []
-  collections: []
-  media: []
-  sense: []
-  operatives: []
   rename: [id: string, title: string]
   setIconSeed: [id: string, seed: number]
 }>()
@@ -142,7 +132,7 @@ const emit = defineEmits<{
               v-for="s in favoritedSessions"
               :key="s.id"
               :session="s"
-              :active="s.id === activeSessionId && activeView === 'chat'"
+              :active="s.id === activeSessionId"
               :busy="busySessionIds.has(s.id)"
               @select="emit('select', s.id)"
               @unfavorite="emit('unfavorite', s.id)"
@@ -157,7 +147,7 @@ const emit = defineEmits<{
               v-for="s in regularSessions"
               :key="s.id"
               :session="s"
-              :active="s.id === activeSessionId && activeView === 'chat'"
+              :active="s.id === activeSessionId"
               :generating="generatingTitleId === s.id"
               :busy="busySessionIds.has(s.id)"
               actionTitle="Archive"
@@ -176,49 +166,6 @@ const emit = defineEmits<{
         </nav>
       </BondPanel>
     </BondPanelGroup>
-
-    <nav class="sidebar-nav">
-      <button
-        :class="['sidebar-nav-item', { active: activeView === 'projects' }]"
-        @click="emit('projects')"
-      >
-        <PhCube :size="16" weight="bold" />
-        <BondText size="sm">Projects</BondText>
-        <span v-if="projectCount > 0" class="media-count-badge">{{ projectCount }}</span>
-      </button>
-      <button
-        :class="['sidebar-nav-item', { active: activeView === 'collections' }]"
-        @click="emit('collections')"
-      >
-        <PhListBullets :size="16" weight="bold" />
-        <BondText size="sm">Collections</BondText>
-        <span v-if="collectionCount > 0" class="media-count-badge">{{ collectionCount }}</span>
-      </button>
-      <button
-        :class="['sidebar-nav-item', { active: activeView === 'operatives' }]"
-        @click="emit('operatives')"
-      >
-        <PhRobot :size="16" weight="bold" />
-        <BondText size="sm">Operatives</BondText>
-        <span v-if="operativeRunningCount && operativeRunningCount > 0" class="media-count-badge running-badge">{{ operativeRunningCount }}</span>
-      </button>
-      <button
-        :class="['sidebar-nav-item', { active: activeView === 'sense' }]"
-        @click="emit('sense')"
-      >
-        <PhClockCounterClockwise :size="16" weight="bold" />
-        <BondText size="sm">Sense</BondText>
-      </button>
-      <button
-        :class="['sidebar-nav-item', { active: activeView === 'media' }]"
-        @click="emit('media')"
-      >
-        <PhImages :size="16" weight="bold" />
-        <BondText size="sm">Media</BondText>
-        <span v-if="mediaCount > 0" class="media-count-badge">{{ mediaCount }}</span>
-      </button>
-    </nav>
-
   </aside>
 </template>
 
@@ -263,62 +210,4 @@ const emit = defineEmits<{
   display: flex;
   justify-content: flex-end;
 }
-
-.sidebar-nav {
-  border-top: 1px solid var(--sidebar-border);
-  padding: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.sidebar-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.375rem 0.625rem;
-  border-radius: var(--radius-md);
-  border: none;
-  background: none;
-  color: var(--sidebar-text);
-  cursor: pointer;
-  width: 100%;
-  text-align: left;
-  transition: background var(--transition-fast);
-}
-
-.sidebar-nav-item:hover {
-  background: var(--sidebar-hover-bg);
-}
-
-.sidebar-nav-item.active {
-  background: var(--sidebar-hover-bg);
-  color: var(--color-text-primary);
-}
-
-.media-count-badge {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  line-height: 1;
-  min-width: 1.125rem;
-  height: 1.125rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 0.3125rem;
-  border-radius: 999px;
-  background: var(--color-accent, var(--color-text-primary));
-  color: var(--color-bg, #fff);
-  margin-left: auto;
-}
-
-.running-badge {
-  animation: pulse-badge 2s ease-in-out infinite;
-}
-
-@keyframes pulse-badge {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
 </style>

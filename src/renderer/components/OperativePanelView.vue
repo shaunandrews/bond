@@ -5,7 +5,9 @@ import type { Operative, OperativeEvent } from '../../shared/operative'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
 import BondToolbar from './BondToolbar.vue'
+import BondTab from './BondTab.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
+import ContextGauge from './ContextGauge.vue'
 
 const props = defineProps<{
   operatives: Operative[]
@@ -17,10 +19,35 @@ const emit = defineEmits<{
   select: [id: string | null]
   cancel: [id: string]
   remove: [id: string]
+  clear: []
 }>()
 
 const activeOperative = computed(() =>
   props.operatives.find(o => o.id === props.activeOperativeId) ?? null
+)
+
+// --- List filter ---
+
+const filterTabs = [
+  { id: 'all', label: 'All' },
+  { id: 'running', label: 'Active' },
+  { id: 'completed', label: 'Done' },
+]
+
+const activeFilter = ref('all')
+
+const filteredOperatives = computed(() => {
+  if (activeFilter.value === 'running') {
+    return props.operatives.filter(o => o.status === 'running' || o.status === 'queued')
+  }
+  if (activeFilter.value === 'completed') {
+    return props.operatives.filter(o => o.status === 'completed' || o.status === 'failed' || o.status === 'cancelled')
+  }
+  return props.operatives
+})
+
+const hasFinished = computed(() =>
+  props.operatives.some(o => o.status === 'completed' || o.status === 'failed' || o.status === 'cancelled')
 )
 
 // --- List helpers ---
@@ -66,6 +93,11 @@ function abbreviatePath(path: string): string {
     }
   }
   return path
+}
+
+function formatCost(cost: number): string {
+  if (cost < 0.01) return ''
+  return `$${cost.toFixed(2)}`
 }
 
 // --- Detail helpers ---
@@ -126,6 +158,29 @@ function toolIcon(name: string) {
   return PhTerminal
 }
 
+// Context usage from live events or stored operative record
+const operativeContextUsage = computed(() => {
+  if (!activeOperative.value) return { inputTokens: 0, contextWindow: 0, costUsd: 0 }
+  for (let i = props.events.length - 1; i >= 0; i--) {
+    const evt = props.events[i]
+    if (evt.kind === 'usage_update') {
+      return {
+        inputTokens: (evt.data as any).inputTokens ?? 0,
+        contextWindow: (evt.data as any).contextWindow ?? 0,
+        costUsd: (evt.data as any).costUsd ?? 0
+      }
+    }
+  }
+  if (activeOperative.value.contextWindow) {
+    return {
+      inputTokens: activeOperative.value.inputTokens,
+      contextWindow: activeOperative.value.contextWindow,
+      costUsd: activeOperative.value.costUsd
+    }
+  }
+  return { inputTokens: 0, contextWindow: 0, costUsd: 0 }
+})
+
 const scrollRef = ref<HTMLElement | null>(null)
 
 watch(() => props.events.length, () => {
@@ -165,9 +220,20 @@ watch(() => props.events.length, () => {
           </span>
           <BondText size="xs" color="muted">{{ formatDuration(activeOperative) }}</BondText>
           <BondText v-if="activeOperative.costUsd > 0.01" size="xs" color="muted">${{ activeOperative.costUsd.toFixed(2) }}</BondText>
+          <ContextGauge
+            :used="operativeContextUsage.inputTokens"
+            :limit="operativeContextUsage.contextWindow"
+            :cost="operativeContextUsage.costUsd"
+          />
         </div>
         <BondText size="xs" color="muted" class="op-detail-path">{{ abbreviatePath(activeOperative.workingDir) }}</BondText>
+        <BondText v-if="activeOperative.branch" size="xs" color="muted" class="op-detail-branch">Branch: {{ activeOperative.branch }}</BondText>
         <BondText v-if="activeOperative.errorMessage" size="xs" color="err" class="op-detail-error">{{ activeOperative.errorMessage }}</BondText>
+
+        <!-- Prompt -->
+        <div v-if="activeOperative.prompt" class="op-detail-prompt">
+          <MarkdownMessage :text="activeOperative.prompt" :streaming="false" />
+        </div>
 
         <!-- Activity feed -->
         <div class="op-feed">
@@ -200,14 +266,24 @@ watch(() => props.events.length, () => {
         <template #middle>
           <BondText size="sm" weight="medium">Operatives</BondText>
         </template>
+        <template #end>
+          <BondButton v-if="hasFinished" variant="ghost" size="sm" icon @click="emit('clear')" v-tooltip="'Clear finished'">
+            <PhTrash :size="14" />
+          </BondButton>
+        </template>
       </BondToolbar>
+
       <div class="op-panel-scroll">
-        <div v-if="operatives.length === 0" class="op-empty">
-          <BondText color="muted" size="sm">No operatives</BondText>
+        <div class="op-filter">
+          <BondTab :tabs="filterTabs" v-model="activeFilter" />
+        </div>
+
+        <div v-if="filteredOperatives.length === 0" class="op-empty">
+          <BondText color="muted" size="sm">No operatives{{ activeFilter !== 'all' ? ' matching filter' : '' }}</BondText>
         </div>
         <div v-else class="op-list">
           <button
-            v-for="op in operatives"
+            v-for="op in filteredOperatives"
             :key="op.id"
             :class="['op-item', { active: op.id === activeOperativeId }]"
             @click="emit('select', op.id)"
@@ -217,14 +293,19 @@ watch(() => props.events.length, () => {
             </div>
             <div class="op-item-info">
               <BondText size="sm" weight="medium" truncate>{{ op.name }}</BondText>
+              <BondText v-if="op.prompt" size="xs" color="muted" class="op-item-prompt">{{ op.prompt }}</BondText>
               <div class="op-item-meta">
+                <BondText size="xs" color="muted">{{ abbreviatePath(op.workingDir) }}</BondText>
                 <BondText size="xs" color="muted">{{ formatDuration(op) }}</BondText>
-                <BondText v-if="op.costUsd > 0.01" size="xs" color="muted">${{ op.costUsd.toFixed(2) }}</BondText>
+                <BondText v-if="formatCost(op.costUsd)" size="xs" color="muted">{{ formatCost(op.costUsd) }}</BondText>
               </div>
             </div>
             <div class="op-item-actions" @click.stop>
               <BondButton v-if="op.status === 'running' || op.status === 'queued'" variant="ghost" size="sm" icon @click="emit('cancel', op.id)" v-tooltip="'Cancel'">
                 <PhStop :size="12" />
+              </BondButton>
+              <BondButton v-else variant="ghost" size="sm" icon @click="emit('remove', op.id)" v-tooltip="'Remove'">
+                <PhTrash :size="12" />
               </BondButton>
             </div>
           </button>
@@ -239,6 +320,8 @@ watch(() => props.events.length, () => {
   height: 100%;
   display: flex;
   flex-direction: column;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg);
 }
 
 .op-panel-toolbar {
@@ -252,6 +335,10 @@ watch(() => props.events.length, () => {
   flex: 1;
   overflow-y: auto;
   padding: 8px 12px;
+}
+
+.op-filter {
+  margin-bottom: 8px;
 }
 
 .op-empty {
@@ -282,8 +369,15 @@ watch(() => props.events.length, () => {
 .op-item.active { background: var(--color-tint); }
 
 .op-item-status { flex-shrink: 0; display: flex; align-items: center; }
-.op-item-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.op-item-meta { display: flex; gap: 6px; align-items: center; }
+.op-item-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.op-item-prompt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+.op-item-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .op-item-actions { flex-shrink: 0; opacity: 0; transition: opacity var(--transition-fast); }
 .op-item:hover .op-item-actions { opacity: 1; }
 
@@ -298,7 +392,7 @@ watch(() => props.events.length, () => {
   font-size: 12px;
   font-weight: 600;
 }
-.op-detail-path {
+.op-detail-path, .op-detail-branch {
   font-family: var(--font-mono);
   margin-bottom: 4px;
   display: block;
@@ -306,6 +400,15 @@ watch(() => props.events.length, () => {
 .op-detail-error {
   display: block;
   margin-bottom: 8px;
+}
+
+.op-detail-prompt {
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--color-tint);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .op-feed {
