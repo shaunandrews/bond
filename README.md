@@ -4,6 +4,82 @@ Bond is a macOS desktop assistant powered by the [Claude Agent SDK](https://plat
 
 ![Bond](screenshot.png)
 
+![Operatives and git workflow](screenshot-operatives.png)
+
+![In-app browser and visual identity exploration](screenshot-browser.png)
+
+<img src="screenshot-mobile.png" alt="Bond on the go" width="300" />
+
+## Features
+
+Bond is a full-spectrum desktop AI assistant. It can talk, think, code, browse, and run background agents — all from one app.
+
+### AI Chat
+
+Conversational AI powered by Claude (Opus, Sonnet, or Haiku). Streams responses in real-time, renders rich Markdown, syntax-highlighted code, and interactive artifacts. Attach images, switch models mid-conversation, and pick up right where you left off — sessions persist across restarts.
+
+### System Access Control
+
+Three permission tiers — **readonly**, **scoped**, and **full access** — so you control exactly how much Bond can touch. It can read files, search codebases, edit code, run shell commands, and fetch the web. All write operations require explicit approval.
+
+### Projects
+
+Organize work into named projects with goals, deadlines, types, and attached resources (folders, files, links). Projects keep Bond focused — when a chat is linked to a project, Bond reads the resources and works toward the goal.
+
+### Todos
+
+A built-in task manager. Create, complete, group, and link todos to projects. Todos render as live, interactive checklists right in the chat. Bond can create them conversationally or you can manage them through the sidebar.
+
+### Operatives (Subagents)
+
+Spawn autonomous background agents that work on coding tasks independently. Each operative gets its own context window and can be isolated in a git worktree. Run multiple in parallel — one refactoring the backend while another writes tests. Monitor progress, read logs, or cancel from the chat.
+
+### In-App Browser
+
+A built-in browser panel for viewing websites, inspecting pages, and working with web content without leaving Bond. Open URLs, read page text, execute JavaScript, capture screenshots, and inspect the DOM — all from the chat.
+
+### Bond on the Go
+
+A compact, always-accessible companion view for quick interactions on the move. Same capabilities, smaller footprint.
+
+### Skills
+
+Extensible slash commands that teach Bond new tricks. Skills are Markdown files with instructions — create your own or use built-ins like `/brainstorm`, `/plan`, `/git-tidy`, `/imagine` (Midjourney image generation), `/wordpress`, and more. Bond detects when a skill is relevant and activates it automatically.
+
+### MCP (Model Context Protocol)
+
+Connect Bond to external tool servers — Figma, GitHub, Slack, Linear, Chrome DevTools, and more. MCP servers extend Bond's capabilities without modifying its core.
+
+### Collections & Journal
+
+Track anything with custom schemas (movies, books, workouts) via collections. Keep a persistent journal for reflections, decision logs, and project summaries that carry context across sessions.
+
+### Sense (Screen Awareness)
+
+Ambient screen capture and OCR. Bond can see what you've been working on, search your visual history, and summarize your day. Runs locally with Apple Vision — nothing leaves your machine.
+
+### Media Library
+
+Store, browse, and manage images. Download from URLs, search by filename, and reference them in conversations.
+
+---
+
+### What can Bond actually do?
+
+**Simple things:**
+
+- "What's in this screenshot?" — attach an image and get an instant analysis
+- "/joke" — get a bad programmer joke on demand
+- "Add a todo to pick up groceries" — task created, done
+- "What was I working on yesterday?" — Sense summarizes your screen activity
+
+**Involved things:**
+
+- "Refactor the auth module to use JWT, write tests, and open a PR" — Bond edits the code, runs the test suite, creates the branch, and opens the pull request
+- "Spin up two operatives — one to build the API endpoints, one to build the React frontend" — parallel background agents working in isolated worktrees
+- "Here's a Figma link — implement this design in our app" — Bond fetches the design context, maps it to your component library, and writes the code
+- "Research competitors in the project management space, summarize findings, and create a feature plan" — web search, synthesis, structured output saved to the project
+
 ## Requirements
 
 - **Node.js 18+**
