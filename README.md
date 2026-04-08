@@ -8,6 +8,8 @@ Bond is a macOS desktop assistant powered by the [Claude Agent SDK](https://plat
 
 ![In-app browser and visual identity exploration](screenshot-browser.png)
 
+![Sense screen awareness](screenshot-sense.png)
+
 <img src="screenshot-mobile.png" alt="Bond on the go" width="300" />
 
 ## Features
@@ -56,7 +58,7 @@ Track anything with custom schemas (movies, books, workouts) via collections. Ke
 
 ### Sense (Screen Awareness)
 
-Ambient screen capture and OCR. Bond can see what you've been working on, search your visual history, and summarize your day. Runs locally with Apple Vision — nothing leaves your machine.
+Ambient screen capture that runs in the background, recording what's on your screen at regular intervals. Uses Apple Vision for OCR and accessibility tree extraction — everything is indexed locally in SQLite. Ask Bond what you were working on yesterday, search for something you saw last week, or get an app usage breakdown for the day. Native Objective-C helpers handle window detection, OCR, and accessibility data. Screenshots are stored as dated JPEGs on disk and never leave your machine.
 
 ### Media Library
 
