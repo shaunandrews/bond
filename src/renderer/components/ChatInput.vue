@@ -5,6 +5,7 @@ import { MODEL_IDS, type ModelId } from '../../shared/models'
 import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode, type ImageMediaType } from '../../shared/session'
 import BondButton from './BondButton.vue'
 import BondSelect from './BondSelect.vue'
+import ContextGauge from './ContextGauge.vue'
 
 function highlightMarkdownSyntax(text: string): string {
   if (!text) return ''
@@ -58,7 +59,13 @@ interface SkillInfo {
   argumentHint: string
 }
 
-const props = defineProps<{ busy: boolean; model: ModelId; editMode: EditMode; trimBottom?: boolean }>()
+const props = defineProps<{
+  busy: boolean
+  model: ModelId
+  editMode: EditMode
+  trimBottom?: boolean
+  contextUsage?: { inputTokens: number; contextWindow: number; costUsd: number }
+}>()
 const { busy } = toRefs(props)
 
 const emit = defineEmits<{
@@ -419,7 +426,7 @@ function handleKeyDown(e: KeyboardEvent) {
             @update:modelValue="handleEditModeChange"
           />
         </div>
-        <div class="flex items-center gap-s">
+        <div class="flex items-center gap-3">
           <BondButton
             v-if="busy"
             variant="ghost"
@@ -429,6 +436,12 @@ function handleKeyDown(e: KeyboardEvent) {
           >
             Esc to stop
           </BondButton>
+          <ContextGauge
+            v-if="contextUsage"
+            :used="contextUsage.inputTokens"
+            :limit="contextUsage.contextWindow"
+            :cost="contextUsage.costUsd"
+          />
           <button
             type="button"
             data-action="send"

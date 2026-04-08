@@ -42,6 +42,7 @@ interface OperativeRow {
   input_tokens: number
   output_tokens: number
   cost_usd: number
+  context_window: number
   timeout_ms: number | null
   max_budget_usd: number | null
   started_at: string | null
@@ -68,6 +69,7 @@ function rowToOperative(r: OperativeRow): Operative {
     inputTokens: r.input_tokens,
     outputTokens: r.output_tokens,
     costUsd: r.cost_usd,
+    contextWindow: r.context_window || undefined,
     timeoutMs: r.timeout_ms ?? undefined,
     maxBudgetUsd: r.max_budget_usd ?? undefined,
     startedAt: r.started_at || undefined,
@@ -304,6 +306,10 @@ async function runOperative(
   let lastTextChunk: string | undefined
   let totalInputTokens = 0
   let totalOutputTokens = 0
+  let lastMessageId: string | null = null
+  let lastInputTokens = 0
+  let contextWindowLimit = 0
+  let cumulativeCost = 0
 
   try {
     const q = query({
@@ -330,12 +336,47 @@ async function runOperative(
     for await (const message of q) {
       if (ac.signal.aborted) break
 
+      // Extract usage from assistant messages (deduplicate by message ID)
+      if (message.type === 'assistant') {
+        const msg = message as any
+        const msgId = msg.message?.id
+        if (msgId && msgId !== lastMessageId) {
+          lastMessageId = msgId
+          const u = msg.message?.usage
+          if (u) {
+            lastInputTokens =
+              (u.input_tokens ?? 0) +
+              (u.cache_read_input_tokens ?? 0) +
+              (u.cache_creation_input_tokens ?? 0)
+          }
+        }
+      }
+
       // Extract usage from result messages
       if (message.type === 'result') {
         const msg = message as any
         if (msg.usage) {
           totalInputTokens += msg.usage.input_tokens ?? 0
           totalOutputTokens += msg.usage.output_tokens ?? 0
+        }
+
+        cumulativeCost = msg.total_cost_usd ?? cumulativeCost
+
+        const models = msg.modelUsage ?? {}
+        const primary = Object.values(models)[0] as any
+        if (primary?.contextWindow) {
+          contextWindowLimit = primary.contextWindow
+        }
+
+        if (contextWindowLimit > 0) {
+          const usageChunk: BondStreamChunk = {
+            kind: 'usage_update',
+            inputTokens: lastInputTokens,
+            contextWindow: contextWindowLimit,
+            costUsd: cumulativeCost
+          }
+          const usageEvent = storeEvent(id, usageChunk)
+          onEvent(id, usageEvent)
         }
       }
 
@@ -349,14 +390,10 @@ async function runOperative(
 
         // Track usage from result chunks
         if (chunk.kind === 'result') {
-          // Update token counts on the operative
-          const costRate = COST_PER_MTOK[model] ?? COST_PER_MTOK.sonnet
-          const cost = (totalInputTokens / 1_000_000) * costRate.input +
-                       (totalOutputTokens / 1_000_000) * costRate.output
           const now = new Date().toISOString()
           db.prepare(
-            'UPDATE operatives SET input_tokens = ?, output_tokens = ?, cost_usd = ?, updated_at = ? WHERE id = ?'
-          ).run(totalInputTokens, totalOutputTokens, cost, now, id)
+            'UPDATE operatives SET input_tokens = ?, output_tokens = ?, cost_usd = ?, context_window = ?, updated_at = ? WHERE id = ?'
+          ).run(totalInputTokens, totalOutputTokens, cumulativeCost, contextWindowLimit, now, id)
         }
       }
     }

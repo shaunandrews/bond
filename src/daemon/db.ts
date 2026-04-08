@@ -45,6 +45,7 @@ export function getDb(): Database.Database {
   migrateCreateCollectionItemCommentsTable(_db)
   migrateAddCollectionItemProjectId(_db)
   migrateJournalToCollection(_db)
+  migrateAddOperativeContextWindow(_db)
 
   return _db
 }
@@ -701,4 +702,11 @@ function migrateFromFiles(db: Database.Database): void {
   try {
     renameSync(sessionsDir, join(dataDir, 'sessions.bak'))
   } catch { /* ignore */ }
+}
+
+function migrateAddOperativeContextWindow(db: Database.Database): void {
+  const columns = db.pragma('table_info(operatives)') as { name: string }[]
+  if (!columns.some(c => c.name === 'context_window')) {
+    db.exec('ALTER TABLE operatives ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0')
+  }
 }

@@ -614,9 +614,61 @@ export async function runBondQuery(
 
   let chunkCount = 0
   let succeeded = false
+  let lastMessageId: string | null = null
+  let lastInputTokens = 0
+  let contextWindowLimit = 0
+  let cumulativeCost = 0
+
   try {
     for await (const message of q) {
       if (options.abortSignal.aborted) break
+
+      // Extract usage from assistant messages (deduplicate by message ID)
+      if (message.type === 'assistant') {
+        const msg = message as any
+        const msgId = msg.message?.id
+        if (msgId && msgId !== lastMessageId) {
+          lastMessageId = msgId
+          const u = msg.message?.usage
+          if (u) {
+            lastInputTokens =
+              (u.input_tokens ?? 0) +
+              (u.cache_read_input_tokens ?? 0) +
+              (u.cache_creation_input_tokens ?? 0)
+
+            if (contextWindowLimit > 0) {
+              options.onChunk({
+                kind: 'usage_update',
+                inputTokens: lastInputTokens,
+                contextWindow: contextWindowLimit,
+                costUsd: cumulativeCost
+              })
+            }
+          }
+        }
+      }
+
+      // Extract contextWindow and cost from result messages
+      if (message.type === 'result') {
+        const msg = message as any
+        cumulativeCost = msg.total_cost_usd ?? cumulativeCost
+
+        const models = msg.modelUsage ?? {}
+        const primary = Object.values(models)[0] as any
+        if (primary?.contextWindow) {
+          contextWindowLimit = primary.contextWindow
+        }
+
+        if (contextWindowLimit > 0) {
+          options.onChunk({
+            kind: 'usage_update',
+            inputTokens: lastInputTokens,
+            contextWindow: contextWindowLimit,
+            costUsd: cumulativeCost
+          })
+        }
+      }
+
       for (const chunk of bondMessageToChunks(message)) {
         chunkCount++
         if (chunk.kind === 'result' && chunk.subtype === 'success') {

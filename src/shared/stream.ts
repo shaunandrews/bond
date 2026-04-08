@@ -8,6 +8,7 @@ export type BondStreamChunk =
   | { kind: 'result'; subtype: string; result?: string; errors?: string[] }
   | { kind: 'tool_approval'; requestId: string; toolName: string; input: Record<string, unknown>; title?: string; description?: string }
   | { kind: 'raw_error'; message: string }
+  | { kind: 'usage_update'; inputTokens: number; contextWindow: number; costUsd: number }
   | { kind: 'query_start' }
   | { kind: 'query_end'; succeeded: boolean }
 

@@ -86,6 +86,10 @@ const _hmr = import.meta.hot?.data as
 const _hmrNeedsPersist = !!(_hmr?.messages?.length || _hmr?.backgroundMessages?.length)
 
 export function useChat(deps: ChatDeps = window.bond) {
+  /** Per-session context usage tracking */
+  const _contextUsageMap = new Map<string, { inputTokens: number; contextWindow: number; costUsd: number }>()
+  const contextUsage = ref<{ inputTokens: number; contextWindow: number; costUsd: number }>({ inputTokens: 0, contextWindow: 0, costUsd: 0 })
+
   /** Messages for the current session (reactive, rendered by template) */
   const messages = ref<Message[]>(_hmr?.messages ?? [])
   const busySessions = ref<Set<string>>(new Set(_hmr?.busySessions ?? []))
@@ -381,6 +385,13 @@ export function useChat(deps: ChatDeps = window.bond) {
     _thinkingBufs.delete(sid)
 
     switch (chunk.kind) {
+      case 'usage_update': {
+        const usage = { inputTokens: chunk.inputTokens, contextWindow: chunk.contextWindow, costUsd: chunk.costUsd }
+        _contextUsageMap.set(sid, usage)
+        if (sid === currentSessionId.value) contextUsage.value = usage
+        return
+      }
+
       case 'assistant_text': {
         const cur = _activityMap.get(sid)
         if (cur?.type !== 'responding') {
@@ -514,6 +525,7 @@ export function useChat(deps: ChatDeps = window.bond) {
 
     currentSessionId.value = sessionId
     activity.value = _activityMap.get(sessionId) ?? _restoreActivity(sessionId) ?? { type: 'idle' }
+    contextUsage.value = _contextUsageMap.get(sessionId) ?? { inputTokens: 0, contextWindow: 0, costUsd: 0 }
 
     // Restore from background buffer if available (preserves in-flight responses)
     const bg = backgroundMessages.get(sessionId)
@@ -801,6 +813,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     busy,
     busySessionIds: busySessions,
     activity,
+    contextUsage,
     currentSessionId,
     queuedMessages,
     currentQueue,

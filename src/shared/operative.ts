@@ -17,6 +17,7 @@ export interface Operative {
   inputTokens: number
   outputTokens: number
   costUsd: number
+  contextWindow?: number
   timeoutMs?: number
   maxBudgetUsd?: number
   startedAt?: string
