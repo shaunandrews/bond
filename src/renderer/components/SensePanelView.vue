@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch, computed, ref } from 'vue'
-import { useSense, appColor } from '../composables/useSense'
-import type { SenseCapture } from '../../shared/sense'
+import { onMounted, onUnmounted, watch } from 'vue'
+import { useSense } from '../composables/useSense'
 import BondToolbar from './BondToolbar.vue'
-import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
 import SenseDayNav from './SenseDayNav.vue'
 import SenseSearch from './SenseSearch.vue'
 import SenseDetail from './SenseDetail.vue'
-import { PhArrowLeft } from '@phosphor-icons/vue'
+import SenseAppLegend from './SenseAppLegend.vue'
+import SenseTimeline from './SenseTimeline.vue'
 
 const sense = useSense()
 
@@ -37,6 +36,7 @@ watch(() => sense.isToday.value, (isToday) => {
 })
 
 onMounted(() => {
+  sense.selectCapture('')
   if (sense.captures.value.length === 0 && !sense.loading.value) {
     sense.loadDay(sense.date.value)
   }
@@ -46,58 +46,22 @@ onMounted(() => {
 onUnmounted(() => {
   stopAutoRefresh()
 })
-
-const showDetail = computed(() => !!sense.activeCapture.value)
-
-function formatTime(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-}
-
-function isDark(): boolean {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
-}
 </script>
 
 <template>
   <div class="sense-panel">
-    <!-- Detail view -->
-    <template v-if="showDetail">
-      <BondToolbar label="Sense capture" drag blur class="sense-panel-toolbar">
-        <template #start>
-          <BondButton variant="ghost" size="sm" icon @click="sense.selectCapture('')" v-tooltip="'Back to list'">
-            <PhArrowLeft :size="14" weight="bold" />
-          </BondButton>
-          <BondText size="sm" weight="medium" truncate>{{ sense.activeCapture.value?.appName ?? 'Capture' }}</BondText>
-        </template>
-      </BondToolbar>
-      <div class="sense-panel-scroll">
-        <SenseDetail
-          :capture="sense.activeCapture.value"
-          :image="sense.activeCaptureImage.value"
-          :loadingImage="sense.loadingImage.value"
+    <!-- Toolbar: search | date nav -->
+    <BondToolbar label="Sense" drag blur class="sense-panel-toolbar">
+      <template #start>
+        <SenseSearch
+          :results="sense.searchResults.value"
+          :query="sense.searchQuery.value"
+          @search="sense.search($event)"
+          @select="sense.jumpToCapture($event)"
+          @clear="sense.search('')"
         />
-      </div>
-    </template>
-
-    <!-- List view -->
-    <template v-else>
-      <BondToolbar label="Sense" drag blur class="sense-panel-toolbar">
-        <template #start>
-          <BondText size="sm" weight="medium" color="muted">Sense</BondText>
-        </template>
-        <template #end>
-          <SenseSearch
-            :results="sense.searchResults.value"
-            :query="sense.searchQuery.value"
-            @search="sense.search($event)"
-            @select="sense.jumpToCapture($event)"
-            @clear="sense.search('')"
-          />
-        </template>
-      </BondToolbar>
-
-      <div class="sense-panel-nav">
+      </template>
+      <template #middle>
         <SenseDayNav
           :date="sense.date.value"
           :isToday="sense.isToday.value"
@@ -107,37 +71,44 @@ function isDark(): boolean {
           @next="sense.nextDay()"
           @pick="sense.loadDay($event)"
         />
+      </template>
+    </BondToolbar>
+
+    <!-- Main content area -->
+    <div class="sense-panel-body">
+      <div v-if="sense.loading.value" class="sense-panel-empty">
+        <BondText size="sm" color="muted">Loading captures...</BondText>
       </div>
 
-      <div class="sense-panel-scroll">
-        <div v-if="sense.loading.value" class="sense-panel-empty">
-          <BondText size="sm" color="muted">Loading captures...</BondText>
-        </div>
-
-        <div v-else-if="sense.captures.value.length === 0" class="sense-panel-empty">
-          <BondText size="sm" color="muted">No captures on this day.</BondText>
-        </div>
-
-        <div v-else class="sense-capture-list">
-          <button
-            v-for="cap in sense.captures.value"
-            :key="cap.id"
-            class="sense-capture-item"
-            @click="sense.selectCapture(cap.id)"
-          >
-            <span
-              class="capture-app-dot"
-              :style="{ background: appColor(cap.appBundleId || cap.appName || 'unknown', isDark()) }"
-            />
-            <div class="capture-item-body">
-              <BondText size="sm" truncate>{{ cap.appName }}</BondText>
-              <BondText size="xs" color="muted" truncate>{{ cap.windowTitle }}</BondText>
-            </div>
-            <BondText size="xs" color="muted" class="capture-item-time">{{ formatTime(cap.capturedAt) }}</BondText>
-          </button>
-        </div>
+      <div v-else-if="sense.captures.value.length === 0" class="sense-panel-empty">
+        <BondText size="sm" color="muted">No captures on this day.</BondText>
       </div>
-    </template>
+
+      <SenseDetail
+        v-else
+        :capture="sense.displayCapture.value"
+        :image="sense.displayCaptureImage.value"
+        :loadingImage="sense.displayLoadingImage.value"
+      />
+    </div>
+
+    <!-- Bottom dock: app legend + timeline scrubber -->
+    <div v-if="sense.captures.value.length > 0" class="sense-panel-dock">
+      <SenseAppLegend
+        :apps="sense.apps.value"
+        :activeFilter="sense.appFilter.value"
+        @filter="sense.setAppFilter($event)"
+      />
+      <SenseTimeline
+        :captures="sense.filteredCaptures.value"
+        :sessions="sense.sessions.value"
+        :activeCaptureId="sense.activeCapture.value?.id ?? null"
+        :appFilter="sense.appFilter.value"
+        @select="sense.selectCapture($event)"
+        @preview="sense.setPreview($event)"
+        @preview-clear="sense.clearPreview()"
+      />
+    </div>
   </div>
 </template>
 
@@ -152,71 +123,30 @@ function isDark(): boolean {
 }
 
 .sense-panel-toolbar {
-  position: sticky;
-  top: 0;
+  flex-shrink: 0;
   z-index: 10;
-  flex-shrink: 0;
 }
 
-.sense-panel-nav {
-  flex-shrink: 0;
-  padding: 0.25rem 0.5rem;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.sense-panel-scroll {
+.sense-panel-body {
   flex: 1;
-  overflow-y: auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .sense-panel-empty {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 3rem 1rem;
 }
 
-.sense-capture-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 0.25rem 0.375rem;
-}
-
-.sense-capture-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.375rem 0.5rem;
-  border: none;
-  background: none;
-  cursor: pointer;
-  border-radius: var(--radius-md);
-  text-align: left;
-  width: 100%;
-  transition: background var(--transition-fast);
-}
-.sense-capture-item:hover {
-  background: var(--color-tint);
-}
-
-.capture-app-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+.sense-panel-dock {
   flex-shrink: 0;
-}
-
-.capture-item-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.0625rem;
-}
-
-.capture-item-time {
-  flex-shrink: 0;
+  border-top: 1px solid var(--color-border);
+  padding: 0.375rem 1rem 0.5rem;
+  background: var(--color-bg);
 }
 </style>

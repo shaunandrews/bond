@@ -48,12 +48,52 @@ const captures = ref<SenseCapture[]>([])
 const sessions = ref<SenseSession[]>([])
 const activeCapture = ref<SenseCapture | null>(null)
 const activeCaptureImage = ref<string | null>(null)
+const previewCapture = ref<SenseCapture | null>(null)
+const previewCaptureImage = ref<string | null>(null)
 const searchQuery = ref('')
 const searchResults = ref<SenseCapture[]>([])
 const appFilter = ref<string | null>(null)
 const apps = ref<AppSummary[]>([])
 const loading = ref(false)
 const loadingImage = ref(false)
+const loadingPreviewImage = ref(false)
+let previewDebounce: ReturnType<typeof setTimeout> | null = null
+
+// Image cache — avoids re-fetching on scrub. Cleared on day change.
+const imageCache = new Map<string, string>()
+const IMAGE_CACHE_MAX = 200
+const PRELOAD_RADIUS = 3 // preload N captures on each side
+
+async function fetchImage(id: string): Promise<string | null> {
+  const cached = imageCache.get(id)
+  if (cached) return cached
+  try {
+    const result = await window.bond.senseCapture(id)
+    if (result?.image) {
+      // Evict oldest if over limit
+      if (imageCache.size >= IMAGE_CACHE_MAX) {
+        const first = imageCache.keys().next().value
+        if (first) imageCache.delete(first)
+      }
+      imageCache.set(id, result.image)
+      return result.image
+    }
+  } catch (err) {
+    console.error('Failed to load capture image:', err)
+  }
+  return null
+}
+
+function preloadNeighbors(id: string) {
+  const idx = captures.value.findIndex(c => c.id === id)
+  if (idx < 0) return
+  for (let offset = 1; offset <= PRELOAD_RADIUS; offset++) {
+    const before = captures.value[idx - offset]
+    const after = captures.value[idx + offset]
+    if (before && !imageCache.has(before.id)) fetchImage(before.id)
+    if (after && !imageCache.has(after.id)) fetchImage(after.id)
+  }
+}
 
 const filteredCaptures = computed(() => {
   if (!appFilter.value) return captures.value
@@ -63,6 +103,17 @@ const filteredCaptures = computed(() => {
 })
 
 const isToday = computed(() => date.value === todayISO())
+
+// Display = preview (hover) ?? active (clicked). Views bind to these.
+const displayCapture = computed(() => previewCapture.value ?? activeCapture.value)
+const displayCaptureImage = computed(() => {
+  if (previewCapture.value) return previewCaptureImage.value
+  return activeCaptureImage.value
+})
+const displayLoadingImage = computed(() => {
+  if (previewCapture.value) return loadingPreviewImage.value
+  return loadingImage.value
+})
 
 // Compute app summaries from captures
 function computeApps(caps: SenseCapture[]): AppSummary[] {
@@ -88,6 +139,8 @@ async function loadDay(dateStr: string) {
   loading.value = true
   activeCapture.value = null
   activeCaptureImage.value = null
+  clearPreview()
+  imageCache.clear()
   searchQuery.value = ''
   searchResults.value = []
   appFilter.value = null
@@ -113,23 +166,75 @@ async function loadDay(dateStr: string) {
 }
 
 async function selectCapture(id: string) {
+  if (!id) {
+    activeCapture.value = null
+    activeCaptureImage.value = null
+    return
+  }
+
   const cap = captures.value.find(c => c.id === id) || searchResults.value.find(c => c.id === id)
   if (!cap) return
 
   activeCapture.value = cap
-  activeCaptureImage.value = null
-  loadingImage.value = true
 
-  try {
-    const result = await window.bond.senseCapture(id)
-    if (result?.image) {
-      activeCaptureImage.value = result.image
-    }
-  } catch (err) {
-    console.error('Failed to load capture image:', err)
-  } finally {
+  // Check cache first — if hit, no flash
+  const cached = imageCache.get(id)
+  if (cached) {
+    activeCaptureImage.value = cached
+    loadingImage.value = false
+    preloadNeighbors(id)
+    return
+  }
+
+  // Not cached — keep previous image visible while loading (don't null it)
+  loadingImage.value = true
+  const image = await fetchImage(id)
+  // Only apply if still the active capture
+  if (activeCapture.value?.id === id) {
+    activeCaptureImage.value = image
     loadingImage.value = false
   }
+  preloadNeighbors(id)
+}
+
+function setPreview(id: string) {
+  if (!id) { clearPreview(); return }
+  const cap = captures.value.find(c => c.id === id)
+  if (!cap) return
+  // If already previewing this capture, skip
+  if (previewCapture.value?.id === id) return
+
+  previewCapture.value = cap
+
+  // Check cache first — instant display, no debounce needed
+  const cached = imageCache.get(id)
+  if (cached) {
+    previewCaptureImage.value = cached
+    loadingPreviewImage.value = false
+    if (previewDebounce) { clearTimeout(previewDebounce); previewDebounce = null }
+    return
+  }
+
+  // Not cached — keep previous preview image visible (don't null it),
+  // debounce the fetch to avoid hammering IPC on fast scrub
+  if (previewDebounce) clearTimeout(previewDebounce)
+  previewDebounce = setTimeout(async () => {
+    loadingPreviewImage.value = true
+    const image = await fetchImage(id)
+    // Only apply if still previewing the same capture
+    if (previewCapture.value?.id === id) {
+      if (image) previewCaptureImage.value = image
+      loadingPreviewImage.value = false
+      preloadNeighbors(id)
+    }
+  }, 80)
+}
+
+function clearPreview() {
+  if (previewDebounce) { clearTimeout(previewDebounce); previewDebounce = null }
+  previewCapture.value = null
+  previewCaptureImage.value = null
+  loadingPreviewImage.value = false
 }
 
 async function search(query: string) {
@@ -228,6 +333,11 @@ export function useSense() {
     sessions,
     activeCapture,
     activeCaptureImage,
+    previewCapture,
+    previewCaptureImage,
+    displayCapture,
+    displayCaptureImage,
+    displayLoadingImage,
     searchQuery,
     searchResults,
     appFilter,
@@ -240,6 +350,8 @@ export function useSense() {
     // Methods
     loadDay,
     selectCapture,
+    setPreview,
+    clearPreview,
     search,
     setAppFilter,
     nextDay,

@@ -57,7 +57,6 @@ export function createTextWorker(settings: SenseSettings) {
 
     try {
       const db = getDb()
-      console.log('[sense/worker] Processing batch...')
 
       // Find pending captures
       const pending = db.prepare(`
@@ -75,6 +74,8 @@ export function createTextWorker(settings: SenseSettings) {
       }[]
 
       if (pending.length === 0) return
+
+      console.log(`[sense/worker] Processing ${pending.length} captures...`)
 
       // Mark as processing
       const markProcessing = db.prepare(

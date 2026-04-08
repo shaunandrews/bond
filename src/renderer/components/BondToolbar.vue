@@ -49,6 +49,10 @@ defineProps<{
   padding-left: 5.5rem;
 }
 
+.bond-toolbar--blur {
+  position: relative;
+}
+
 .bond-toolbar--blur::before {
   content: '';
   position: absolute;

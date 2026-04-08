@@ -46,6 +46,8 @@ watch(() => sense.isToday.value, (isToday) => {
 })
 
 onMounted(() => {
+  // Always clear stale detail view when component remounts
+  sense.selectCapture('')
   // Load today's data if not already loaded
   if (sense.captures.value.length === 0 && !sense.loading.value) {
     sense.loadDay(sense.date.value)
@@ -64,6 +66,15 @@ onUnmounted(() => {
     <BondToolbar label="Sense timeline" drag blur :insetStart="insetStart" class="sense-header">
       <template #start>
         <slot name="header-start" />
+        <SenseSearch
+          :results="sense.searchResults.value"
+          :query="sense.searchQuery.value"
+          @search="sense.search($event)"
+          @select="sense.jumpToCapture($event)"
+          @clear="sense.search('')"
+        />
+      </template>
+      <template #middle>
         <SenseDayNav
           :date="sense.date.value"
           :isToday="sense.isToday.value"
@@ -72,15 +83,6 @@ onUnmounted(() => {
           @prev="sense.prevDay()"
           @next="sense.nextDay()"
           @pick="sense.loadDay($event)"
-        />
-      </template>
-      <template #end>
-        <SenseSearch
-          :results="sense.searchResults.value"
-          :query="sense.searchQuery.value"
-          @search="sense.search($event)"
-          @select="sense.jumpToCapture($event)"
-          @clear="sense.search('')"
         />
       </template>
     </BondToolbar>
@@ -103,9 +105,9 @@ onUnmounted(() => {
       <!-- Detail viewer -->
       <SenseDetail
         v-else
-        :capture="sense.activeCapture.value"
-        :image="sense.activeCaptureImage.value"
-        :loadingImage="sense.loadingImage.value"
+        :capture="sense.displayCapture.value"
+        :image="sense.displayCaptureImage.value"
+        :loadingImage="sense.displayLoadingImage.value"
       />
     </div>
 
@@ -122,6 +124,8 @@ onUnmounted(() => {
         :activeCaptureId="sense.activeCapture.value?.id ?? null"
         :appFilter="sense.appFilter.value"
         @select="sense.selectCapture($event)"
+        @preview="sense.setPreview($event)"
+        @preview-clear="sense.clearPreview()"
       />
     </div>
   </div>

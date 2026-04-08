@@ -13,13 +13,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [id: string]
+  preview: [id: string]
+  'preview-clear': []
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)
 const hoverIndex = ref<number | null>(null)
-const hoverX = ref(0)
-const hoverTimeout = ref<ReturnType<typeof setTimeout> | null>(null)
-const showPreview = ref(false)
 
 function isDark(): boolean {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -123,21 +122,6 @@ const playheadPosition = computed(() => {
   return ((min - start) / (end - start + 1)) * 100
 })
 
-// Hover preview data
-const hoverCapture = computed(() => {
-  if (hoverIndex.value == null || !showPreview.value) return null
-  const bucket = visibleBuckets.value[hoverIndex.value]
-  if (!bucket || bucket.captures.length === 0) return null
-  return bucket.captures[Math.floor(bucket.captures.length / 2)]
-})
-
-const hoverTime = computed(() => {
-  if (hoverIndex.value == null) return ''
-  const bucket = visibleBuckets.value[hoverIndex.value]
-  if (!bucket) return ''
-  return minuteToTime(bucket.minute)
-})
-
 function timeToMinute(iso: string): number {
   const d = new Date(iso)
   return d.getHours() * 60 + d.getMinutes()
@@ -177,22 +161,18 @@ function handleBarClick(index: number) {
   emit('select', cap.id)
 }
 
-function handleMouseEnter(index: number, event: MouseEvent) {
+function handleMouseEnter(index: number) {
   hoverIndex.value = index
-  hoverX.value = (event.target as HTMLElement).getBoundingClientRect().left
-  if (hoverTimeout.value) clearTimeout(hoverTimeout.value)
-  hoverTimeout.value = setTimeout(() => {
-    showPreview.value = true
-  }, 200)
+  const bucket = visibleBuckets.value[index]
+  if (bucket && bucket.captures.length > 0) {
+    const cap = bucket.captures[Math.floor(bucket.captures.length / 2)]
+    emit('preview', cap.id)
+  }
 }
 
 function handleMouseLeave() {
   hoverIndex.value = null
-  showPreview.value = false
-  if (hoverTimeout.value) {
-    clearTimeout(hoverTimeout.value)
-    hoverTimeout.value = null
-  }
+  emit('preview-clear')
 }
 
 // Scroll-to-scrub
@@ -257,7 +237,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   containerRef.value?.removeEventListener('wheel', handleWheel)
-  if (hoverTimeout.value) clearTimeout(hoverTimeout.value)
 })
 </script>
 
@@ -283,7 +262,7 @@ onUnmounted(() => {
         :key="bucket.minute"
         :class="['bar-slot', { 'in-session': bucket.inSession, 'has-captures': bucket.captures.length > 0 }]"
         @click="handleBarClick(i)"
-        @mouseenter="handleMouseEnter(i, $event)"
+        @mouseenter="handleMouseEnter(i)"
       >
         <div
           class="bar"
@@ -302,18 +281,14 @@ onUnmounted(() => {
         :style="{ left: playheadPosition + '%' }"
       />
 
-      <!-- Hover preview tooltip -->
-      <Transition name="preview">
-        <div
-          v-if="hoverCapture && showPreview"
-          class="hover-preview"
-          :style="{ left: `${((hoverIndex ?? 0) / visibleBuckets.length) * 100}%` }"
-        >
-          <BondText size="xs" weight="medium">{{ hoverCapture.appName || 'Unknown' }}</BondText>
-          <BondText size="xs" color="muted">{{ hoverTime }}</BondText>
-          <BondText v-if="hoverCapture.windowTitle" size="xs" color="muted" truncate class="max-w-[200px]">{{ hoverCapture.windowTitle }}</BondText>
-        </div>
-      </Transition>
+      <!-- Hover time indicator -->
+      <div
+        v-if="hoverIndex != null"
+        class="hover-time"
+        :style="{ left: `${(hoverIndex / visibleBuckets.length) * 100}%` }"
+      >
+        <BondText size="xs" color="muted">{{ minuteToTime(visibleBuckets[hoverIndex]?.minute ?? 0) }}</BondText>
+      </div>
     </div>
   </div>
 </template>
@@ -403,31 +378,12 @@ onUnmounted(() => {
   border-radius: 50%;
 }
 
-.hover-preview {
+.hover-time {
   position: absolute;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 4px);
   transform: translateX(-50%);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 0.375rem 0.625rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  box-shadow: var(--shadow-md);
-  white-space: nowrap;
-  z-index: 10;
   pointer-events: none;
-}
-
-.preview-enter-active,
-.preview-leave-active {
-  transition: opacity 0.1s ease, transform 0.1s ease;
-}
-
-.preview-enter-from,
-.preview-leave-to {
-  opacity: 0;
-  transform: translateX(-50%) translateY(4px);
+  z-index: 10;
+  white-space: nowrap;
 }
 </style>

@@ -45,7 +45,7 @@ function handleDatePick(e: Event) {
 
     <label class="date-label">
       <BondText size="sm" weight="medium">{{ formattedDate }}</BondText>
-      <BondText v-if="captureCount > 0" size="xs" color="muted" class="ml-1.5">{{ subtitle }}</BondText>
+      <BondText v-if="captureCount > 0" size="xs" color="muted">{{ subtitle }}</BondText>
       <input type="date" class="date-picker-hidden" :value="date" @change="handleDatePick" />
     </label>
 
@@ -64,11 +64,13 @@ function handleDatePick(e: Event) {
 
 .date-label {
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: center;
   gap: 0;
   cursor: pointer;
   position: relative;
-  padding: 0.125rem 0.375rem;
+  overflow: hidden;
+  padding: 0.125rem 0.5rem;
   border-radius: var(--radius-md);
   transition: background var(--transition-fast);
 }
