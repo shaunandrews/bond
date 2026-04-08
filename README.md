@@ -2,6 +2,8 @@
 
 Bond is a macOS desktop assistant powered by the [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview). It runs a standalone daemon that manages Claude conversations, tool use, and session persistence — with a Vue 3 + Tailwind CSS interface wrapped in Electron.
 
+![Bond](screenshot.png)
+
 ## Requirements
 
 - **Node.js 18+**
