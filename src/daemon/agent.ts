@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { resolve, normalize } from 'node:path'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { BondStreamChunk } from '../shared/stream'
-import type { EditMode } from '../shared/session'
+import type { EditMode, Project } from '../shared/session'
 import { getSoul, getSetting } from './settings'
 import { getImagePaths } from './images'
 import { getSkillsDir } from './paths'
@@ -207,6 +207,8 @@ export async function runBondQuery(
     resumeSession?: boolean
     imageIds?: string[]
     editMode?: EditMode
+    project?: Project | null
+    mentionedProjects?: Project[]
   }
 ): Promise<boolean> {
   const cwd = homedir()
@@ -494,6 +496,41 @@ export async function runBondQuery(
       }
     }
   } catch { /* non-fatal */ }
+
+  // Project context injection
+  function formatProjectContext(p: Project): string {
+    const lines = [
+      `Project: "${p.name}"`,
+      p.goal ? `Goal: ${p.goal}` : null,
+      p.type !== 'generic' ? `Type: ${p.type}` : null,
+      p.deadline ? `Deadline: ${p.deadline}` : null,
+    ].filter(Boolean)
+
+    if (p.resources.length) {
+      lines.push('Resources:')
+      for (const r of p.resources) {
+        const label = r.label ? `${r.label} — ` : ''
+        lines.push(`  - [${r.kind}] ${label}${r.value}`)
+      }
+    }
+    return lines.join('\n')
+  }
+
+  if (options.project) {
+    basePrompt += `\nThis chat is linked to the following project:\n${formatProjectContext(options.project)}\n`
+  }
+
+  if (options.mentionedProjects?.length) {
+    // Filter out the session-linked project to avoid double-injection
+    const linkedId = options.project?.id
+    const mentions = options.mentionedProjects.filter(p => p.id !== linkedId)
+    if (mentions.length) {
+      basePrompt += `\nThe user referenced the following project${mentions.length > 1 ? 's' : ''} in this message:\n`
+      for (const p of mentions) {
+        basePrompt += formatProjectContext(p) + '\n'
+      }
+    }
+  }
 
   // Current date and time with day of week
   const now = new Date()

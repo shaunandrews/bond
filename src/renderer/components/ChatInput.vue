@@ -9,11 +9,16 @@ import ContextGauge from './ContextGauge.vue'
 
 function highlightMarkdownSyntax(text: string): string {
   if (!text) return ''
-  return text.split('\n').map(line => {
+  let result = text.split('\n').map(line => {
     let esc = line
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
+
+    // @mentions: keep ALL characters so overlay layout matches textarea exactly.
+    // The bracket/paren/uuid syntax is rendered transparent; only @Name is visible.
+    esc = esc.replace(/@(\[)([^\]]+)(\]\(project:[a-f0-9-]+\))/g,
+      '<span class="md-mention-syn">@$1</span><span class="md-mention">$2</span><span class="md-mention-syn">$3</span>')
 
     // Blockquote: > at line start (escaped as &gt;)
     if (/^&gt;\s?/.test(esc)) {
@@ -51,6 +56,14 @@ function highlightMarkdownSyntax(text: string): string {
 
     return esc
   }).join('\n')
+
+  // Trailing newline fix: browsers don't render a final empty line in pre-wrap,
+  // but textareas do — causing the highlight to be one line shorter.
+  if (result.endsWith('\n')) {
+    result += ' '
+  }
+
+  return result
 }
 
 interface SkillInfo {
@@ -119,6 +132,8 @@ const inputHighlightHtml = computed(() => highlightMarkdownSyntax(inputText.valu
 
 function updatePreview() {
   inputText.value = inputEl.value?.value ?? ''
+  // Re-sync scroll after Vue re-renders the highlight div (v-html reset scrollTop)
+  nextTick(syncPreviewScroll)
 }
 
 function syncPreviewScroll() {
@@ -244,10 +259,33 @@ const filteredSkills = computed(() => {
   return skills.value.filter(s => s.name.toLowerCase().startsWith(q))
 })
 
+// --- @mention autocomplete ---
+interface ProjectInfo {
+  id: string
+  name: string
+  goal: string
+  archived: boolean
+}
+const projects = ref<ProjectInfo[]>([])
+const showMentionMenu = ref(false)
+const mentionMenuIndex = ref(0)
+const mentionFilter = ref('')
+const mentionStart = ref(0)  // cursor position of the '@'
+
+const filteredProjects = computed(() => {
+  const available = projects.value.filter(p => !p.archived)
+  if (!mentionFilter.value) return available
+  const q = mentionFilter.value.toLowerCase()
+  return available.filter(p => p.name.toLowerCase().startsWith(q))
+})
+
 onMounted(async () => {
   try {
     skills.value = await window.bond.listSkills()
   } catch { /* skills not available yet */ }
+  try {
+    projects.value = await window.bond.listProjects()
+  } catch { /* projects not available yet */ }
 })
 
 function updateSkillMenu() {
@@ -279,6 +317,57 @@ function selectSkill(skill: SkillInfo) {
   nextTick(autoResize)
 }
 
+function updateMentionMenu() {
+  const el = inputEl.value
+  if (!el) return
+  const text = el.value
+  const cursor = el.selectionStart ?? text.length
+
+  // Look backwards from cursor for an '@' trigger
+  // Must be at position 0 or preceded by whitespace
+  const before = text.slice(0, cursor)
+  const match = before.match(/@([a-zA-Z0-9_ -]*)$/)
+  if (match && (match.index === 0 || /\s/.test(text[match.index! - 1]))) {
+    // Don't trigger inside backticks
+    const backticksBefore = (before.slice(0, match.index).match(/`/g) || []).length
+    if (backticksBefore % 2 !== 0) {
+      showMentionMenu.value = false
+      return
+    }
+    mentionStart.value = match.index!
+    mentionFilter.value = match[1]
+    mentionMenuIndex.value = 0
+    showMentionMenu.value = filteredProjects.value.length > 0
+    return
+  }
+  showMentionMenu.value = false
+}
+
+function selectMention(project: ProjectInfo) {
+  const el = inputEl.value
+  if (!el) return
+  const text = el.value
+  const cursor = el.selectionStart ?? text.length
+
+  // Replace @partial with the mention token
+  const before = text.slice(0, mentionStart.value)
+  const after = text.slice(cursor)
+  const token = `@[${project.name}](project:${project.id})`
+  el.value = before + token + ' ' + after
+  inputText.value = el.value
+
+  showMentionMenu.value = false
+
+  // Place cursor after the token
+  const newCursor = before.length + token.length + 1
+  nextTick(() => {
+    el.focus()
+    el.setSelectionRange(newCursor, newCursor)
+    autoResize()
+    syncPreviewScroll()
+  })
+}
+
 function handleKeyDown(e: KeyboardEvent) {
   if (showSkillMenu.value) {
     if (e.key === 'ArrowDown') {
@@ -300,6 +389,29 @@ function handleKeyDown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       e.preventDefault()
       showSkillMenu.value = false
+      return
+    }
+  }
+  if (showMentionMenu.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      mentionMenuIndex.value = Math.min(mentionMenuIndex.value + 1, filteredProjects.value.length - 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      mentionMenuIndex.value = Math.max(mentionMenuIndex.value - 1, 0)
+      return
+    }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      e.preventDefault()
+      const project = filteredProjects.value[mentionMenuIndex.value]
+      if (project) selectMention(project)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      showMentionMenu.value = false
       return
     }
   }
@@ -325,6 +437,22 @@ function handleKeyDown(e: KeyboardEvent) {
       >
         <span class="text-text-primary text-sm font-medium">/{{ skill.name }}</span>
         <span class="text-muted text-xs truncate">{{ skill.description }}</span>
+      </button>
+    </div>
+
+    <!-- @mention autocomplete menu -->
+    <div v-if="showMentionMenu" class="skill-menu">
+      <button
+        v-for="(project, i) in filteredProjects"
+        :key="project.id"
+        type="button"
+        class="skill-menu-item"
+        :class="{ 'is-selected': i === mentionMenuIndex }"
+        @mousedown.prevent="selectMention(project)"
+        @mouseenter="mentionMenuIndex = i"
+      >
+        <span class="text-text-primary text-sm font-medium">@{{ project.name }}</span>
+        <span v-if="project.goal" class="text-muted text-xs truncate">{{ project.goal.slice(0, 40) }}</span>
       </button>
     </div>
 
@@ -370,7 +498,7 @@ function handleKeyDown(e: KeyboardEvent) {
           placeholder="Ask Bond something…"
           :spellcheck="false"
           @keydown="handleKeyDown"
-          @input="autoResize(); updateSkillMenu(); updatePreview()"
+          @input="autoResize(); updateSkillMenu(); updateMentionMenu(); updatePreview()"
           @paste="handlePaste"
           @scroll="syncPreviewScroll"
           class="chat-textarea"
@@ -532,6 +660,14 @@ function handleKeyDown(e: KeyboardEvent) {
 .chat-highlight :deep(.md-strike) {
   text-decoration: line-through;
   opacity: 0.6;
+}
+.chat-highlight :deep(.md-mention) {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.chat-highlight :deep(.md-mention-syn) {
+  /* Keep characters in the flow for layout parity with textarea, but invisible */
+  color: transparent;
 }
 
 .image-strip {

@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import { createServer, type Server as HttpServer } from 'node:http'
-import { existsSync, unlinkSync, readFileSync } from 'node:fs'
+import { existsSync, unlinkSync, readFileSync, chmodSync } from 'node:fs'
+import { join } from 'node:path'
 import type { TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage } from '../shared/session'
@@ -36,6 +37,7 @@ import {
   abortAllOperatives
 } from './operatives'
 import type { SpawnOperativeOptions } from '../shared/operative'
+import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
 import {
@@ -384,6 +386,26 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           imageIds = saveImages(sessionId, images)
         }
 
+        // Look up project context (session-linked + @mentions)
+        let projectContext: import('../shared/session').Project | null = null
+        if (session.projectId) {
+          projectContext = getProject(session.projectId) ?? null
+        }
+
+        // Extract @mentioned project IDs from the raw message text
+        const mentionedProjects: import('../shared/session').Project[] = []
+        if (text) {
+          const mentionRe = /@\[.*?\]\(project:([a-f0-9-]+)\)/g
+          let match
+          while ((match = mentionRe.exec(text)) !== null) {
+            const mp = getProject(match[1])
+            if (mp) mentionedProjects.push(mp)
+          }
+        }
+
+        // Strip mention tokens from the prompt text (keep display name only)
+        const cleanText = text ? text.replace(/@\[([^\]]+)\]\(project:[a-f0-9-]+\)/g, '@$1') : text
+
         const ac = new AbortController()
         let shouldResume = knownSdkSessions.has(sessionId)
 
@@ -394,7 +416,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
-              succeeded = await runBondQuery(text ?? '', {
+              succeeded = await runBondQuery(cleanText ?? '', {
                 abortSignal: ac.signal,
                 onChunk: (chunk) => broadcastChunk(sessionId, chunk),
                 model: currentModel,
@@ -402,6 +424,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
                 resumeSession: shouldResume,
                 imageIds,
                 editMode: session.editMode,
+                project: projectContext,
+                mentionedProjects: mentionedProjects.length ? mentionedProjects : undefined,
               })
               break // Query ran (success or graceful failure) — stop retrying
             } catch (e) {
@@ -1344,13 +1368,14 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'browser.download': {
         const tabId = getParam(p, 'tabId') as string | undefined
         const url = getParam(p, 'url') as string
-        const outPath = getStringParam(p, 'outPath')
         const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'download', requestId, tabId, url, outPath }) as any
+        // Always write to Bond's managed downloads directory, never to arbitrary paths
+        const result = await sendBrowserCommand({ type: 'download', requestId, tabId, url }) as any
         if (result?.error) return JSON.stringify(makeResponse(id, result))
         if (result?.data) {
           const buf = Buffer.from(result.data, 'base64')
-          const dest = outPath || `/tmp/bond-download-${randomUUID().slice(0, 8)}${guessExt(result.contentType)}`
+          ensureDownloadsDir()
+          const dest = join(getDownloadsDir(), `${randomUUID().slice(0, 8)}${guessExt(result.contentType)}`)
           const { writeFileSync } = await import('node:fs')
           writeFileSync(dest, buf)
           return JSON.stringify(makeResponse(id, { path: dest, size: buf.length, contentType: result.contentType }))
@@ -1386,7 +1411,7 @@ export interface BondServer {
   wss: WebSocketServer
 }
 
-export function startServer(socketPath: string): BondServer {
+export function startServer(socketPath: string, authToken?: string): BondServer {
   // Clean up stale socket
   if (existsSync(socketPath)) {
     unlinkSync(socketPath)
@@ -1401,6 +1426,9 @@ export function startServer(socketPath: string): BondServer {
   // Recover orphaned operatives from previous daemon process
   recoverOrphanedOperatives()
 
+  // Track authenticated connections
+  const authenticatedClients = new WeakSet<WebSocket>()
+
   const httpServer: HttpServer = createServer()
   const wss = new WebSocketServer({ server: httpServer })
   serverWss = wss
@@ -1412,6 +1440,29 @@ export function startServer(socketPath: string): BondServer {
         msg = JSON.parse(data.toString())
       } catch {
         ws.send(JSON.stringify(makeErrorResponse(0, -32700, 'Parse error')))
+        return
+      }
+
+      // Auth gate: if a token is configured, the first message must be bond.auth
+      if (authToken && !authenticatedClients.has(ws)) {
+        if (isRequest(msg) && msg.method === 'bond.auth') {
+          const token = (msg.params as any)?.token
+          if (token === authToken) {
+            authenticatedClients.add(ws)
+            ws.send(JSON.stringify(makeResponse(msg.id, { ok: true })))
+          } else {
+            ws.send(JSON.stringify(makeErrorResponse(msg.id, -32600, 'Invalid auth token')))
+            ws.close()
+          }
+          return
+        }
+        // Not authenticated and not an auth request — reject
+        ws.send(JSON.stringify(makeErrorResponse(
+          isRequest(msg) ? msg.id : 0,
+          -32600,
+          'Authentication required — send bond.auth first'
+        )))
+        ws.close()
         return
       }
 
@@ -1430,6 +1481,9 @@ export function startServer(socketPath: string): BondServer {
   })
 
   httpServer.listen(socketPath)
+
+  // Restrict socket file permissions to owner-only
+  try { chmodSync(socketPath, 0o600) } catch { /* ignore on platforms that don't support it */ }
 
   return {
     wss,

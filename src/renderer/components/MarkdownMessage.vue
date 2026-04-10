@@ -14,6 +14,25 @@ function escapeAttr(str: string): string {
     .replace(/>/g, '&gt;')
 }
 
+// Custom tokenizer extension for @mentions — must run before standard link parser
+const mentionExtension = {
+  name: 'mention',
+  level: 'inline' as const,
+  start(src: string) { return src.indexOf('@[') },
+  tokenizer(src: string) {
+    const match = /^@\[([^\]]+)\]\(project:[a-f0-9-]+\)/.exec(src)
+    if (match) {
+      return { type: 'mention', raw: match[0], name: match[1] }
+    }
+    return undefined
+  },
+  renderer(token: { name: string }) {
+    return `<span class="md-mention">@${token.name}</span>`
+  }
+}
+
+marked.use({ extensions: [mentionExtension] })
+
 const renderer = new Renderer()
 
 renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
@@ -298,6 +317,14 @@ onUnmounted(() => {
 .bond-message input[type="checkbox"] {
   margin-right: 0.4em;
   accent-color: var(--color-accent);
+}
+
+.bond-message .md-mention {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-weight: 500;
 }
 
 /* Syntax highlighting */
