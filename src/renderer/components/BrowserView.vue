@@ -24,6 +24,133 @@ const browser = useBrowser()
 const { tabs, activeTabId, favorites, visibleTabs, hiddenTabs } = browser
 const hiddenTabsMenuOpen = ref(false)
 
+// Drag-and-drop tab reordering (pointer-based for smooth animation)
+const dragState = ref<{
+  tabId: string
+  startX: number
+  currentX: number
+  tabWidth: number
+  tabGap: number
+  originalIndex: number
+  currentIndex: number
+} | null>(null)
+
+const tabsScrollRef = ref<HTMLElement | null>(null)
+
+function onTabPointerDown(e: MouseEvent, tabId: string) {
+  // Only left button, ignore close button clicks
+  if (e.button !== 0) return
+  if ((e.target as HTMLElement).closest('.browser-tab-close')) return
+
+  const tabEl = (e.currentTarget as HTMLElement)
+  const scrollEl = tabsScrollRef.value
+  if (!scrollEl) return
+
+  const tabEls = Array.from(scrollEl.querySelectorAll('.browser-tab')) as HTMLElement[]
+  const idx = tabEls.indexOf(tabEl)
+  if (idx === -1) return
+
+  // Measure tab width + gap for shift calculations
+  const tabRect = tabEl.getBoundingClientRect()
+  const gap = 4 // matches .browser-tabs-scroll gap
+
+  dragState.value = {
+    tabId,
+    startX: e.clientX,
+    currentX: e.clientX,
+    tabWidth: tabRect.width,
+    tabGap: gap,
+    originalIndex: idx,
+    currentIndex: idx,
+  }
+
+  document.addEventListener('mousemove', onTabPointerMove)
+  document.addEventListener('mouseup', onTabPointerUp)
+  // Prevent text selection while dragging
+  e.preventDefault()
+}
+
+function onTabPointerMove(e: MouseEvent) {
+  const state = dragState.value
+  if (!state) return
+
+  state.currentX = e.clientX
+  const offset = state.currentX - state.startX
+  const step = state.tabWidth + state.tabGap
+
+  // Calculate how many positions the dragged tab has moved
+  let newIndex = state.originalIndex + Math.round(offset / step)
+  const visible = visibleTabs.value
+  newIndex = Math.max(0, Math.min(visible.length - 1, newIndex))
+  state.currentIndex = newIndex
+}
+
+function onTabPointerUp() {
+  const state = dragState.value
+  if (!state) return
+
+  document.removeEventListener('mousemove', onTabPointerMove)
+  document.removeEventListener('mouseup', onTabPointerUp)
+
+  const fromIdx = state.originalIndex
+  const toIdx = state.currentIndex
+
+  // Commit the reorder to the actual tabs array
+  if (fromIdx !== toIdx) {
+    // Find the indices in the full tabs array (which includes hidden tabs)
+    const visible = visibleTabs.value
+    const sourceTab = visible[fromIdx]
+    const allTabs = browser.tabs.value
+    const allFromIdx = allTabs.indexOf(sourceTab)
+    if (allFromIdx !== -1) {
+      allTabs.splice(allFromIdx, 1)
+      // Find where to insert: position of the tab currently at toIdx in the full array
+      const targetTab = visible[toIdx > fromIdx ? toIdx : toIdx]
+      let allToIdx = allTabs.indexOf(targetTab)
+      if (allToIdx === -1) allToIdx = allTabs.length
+      if (toIdx > fromIdx) allToIdx++ // insert after target when moving right
+      allTabs.splice(allToIdx, 0, sourceTab)
+    }
+  }
+
+  dragState.value = null
+}
+
+// Compute per-tab transform styles during drag
+function tabDragStyle(tabId: string, index: number): Record<string, string> {
+  const state = dragState.value
+  if (!state) return {}
+
+  const step = state.tabWidth + state.tabGap
+
+  if (tabId === state.tabId) {
+    // The dragged tab follows the pointer
+    const offset = state.currentX - state.startX
+    return {
+      transform: `translateX(${offset}px)`,
+      zIndex: '10',
+      opacity: '0.9',
+      transition: 'none',
+      pointerEvents: 'none',
+    }
+  }
+
+  // Idle tabs shift to make room
+  const from = state.originalIndex
+  const to = state.currentIndex
+
+  let shift = 0
+  if (from < to && index > from && index <= to) {
+    shift = -step // shift left to fill the gap
+  } else if (from > to && index >= to && index < from) {
+    shift = step // shift right to fill the gap
+  }
+
+  return shift !== 0
+    ? { transform: `translateX(${shift}px)`, transition: 'transform 200ms cubic-bezier(0.2, 0, 0, 1)' }
+    : { transform: 'translateX(0)', transition: 'transform 200ms cubic-bezier(0.2, 0, 0, 1)' }
+}
+
 const urlInput = ref('')
 const urlInputRef = ref<HTMLInputElement | null>(null)
 const emptyUrlInputRef = ref<HTMLInputElement | null>(null)
@@ -468,12 +595,28 @@ function waitForLoad(tabId: string, timeoutMs: number): Promise<void> {
 
 let removeCommandListener: (() => void) | null = null
 
+// Keyboard shortcut: Cmd+Left = back, Cmd+Right = forward
+function handleKeydown(e: KeyboardEvent) {
+  if (!e.metaKey) return
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    goBack()
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault()
+    goForward()
+  }
+}
+
 onMounted(() => {
   removeCommandListener = setupCommandListener()
+  window.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
   removeCommandListener?.()
+  window.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('mousemove', onTabPointerMove)
+  document.removeEventListener('mouseup', onTabPointerUp)
   // Unregister all webContentsIds
   if (window.bond.browser) {
     for (const tabId of webviewRefs.value.keys()) {
@@ -582,11 +725,13 @@ defineExpose({ openUrl, focusUrlBar })
   <div v-else class="browser-wrap">
     <!-- Tab bar -->
     <div class="browser-tab-bar">
-      <div class="browser-tabs-scroll">
+      <div ref="tabsScrollRef" class="browser-tabs-scroll">
         <div
-          v-for="tab in visibleTabs"
+          v-for="(tab, idx) in visibleTabs"
           :key="tab.id"
-          :class="['browser-tab', { 'browser-tab--active': tab.id === activeTabId }]"
+          :class="['browser-tab', { 'browser-tab--active': tab.id === activeTabId, 'browser-tab--dragging': dragState?.tabId === tab.id }]"
+          :style="tabDragStyle(tab.id, idx)"
+          @mousedown="onTabPointerDown($event, tab.id)"
           @click="browser.switchTab(tab.id)"
           @mousedown.middle.prevent="browser.closeTab(tab.id)"
         >
@@ -894,11 +1039,14 @@ defineExpose({ openUrl, focusUrlBar })
   border: none;
   background: transparent;
   border-radius: var(--radius-md);
-  cursor: pointer;
+  cursor: grab;
   color: var(--color-muted);
   font-size: 12px;
   flex-shrink: 0;
+  position: relative;
+  will-change: transform;
   transition: background var(--transition-fast), color var(--transition-fast);
+  user-select: none;
 }
 
 .browser-tab:hover {
@@ -909,6 +1057,12 @@ defineExpose({ openUrl, focusUrlBar })
 .browser-tab--active {
   background: var(--color-tint);
   color: var(--color-text-primary);
+}
+
+.browser-tab--dragging {
+  cursor: grabbing;
+  opacity: 0.9;
+  z-index: 10;
 }
 
 .browser-tab-favicon {
