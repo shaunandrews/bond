@@ -21,32 +21,7 @@
  *   bond todo ls --project <p>                          List filtered by project
  */
 
-import { join } from 'node:path'
-import { homedir } from 'node:os'
-import WebSocket from 'ws'
-
-const SOCK = join(homedir(), '.bond', 'bond.sock')
-
-let reqId = 1
-
-function call(ws: WebSocket, method: string, params?: unknown): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const id = reqId++
-    const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params })
-
-    const onMessage = (data: WebSocket.Data) => {
-      const parsed = JSON.parse(data.toString())
-      if (parsed.id === id) {
-        ws.off('message', onMessage)
-        if (parsed.error) reject(new Error(parsed.error.message))
-        else resolve(parsed.result)
-      }
-    }
-
-    ws.on('message', onMessage)
-    ws.send(msg)
-  })
-}
+import { call, connect, WebSocket } from './connect'
 
 interface Todo {
   id: string
@@ -61,14 +36,6 @@ interface Todo {
 interface Project {
   id: string
   name: string
-}
-
-function connect(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws+unix://${SOCK}`)
-    ws.on('open', () => resolve(ws))
-    ws.on('error', (err) => reject(err))
-  })
 }
 
 function findTodo(todos: Todo[], query: string): Todo | undefined {

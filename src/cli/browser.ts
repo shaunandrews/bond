@@ -16,40 +16,7 @@
  *   bond browser network [tab]            Recent network requests
  */
 
-import { join } from 'node:path'
-import { homedir } from 'node:os'
-import WebSocket from 'ws'
-
-const SOCK = join(homedir(), '.bond', 'bond.sock')
-
-let reqId = 1
-
-function call(ws: WebSocket, method: string, params?: unknown): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const id = reqId++
-    const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params })
-
-    const onMessage = (data: WebSocket.Data) => {
-      const parsed = JSON.parse(data.toString())
-      if (parsed.id === id) {
-        ws.off('message', onMessage)
-        if (parsed.error) reject(new Error(parsed.error.message))
-        else resolve(parsed.result)
-      }
-    }
-
-    ws.on('message', onMessage)
-    ws.send(msg)
-  })
-}
-
-function connect(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws+unix://${SOCK}`)
-    ws.on('open', () => resolve(ws))
-    ws.on('error', (err) => reject(err))
-  })
-}
+import { call, connect, WebSocket } from './connect'
 
 const R = '\x1b[31m'
 const G = '\x1b[32m'
@@ -71,7 +38,7 @@ async function main() {
   ${G}read${N} [tab]               Get page text
   ${G}screenshot${N} [tab]         Capture page as PNG
   ${G}exec${N} [tab] "<js>"        Run JavaScript in page
-  ${G}download${N} [tab] <url> [--out path]  Download URL using tab's session
+  ${G}download${N} [tab] <url>    Download URL using tab's session
   ${G}cookies${N} [tab]            Get cookies from tab's session
   ${G}console${N} [tab]            Get console output
   ${G}dom${N} [tab] [selector]     Read page HTML / query elements
@@ -220,20 +187,17 @@ async function main() {
       }
 
       case 'download': case 'dl': {
-        // bond browser download [tabId] <url> [--out path]
-        const outIdx = args.indexOf('--out')
-        const outPath = outIdx !== -1 ? args[outIdx + 1] : undefined
-        const filteredArgs = args.filter((a, i) => a !== '--out' && (outIdx === -1 || i !== outIdx + 1))
+        // bond browser download [tabId] <url>
         let tabId: string | undefined
         let url: string
-        if (filteredArgs.length >= 3) {
-          tabId = filteredArgs[1]
-          url = filteredArgs[2]
+        if (args.length >= 3) {
+          tabId = args[1]
+          url = args[2]
         } else {
-          url = filteredArgs[1] || ''
+          url = args[1] || ''
         }
-        if (!url) { console.error(`${R}Usage:${N} bond browser download [tab] <url> [--out path]`); break }
-        const result = await call(ws, 'browser.download', { tabId, url, outPath }) as any
+        if (!url) { console.error(`${R}Usage:${N} bond browser download [tab] <url>`); break }
+        const result = await call(ws, 'browser.download', { tabId, url }) as any
         if (result?.error) { console.error(`${R}Error:${N} ${result.error}`); break }
         console.log(`${G}Downloaded${N}  ${result.path}  ${D}${(result.size / 1024).toFixed(1)} KB${N}  ${D}${result.contentType}${N}`)
         break

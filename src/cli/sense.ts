@@ -25,32 +25,7 @@
  *   bond sense config <key> <value>           Update setting
  */
 
-import { join } from 'node:path'
-import { homedir } from 'node:os'
-import WebSocket from 'ws'
-
-const SOCK = join(homedir(), '.bond', 'bond.sock')
-
-let reqId = 1
-
-function call(ws: WebSocket, method: string, params?: unknown): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const id = reqId++
-    const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params })
-
-    const onMessage = (data: WebSocket.Data) => {
-      const parsed = JSON.parse(data.toString())
-      if (parsed.id === id) {
-        ws.off('message', onMessage)
-        if (parsed.error) reject(new Error(parsed.error.message))
-        else resolve(parsed.result)
-      }
-    }
-
-    ws.on('message', onMessage)
-    ws.send(msg)
-  })
-}
+import { call, connect } from './connect'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -81,11 +56,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const cmd = args[0] ?? ''
 
-  const ws = new WebSocket(`ws+unix://${SOCK}`)
-  await new Promise<void>((resolve, reject) => {
-    ws.on('open', resolve)
-    ws.on('error', () => reject(new Error('Cannot connect to Bond daemon. Is it running?')))
-  })
+  const ws = await connect()
 
   try {
     switch (cmd) {

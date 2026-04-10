@@ -13,40 +13,7 @@
  *   bond soul append "text"           Append a line to the existing soul
  */
 
-import { join } from 'node:path'
-import { homedir } from 'node:os'
-import WebSocket from 'ws'
-
-const SOCK = join(homedir(), '.bond', 'bond.sock')
-
-let reqId = 1
-
-function call(ws: WebSocket, method: string, params?: unknown): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const id = reqId++
-    const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params })
-
-    const onMessage = (data: WebSocket.Data) => {
-      const parsed = JSON.parse(data.toString())
-      if (parsed.id === id) {
-        ws.off('message', onMessage)
-        if (parsed.error) reject(new Error(parsed.error.message))
-        else resolve(parsed.result)
-      }
-    }
-
-    ws.on('message', onMessage)
-    ws.send(msg)
-  })
-}
-
-function connect(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws+unix://${SOCK}`)
-    ws.on('open', () => resolve(ws))
-    ws.on('error', (err) => reject(err))
-  })
-}
+import { call, connect, WebSocket } from './connect'
 
 function readStdin(): Promise<string> {
   return new Promise((resolve) => {

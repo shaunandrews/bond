@@ -7,43 +7,11 @@
  * the resulting PNG into Bond's media system.
  */
 
-import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import WebSocket from 'ws'
+import { call, connect, WebSocket } from './connect'
 
-const SOCK = join(homedir(), '.bond', 'bond.sock')
 const TRIGGER = '/tmp/bond-capture'
 const TMP_OUTPUT = '/tmp/bond-screenshot.png'
-
-let reqId = 1
-
-function call(ws: WebSocket, method: string, params?: unknown): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const id = reqId++
-    const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params })
-
-    const onMessage = (data: WebSocket.Data) => {
-      const parsed = JSON.parse(data.toString())
-      if (parsed.id === id) {
-        ws.off('message', onMessage)
-        if (parsed.error) reject(new Error(parsed.error.message))
-        else resolve(parsed.result)
-      }
-    }
-
-    ws.on('message', onMessage)
-    ws.send(msg)
-  })
-}
-
-function connect(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws+unix://${SOCK}`)
-    ws.on('open', () => resolve(ws))
-    ws.on('error', (err) => reject(err))
-  })
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))

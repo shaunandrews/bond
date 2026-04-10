@@ -37,3 +37,15 @@ export function getSkillsDir(): string {
 export function ensureSkillsDir(): void {
   mkdirSync(getSkillsDir(), { recursive: true })
 }
+
+/**
+ * Downloads directory — ~/Library/Application Support/bond/downloads/
+ * Browser downloads are always written here, never to arbitrary paths.
+ */
+export function getDownloadsDir(): string {
+  return join(getDataDir(), 'downloads')
+}
+
+export function ensureDownloadsDir(): void {
+  mkdirSync(getDownloadsDir(), { recursive: true })
+}

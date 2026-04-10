@@ -541,7 +541,6 @@ function setupCommandListener() {
                 data: dlResult.data,
                 contentType: dlResult.contentType,
                 size: dlResult.size,
-                outPath: cmd.outPath,
               }
             }
           } catch (e: any) {

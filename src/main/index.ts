@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync, watch, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -19,8 +19,18 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 const runtimeDir = join(homedir(), '.bond')
 const socketPath = join(runtimeDir, 'bond.sock')
+const tokenPath = join(runtimeDir, 'bond.token')
 const pidPath = join(runtimeDir, 'daemon.pid')
 const logPath = join(runtimeDir, 'daemon.log')
+const dataDir = join(homedir(), 'Library', 'Application Support', 'bond')
+
+/** Allowed base directories for file:read and image:readLocal */
+const ALLOWED_READ_ROOTS = [dataDir, runtimeDir]
+
+function isAllowedPath(filePath: string): boolean {
+  const resolved = resolve(filePath)
+  return ALLOWED_READ_ROOTS.some(root => resolved.startsWith(root + '/') || resolved === root)
+}
 
 function ensureRuntimeDir(): void {
   if (!existsSync(runtimeDir)) mkdirSync(runtimeDir, { recursive: true })
@@ -163,8 +173,18 @@ async function ensureDaemon(): Promise<void> {
 
 let client: BondClient
 
+function readAuthToken(): string | undefined {
+  try {
+    if (existsSync(tokenPath)) {
+      return readFileSync(tokenPath, 'utf-8').trim()
+    }
+  } catch { /* ignore */ }
+  return undefined
+}
+
 async function connectClient(): Promise<void> {
-  client = new BondClient(socketPath)
+  const token = readAuthToken()
+  client = new BondClient(socketPath, token)
 
   let lastError: Error | undefined
   for (let i = 0; i < 10; i++) {
@@ -385,10 +405,11 @@ function createViewerWindow(filePath: string): void {
 // --- App lifecycle ---
 
 let isReconnecting = false
+let isQuitting = false
 
 function setupAutoReconnect(): void {
   client.onDisconnect(() => {
-    if (isReconnecting) return
+    if (isQuitting || isReconnecting) return
     isReconnecting = true
     console.warn('[bond] daemon connection lost, attempting reconnect...')
     broadcast('bond:connectionLost')
@@ -498,6 +519,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('file:read', (_e, filePath: string): string | null => {
     if (typeof filePath !== 'string') return null
+    if (!isAllowedPath(filePath)) return null
     try {
       if (!existsSync(filePath)) return null
       return readFileSync(filePath, 'utf-8')
@@ -559,7 +581,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('session:delete', (_e, id: string) => client.deleteSession(id))
   ipcMain.handle('session:deleteArchived', () => client.deleteArchivedSessions())
   ipcMain.handle('session:getMessages', (_e, sessionId: string) => client.getMessages(sessionId))
-  ipcMain.handle('session:saveMessages', (_e, sessionId: string, messages: unknown[]) => client.saveMessages(sessionId, messages as any))
+  ipcMain.handle('session:saveMessages', (_e, sessionId: string, messages: unknown[]) => {
+    if (isQuitting) return true
+    return client.saveMessages(sessionId, messages as any)
+  })
   ipcMain.handle('session:generateTitle', (_e, sessionId: string) => client.generateTitle(sessionId))
 
   // --- Skills ---
@@ -621,6 +646,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('journal:generateBondComment', (_e, entryId: string) => client.generateBondComment(entryId))
 
   ipcMain.handle('image:readLocal', (_e, filePath: string): string | null => {
+    if (!isAllowedPath(filePath)) return null
     const EXT_TO_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
     const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase()
     const mime = EXT_TO_MIME[ext]
@@ -689,6 +715,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  isQuitting = true
   destroyQuickChat()
   destroyTray()
   destroySense()

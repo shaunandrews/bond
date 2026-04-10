@@ -9,12 +9,14 @@
 
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, unlinkSync, existsSync, chmodSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { setDataDir, ensureSkillsDir } from './paths'
 import { startServer } from './server'
 
 const runtimeDir = join(homedir(), '.bond')
 const socketPath = join(runtimeDir, 'bond.sock')
+const tokenPath = join(runtimeDir, 'bond.token')
 const pidPath = join(runtimeDir, 'daemon.pid')
 
 // Data lives in macOS Application Support (same location Electron uses)
@@ -32,13 +34,25 @@ function removePid(): void {
   try { unlinkSync(pidPath) } catch { /* ignore */ }
 }
 
+function generateAuthToken(): string {
+  const token = randomBytes(32).toString('hex')
+  writeFileSync(tokenPath, token, { encoding: 'utf-8', mode: 0o600 })
+  chmodSync(tokenPath, 0o600)
+  return token
+}
+
+function removeToken(): void {
+  try { unlinkSync(tokenPath) } catch { /* ignore */ }
+}
+
 function main(): void {
   ensureDir(runtimeDir)
   ensureDir(dataDir)
   setDataDir(dataDir)
   ensureSkillsDir()
 
-  const server = startServer(socketPath)
+  const authToken = generateAuthToken()
+  const server = startServer(socketPath, authToken)
   writePid()
 
   console.log(`[bond-daemon] pid=${process.pid} socket=${socketPath}`)
@@ -47,6 +61,7 @@ function main(): void {
     console.log('[bond-daemon] shutting down…')
     server.close().then(() => {
       removePid()
+      removeToken()
       process.exit(0)
     })
   }

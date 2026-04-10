@@ -16,31 +16,9 @@ import { join, extname } from 'node:path'
 import { homedir } from 'node:os'
 import { execSync } from 'node:child_process'
 import { readFileSync, existsSync, statSync } from 'node:fs'
-import WebSocket from 'ws'
+import { call, connect, WebSocket } from './connect'
 
-const SOCK = join(homedir(), '.bond', 'bond.sock')
 const IMAGES_DIR = join(homedir(), 'Library', 'Application Support', 'bond', 'images')
-
-let reqId = 1
-
-function call(ws: WebSocket, method: string, params?: unknown): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const id = reqId++
-    const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params })
-
-    const onMessage = (data: WebSocket.Data) => {
-      const parsed = JSON.parse(data.toString())
-      if (parsed.id === id) {
-        ws.off('message', onMessage)
-        if (parsed.error) reject(new Error(parsed.error.message))
-        else resolve(parsed.result)
-      }
-    }
-
-    ws.on('message', onMessage)
-    ws.send(msg)
-  })
-}
 
 interface ImageRecord {
   id: string
@@ -49,14 +27,6 @@ interface ImageRecord {
   mediaType: string
   sizeBytes: number
   createdAt: string
-}
-
-function connect(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws+unix://${SOCK}`)
-    ws.on('open', () => resolve(ws))
-    ws.on('error', (err) => reject(err))
-  })
 }
 
 function findImage(images: ImageRecord[], query: string): ImageRecord | undefined {

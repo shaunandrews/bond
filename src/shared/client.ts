@@ -41,10 +41,12 @@ export class BondClient {
   private operativeEventListeners = new Set<OperativeEventListener>()
   private disconnectListeners = new Set<() => void>()
   private socketPath: string
+  private authToken?: string
   private _connected = false
 
-  constructor(socketPath: string) {
+  constructor(socketPath: string, authToken?: string) {
     this.socketPath = socketPath
+    this.authToken = authToken
   }
 
   get connected(): boolean {
@@ -56,8 +58,37 @@ export class BondClient {
       const url = `ws+unix://${this.socketPath}`
       this.ws = new WebSocket(url)
 
-      this.ws.on('open', () => {
+      this.ws.on('open', async () => {
+        // Authenticate if a token is provided
+        if (this.authToken && this.ws) {
+          try {
+            const authMsg = JSON.stringify(makeRequest(this.nextId++, 'bond.auth', { token: this.authToken }))
+            const authPromise = new Promise<void>((authResolve, authReject) => {
+              const onMsg = (raw: WebSocket.Data) => {
+                try {
+                  const resp = JSON.parse(raw.toString())
+                  if (isResponse(resp)) {
+                    this.ws?.off('message', onMsg)
+                    if (resp.error) {
+                      authReject(new Error(resp.error.message))
+                    } else {
+                      authResolve()
+                    }
+                  }
+                } catch { /* ignore parse errors during auth */ }
+              }
+              this.ws!.on('message', onMsg)
+            })
+            this.ws.send(authMsg)
+            await authPromise
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)))
+            return
+          }
+        }
+
         this._connected = true
+        this.setupMessageHandler()
         resolve()
       })
 
@@ -77,70 +108,73 @@ export class BondClient {
         // Notify disconnect listeners
         for (const fn of this.disconnectListeners) fn()
       })
+    })
+  }
 
-      this.ws.on('message', (data) => {
-        let msg: JsonRpcMessage
-        try {
-          msg = JSON.parse(data.toString())
-        } catch {
-          return
-        }
+  private setupMessageHandler(): void {
+    if (!this.ws) return
+    this.ws.on('message', (data) => {
+      let msg: JsonRpcMessage
+      try {
+        msg = JSON.parse(data.toString())
+      } catch {
+        return
+      }
 
-        if (isResponse(msg)) {
-          const p = this.pending.get(msg.id)
-          if (p) {
-            this.pending.delete(msg.id)
-            if (msg.error) {
-              p.reject(new Error(msg.error.message))
-            } else {
-              p.resolve(msg.result)
-            }
-          }
-        } else if (isNotification(msg)) {
-          if (msg.method === 'bond.chunk' && msg.params) {
-            const chunk = msg.params as TaggedChunk
-            for (const fn of this.chunkListeners) {
-              fn(chunk)
-            }
-          } else if (msg.method === 'todo.changed') {
-            for (const fn of this.todoChangeListeners) {
-              fn()
-            }
-          } else if (msg.method === 'project.changed') {
-            for (const fn of this.projectChangeListeners) {
-              fn()
-            }
-          } else if (msg.method === 'collection.changed') {
-            for (const fn of this.collectionChangeListeners) {
-              fn()
-            }
-          } else if (msg.method === 'browser.command' && msg.params) {
-            const cmd = msg.params as import('./browser').BrowserCommand
-            for (const fn of this.browserCommandListeners) {
-              fn(cmd)
-            }
-          } else if (msg.method === 'sense.requestCapture' && msg.params) {
-            const payload = msg.params as { captureDir: string; captureId: string }
-            for (const fn of this.senseRequestCaptureListeners) {
-              fn(payload)
-            }
-          } else if (msg.method === 'sense.stateChanged' && msg.params) {
-            const payload = msg.params as { state: string }
-            for (const fn of this.senseStateChangedListeners) {
-              fn(payload)
-            }
-          } else if (msg.method === 'operative.changed') {
-            for (const fn of this.operativeChangeListeners) {
-              fn()
-            }
-          } else if (msg.method === 'operative.event' && msg.params) {
-            const payload = msg.params as { operativeId: string; event: OperativeEvent }
-            for (const fn of this.operativeEventListeners) {
-              fn(payload)
-            }
+      if (isResponse(msg)) {
+        const p = this.pending.get(msg.id)
+        if (p) {
+          this.pending.delete(msg.id)
+          if (msg.error) {
+            p.reject(new Error(msg.error.message))
+          } else {
+            p.resolve(msg.result)
           }
         }
-      })
+      } else if (isNotification(msg)) {
+        if (msg.method === 'bond.chunk' && msg.params) {
+          const chunk = msg.params as TaggedChunk
+          for (const fn of this.chunkListeners) {
+            fn(chunk)
+          }
+        } else if (msg.method === 'todo.changed') {
+          for (const fn of this.todoChangeListeners) {
+            fn()
+          }
+        } else if (msg.method === 'project.changed') {
+          for (const fn of this.projectChangeListeners) {
+            fn()
+          }
+        } else if (msg.method === 'collection.changed') {
+          for (const fn of this.collectionChangeListeners) {
+            fn()
+          }
+        } else if (msg.method === 'browser.command' && msg.params) {
+          const cmd = msg.params as import('./browser').BrowserCommand
+          for (const fn of this.browserCommandListeners) {
+            fn(cmd)
+          }
+        } else if (msg.method === 'sense.requestCapture' && msg.params) {
+          const payload = msg.params as { captureDir: string; captureId: string }
+          for (const fn of this.senseRequestCaptureListeners) {
+            fn(payload)
+          }
+        } else if (msg.method === 'sense.stateChanged' && msg.params) {
+          const payload = msg.params as { state: string }
+          for (const fn of this.senseStateChangedListeners) {
+            fn(payload)
+          }
+        } else if (msg.method === 'operative.changed') {
+          for (const fn of this.operativeChangeListeners) {
+            fn()
+          }
+        } else if (msg.method === 'operative.event' && msg.params) {
+          const payload = msg.params as { operativeId: string; event: OperativeEvent }
+          for (const fn of this.operativeEventListeners) {
+            fn(payload)
+          }
+        }
+      }
     })
   }
 
