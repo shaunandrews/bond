@@ -5,19 +5,27 @@
 Bond uses **Vitest** with **happy-dom** and **@vue/test-utils** for testing.
 
 ```bash
-npm run test:run   # single run
-npm test           # watch mode
+npm run test:run      # single run
+npm test              # watch mode
+npm run test:coverage # with coverage report
 ```
 
 Test files live next to their source: `useChat.ts` → `useChat.test.ts`, `ChatInput.vue` → `ChatInput.test.ts`.
 
 ### Rules
 
-- **Always run `npm run test:run` after making changes** to verify nothing is broken.
-- **Write tests for all new functionality.** New composables get unit tests. New components with logic or user interaction get component tests. Pure presentational components (no props, no events) can skip tests.
+- **Every new `.ts` file with logic gets a `.test.ts` sibling.**
+- **Every new composable gets unit tests.**
+- **Every new component with props, events, or user interaction gets component tests.** Pure presentational components (no logic, no events) can skip tests.
+- **Every bug fix includes a regression test** that would have caught it.
+- **`npm run test:run` is the final step of any code change** — always run it, never skip it.
+- **When modifying existing code**, check for an adjacent test file and update it to cover the change.
+- **If a test file exists but doesn't cover the modified code path**, add a test case.
 - **Composable tests** use a `withSetup` helper to run composables in a Vue app context. Inject mock `ChatDeps` instead of relying on `window.bond`.
 - **Component tests** use `mount` or `shallowMount` from `@vue/test-utils`. Assert on emitted events, rendered text, and class presence — not computed styles (happy-dom doesn't process Tailwind).
-- Test config is in `vitest.config.ts` (separate from `electron.vite.config.ts`).
+- **Daemon data layer tests** create an in-memory SQLite database, run migrations, and exercise all exported functions.
+- Test config is in `vitest.config.ts` (separate from `electron.vite.config.ts`). Coverage uses `@vitest/coverage-v8`.
+- A **pre-commit hook** runs `vitest run` — commits are rejected if tests fail.
 
 ## Architecture
 
