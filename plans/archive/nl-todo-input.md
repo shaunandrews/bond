@@ -25,12 +25,14 @@ The current add-todo experience is split awkwardly. `TodoView.vue` already calls
 ### Fallback chain
 The input should **always produce a todo**. AI enrichment is best-effort.
 1. AI returns parsed todos → use them
-2. AI returns empty array → create one todo with the literal text as title
+2. AI returns empty array → create one todo with the literal text as title (even for "thanks" — the user hit Enter, so they wanted a todo)
 3. AI call fails (network, rate limit) → create one todo with literal text, show subtle inline warning "AI unavailable, created as-is" that fades after 3s
 4. AI times out (8s) → same as failure
 5. AI returns malformed JSON → same as failure, log error for debugging
 
 The user never loses their input.
+
+**Note:** This means the system prompt's instruction to return `[]` for non-tasks like "thanks" is effectively overridden by the fallback. In practice the AI rarely returns `[]` for actual input — mostly only for greetings or acknowledgements, which users are unlikely to type into a todo input. If this becomes a problem, the composable can be updated to distinguish "AI chose not to create" from "AI failed."
 
 ---
 
@@ -125,7 +127,7 @@ Reply with ONLY the JSON array. No markdown fences, no explanation.`,
       }
     }
 
-    return parseJsonArray(resultText, trimmed)
+    return parseJsonArray(resultText)
   } catch {
     // AI call failed — return empty so composable falls back to literal
     return []
@@ -133,7 +135,7 @@ Reply with ONLY the JSON array. No markdown fences, no explanation.`,
 }
 
 /** Parse the AI response into a ParsedTodo[]. Handles markdown fences, malformed JSON. */
-function parseJsonArray(text: string, originalPrompt: string): ParsedTodo[] {
+function parseJsonArray(text: string): ParsedTodo[] {
   if (!text) return []
 
   // Strip markdown code fences if present
@@ -178,26 +180,28 @@ function parseJsonArray(text: string, originalPrompt: string): ParsedTodo[] {
 
 ### 2. Wire the RPC in `src/daemon/server.ts`
 
-Add the import at the top (near line 93 where `parseTodoInput` is imported):
+Add the import at the top (near line 95 where `parseTodoInput` is imported):
 ```ts
 import { parseTodosFromPrompt } from './parse-todos-from-prompt'
 ```
 
-Add the handler in the `// --- Todos ---` section (after the `todo.parse` case, around line 730):
+Add the handler in the `// --- Todos ---` section (after the `todo.reorder` case, around line 740, just before the `// --- Projects ---` comment):
 ```ts
 case 'todo.parseFromPrompt': {
   const prompt = getStringParam(p, 'prompt')
   if (!prompt) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'prompt is required'))
-  // existingGroups is an optional string array — use getParam, not getStringParam
-  const existingGroups = (getParam(p, 'existingGroups') as string[] | undefined) ?? []
-  const todos = await parseTodosFromPrompt(prompt, existingGroups)
+  const existingGroups = getParam(p, 'existingGroups') as string[] | undefined
+  if (existingGroups && !Array.isArray(existingGroups)) {
+    return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'existingGroups must be an array'))
+  }
+  const todos = await parseTodosFromPrompt(prompt, existingGroups ?? [])
   return JSON.stringify(makeResponse(id, { todos }))
 }
 ```
 
-**Important:** There is no `getArrayParam` helper in `server.ts`. Use `getParam(p, 'existingGroups') as string[]` — see how `todo.reorder` handles its `ids` array parameter at line 733 for the pattern.
+**Important:** There is no `getArrayParam` helper in `server.ts`. Use `getParam(p, 'existingGroups') as string[]` with an `Array.isArray` guard — see how `todo.reorder` handles its `ids` array parameter at line 734 for the pattern.
 
-Also add a comment above the existing `todo.parse` handler:
+Also add a comment above the existing `todo.parse` handler (line 727):
 ```ts
 // Used by CLI (bond todo add). Renderer uses todo.parseFromPrompt instead.
 case 'todo.parse': {
@@ -205,7 +209,7 @@ case 'todo.parse': {
 
 ### 3. Client method in `src/shared/client.ts`
 
-Add near the existing `parseTodo` method (around line 304):
+Add after the existing `parseTodo` method (around line 338):
 ```ts
 async parseFromPrompt(prompt: string, existingGroups?: string[]): Promise<{ todos: Array<{ title: string; notes: string; group: string }> }> {
   return await this.call('todo.parseFromPrompt', { prompt, existingGroups }) as { todos: Array<{ title: string; notes: string; group: string }> }
@@ -222,7 +226,7 @@ parseFromPrompt: (prompt: string, existingGroups?: string[]) =>
 
 ### 5. IPC handler in `src/main/index.ts`
 
-Add after the existing `todo:parse` handler (line 581):
+Add after the existing `todo:parse` handler (line 606):
 ```ts
 ipcMain.handle('todo:parseFromPrompt', (_e, prompt: string, existingGroups?: string[]) =>
   client.parseFromPrompt(prompt, existingGroups))
@@ -230,7 +234,7 @@ ipcMain.handle('todo:parseFromPrompt', (_e, prompt: string, existingGroups?: str
 
 ### 6. Type declaration in `src/renderer/env.d.ts`
 
-Add after the existing `parseTodo` type (line 22):
+Add after the existing `parseTodo` type (line 22) and `reorderTodos` (line 23):
 ```ts
 parseFromPrompt: (prompt: string, existingGroups?: string[]) => Promise<{ todos: Array<{ title: string; notes: string; group: string }> }>
 ```
@@ -351,27 +355,22 @@ async function addTodo(literal = false) {
 }
 ```
 
-Update `onInputKeydown` (lines 202-208):
-```ts
-function onInputKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && e.shiftKey) {
-    e.preventDefault()
-    addTodo(true)  // literal mode — Shift+Enter
-  } else if (e.key === 'Enter') {
-    e.preventDefault()
-    addTodo(false)  // AI mode — Enter
-  }
-}
+Replace the `@keydown="onInputKeydown"` handler on the textarea (line 300) with Vue modifier-based handlers, matching the pattern used in ProjectDetail:
+```html
+@keydown.enter.shift.prevent="addTodo(true)"
+@keydown.enter.exact.prevent="addTodo(false)"
 ```
 
-**Important:** Check the Shift+Enter ordering — it must be checked **before** the plain Enter case, otherwise `e.shiftKey` is never reached. The current code (line 204) checks `!e.shiftKey` first, which means Shift+Enter currently inserts a newline. The new behavior repurposes Shift+Enter for literal mode, so **multi-line input is no longer supported** via keyboard. This is intentional — the input is a prompt, not a text editor. If this feels like a regression, add a note in the PR.
+Then **delete the `onInputKeydown` function** entirely (lines 202-208) — it's no longer needed.
+
+**Note:** The current code (line 204) checks `!e.shiftKey` first, which means Shift+Enter currently inserts a newline. The new behavior repurposes Shift+Enter for literal mode, so **multi-line input is no longer supported** via keyboard. This is intentional — the input is a prompt, not a text editor. If this feels like a regression, add a note in the PR.
 
 Update the placeholder in the template (line 298):
 ```html
 placeholder="What do you need to do?"
 ```
 
-Change the submit button icon from `PhPlus` to `PhArrowUp` (line 305). Add the import:
+Change the submit button icon from `PhPlus` to `PhArrowUp` (line 305) and update the import (line 3) — replace `PhPlus` with `PhArrowUp` (`PhPlus` is only used here, nowhere else in the template):
 ```ts
 import { PhArrowUp, PhTrash, PhChatCircle, PhNotePencil, PhTag, PhSpinner, PhFolder } from '@phosphor-icons/vue'
 ```
@@ -385,18 +384,33 @@ import { PhArrowUp, PhTrash, PhChatCircle, PhNotePencil, PhTag, PhSpinner, PhFol
 
 **What to add:**
 
-Import the composable and `PhSpinner` and `PhArrowUp`:
+Import the composable:
 ```ts
 import { useTodoPrompt } from '../composables/useTodoPrompt'
-import { PhSpinner, PhArrowUp } from '@phosphor-icons/vue'
 ```
 
-Note: `PhArrowUp` is not currently imported in this component. `PhSpinner` is also not imported — add both to the existing import statement from `@phosphor-icons/vue`.
-
-Set up the composable:
+Add `PhSpinner` and `PhArrowUp` to the existing `@phosphor-icons/vue` import (lines 3-6). **Keep `PhPlus`** — it's still used by the resource add button (line 183):
 ```ts
+import {
+  PhPlus, PhTrash, PhFolder, PhFile, PhLink,
+  PhGlobe, PhCode, PhPresentation, PhCube, PhCalendar,
+  PhSpinner, PhArrowUp
+} from '@phosphor-icons/vue'
+```
+
+Set up the composable. Derive `existingGroups` from the project's todos so the AI can reuse existing categories:
+```ts
+const todoGroups = computed(() => {
+  const set = new Set<string>()
+  for (const t of todos.value) {
+    if (t.group) set.add(t.group)
+  }
+  return [...set]
+})
+
 const { text: newTodoText, parsing: todoParsing, submit: submitTodo } = useTodoPrompt({
-  projectId: computed(() => props.project.id)
+  projectId: computed(() => props.project.id),
+  existingGroups: todoGroups
 })
 const todoInputRef = ref<HTMLTextAreaElement | null>(null)
 ```
@@ -512,7 +526,7 @@ function autoResizeInput() {
 
 - [ ] Type "buy milk" → creates 1 todo titled "buy milk" (or AI-enriched equivalent)
 - [ ] Type "update docs, write tests, and deploy" → creates 3 separate todos
-- [ ] Type "thanks" or "hello" → AI returns [] → falls back to literal todo
+- [ ] Type "thanks" or "hello" → AI returns [] → falls back to literal todo (creates a todo titled "thanks")
 - [ ] Type something while network is down → falls back to literal, no error dialog
 - [ ] Shift+Enter → creates literal todo immediately, no AI call
 - [ ] In ProjectDetail: created todos have the correct `projectId`
@@ -520,6 +534,7 @@ function autoResizeInput() {
 - [ ] AI response with markdown fences (```json) is parsed correctly
 - [ ] Rapid double-submit (click button twice) doesn't create duplicates (the `parsing` guard prevents this)
 - [ ] CLI `bond todo add "some text"` still works (uses old `todo.parse`, unchanged)
+- [ ] In ProjectDetail: `existingGroups` includes groups from the project's todos (verify via daemon logs or network inspector)
 
 ---
 
