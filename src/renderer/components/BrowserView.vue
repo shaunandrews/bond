@@ -95,6 +95,13 @@ function onTabPointerUp() {
   const fromIdx = state.originalIndex
   const toIdx = state.currentIndex
 
+  // No drag occurred — just a click, so switch to this tab
+  if (fromIdx === toIdx) {
+    browser.switchTab(state.tabId)
+    dragState.value = null
+    return
+  }
+
   // Commit the reorder to the actual tabs array
   if (fromIdx !== toIdx) {
     // Find the indices in the full tabs array (which includes hidden tabs)
@@ -731,7 +738,6 @@ defineExpose({ openUrl, focusUrlBar })
           :class="['browser-tab', { 'browser-tab--active': tab.id === activeTabId, 'browser-tab--dragging': dragState?.tabId === tab.id }]"
           :style="tabDragStyle(tab.id, idx)"
           @mousedown="onTabPointerDown($event, tab.id)"
-          @click="browser.switchTab(tab.id)"
           @mousedown.middle.prevent="browser.closeTab(tab.id)"
         >
           <img v-if="tab.favicon" :src="tab.favicon" class="browser-tab-favicon" />
