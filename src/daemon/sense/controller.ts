@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { getDb } from '../db'
-import { createPresenceMonitor } from './presence'
+import { createPresenceMonitor, type PresenceState } from './presence'
 import { createWindowDetector } from './window-detector'
 import { createClipboardMonitor } from './clipboard'
 import { isBlacklisted, isAmbiguous } from './privacy'
@@ -154,25 +154,63 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
     }
   }
 
-  // --- Presence events ---
-  presence.on('change', (presenceState) => {
+  // --- State reconciliation ---
+  // Transitions the state machine based on current presence.
+  // Called from both the event handler and the watchdog.
+  function reconcileState(presenceState: PresenceState): void {
     if (state === 'disabled' || state === 'paused' || state === 'suspended') return
 
-    if (presenceState === 'active' && state === 'armed') {
-      startSession()
-      setState('recording')
-      startCapturing()
-      textWorker.start()
-    } else if (presenceState === 'active' && state === 'idle') {
-      startSession()
-      setState('recording')
-      startCapturing()
-    } else if (presenceState === 'idle' && state === 'recording') {
+    try {
+      if (presenceState === 'active' && state === 'armed') {
+        startSession()
+        setState('recording')
+        startCapturing()
+        textWorker.start()
+      } else if (presenceState === 'active' && state === 'idle') {
+        startSession()
+        setState('recording')
+        startCapturing()
+      } else if (presenceState === 'idle' && state === 'recording') {
+        stopCapturing()
+        closeSession()
+        setState('idle')
+      }
+    } catch {
+      // If a transition fails (e.g. DB error in startSession), reset to armed
+      // so the watchdog can retry on the next tick.
       stopCapturing()
       closeSession()
-      setState('idle')
+      setState('armed')
     }
+  }
+
+  // --- Presence events ---
+  presence.on('change', (presenceState) => {
+    reconcileState(presenceState)
   })
+
+  // --- Watchdog ---
+  // Periodically checks for state/presence mismatch and recovers.
+  // This prevents the system from getting permanently stuck if an event
+  // is missed or a transition throws.
+  let watchdogTimer: ReturnType<typeof setInterval> | null = null
+  function startWatchdog(): void {
+    if (watchdogTimer) return
+    watchdogTimer = setInterval(() => {
+      if (state === 'disabled' || state === 'paused' || state === 'suspended') return
+      const presenceState = presence.getState()
+      const mismatch =
+        (presenceState === 'active' && (state === 'armed' || state === 'idle')) ||
+        (presenceState === 'idle' && state === 'recording')
+      if (mismatch) {
+        reconcileState(presenceState)
+      }
+    }, 30_000) // Check every 30 seconds
+    watchdogTimer.unref()
+  }
+  function stopWatchdog(): void {
+    if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null }
+  }
 
   // --- Window switch events (event-driven capture) ---
   windowDetector.on('appSwitch', () => {
@@ -214,22 +252,12 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
     // from previous sessions even if we're not yet recording
     textWorker.start()
 
-    // If user is already active, start recording immediately.
-    // Presence only emits 'change' on transitions — if already active when we start
-    // polling, no event fires. Poll a few times to catch the initial state.
-    const checkActive = setInterval(() => {
-      if (state !== 'armed') { clearInterval(checkActive); return }
-      if (presence.getState() === 'active') {
-        clearInterval(checkActive)
-        startSession()
-        setState('recording')
-        startCapturing()
-        textWorker.start()
-      }
-    }, 500)
-    checkActive.unref()
-    // Give up after 10s — presence change events will handle it from there
-    setTimeout(() => clearInterval(checkActive), 10_000).unref()
+    // Start the watchdog — it handles both initial active detection
+    // and recovery from missed events or failed transitions.
+    startWatchdog()
+
+    // Also do an immediate check so we don't wait 30s on first launch
+    setTimeout(() => reconcileState(presence.getState()), 1_000).unref()
   }
 
   emitter.disable = () => {
@@ -239,6 +267,7 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
     presence.stop()
     windowDetector.stopPolling()
     clipboard.stop()
+    stopWatchdog()
     if (retentionTimer) { clearInterval(retentionTimer); retentionTimer = null }
     if (pauseTimer) { clearTimeout(pauseTimer); pauseTimer = null }
     settings.enabled = false
