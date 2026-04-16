@@ -12,7 +12,7 @@ import { useOperatives } from './composables/useOperatives'
 import { useOperativeEvents } from './composables/useOperativeEvents'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhGlobe, PhX, PhRobot, PhDotsThree, PhListBullets, PhClockCounterClockwise, PhImages } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhGlobe, PhX, PhRobot, PhDotsThree, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import BondFlyoutMenu from './components/BondFlyoutMenu.vue'
@@ -27,6 +27,7 @@ import CollectionsView from './components/CollectionsView.vue'
 import TodoView from './components/TodoView.vue'
 import BrowserView from './components/BrowserView.vue'
 import SensePanelView from './components/SensePanelView.vue'
+import MemoryView from './components/MemoryView.vue'
 import OperativePanelView from './components/OperativePanelView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
@@ -130,7 +131,7 @@ const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === 
 const isFullScreen = ref(false)
 const sidebarWidth = ref(getInitialSidebarWidth())
 
-type RightPanelContent = 'todos' | 'projects' | 'browser' | 'operatives' | 'collections' | 'sense' | 'media'
+type RightPanelContent = 'todos' | 'projects' | 'browser' | 'operatives' | 'collections' | 'sense' | 'media' | 'memory'
 const rightPanelCollapsed = ref(localStorage.getItem('bond:right-panel') === 'none' || !localStorage.getItem('bond:right-panel'))
 const rightPanelContent = ref<RightPanelContent>(
   (localStorage.getItem('bond:right-panel-content') as RightPanelContent) || 'todos'
@@ -563,7 +564,7 @@ onUnmounted(() => {
           <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'browser' }" @click.stop="toggleRightPanel('browser')" v-tooltip="'Browser ⇧⌘K'">
             <PhGlobe :size="16" weight="bold" />
           </BondButton>
-          <BondButton ref="overflowBtnRef" variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && ['collections', 'sense', 'media'].includes(rightPanelContent) }" @click.stop="overflowMenuOpen = !overflowMenuOpen" v-tooltip="'More panels'">
+          <BondButton ref="overflowBtnRef" variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && ['collections', 'sense', 'media', 'memory'].includes(rightPanelContent) }" @click.stop="overflowMenuOpen = !overflowMenuOpen" v-tooltip="'More panels'">
             <PhDotsThree :size="16" weight="bold" />
           </BondButton>
           <BondFlyoutMenu :open="overflowMenuOpen" :anchor="overflowBtnRef?.$el" :width="180" @close="overflowMenuOpen = false">
@@ -581,6 +582,10 @@ onUnmounted(() => {
                 <PhImages :size="14" weight="bold" />
                 <span>Media</span>
                 <span v-if="mediaCount" class="overflow-badge">{{ mediaCount }}</span>
+              </button>
+              <button :class="['overflow-menu-item', { active: rightPanelOpen && rightPanelContent === 'memory' }]" @click="openPanelFromOverflow('memory')">
+                <PhBrain :size="14" weight="bold" />
+                <span>Memory</span>
               </button>
             </nav>
           </BondFlyoutMenu>
@@ -633,7 +638,7 @@ onUnmounted(() => {
 
     <BondPanelHandle v-show="!rightPanelHidden" id="handle-1" />
 
-    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="rightPanelContent === 'browser' ? 360 : rightPanelContent === 'sense' ? 300 : 260" :maxSize="99999" :style="rightPanelStyle">
+    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="rightPanelContent === 'browser' ? 360 : ['sense', 'memory'].includes(rightPanelContent) ? 300 : 260" :maxSize="99999" :style="rightPanelStyle">
       <TodoView v-if="rightPanelContent === 'todos'" @startChat="handleTodoChat" />
       <ProjectPanelView v-else-if="rightPanelContent === 'projects'"
         :projects="projects.activeProjects.value"
@@ -669,6 +674,7 @@ onUnmounted(() => {
         @back="collections.select(null)"
       />
       <SensePanelView v-else-if="rightPanelContent === 'sense'" />
+      <MemoryView v-else-if="rightPanelContent === 'memory'" />
       <MediaView v-else-if="rightPanelContent === 'media'" />
       <!-- BrowserView uses v-show so webview tabs stay alive when panel switches -->
       <BrowserView v-show="rightPanelContent === 'browser'" ref="browserViewRef" @ensureVisible="ensureBrowserPanel" />
