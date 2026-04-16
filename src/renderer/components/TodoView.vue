@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { PhPlus, PhTrash, PhChatCircle, PhNotePencil, PhTag, PhSpinner, PhFolder } from '@phosphor-icons/vue'
+import { PhArrowUp, PhTrash, PhChatCircle, PhNotePencil, PhTag, PhSpinner, PhFolder } from '@phosphor-icons/vue'
 import type { TodoItem, Project } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
 import BondToolbar from './BondToolbar.vue'
+import { useTodoPrompt } from '../composables/useTodoPrompt'
 
 const emit = defineEmits<{
   startChat: [text: string]
@@ -13,8 +14,6 @@ const emit = defineEmits<{
 const todos = ref<TodoItem[]>([])
 const projects = ref<Project[]>([])
 const loading = ref(true)
-const newRaw = ref('')
-const parsing = ref(false)
 const activeGroup = ref<string | null>(null)
 const activeProjectId = ref<string | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
@@ -33,6 +32,10 @@ const groups = computed(() => {
     if (t.group) set.add(t.group)
   }
   return [...set].sort((a, b) => a.localeCompare(b))
+})
+
+const { text: newRaw, parsing, submit: submitTodo } = useTodoPrompt({
+  existingGroups: computed(() => [...groups.value])
 })
 
 const UNASSIGNED = '__unassigned__'
@@ -93,22 +96,14 @@ onUnmounted(() => {
   unsubProjectsChanged?.()
 })
 
-async function addTodo() {
-  const raw = newRaw.value.trim()
-  if (!raw || parsing.value) return
-  parsing.value = true
-  try {
-    const parsed = await window.bond.parseTodo(raw)
-    if (!parsed.title) return
-    const todo = await window.bond.createTodo(parsed.title, parsed.notes, parsed.group)
-    todos.value.push(todo)
-    newRaw.value = ''
+async function addTodo(literal = false) {
+  const result = await submitTodo({ literal })
+  if (result.todos.length) {
+    await refreshTodos()
     nextTick(() => {
       inputRef.value?.focus()
       autoResizeInput()
     })
-  } finally {
-    parsing.value = false
   }
 }
 
@@ -199,14 +194,6 @@ function onEditKeydown(e: KeyboardEvent, todo: TodoItem) {
   }
 }
 
-function onInputKeydown(e: KeyboardEvent) {
-  // Enter to submit, Shift+Enter for newline
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    addTodo()
-  }
-}
-
 // --- Drag and drop ---
 const dragId = ref<string | null>(null)
 const dropTargetId = ref<string | null>(null)
@@ -290,22 +277,6 @@ function onDragEnd() {
       </div>
 
       <template v-else>
-        <div class="todo-input-row">
-          <textarea
-            ref="inputRef"
-            v-model="newRaw"
-            class="todo-input todo-textarea"
-            placeholder="Describe a todo... title, notes, and group will be extracted automatically"
-            rows="1"
-            @keydown="onInputKeydown"
-            @input="autoResizeInput"
-          />
-          <BondButton variant="ghost" size="sm" icon :disabled="!newRaw.trim() || parsing" @click="addTodo">
-            <PhSpinner v-if="parsing" :size="16" weight="bold" class="todo-spinner" />
-            <PhPlus v-else :size="16" weight="bold" />
-          </BondButton>
-        </div>
-
         <div v-if="groups.length || projectsWithTodos.length" class="todo-filters">
           <div v-if="groups.length" class="todo-group-filters">
             <button
@@ -495,6 +466,31 @@ function onDragEnd() {
         </template>
       </template>
       </div>
+      <div v-if="!loading" class="todo-input-footer">
+        <div class="todo-chat-box">
+          <textarea
+            ref="inputRef"
+            v-model="newRaw"
+            class="todo-chat-textarea"
+            placeholder="What do you need to do?"
+            rows="1"
+            @keydown.enter.shift.prevent="addTodo(true)"
+            @keydown.enter.exact.prevent="addTodo(false)"
+            @input="autoResizeInput"
+          />
+          <div class="todo-chat-toolbar">
+            <button
+              type="button"
+              class="todo-send-btn"
+              :disabled="!newRaw.trim() || parsing"
+              @click="addTodo()"
+            >
+              <PhSpinner v-if="parsing" :size="16" weight="bold" class="todo-spinner" />
+              <PhArrowUp v-else :size="16" weight="bold" />
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -537,7 +533,8 @@ function onDragEnd() {
 }
 
 .todo-view-content {
-  padding: 0.75rem 1rem 2rem;
+  padding: 0.75rem 1rem 6rem;
+  flex: 1;
 }
 
 .todo-empty {
@@ -547,41 +544,95 @@ function onDragEnd() {
   padding: 3rem 1rem;
 }
 
-.todo-input-row {
-  display: flex;
-  gap: 0.375rem;
-  align-items: flex-end;
-  margin-bottom: 1rem;
+/* --- Sticky chat-style input footer --- */
+
+.todo-input-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  padding: 0.5rem 1rem 1rem;
+  pointer-events: none;
 }
 
-.todo-input {
-  flex: 1;
-  font-size: 0.875rem;
-  font-family: inherit;
-  color: var(--color-text-primary);
+.todo-input-footer > * {
+  pointer-events: auto;
+}
+
+.todo-input-footer::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: -1;
+  backdrop-filter: blur(8px);
+  mask-image: linear-gradient(to bottom, transparent, black 24px);
+}
+
+.todo-chat-box {
+  border-radius: 18px 18px 22px 12px;
+  padding: 6px;
+  background: var(--color-tint);
+  backdrop-filter: blur(24px);
+  transition: all var(--transition-fast);
+}
+
+.todo-chat-box:focus-within {
+  box-shadow: 0 0 0 2px var(--color-accent);
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 0.5rem 0.625rem;
-  outline: none;
-  transition: border-color var(--transition-fast);
 }
 
-.todo-textarea {
+.todo-chat-textarea {
+  display: block;
+  width: 100%;
   resize: none;
-  min-height: 2.25rem;
-  max-height: 10rem;
-  line-height: 1.5;
+  max-height: 8rem;
   overflow-y: auto;
+  padding: 0.625rem 0.75rem 0.25rem;
+  border-radius: var(--radius-xl);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  outline: none;
+  background: transparent;
+  border: none;
   box-sizing: border-box;
 }
 
-.todo-input:focus {
-  border-color: var(--color-accent, var(--color-border));
+.todo-chat-textarea::placeholder {
+  color: var(--color-muted);
 }
 
-.todo-input::placeholder {
-  color: var(--color-muted);
+.todo-chat-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.todo-send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  border: none;
+  cursor: pointer;
+  background: var(--color-accent);
+  color: #fff;
+  transition: opacity var(--transition-fast);
+}
+
+.todo-send-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.todo-send-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 @keyframes spin {

@@ -2,12 +2,14 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import {
   PhPlus, PhTrash, PhFolder, PhFile, PhLink,
-  PhGlobe, PhCode, PhPresentation, PhCube, PhCalendar
+  PhGlobe, PhCode, PhPresentation, PhCube, PhCalendar,
+  PhSpinner, PhArrowUp
 } from '@phosphor-icons/vue'
 import type { Project, ProjectType, ProjectResource, TodoItem } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
 import BondSelect from './BondSelect.vue'
+import { useTodoPrompt } from '../composables/useTodoPrompt'
 
 const props = defineProps<{
   project: Project
@@ -25,8 +27,19 @@ const todos = ref<TodoItem[]>([])
 let unsubTodoChanged: (() => void) | null = null
 
 // Todo input
-const newTodoText = ref('')
-const todoInputRef = ref<HTMLInputElement | null>(null)
+const todoGroups = computed(() => {
+  const set = new Set<string>()
+  for (const t of todos.value) {
+    if (t.group) set.add(t.group)
+  }
+  return [...set]
+})
+
+const { text: newTodoText, parsing: todoParsing, submit: submitTodo } = useTodoPrompt({
+  projectId: computed(() => props.project.id),
+  existingGroups: todoGroups
+})
+const todoInputRef = ref<HTMLTextAreaElement | null>(null)
 
 // Resource input
 const showResourceForm = ref(false)
@@ -79,13 +92,20 @@ onUnmounted(() => {
 
 // --- Todo actions ---
 
-async function addTodo() {
-  const text = newTodoText.value.trim()
-  if (!text) return
-  const todo = await window.bond.createTodo(text, '', '', props.project.id)
-  todos.value.push(todo)
-  newTodoText.value = ''
-  nextTick(() => todoInputRef.value?.focus())
+async function addTodo(literal = false) {
+  const result = await submitTodo({ literal })
+  if (result.todos.length) {
+    await refreshTodos()
+    nextTick(() => todoInputRef.value?.focus())
+  }
+}
+
+function autoResizeInput() {
+  const el = todoInputRef.value
+  if (el) {
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+  }
 }
 
 async function toggleTodo(todo: TodoItem) {
@@ -233,19 +253,6 @@ function openResource(kind: string, value: string) {
         <span v-if="pendingTodos.length" class="pd-todo-count">{{ pendingTodos.length }}</span>
       </div>
 
-      <div class="pd-todo-add">
-        <input
-          ref="todoInputRef"
-          v-model="newTodoText"
-          class="pd-form-input"
-          placeholder="Add a todo..."
-          @keydown.enter="addTodo"
-        />
-        <BondButton variant="ghost" size="sm" icon :disabled="!newTodoText.trim()" @click="addTodo">
-          <PhPlus :size="14" weight="bold" />
-        </BondButton>
-      </div>
-
       <div v-if="projectTodos.length === 0" class="pd-empty">
         <BondText size="sm" color="muted">No todos yet.</BondText>
       </div>
@@ -271,18 +278,45 @@ function openResource(kind: string, value: string) {
         </ul>
       </template>
     </div>
+
+    <!-- Sticky todo input -->
+    <div class="pd-input-footer">
+      <div class="pd-chat-box">
+        <textarea
+          ref="todoInputRef"
+          v-model="newTodoText"
+          class="pd-chat-textarea"
+          placeholder="What do you need to do?"
+          rows="1"
+          @keydown.enter.shift.prevent="addTodo(true)"
+          @keydown.enter.exact.prevent="addTodo(false)"
+          @input="autoResizeInput"
+        />
+        <div class="pd-chat-toolbar">
+          <button
+            type="button"
+            class="pd-send-btn"
+            :disabled="!newTodoText.trim() || todoParsing"
+            @click="addTodo()"
+          >
+            <PhSpinner v-if="todoParsing" :size="14" weight="bold" class="pd-todo-spinner" />
+            <PhArrowUp v-else :size="14" weight="bold" />
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .project-detail {
-  padding: 1rem 1.5rem 2rem;
+  padding: 1rem 1.5rem 0;
   max-width: 640px;
   margin-inline: auto;
 }
 
 .project-detail.compact {
-  padding: 0.75rem 0.75rem 2rem;
+  padding: 0.75rem 0.75rem 0;
   max-width: none;
 }
 
@@ -534,11 +568,104 @@ function openResource(kind: string, value: string) {
   color: var(--color-bg, #fff);
 }
 
-.pd-todo-add {
+/* --- Sticky chat-style input footer --- */
+
+.pd-input-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  padding: 0.5rem 0 1rem;
+  pointer-events: none;
+}
+
+.pd-input-footer > * {
+  pointer-events: auto;
+}
+
+.pd-input-footer::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: -1;
+  backdrop-filter: blur(8px);
+  mask-image: linear-gradient(to bottom, transparent, black 24px);
+}
+
+.pd-chat-box {
+  border-radius: 18px 18px 22px 12px;
+  padding: 6px;
+  background: var(--color-tint);
+  backdrop-filter: blur(24px);
+  transition: all var(--transition-fast);
+}
+
+.pd-chat-box:focus-within {
+  box-shadow: 0 0 0 2px var(--color-accent);
+  background: var(--color-surface);
+}
+
+.pd-chat-textarea {
+  display: block;
+  width: 100%;
+  resize: none;
+  max-height: 8rem;
+  overflow-y: auto;
+  padding: 0.5rem 0.625rem 0.25rem;
+  border-radius: var(--radius-xl);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  outline: none;
+  background: transparent;
+  border: none;
+  box-sizing: border-box;
+}
+
+.pd-chat-textarea::placeholder {
+  color: var(--color-muted);
+}
+
+.pd-chat-toolbar {
   display: flex;
-  gap: 0.375rem;
   align-items: center;
-  margin-bottom: 0.5rem;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.pd-send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  border: none;
+  cursor: pointer;
+  background: var(--color-accent);
+  color: #fff;
+  transition: opacity var(--transition-fast);
+}
+
+.pd-send-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.pd-send-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+@keyframes pd-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.pd-todo-spinner {
+  animation: pd-spin 0.8s linear infinite;
 }
 
 .pd-todo-list {
