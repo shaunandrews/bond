@@ -46,6 +46,7 @@ export function getDb(): Database.Database {
   migrateAddCollectionItemProjectId(_db)
   migrateJournalToCollection(_db)
   migrateAddOperativeContextWindow(_db)
+  migrateCreateSenseMemoryTables(_db)
 
   return _db
 }
@@ -702,6 +703,87 @@ function migrateFromFiles(db: Database.Database): void {
   try {
     renameSync(sessionsDir, join(dataDir, 'sessions.bak'))
   } catch { /* ignore */ }
+}
+
+function migrateCreateSenseMemoryTables(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sense_debriefs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+      session_title TEXT NOT NULL DEFAULT '',
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+
+      summary TEXT NOT NULL,
+      topics TEXT NOT NULL DEFAULT '[]',
+      decisions TEXT NOT NULL DEFAULT '[]',
+      open_threads TEXT NOT NULL DEFAULT '[]',
+      key_facts TEXT NOT NULL DEFAULT '[]',
+
+      topics_text TEXT NOT NULL DEFAULT '',
+      decisions_text TEXT NOT NULL DEFAULT '',
+      open_threads_text TEXT NOT NULL DEFAULT '',
+      key_facts_text TEXT NOT NULL DEFAULT '',
+
+      message_count INTEGER NOT NULL DEFAULT 0,
+      duration_seconds INTEGER NOT NULL DEFAULT 0,
+
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sense_debriefs_created ON sense_debriefs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sense_debriefs_project ON sense_debriefs(project_id);
+
+    CREATE TABLE IF NOT EXISTS sense_facts (
+      id TEXT PRIMARY KEY,
+      fact TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'user',
+      source_debrief_id TEXT REFERENCES sense_debriefs(id) ON DELETE SET NULL,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sense_facts_active ON sense_facts(active, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sense_facts_project ON sense_facts(project_id);
+  `)
+
+  // FTS5 virtual table — guard with existence check (same pattern as sense_fts)
+  const hasDebriefFts = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='sense_debriefs_fts'"
+  ).get()
+
+  if (!hasDebriefFts) {
+    db.exec(`
+      CREATE VIRTUAL TABLE sense_debriefs_fts USING fts5(
+        summary,
+        topics_text,
+        decisions_text,
+        open_threads_text,
+        key_facts_text,
+        session_title,
+        content=sense_debriefs,
+        content_rowid=rowid
+      );
+
+      CREATE TRIGGER sense_debriefs_fts_insert AFTER INSERT ON sense_debriefs BEGIN
+        INSERT INTO sense_debriefs_fts(rowid, summary, topics_text, decisions_text, open_threads_text, key_facts_text, session_title)
+        VALUES (NEW.rowid, NEW.summary, NEW.topics_text, NEW.decisions_text, NEW.open_threads_text, NEW.key_facts_text, NEW.session_title);
+      END;
+
+      CREATE TRIGGER sense_debriefs_fts_delete AFTER DELETE ON sense_debriefs BEGIN
+        INSERT INTO sense_debriefs_fts(sense_debriefs_fts, rowid, summary, topics_text, decisions_text, open_threads_text, key_facts_text, session_title)
+        VALUES ('delete', OLD.rowid, OLD.summary, OLD.topics_text, OLD.decisions_text, OLD.open_threads_text, OLD.key_facts_text, OLD.session_title);
+      END;
+
+      CREATE TRIGGER sense_debriefs_fts_update AFTER UPDATE ON sense_debriefs BEGIN
+        INSERT INTO sense_debriefs_fts(sense_debriefs_fts, rowid, summary, topics_text, decisions_text, open_threads_text, key_facts_text, session_title)
+        VALUES ('delete', OLD.rowid, OLD.summary, OLD.topics_text, OLD.decisions_text, OLD.open_threads_text, OLD.key_facts_text, OLD.session_title);
+        INSERT INTO sense_debriefs_fts(rowid, summary, topics_text, decisions_text, open_threads_text, key_facts_text, session_title)
+        VALUES (NEW.rowid, NEW.summary, NEW.topics_text, NEW.decisions_text, NEW.open_threads_text, NEW.key_facts_text, NEW.session_title);
+      END;
+    `)
+  }
 }
 
 function migrateAddOperativeContextWindow(db: Database.Database): void {

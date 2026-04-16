@@ -39,6 +39,8 @@ export interface SenseSettings {
   autoContextInChat: boolean
   clipboardCapture: boolean
   textExtractionPreference: 'auto' | 'accessibility' | 'ocr'
+  chatMemoryInject: boolean
+  chatMemoryWindowDays: number
 }
 
 export const DEFAULT_SENSE_SETTINGS: SenseSettings = {
@@ -54,6 +56,8 @@ export const DEFAULT_SENSE_SETTINGS: SenseSettings = {
   autoContextInChat: false,
   clipboardCapture: true,
   textExtractionPreference: 'auto',
+  chatMemoryInject: true,
+  chatMemoryWindowDays: 7,
 }
 
 export type SenseState = 'disabled' | 'armed' | 'recording' | 'idle' | 'paused' | 'suspended'
@@ -106,6 +110,53 @@ export interface AppTextQuality {
   avgAccessibilityChars: number
   sampleCount: number
   updatedAt: string
+}
+
+// --- Sense Memory: Session Debriefs & Facts ---
+
+export interface SessionDebrief {
+  id: string
+  sessionId: string
+  sessionTitle: string
+  projectId: string | null
+
+  summary: string
+  topics: string[]
+  decisions: string[]
+  openThreads: string[]
+  keyFacts: string[]
+
+  messageCount: number
+  durationSeconds: number
+  createdAt: string
+}
+
+export interface SenseFact {
+  id: string
+  fact: string
+  source: 'user' | 'debrief'
+  sourceDebriefId: string | null
+  projectId: string | null
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+/** Open thread enriched with source session context (returned by sense.threads RPC) */
+export interface OpenThread {
+  thread: string
+  debriefId: string
+  sessionId: string
+  sessionTitle: string
+  createdAt: string
+}
+
+/** Decision enriched with source session context (returned by sense.decisions RPC) */
+export interface DecisionWithContext {
+  decision: string
+  debriefId: string
+  sessionTitle: string
+  createdAt: string
 }
 
 // Default blacklisted apps (bundle IDs)

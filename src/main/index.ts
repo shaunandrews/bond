@@ -605,6 +605,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('todo:delete', (_e, id: string) => client.deleteTodo(id))
   ipcMain.handle('todo:parse', (_e, raw: string) => client.parseTodo(raw))
   ipcMain.handle('todo:reorder', (_e, ids: string[]) => client.reorderTodos(ids))
+  ipcMain.handle('todo:parseFromPrompt', (_e, prompt: string, existingGroups?: string[]) =>
+    client.parseFromPrompt(prompt, existingGroups))
 
   // --- Projects ---
   ipcMain.handle('project:list', () => client.listProjects())
@@ -688,6 +690,20 @@ app.whenReady().then(async () => {
   ipcMain.handle('sense:updateSettings', (_e, updates: Record<string, unknown>) => client.senseUpdateSettings(updates))
   ipcMain.handle('sense:clear', (_e, range?: { from?: string; to?: string }) => client.senseClear(range))
   ipcMain.handle('sense:stats', () => client.senseStats())
+
+  // Sense Memory IPC handlers
+  ipcMain.handle('sense:memory', (_e, limit?: number) => client.senseMemory(limit))
+  ipcMain.handle('sense:threads', (_e, limit?: number, projectId?: string) => client.senseThreads(limit, projectId))
+  ipcMain.handle('sense:decisions', (_e, limit?: number, projectId?: string) => client.senseDecisions(limit, projectId))
+  ipcMain.handle('sense:debrief', (_e, id?: string, sessionId?: string) => client.senseDebrief(id, sessionId))
+  ipcMain.handle('sense:remember', (_e, fact: string, projectId?: string) => client.senseRemember(fact, projectId))
+  ipcMain.handle('sense:facts', (_e, projectId?: string) => client.senseFacts(projectId))
+  ipcMain.handle('sense:forget', (_e, id: string) => client.senseForget(id))
+  ipcMain.handle('sense:updateFact', (_e, id: string, fact: string) => client.senseUpdateFact(id, fact))
+  ipcMain.handle('sense:deleteDebrief', (_e, id: string) => client.senseDeleteDebrief(id))
+  ipcMain.handle('sense:dismissThread', (_e, debriefId: string, thread: string) => client.senseDismissThread(debriefId, thread))
+  ipcMain.handle('sense:removeDecision', (_e, debriefId: string, decision: string) => client.senseRemoveDecision(debriefId, decision))
+  ipcMain.handle('sense:systemPromptPreview', (_e, projectId?: string) => client.senseSystemPromptPreview(projectId))
   ipcMain.handle('sense:hasPermission', () => {
     const { hasScreenRecordingPermission } = require('./sense') as typeof import('./sense')
     return hasScreenRecordingPermission()

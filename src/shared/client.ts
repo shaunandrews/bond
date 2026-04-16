@@ -1,7 +1,7 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
 import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, ItemComment } from './session'
-import type { SenseStatus, SenseSettings, SenseCapture } from './sense'
+import type { SenseStatus, SenseSettings, SenseCapture, SessionDebrief, SenseFact, OpenThread, DecisionWithContext } from './sense'
 import type { Operative, OperativeEvent, SpawnOperativeOptions } from './operative'
 import {
   makeRequest,
@@ -343,6 +343,10 @@ export class BondClient {
     return await this.call('todo.reorder', { ids }) as boolean
   }
 
+  async parseFromPrompt(prompt: string, existingGroups?: string[]): Promise<{ todos: Array<{ title: string; notes: string; group: string }> }> {
+    return await this.call('todo.parseFromPrompt', { prompt, existingGroups }) as { todos: Array<{ title: string; notes: string; group: string }> }
+  }
+
   // --- Skills ---
 
   async listSkills(): Promise<{ name: string; description: string; argumentHint: string }[]> {
@@ -634,6 +638,56 @@ export class BondClient {
 
   async senseStats(): Promise<{ storageBytes: number; captureCount: number; sessionCount: number; oldestCapture: string | null }> {
     return await this.call('sense.stats') as { storageBytes: number; captureCount: number; sessionCount: number; oldestCapture: string | null }
+  }
+
+  // --- Sense Memory ---
+
+  async senseMemory(limit?: number): Promise<{ debriefs: SessionDebrief[]; facts: SenseFact[] }> {
+    return await this.call('sense.memory', { limit }) as { debriefs: SessionDebrief[]; facts: SenseFact[] }
+  }
+
+  async senseThreads(limit?: number, projectId?: string): Promise<OpenThread[]> {
+    return await this.call('sense.threads', { limit, projectId }) as OpenThread[]
+  }
+
+  async senseDecisions(limit?: number, projectId?: string): Promise<DecisionWithContext[]> {
+    return await this.call('sense.decisions', { limit, projectId }) as DecisionWithContext[]
+  }
+
+  async senseDebrief(id?: string, sessionId?: string): Promise<SessionDebrief | null> {
+    return await this.call('sense.debrief', { id, sessionId }) as SessionDebrief | null
+  }
+
+  async senseRemember(fact: string, projectId?: string): Promise<SenseFact> {
+    return await this.call('sense.remember', { fact, projectId }) as SenseFact
+  }
+
+  async senseFacts(projectId?: string): Promise<SenseFact[]> {
+    return await this.call('sense.facts', { projectId }) as SenseFact[]
+  }
+
+  async senseForget(id: string): Promise<{ ok: boolean }> {
+    return await this.call('sense.forget', { id }) as { ok: boolean }
+  }
+
+  async senseUpdateFact(id: string, fact: string): Promise<SenseFact> {
+    return await this.call('sense.updateFact', { id, fact }) as SenseFact
+  }
+
+  async senseDeleteDebrief(id: string): Promise<{ ok: boolean }> {
+    return await this.call('sense.deleteDebrief', { id }) as { ok: boolean }
+  }
+
+  async senseDismissThread(debriefId: string, thread: string): Promise<{ ok: boolean }> {
+    return await this.call('sense.dismissThread', { debriefId, thread }) as { ok: boolean }
+  }
+
+  async senseRemoveDecision(debriefId: string, decision: string): Promise<{ ok: boolean }> {
+    return await this.call('sense.removeDecision', { debriefId, decision }) as { ok: boolean }
+  }
+
+  async senseSystemPromptPreview(projectId?: string): Promise<{ prompt: string }> {
+    return await this.call('sense.systemPromptPreview', { projectId }) as { prompt: string }
   }
 
   onSenseRequestCapture(fn: SenseRequestCaptureListener): () => void {

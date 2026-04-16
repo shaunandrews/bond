@@ -23,7 +23,8 @@ import {
   resolvePendingApproval,
   clearSessionApprovals,
   getCachedSkills,
-  refreshSkillsCache
+  refreshSkillsCache,
+  buildSystemPromptPreview,
 } from './agent'
 import {
   listOperatives,
@@ -93,7 +94,28 @@ import { generateJournalMeta } from './generate-journal-meta'
 import { generateBondComment } from './generate-journal-comment'
 import type { ItemComment } from '../shared/session'
 import { parseTodoInput } from './parse-todo'
+import { parseTodosFromPrompt } from './parse-todos-from-prompt'
 import { generateTitleAndSummary } from './generate-title'
+import { generateDebrief } from './generate-debrief'
+import {
+  getDebrief,
+  getDebriefBySession,
+  listDebriefs,
+  searchDebriefs,
+  getRecentOpenThreads,
+  getRecentOpenThreadsEnriched,
+  getRecentDecisions,
+  createFact,
+  getActiveFacts,
+  listFacts,
+  deactivateFact,
+  updateFact,
+  deleteDebrief,
+  removeDebriefThread,
+  removeDebriefDecision,
+  searchFacts,
+} from './debriefs'
+import { backfillDebriefs } from './generate-debrief'
 import {
   getSoul,
   saveSoul,
@@ -583,7 +605,16 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const sid = getStringParam(p, 'id')
         const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
         if (!sid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, updateSession(sid, updates ?? {})))
+        const result = updateSession(sid, updates ?? {})
+
+        // Trigger debrief on archive (regenerates if one already exists from a prior archive)
+        if (updates?.archived === true) {
+          generateDebrief(sid).catch((err) => {
+            console.warn('[bond] debrief generation failed:', err.message)
+          })
+        }
+
+        return JSON.stringify(makeResponse(id, result))
       }
 
       case 'session.delete': {
@@ -724,6 +755,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, deleted))
       }
 
+      // Used by CLI (bond todo add). Renderer uses todo.parseFromPrompt instead.
       case 'todo.parse': {
         const raw = getStringParam(p, 'raw')
         if (!raw) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'raw is required'))
@@ -737,6 +769,17 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         reorderTodos(ids)
         broadcastTodoChanged()
         return JSON.stringify(makeResponse(id, true))
+      }
+
+      case 'todo.parseFromPrompt': {
+        const prompt = getStringParam(p, 'prompt')
+        if (!prompt) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'prompt is required'))
+        const existingGroups = getParam(p, 'existingGroups') as string[] | undefined
+        if (existingGroups && !Array.isArray(existingGroups)) {
+          return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'existingGroups must be an array'))
+        }
+        const todos = await parseTodosFromPrompt(prompt, existingGroups ?? [])
+        return JSON.stringify(makeResponse(id, { todos }))
       }
 
       // --- Projects ---
@@ -1143,18 +1186,37 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, { sessions, apps }))
       }
       case 'sense.search': {
-        const query = getStringParam(p, 'query')
-        if (!query) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'query required'))
+        const searchQuery = getStringParam(p, 'query')
+        if (!searchQuery) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'query required'))
         const limit = getNumberParam(p, 'limit') ?? 20
         const db = getDb()
-        // LIKE-based search (FTS5 may be unavailable or out of sync)
-        const results = db.prepare(`
-          SELECT * FROM sense_captures
+
+        // Cross-channel search: screen captures + debriefs + facts
+        const captures = db.prepare(`
+          SELECT *, 'see' as channel FROM sense_captures
           WHERE text_content LIKE ? OR app_name LIKE ? OR window_title LIKE ?
           ORDER BY captured_at DESC
           LIMIT ?
-        `).all(`%${query}%`, `%${query}%`, `%${query}%`, limit)
-        return JSON.stringify(makeResponse(id, results))
+        `).all(`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, limit) as Record<string, unknown>[]
+
+        const debriefResults = searchDebriefs(searchQuery, limit).map(d => ({
+          ...d,
+          channel: 'chat' as const,
+        }))
+
+        const factResults = searchFacts(searchQuery).map(f => ({
+          ...f,
+          channel: 'fact' as const,
+        }))
+
+        // Unified results sorted by date
+        const unified = [
+          ...captures.map(c => ({ ...c, _sortDate: c.captured_at as string })),
+          ...debriefResults.map(d => ({ ...d, _sortDate: d.createdAt })),
+          ...factResults.map(f => ({ ...f, _sortDate: f.createdAt })),
+        ].sort((a, b) => b._sortDate.localeCompare(a._sortDate)).slice(0, limit)
+
+        return JSON.stringify(makeResponse(id, unified))
       }
       case 'sense.apps': {
         const range = getStringParam(p, 'range') ?? 'today'
@@ -1238,6 +1300,94 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'sense.stats': {
         const stats = getSenseStats()
         return JSON.stringify(makeResponse(id, stats))
+      }
+
+      // --- Sense Memory ---
+      case 'sense.memory': {
+        const limit = getNumberParam(p, 'limit') ?? 5
+        const debriefs = listDebriefs({ limit })
+        const facts = getActiveFacts()
+        return JSON.stringify(makeResponse(id, { debriefs, facts }))
+      }
+      case 'sense.threads': {
+        const limit = getNumberParam(p, 'limit') ?? 10
+        const projectId = getStringParam(p, 'projectId')
+        const threads = getRecentOpenThreadsEnriched({ limit, projectId: projectId ?? undefined, excludeResolved: true })
+        return JSON.stringify(makeResponse(id, threads))
+      }
+      case 'sense.decisions': {
+        const limit = getNumberParam(p, 'limit') ?? 10
+        const projectId = getStringParam(p, 'projectId')
+        const decisions = getRecentDecisions({ limit, projectId: projectId ?? undefined })
+        return JSON.stringify(makeResponse(id, decisions))
+      }
+      case 'sense.debrief': {
+        const debriefId = getStringParam(p, 'id')
+        const sessionId = getStringParam(p, 'sessionId')
+        let debrief = null
+        if (debriefId) debrief = getDebrief(debriefId)
+        else if (sessionId) debrief = getDebriefBySession(sessionId)
+        return JSON.stringify(makeResponse(id, debrief))
+      }
+      case 'sense.remember': {
+        const fact = getStringParam(p, 'fact')
+        if (!fact) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'fact is required'))
+        const projectId = getStringParam(p, 'projectId')
+        const created = createFact(fact, { projectId: projectId ?? undefined })
+        return JSON.stringify(makeResponse(id, created))
+      }
+      case 'sense.facts': {
+        const projectId = getStringParam(p, 'projectId')
+        const facts = listFacts({ active: true, projectId: projectId ?? undefined })
+        return JSON.stringify(makeResponse(id, facts))
+      }
+      case 'sense.forget': {
+        const factId = getStringParam(p, 'id')
+        if (!factId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const ok = deactivateFact(factId)
+        return JSON.stringify(makeResponse(id, { ok }))
+      }
+      case 'sense.updateFact': {
+        const factId = getStringParam(p, 'id')
+        const factText = getStringParam(p, 'fact')
+        if (!factId || !factText) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id and fact are required'))
+        const updated = updateFact(factId, factText)
+        if (!updated) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'fact not found'))
+        return JSON.stringify(makeResponse(id, updated))
+      }
+      case 'sense.deleteDebrief': {
+        const debriefId = getStringParam(p, 'id')
+        if (!debriefId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const ok = deleteDebrief(debriefId)
+        return JSON.stringify(makeResponse(id, { ok }))
+      }
+      case 'sense.dismissThread': {
+        const debriefId = getStringParam(p, 'debriefId')
+        const thread = getStringParam(p, 'thread')
+        if (!debriefId || !thread) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'debriefId and thread are required'))
+        const ok = removeDebriefThread(debriefId, thread)
+        return JSON.stringify(makeResponse(id, { ok }))
+      }
+      case 'sense.removeDecision': {
+        const debriefId = getStringParam(p, 'debriefId')
+        const decision = getStringParam(p, 'decision')
+        if (!debriefId || !decision) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'debriefId and decision are required'))
+        const ok = removeDebriefDecision(debriefId, decision)
+        return JSON.stringify(makeResponse(id, { ok }))
+      }
+      case 'sense.systemPromptPreview': {
+        const projectId = getStringParam(p, 'projectId')
+        const prompt = buildSystemPromptPreview({ projectId: projectId ?? undefined })
+        return JSON.stringify(makeResponse(id, { prompt }))
+      }
+      case 'sense.backfill': {
+        const limit = getNumberParam(p, 'limit') ?? 50
+        backfillDebriefs(limit).then(result => {
+          console.log(`[bond] backfill complete: ${result.generated} generated, ${result.skipped} skipped, ${result.failed} failed`)
+        }).catch(err => {
+          console.warn('[bond] backfill failed:', err.message)
+        })
+        return JSON.stringify(makeResponse(id, { ok: true, message: 'Backfill started in background' }))
       }
 
       // --- Operatives ---

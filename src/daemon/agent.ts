@@ -13,9 +13,134 @@ import { listCollections, countItems } from './collections'
 import { getDb } from './db'
 import type { SenseSettings } from '../shared/sense'
 import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
+import {
+  getActiveFacts,
+  getRecentOpenThreads,
+  getRecentDecisions,
+  listDebriefs,
+} from './debriefs'
 
 export function getCachedSkills(): SkillInfo[] {
   return scanSkills()
+}
+
+/**
+ * Build a preview of the full system prompt that would be injected into a new chat.
+ * Reuses the same logic as the real agent query setup.
+ */
+export function buildSystemPromptPreview(options?: { projectId?: string }): string {
+  let prompt =
+    'You are Bond, a standalone desktop assistant app for Mac. ' +
+    'Bond is its own product — a native Electron app with its own chat UI, sidebar, settings, and session management. ' +
+    'You are NOT Claude, Claude Code, or the Claude website. You are powered by Claude (an AI model by Anthropic), but your identity is Bond. ' +
+    'Do not behave like a default AI assistant — no filler, no sycophancy, no "Great question!" preambles, no hedging with unnecessary caveats. You have a personality; use it.\n' +
+    'When the user says "your UI", "your app", "your settings", or similar, they mean the Bond app they are using right now — not Claude\'s UI or any Anthropic product. ' +
+    'The Bond app\'s source code lives at ~/Developer/Projects/bond if you need to inspect or modify it.\n\n' +
+    'You can read files with Read, search with Glob and Grep, edit files with Edit and Write, and run shell commands with Bash. ' +
+    'You can search the web with WebSearch and fetch page content with WebFetch. ' +
+    'Write operations require user approval before they execute. Stay concise. ' +
+    'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.\n\n'
+
+  // Skills
+  const skills = getCachedSkills()
+  if (skills.length > 0) {
+    prompt += 'Available skills:\n'
+    for (const s of skills) {
+      prompt += '- /' + s.name + ': ' + s.description
+      if (s.argumentHint) prompt += ' ' + s.argumentHint
+      prompt += '\n'
+    }
+    prompt += '\n'
+  }
+
+  // Collections
+  const collections = listCollections().filter(c => !c.archived)
+  if (collections.length > 0) {
+    const lines = collections.map(c => {
+      const icon = c.icon ? `${c.icon} ` : ''
+      const count = countItems(c.id)
+      return `- ${icon}${c.name} (${count} items)`
+    })
+    prompt += 'Current collections:\n' + lines.join('\n') + '\n\n'
+  }
+
+  // Memory injection
+  let memSenseSettings = DEFAULT_SENSE_SETTINGS
+  try {
+    const raw = getSetting('sense')
+    if (raw) memSenseSettings = { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
+  } catch { /* defaults */ }
+
+  if (memSenseSettings.chatMemoryInject) {
+    const sessionProjectId = options?.projectId ?? null
+    const facts = getActiveFacts({ projectId: sessionProjectId ?? undefined, limit: 10 })
+    const openThreads = getRecentOpenThreads({
+      limit: 5,
+      projectId: sessionProjectId ?? undefined,
+      excludeResolved: true,
+    })
+    const decisions = getRecentDecisions({
+      limit: 5,
+      projectId: sessionProjectId ?? undefined,
+    })
+    const latestDebrief = (sessionProjectId
+      ? listDebriefs({ limit: 1, projectId: sessionProjectId })[0]
+      : null
+    ) ?? listDebriefs({ limit: 1 })[0]
+
+    let memoryBlock = ''
+    let wordCount = 0
+
+    if (facts.length > 0) {
+      memoryBlock += 'Known facts:\n'
+      for (const f of facts) {
+        memoryBlock += `- ${f.fact}\n`
+        wordCount += f.fact.split(/\s+/).length + 1
+      }
+    }
+
+    if (openThreads.length > 0 && wordCount < 250) {
+      memoryBlock += 'Open threads:\n'
+      for (const thread of openThreads) {
+        if (wordCount > 250) break
+        memoryBlock += `- ${thread}\n`
+        wordCount += thread.split(/\s+/).length + 1
+      }
+    }
+
+    if (decisions.length > 0 && wordCount < 280) {
+      memoryBlock += 'Recent decisions:\n'
+      for (const d of decisions) {
+        if (wordCount > 280) break
+        memoryBlock += `- ${d.decision} (${d.sessionTitle})\n`
+        wordCount += d.decision.split(/\s+/).length + 3
+      }
+    }
+
+    if (latestDebrief && wordCount < 300) {
+      memoryBlock += `\nLast session: "${latestDebrief.sessionTitle}" — ${latestDebrief.summary}\n`
+    }
+
+    if (memoryBlock) {
+      prompt += 'RECENT MEMORY:\n' + memoryBlock + '\n'
+    }
+  } else {
+    prompt += '(Memory injection is disabled in Sense settings)\n\n'
+  }
+
+  // Soul
+  const soul = getSoul().trim()
+  if (soul) {
+    prompt += `<soul>\n${soul}\n</soul>\n\n`
+  }
+
+  // Date/time
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  prompt += `CURRENT DATE AND TIME: ${dateStr}, ${timeStr}\n`
+
+  return prompt
 }
 
 export function refreshSkillsCache(): SkillInfo[] {
@@ -394,16 +519,27 @@ export async function runBondQuery(
 
   // Sense system prompt
   basePrompt +=
-    '\nSENSE — SCREEN AWARENESS:\n' +
-    'Bond has built-in screen awareness that captures what the user sees.\n' +
+    '\nSENSE — AWARENESS & MEMORY:\n' +
+    'Bond has built-in screen awareness and memory across sessions.\n' +
+    'Screen:\n' +
     '- `bond sense now` — current screen context\n' +
     '- `bond sense today` / `bond sense yesterday` — daily summaries\n' +
-    '- `bond sense search <query>` — find when the user saw something specific\n' +
+    '- `bond sense search <query>` — cross-channel search (screen + chat memory + facts)\n' +
     '- `bond sense apps [today|week]` — app usage breakdown\n' +
     '- `bond sense timeline [range]` — chronological activity\n' +
+    'Memory:\n' +
+    '- `bond sense memory` — recent session debriefs + pinned facts\n' +
+    '- `bond sense threads` — open threads from recent sessions\n' +
+    '- `bond sense decisions` — recent decisions\n' +
+    '- `bond sense debrief <session-id>` — full debrief for a session\n' +
+    '- `bond sense remember "<fact>"` — pin a fact to memory\n' +
+    '- `bond sense facts` — list pinned facts\n' +
+    '- `bond sense forget <id|number>` — remove a pinned fact\n' +
     'Use Sense data when the user references past activity, needs work summaries, ' +
     'wants to recall something they saw, or when context would help you give better answers. ' +
-    'Don\'t dump raw OCR — synthesize and summarize.\n'
+    'Don\'t dump raw OCR — synthesize and summarize.\n' +
+    'When the user says "remember this" or "keep in mind that...", use `bond sense remember` to pin the fact. ' +
+    'You can also pin facts proactively when the user states a clear preference or convention.\n'
 
   basePrompt +=
     '\nIN-APP BROWSER:\n' +
@@ -493,6 +629,78 @@ export async function runBondQuery(
         }
 
         basePrompt += contextBlock
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  // Chat memory auto-injection
+  try {
+    let memSenseSettings = DEFAULT_SENSE_SETTINGS
+    try {
+      const raw = getSetting('sense')
+      if (raw) memSenseSettings = { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
+    } catch { /* defaults */ }
+
+    if (memSenseSettings.chatMemoryInject) {
+      const sessionProjectId = options.project?.id ?? null
+
+      // Pinned facts — always loaded, highest priority
+      const facts = getActiveFacts({ projectId: sessionProjectId ?? undefined, limit: 10 })
+
+      // Open threads — deduplicated, project-scoped when possible
+      const openThreads = getRecentOpenThreads({
+        limit: 5,
+        projectId: sessionProjectId ?? undefined,
+        excludeResolved: true,
+      })
+
+      // Recent decisions
+      const decisions = getRecentDecisions({
+        limit: 5,
+        projectId: sessionProjectId ?? undefined,
+      })
+
+      // Latest debrief summary — prefer project-scoped, fall back to any
+      const latestDebrief = (sessionProjectId
+        ? listDebriefs({ limit: 1, projectId: sessionProjectId })[0]
+        : null
+      ) ?? listDebriefs({ limit: 1 })[0]
+
+      let memoryBlock = ''
+      let wordCount = 0
+
+      if (facts.length > 0) {
+        memoryBlock += '\nKnown facts:\n'
+        for (const f of facts) {
+          memoryBlock += `- ${f.fact}\n`
+          wordCount += f.fact.split(/\s+/).length + 1
+        }
+      }
+
+      if (openThreads.length > 0 && wordCount < 250) {
+        memoryBlock += 'Open threads:\n'
+        for (const thread of openThreads) {
+          if (wordCount > 250) break
+          memoryBlock += `- ${thread}\n`
+          wordCount += thread.split(/\s+/).length + 1
+        }
+      }
+
+      if (decisions.length > 0 && wordCount < 280) {
+        memoryBlock += 'Recent decisions:\n'
+        for (const d of decisions) {
+          if (wordCount > 280) break
+          memoryBlock += `- ${d.decision} (${d.sessionTitle})\n`
+          wordCount += d.decision.split(/\s+/).length + 3
+        }
+      }
+
+      if (latestDebrief && wordCount < 300) {
+        memoryBlock += `\nLast session: "${latestDebrief.sessionTitle}" — ${latestDebrief.summary}\n`
+      }
+
+      if (memoryBlock) {
+        basePrompt += '\nRECENT MEMORY:\n' + memoryBlock
       }
     }
   } catch { /* non-fatal */ }

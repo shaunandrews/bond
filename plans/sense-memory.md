@@ -1,6 +1,6 @@
 # Sense Memory — Unified Memory System for Bond
 
-> **Revision 2** — Updated based on architecture and product reviews. Key changes: use Sonnet instead of Haiku for debriefs, move auto-injection earlier in build order, add explicit memory pinning, add thread resolution, defer browse/clipboard channels, fix incorrect hook assumptions, flatten CLI, cap injection at 300 words.
+> **Revision 3** — Updated based on codebase audit. Key changes from rev 2: fix FTS5 update trigger to cover all indexed columns, add virtual table existence guard, clarify two separate injection toggles (`autoContextInChat` vs `chatMemoryInject`), restructure `session.update` hook to save result before async fire, remove unnecessary WHEN guard on FTS delete trigger, add facts to cross-channel search, specify migration function placement in db.ts chain, add DEFAULT_SENSE_SETTINGS update, note preload/IPC layer for future UI, spec error handling for Sonnet API failures.
 
 ## Overview
 
@@ -82,7 +82,7 @@ New module, following the pattern of `generate-title.ts`. Uses **Claude Sonnet**
 
 **Input:** All messages from the session (user + bond, skip tool meta noise)
 
-**Minimum threshold:** Skip sessions with fewer than **5 substantive messages** (user + bond text messages, not tool/thinking/system). A 3-message "rename this file" / "done" / "thanks" session does not need a debrief.
+**Minimum threshold:** Skip sessions with fewer than **3 substantive messages** (user + bond text messages, not tool/thinking/system). A 2-message "rename this file" / "done" exchange does not need a debrief. Note: image-only user messages (text is NULL, images is non-null) are excluded from this count — they're valid messages but don't contribute enough signal for a debrief threshold check.
 
 **Output:**
 ```typescript
@@ -120,6 +120,12 @@ interface SessionDebrief {
 - If retry fails: store degraded debrief (summary only, other fields empty)
 - Log warnings for degraded debriefs so we can track quality
 
+**Error handling:**
+- Network failures / rate limits: log warning, do not retry (debrief is non-critical background work). The session archives successfully regardless.
+- API key missing/invalid: log error with actionable message (`[bond] debrief skipped: no API key configured`). Don't retry — user must fix config.
+- Timeout: use a 30s timeout on the Sonnet call. Log and move on if exceeded.
+- All errors are caught per-session (never propagate to the archive handler or crash the daemon).
+
 **Cost:** One Sonnet call per session archive. ~$0.01 per debrief.
 
 ### 1.2 Database Schema
@@ -130,7 +136,7 @@ New tables and FTS indexes in `db.ts`:
 -- Session debriefs
 CREATE TABLE IF NOT EXISTS sense_debriefs (
   id TEXT PRIMARY KEY,
-  session_id TEXT UNIQUE REFERENCES sessions(id) ON DELETE SET NULL,
+  session_id TEXT UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
   session_title TEXT NOT NULL DEFAULT '',
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
 
@@ -172,13 +178,14 @@ CREATE TRIGGER sense_debriefs_fts_insert AFTER INSERT ON sense_debriefs BEGIN
   VALUES (NEW.rowid, NEW.summary, NEW.topics_text, NEW.decisions_text, NEW.open_threads_text, NEW.key_facts_text, NEW.session_title);
 END;
 
-CREATE TRIGGER sense_debriefs_fts_delete AFTER DELETE ON sense_debriefs
-  WHEN OLD.summary IS NOT NULL BEGIN
+CREATE TRIGGER sense_debriefs_fts_delete AFTER DELETE ON sense_debriefs BEGIN
     INSERT INTO sense_debriefs_fts(sense_debriefs_fts, rowid, summary, topics_text, decisions_text, open_threads_text, key_facts_text, session_title)
     VALUES ('delete', OLD.rowid, OLD.summary, OLD.topics_text, OLD.decisions_text, OLD.open_threads_text, OLD.key_facts_text, OLD.session_title);
 END;
 
-CREATE TRIGGER sense_debriefs_fts_update AFTER UPDATE OF summary ON sense_debriefs BEGIN
+-- Fires on ANY column update, not just summary — all 6 indexed columns need syncing.
+-- No perf concern: debriefs are rarely updated (only on un-archive/re-archive).
+CREATE TRIGGER sense_debriefs_fts_update AFTER UPDATE ON sense_debriefs BEGIN
   INSERT INTO sense_debriefs_fts(sense_debriefs_fts, rowid, summary, topics_text, decisions_text, open_threads_text, key_facts_text, session_title)
   VALUES ('delete', OLD.rowid, OLD.summary, OLD.topics_text, OLD.decisions_text, OLD.open_threads_text, OLD.key_facts_text, OLD.session_title);
   INSERT INTO sense_debriefs_fts(rowid, summary, topics_text, decisions_text, open_threads_text, key_facts_text, session_title)
@@ -201,48 +208,58 @@ CREATE INDEX IF NOT EXISTS idx_sense_facts_active ON sense_facts(active, created
 CREATE INDEX IF NOT EXISTS idx_sense_facts_project ON sense_facts(project_id);
 ```
 
-**Note on FTS5 + TEXT PRIMARY KEY:** The `content_rowid=rowid` pattern works because SQLite assigns implicit integer rowids to all tables (even with TEXT PKs). This is the same pattern used by `sense_captures` FTS. Joins go through rowid: `SELECT d.* FROM sense_debriefs_fts f JOIN sense_debriefs d ON d.rowid = f.rowid`.
+**Note on FTS5 virtual table creation:** The `CREATE VIRTUAL TABLE` statement does not reliably support `IF NOT EXISTS` in all SQLite versions. Follow the existing `sense_fts` pattern in `db.ts` — guard with an explicit existence check before creating:
+
+```typescript
+const hasDebirefFts = db.prepare(
+  "SELECT name FROM sqlite_master WHERE type='table' AND name='sense_debriefs_fts'"
+).get()
+
+if (!hasDebirefFts) {
+  db.exec(`CREATE VIRTUAL TABLE sense_debriefs_fts USING fts5(...); ...triggers...`)
+}
+```
+
+**Note on FTS5 + TEXT PRIMARY KEY:** The `content_rowid=rowid` pattern works because SQLite assigns implicit integer rowids to all tables (even with TEXT PKs). This is the same pattern used by `sense_captures` FTS (db.ts:414). Joins go through rowid: `SELECT d.* FROM sense_debriefs_fts f JOIN sense_debriefs d ON d.rowid = f.rowid`.
 
 **Note on _text columns:** The JSON arrays (`topics`, `decisions`, etc.) are stored as-is for programmatic access. The `_text` variants are flattened (space-separated, no brackets/quotes) for better FTS5 quality. Both are populated on insert by the CRUD module.
+
+**Note on FTS delete trigger:** The delete trigger has no `WHEN` guard — `summary` is `NOT NULL` in the schema, so a null check would always be true and is misleading. The existing `sense_fts_delete` trigger (db.ts:436) uses a `WHEN OLD.text_content IS NOT NULL` guard because `text_content` is nullable. Our columns are all `NOT NULL`, so no guard needed.
 
 ### 1.3 Trigger: Archive Hook
 
 When a session is archived, generate a debrief. The archive completes immediately — the debrief generates in the background (same pattern as title generation).
 
-**Hook location:** In `server.ts`, in the `session.update` handler. The current handler calls `updateSession(sid, updates)` directly — there is no "previousState" available. The simplest correct approach:
+**Hook location:** In `server.ts`, in the `session.update` handler (line 583). The current handler is a one-liner that calls `updateSession(sid, updates ?? {})` and returns inline. It must be restructured to save the result first, fire async work, then return. Note: the async debrief generation fires *after* the response is returned — same non-blocking pattern as title generation.
 
 ```typescript
 case 'session.update': {
   const sid = getStringParam(p, 'id')
   const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
-  if (!sid) return ...
+  if (!sid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
 
+  // Execute the update synchronously (existing behavior)
   const result = updateSession(sid, updates ?? {})
 
-  // Trigger debrief on archive (idempotent — skips if debrief exists)
+  // Trigger debrief on archive (regenerates if one already exists from a prior archive)
   if (updates?.archived === true) {
-    generateDebriefIfNeeded(sid).catch((err) => {
+    generateDebrief(sid).catch((err) => {
       console.warn('[bond] debrief generation failed:', err.message)
     })
-  }
-
-  // Delete stale debrief on un-archive (session may be edited and re-archived)
-  if (updates?.archived === false) {
-    deleteDebriefBySession(sid)
   }
 
   return JSON.stringify(makeResponse(id, result))
 }
 ```
 
-**`generateDebriefIfNeeded`:**
-1. Check if debrief already exists for this session → skip if so
-2. Count substantive messages (role = 'user' or 'bond' with text) → skip if < 5
-3. Generate debrief via Sonnet
-4. Validate output, retry once if malformed
+**`generateDebrief`:**
+1. Count substantive messages (role = 'user' or 'bond' with text) → skip if < 3
+2. Generate debrief via Sonnet
+3. Validate output, retry once if malformed
+4. If debrief already exists for this session → replace it (DELETE + INSERT, so FTS triggers fire cleanly)
 5. Store debrief with flattened _text fields
 
-**Un-archive handling:** If a session is un-archived (archived = false), delete its existing debrief. This way, if the session is later re-archived after edits, a fresh debrief is generated. Prevents stale debriefs.
+**Un-archive handling:** Debriefs are kept when a session is un-archived — they're still valid historical context. If the session is re-archived (after edits), a fresh debrief replaces the old one. No eager deletion.
 
 **Quick chat auto-archive:** `src/main/quick-chat.ts` archives via `client.updateSession(sid, { archived: true })`, which goes through the same `session.update` RPC handler. No separate hook needed.
 
@@ -257,7 +274,8 @@ function flattenForFts(arr: string[]): string {
 export function createDebrief(debrief: SessionDebrief): SessionDebrief
 export function getDebrief(id: string): SessionDebrief | null
 export function getDebriefBySession(sessionId: string): SessionDebrief | null
-export function deleteDebriefBySession(sessionId: string): boolean
+export function deleteDebrief(id: string): boolean
+export function deleteOrphanedDebriefs(): number  // debriefs where session was deleted
 export function listDebriefs(options?: {
   projectId?: string
   limit?: number
@@ -279,7 +297,9 @@ export function getRecentDecisions(options?: {
 }): { decision: string; sessionTitle: string; createdAt: string }[]
 ```
 
-**Open thread deduplication:** `getRecentOpenThreads` must deduplicate. If the same thread appears in 3 consecutive debriefs, it should appear once in the injection. Strategy: pull threads from last N debriefs, normalize whitespace, deduplicate by substring similarity (exact match after lowercasing + trimming). If a thread was later mentioned in a decision (in a newer debrief), consider it resolved and exclude it.
+**Open thread deduplication:** `getRecentOpenThreads` must deduplicate. If the same thread appears in 3 consecutive debriefs, it should appear once in the injection. Strategy: pull threads from last N debriefs, normalize whitespace, deduplicate by exact match after lowercasing + trimming.
+
+**Thread resolution heuristic:** If a thread's key noun phrase appears in a decision from a *newer* debrief, consider it resolved and exclude it. This uses simple substring matching and will produce false positives — e.g., thread "Migrate to Postgres" matches decision "Decided to delay Postgres migration" (not actually resolved). Accept this: false exclusion of a stale thread is low-cost (user can re-raise it), and over-injection of resolved threads is higher-cost (wastes the 300-word budget). The heuristic is conservative in the right direction.
 
 ---
 
@@ -289,7 +309,7 @@ export function getRecentDecisions(options?: {
 
 ### 2.1 Chat Memory Context Block
 
-Extend the existing auto-injection in `agent.ts` (currently ~line 450). After the screen context block, add a chat memory block. **Hard cap: 300 words.**
+Extend the existing auto-injection in `agent.ts` (line 450). The screen context block is gated by `senseSettings.autoContextInChat` (existing toggle). Chat memory injection uses a **separate** toggle, `senseSettings.chatMemoryInject`, so users can enable/disable them independently. Add the chat memory block immediately after the screen context try/catch block. **Hard cap: 300 words.**
 
 ```typescript
 // Chat memory auto-injection
@@ -364,13 +384,23 @@ if (sessionProjectId) {
 
 ### 2.3 Settings
 
-Add to `SenseSettings`:
+Add to `SenseSettings` in `src/shared/sense.ts`:
 
 ```typescript
 interface SenseSettings {
-  // ... existing fields ...
+  // ... existing fields (enabled, captureIntervalSeconds, etc.) ...
   chatMemoryInject: boolean      // default: true
   chatMemoryWindowDays: number   // days to look back (default: 7)
+}
+```
+
+Also update `DEFAULT_SENSE_SETTINGS` in the same file (currently lines 44-57):
+
+```typescript
+export const DEFAULT_SENSE_SETTINGS: SenseSettings = {
+  // ... existing defaults ...
+  chatMemoryInject: true,
+  chatMemoryWindowDays: 7,
 }
 ```
 
@@ -463,13 +493,20 @@ sense.debrief        → getDebrief(id) or getDebriefBySession(sessionId)
 sense.remember       → createFact(fact, projectId?)
 sense.facts          → listFacts({ active: true, projectId? })
 sense.forget         → deactivateFact(id)
-sense.search         → combined screen captures + debriefs FTS search (union, sort by date)
+sense.search         → combined screen captures + debriefs FTS + facts LIKE search (union, sort by date)
 sense.backfill       → backfillDebriefs(limit)
 ```
 
 ### 4.3 Cross-Channel Search
 
-`sense.search` queries both `sense_fts` (screen captures) and `sense_debriefs_fts` (debriefs). Returns a unified result list sorted by date. No attempt at cross-table relevance ranking — just recency. Each result has a `channel` field (`see` or `chat`) so the caller knows the source.
+`sense.search` queries three sources:
+1. `sense_fts` — screen captures (channel: `see`)
+2. `sense_debriefs_fts` — session debriefs (channel: `chat`)
+3. `sense_facts` — pinned facts, searched in-memory via `LIKE` (channel: `fact`)
+
+Facts don't get their own FTS table — the table is small (tens to low hundreds of rows) and full-loaded for auto-injection anyway. A simple `SELECT * FROM sense_facts WHERE active = 1 AND fact LIKE '%' || ? || '%'` is sufficient.
+
+Returns a unified result list sorted by date. No attempt at cross-table relevance ranking — just recency. Each result has a `channel` field (`see`, `chat`, or `fact`) so the caller knows the source.
 
 ---
 
@@ -490,7 +527,7 @@ async function backfillDebriefs(limit = 50): Promise<{ generated: number; skippe
     AND (
       SELECT COUNT(*) FROM messages
       WHERE session_id = s.id AND role IN ('user', 'bond') AND text IS NOT NULL
-    ) >= 5
+    ) >= 3
     ORDER BY s.updated_at DESC
     LIMIT ?
   `).all(limit)
@@ -499,7 +536,7 @@ async function backfillDebriefs(limit = 50): Promise<{ generated: number; skippe
 
   for (const session of sessions) {
     try {
-      await generateDebriefIfNeeded(session.id)
+      await generateDebrief(session.id)
       generated++
     } catch (err) {
       console.warn(`[bond] backfill failed for session ${session.id}:`, err.message)
@@ -616,6 +653,10 @@ CREATE INDEX IF NOT EXISTS idx_sense_clipboard_created ON sense_clipboard(create
 | 8 | Backfill command | `debriefs.ts`, `sense.ts` | Small |
 | 9 | Settings additions | `shared/sense.ts` | Small |
 
+**Step 1 detail — migration placement:** Create a new function `migrateCreateSenseMemoryTables(db)` in `db.ts` and add it to the `initDatabase()` chain (currently `getDb()`) after `migrateAddOperativeContextWindow`. The function creates the `sense_debriefs` and `sense_facts` tables with regular `CREATE TABLE IF NOT EXISTS`, then uses the existence-check pattern for the FTS virtual table (same as `migrateCreateSenseTables` at db.ts:406-442).
+
+**Preload/IPC note:** Steps 6-7 add RPC methods the daemon handles directly. The CLI (`src/cli/sense.ts`) connects to the daemon socket, so it works immediately. If the Phase 6 UI needs to call these from the renderer, that requires the full IPC pipeline: add methods to `BondClient` (`shared/client.ts`), expose via `contextBridge` (`preload/index.ts`), and add IPC handlers in the main process (`main/index.ts`). This is deferred with the UI but worth noting — it's ~30 lines per method across 3 files.
+
 **Build order:**
 1. Steps 1-5: The core loop. Debriefs generate on archive, inject into system prompt. **This is when Bond gets memory.** Validate that open threads and decisions actually make conversations feel continuous before building anything else.
 2. Steps 6-7: Wire up CLI and RPC so Bond can search its own memory and the user can manage facts.
@@ -651,9 +692,11 @@ Browse and clipboard channels can be added later in 1-2 additional sessions each
 
 - **Debrief generation: async.** Archive completes immediately, debrief generates in background. Non-blocking.
 
-- **Open thread deduplication: yes.** Normalize, deduplicate by substring match, exclude threads that appear in later decisions (implying resolution).
+- **Open thread deduplication: yes.** Normalize, deduplicate by exact match after lowercasing + trimming. Resolution heuristic uses substring matching against decisions — accepts false positives as low-cost.
 
-- **Un-archive handling: delete stale debrief.** If a session is un-archived, its debrief is deleted. Re-archiving generates a fresh one.
+- **Un-archive handling: keep debrief.** Debriefs are preserved when a session is un-archived — they're still valid historical context. On re-archive, the debrief is regenerated (DELETE old + INSERT new, so FTS triggers fire cleanly).
+
+- **Orphaned debriefs: cascade delete.** `session_id` uses `ON DELETE CASCADE` so debriefs are automatically cleaned up when a session is deleted. No orphans to worry about.
 
 - **Retention for debriefs: keep forever.** They're tiny (~1-2KB each). Even 10,000 debriefs = ~20MB with FTS. No retention pressure.
 
@@ -663,9 +706,19 @@ Browse and clipboard channels can be added later in 1-2 additional sessions each
 
 - **clipboardSenseEnabled default: false.** Opt-in for privacy.
 
-## Open Questions
+- **FTS update trigger scope: all columns.** Trigger fires on any column update (`AFTER UPDATE ON sense_debriefs`), not just summary. Unlike `sense_fts_update` which correctly scopes to `AFTER UPDATE OF text_content` (the only indexed column that changes), debrief FTS indexes 6 columns that could all change.
 
-- **Thread decay:** Should open threads older than N days auto-fade from injection even if not explicitly resolved? Probably yes — a 2-week-old unresolved thread is likely stale. Start with 14-day decay, adjust based on experience.
+- **FTS delete trigger guard: none needed.** All indexed columns are `NOT NULL`, so no `WHEN OLD.x IS NOT NULL` guard. The existing `sense_fts_delete` guard is there because `text_content` is nullable — different situation.
+
+- **Facts in search: in-memory LIKE.** Facts don't get their own FTS table — the table is small enough for `LIKE` matching. Keeps the schema simpler.
+
+- **Two injection toggles.** Screen context uses existing `autoContextInChat`; chat memory uses new `chatMemoryInject`. Independent controls, both in `SenseSettings`.
+
+- **Thread decay: 5 days.** Open threads older than 5 days auto-fade from auto-injection even if not explicitly resolved. They remain searchable — they just stop consuming the 300-word budget. Stale threads crowd out fresh context fast when sessions are frequent.
+
+- **Minimum threshold: 3 messages.** Reduced from 5. A 4-message session with a major architectural decision shouldn't be skipped.
+
+## Open Questions
 
 - **Proactive fact pinning by Bond:** Should Bond autonomously pin facts it notices ("you seem to prefer dark mode")? Deferred — let users drive pinning first, add autonomous pinning when we understand the quality bar.
 

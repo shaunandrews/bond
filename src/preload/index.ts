@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('bond', {
   deleteTodo: (id: string) => ipcRenderer.invoke('todo:delete', id) as Promise<boolean>,
   parseTodo: (raw: string) => ipcRenderer.invoke('todo:parse', raw) as Promise<{ title: string; notes: string; group: string }>,
   reorderTodos: (ids: string[]) => ipcRenderer.invoke('todo:reorder', ids) as Promise<boolean>,
+  parseFromPrompt: (prompt: string, existingGroups?: string[]) =>
+    ipcRenderer.invoke('todo:parseFromPrompt', prompt, existingGroups) as Promise<{ todos: Array<{ title: string; notes: string; group: string }> }>,
 
   // Projects
   listProjects: () => ipcRenderer.invoke('project:list') as Promise<Project[]>,
@@ -264,5 +266,31 @@ contextBridge.exposeInMainWorld('bond', {
   senseClear: (range?: { from?: string; to?: string }) => ipcRenderer.invoke('sense:clear', range),
   senseStats: () => ipcRenderer.invoke('sense:stats'),
   hasScreenRecordingPermission: () => ipcRenderer.invoke('sense:hasPermission'),
+
+  // Sense Memory
+  senseMemory: (limit?: number) =>
+    ipcRenderer.invoke('sense:memory', limit),
+  senseThreads: (limit?: number, projectId?: string) =>
+    ipcRenderer.invoke('sense:threads', limit, projectId),
+  senseDecisions: (limit?: number, projectId?: string) =>
+    ipcRenderer.invoke('sense:decisions', limit, projectId),
+  senseDebrief: (id?: string, sessionId?: string) =>
+    ipcRenderer.invoke('sense:debrief', id, sessionId),
+  senseRemember: (fact: string, projectId?: string) =>
+    ipcRenderer.invoke('sense:remember', fact, projectId),
+  senseFacts: (projectId?: string) =>
+    ipcRenderer.invoke('sense:facts', projectId),
+  senseForget: (id: string) =>
+    ipcRenderer.invoke('sense:forget', id),
+  senseUpdateFact: (id: string, fact: string) =>
+    ipcRenderer.invoke('sense:updateFact', id, fact),
+  senseDeleteDebrief: (id: string) =>
+    ipcRenderer.invoke('sense:deleteDebrief', id),
+  senseDismissThread: (debriefId: string, thread: string) =>
+    ipcRenderer.invoke('sense:dismissThread', debriefId, thread),
+  senseRemoveDecision: (debriefId: string, decision: string) =>
+    ipcRenderer.invoke('sense:removeDecision', debriefId, decision),
+  senseSystemPromptPreview: (projectId?: string) =>
+    ipcRenderer.invoke('sense:systemPromptPreview', projectId),
 
 })
