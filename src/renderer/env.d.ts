@@ -4,6 +4,8 @@ declare global {
       send: (text: string, sessionId?: string, images?: import('../../shared/session').AttachedImage[]) => Promise<{ ok: boolean; error?: string; imageIds?: string[] }>
       cancel: (sessionId?: string) => Promise<{ ok: boolean }>
       respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
+      subscribe: (sessionId: string) => Promise<{ ok: boolean }>
+      unsubscribe: (sessionId: string) => Promise<{ ok: boolean }>
       onChunk: (fn: (chunk: import('../../shared/stream').TaggedChunk) => void) => () => void
       listSessions: () => Promise<import('../../shared/session').Session[]>
       createSession: (options?: { title?: string; projectId?: string }) => Promise<import('../../shared/session').Session>

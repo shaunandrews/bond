@@ -225,16 +225,33 @@ describe('sessions module', () => {
       expect(getMessages(s.id)).toHaveLength(1)
     })
 
-    it('blocks catastrophic message loss', () => {
+    it('blocks empty save when messages exist', () => {
       const s = createSession()
       const msgs = Array.from({ length: 10 }, (_, i) => ({ id: `msg-${i}`, role: 'user', text: `Message ${i}` }))
       saveMessages(s.id, msgs)
 
-      // Try to save only 2 messages (loss of 8 > threshold of 5)
-      const result = saveMessages(s.id, [{ id: 'msg-0', role: 'user', text: 'Message 0' }])
+      // Try to save empty array — should be blocked
+      const result = saveMessages(s.id, [])
       expect(result).toBe(false)
       // Original messages preserved
       expect(getMessages(s.id)).toHaveLength(10)
+    })
+
+    it('allows reducing message count (thinking messages removed)', () => {
+      const s = createSession()
+      const msgs = Array.from({ length: 10 }, (_, i) => ({ id: `msg-${i}`, role: 'user', text: `Message ${i}` }))
+      saveMessages(s.id, msgs)
+
+      // Save fewer messages — normal churn, should be allowed
+      const result = saveMessages(s.id, [{ id: 'msg-0', role: 'user', text: 'Message 0' }])
+      expect(result).toBe(true)
+      expect(getMessages(s.id)).toHaveLength(1)
+    })
+
+    it('allows empty save when no messages exist', () => {
+      const s = createSession()
+      const result = saveMessages(s.id, [])
+      expect(result).toBe(true)
     })
 
     it('returns false for nonexistent session', () => {

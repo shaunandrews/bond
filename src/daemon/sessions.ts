@@ -142,14 +142,15 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
   const session = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId)
   if (!session) return false
 
-  // Guard: never overwrite with significantly fewer messages.
-  // Prevents crash-induced partial renderer state from destroying conversation history.
-  // Small reductions (filtered empty thinking messages) are OK; catastrophic ones are blocked.
-  if (messages.length > 0) {
+  // Guard: never overwrite with an empty array.
+  // Prevents crash-induced empty renderer state from destroying conversation history.
+  // Normal churn (thinking messages created/removed, tools collapsed) is allowed —
+  // the real protection against data loss is the always-stash + background-buffer-first
+  // persist logic in useChat.ts, not this guard.
+  if (messages.length === 0) {
     const existing = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(sessionId) as { count: number }
-    const loss = existing.count - messages.length
-    if (loss > 5) {
-      console.warn(`[bond] saveMessages blocked: would lose ${loss} messages (${messages.length} < ${existing.count}) for session ${sessionId}`)
+    if (existing.count > 0) {
+      console.warn(`[bond] saveMessages blocked: refusing empty save for session ${sessionId} (${existing.count} existing)`)
       return false
     }
   }

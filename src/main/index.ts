@@ -548,6 +548,14 @@ app.whenReady().then(async () => {
     return client.respondToApproval(requestId, approved)
   })
 
+  ipcMain.handle('bond:subscribe', (_e, sessionId: string) => {
+    return client.subscribe(sessionId)
+  })
+
+  ipcMain.handle('bond:unsubscribe', (_e, sessionId: string) => {
+    return client.unsubscribe(sessionId)
+  })
+
   // --- Model ---
   ipcMain.handle('bond:setModel', async (_e, model: string) => {
     const result = await client.setModel(model)

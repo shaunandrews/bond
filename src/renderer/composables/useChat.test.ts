@@ -316,6 +316,75 @@ describe('useChat', () => {
       // (because we deep-copied when stashing)
       expect(bondMsgBefore!.text).toBe('initial')
     })
+
+    it('stashes messages even when session is not busy (Fix 1)', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      // Submit, get a response, and let it finish (no longer busy)
+      await chat.submit('hello')
+      handler({ kind: 'assistant_text', text: 'done', sessionId: 'sess-1' })
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+      await new Promise(r => setTimeout(r, 10))
+      expect(chat.busy.value).toBe(false)
+
+      // Switch to sess-2 — messages should still be stashed even though not busy
+      await chat.loadSession('sess-2')
+
+      // Switch back — should restore from background buffer
+      await chat.loadSession('sess-1')
+      const bondMsg = chat.messages.value.find(m => m.role === 'bond')
+      expect(bondMsg).toMatchObject({ text: 'done' })
+    })
+
+    it('persistMessagesFor reads from backgroundMessages after session switch (Fix 2)', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+
+      // Submit in sess-1, get a partial response
+      await chat.submit('hello')
+      handler({ kind: 'assistant_text', text: 'response text', sessionId: 'sess-1' })
+
+      // Switch to sess-2 (stashes sess-1 to background)
+      await chat.loadSession('sess-2')
+
+      // Submit in sess-2 so messages.value has different content
+      await chat.submit('different message')
+
+      // query_end arrives for sess-1 — this triggers flushPersistFor(sess-1)
+      // which should read from backgroundMessages, not messages.value
+      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
+      await new Promise(r => setTimeout(r, 10))
+
+      // Check that saveMessages was called for sess-1 with sess-1's data (not sess-2's)
+      const sess1Saves = (deps.saveMessages as ReturnType<typeof vi.fn>).mock.calls
+        .filter((call: unknown[]) => call[0] === 'sess-1')
+      const lastSave = sess1Saves[sess1Saves.length - 1]
+      expect(lastSave).toBeTruthy()
+      const savedMsgs = lastSave![1] as Array<{ role: string; text?: string }>
+      expect(savedMsgs.some(m => m.role === 'bond' && m.text === 'response text')).toBe(true)
+      // Should NOT contain sess-2 data
+      expect(savedMsgs.some(m => m.text === 'different message')).toBe(false)
+    })
+
+    it('loadSession serializes overlapping calls (Fix 4)', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+
+      await chat.submit('hello from 1')
+
+      // Fire three loadSession calls without awaiting — simulates rapid clicking
+      const p1 = chat.loadSession('sess-2')
+      const p2 = chat.loadSession('sess-3')
+      const p3 = chat.loadSession('sess-4')
+
+      await Promise.all([p1, p2, p3])
+
+      // Should settle on the last requested session
+      expect(chat.currentSessionId.value).toBe('sess-4')
+    })
   })
 
   describe('onQueryEnd', () => {

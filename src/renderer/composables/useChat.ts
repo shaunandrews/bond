@@ -37,6 +37,8 @@ export interface ChatDeps {
   getMessages: (sessionId: string) => Promise<SessionMessage[]>
   saveMessages: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
   getImages: (ids: string[]) => Promise<(AttachedImage | null)[]>
+  subscribe?: (sessionId: string) => Promise<{ ok: boolean }>
+  unsubscribe?: (sessionId: string) => Promise<{ ok: boolean }>
 }
 
 function uid(): string {
@@ -219,9 +221,8 @@ export function useChat(deps: ChatDeps = window.bond) {
   function startStreamingStash(sessionId: string) {
     stopStreamingStash(sessionId)
     streamingStashTimers.set(sessionId, setInterval(() => {
-      const msgs = sessionId === currentSessionId.value
-        ? messages.value
-        : backgroundMessages.get(sessionId)
+      const msgs = backgroundMessages.get(sessionId)
+        ?? (sessionId === currentSessionId.value ? messages.value : undefined)
       if (!msgs?.length) return
       try {
         const key = `bond:msg-backup:${sessionId}`
@@ -470,9 +471,10 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   function persistMessagesFor(sessionId: string): Promise<void> {
-    const msgs = sessionId === currentSessionId.value
-      ? messages.value
-      : backgroundMessages.get(sessionId)
+    // Check backgroundMessages first — if a session was stashed during a switch,
+    // its data lives there even if currentSessionId has already changed.
+    const msgs = backgroundMessages.get(sessionId)
+      ?? (sessionId === currentSessionId.value ? messages.value : undefined)
     if (!msgs || !msgs.length) return Promise.resolve()
 
     // Snapshot messages immediately to avoid mutation races with ongoing streaming
@@ -512,18 +514,59 @@ export function useChat(deps: ChatDeps = window.bond) {
     }
   }
 
+  // Serialization gate for loadSession — prevents overlapping async calls from
+  // racing and losing intermediate session data (e.g. rapid A→B→C clicks).
+  let _loadLock: Promise<void> | null = null
+  let _pendingLoadId: string | null = null
+
   async function loadSession(sessionId: string) {
+    if (_loadLock) {
+      // Another loadSession is in flight. Record what we actually want and wait.
+      _pendingLoadId = sessionId
+      await _loadLock
+      // If something newer came in while we waited, bail — that one will run.
+      if (_pendingLoadId !== sessionId) return
+    }
+
+    let unlock!: () => void
+    _loadLock = new Promise(r => { unlock = r })
+    _pendingLoadId = null
+
+    try {
+      await _loadSessionCore(sessionId)
+    } finally {
+      _loadLock = null
+      unlock()
+
+      // If a newer session was requested while we ran, load it now.
+      if (_pendingLoadId) {
+        const next = _pendingLoadId
+        _pendingLoadId = null
+        loadSession(next)
+      }
+    }
+  }
+
+  async function _loadSessionCore(sessionId: string) {
     const oldSid = currentSessionId.value
     if (oldSid) {
       await flushPersistFor(oldSid)
-      // Stash current messages if the old session is still busy (receiving chunks).
+      // Always stash current messages when switching away — not just for busy sessions.
+      // Previously this was gated on busySessions.has(oldSid), but query_end can clear
+      // the busy flag during the flushPersistFor await above, causing messages to be
+      // silently dropped when messages.value is overwritten with the new session's data.
       // Deep-copy message objects to prevent mutation races with ongoing streaming.
-      if (busySessions.value.has(oldSid)) {
+      if (messages.value.length > 0) {
         backgroundMessages.set(oldSid, messages.value.map(m => ({ ...m })))
+      }
+      // Unsubscribe from the old session if it's no longer busy
+      if (!busySessions.value.has(oldSid)) {
+        deps.unsubscribe?.(oldSid).catch(() => {})
       }
     }
 
     currentSessionId.value = sessionId
+    deps.subscribe?.(sessionId).catch(() => {})
     activity.value = _activityMap.get(sessionId) ?? _restoreActivity(sessionId) ?? { type: 'idle' }
     contextUsage.value = _contextUsageMap.get(sessionId) ?? { inputTokens: 0, contextWindow: 0, costUsd: 0 }
 
@@ -571,6 +614,9 @@ export function useChat(deps: ChatDeps = window.bond) {
     }
 
     messages.value = msgs
+
+    // Clean up stale localStorage backup after successful DB load
+    try { localStorage.removeItem(`bond:msg-backup:${sessionId}`) } catch {}
   }
 
   function clearMessages() {

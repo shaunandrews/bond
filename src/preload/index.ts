@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('bond', {
   cancel: (sessionId?: string) => ipcRenderer.invoke('bond:cancel', sessionId) as Promise<{ ok: boolean }>,
   respondToApproval: (requestId: string, approved: boolean) =>
     ipcRenderer.invoke('bond:approvalResponse', requestId, approved) as Promise<{ ok: boolean }>,
+  subscribe: (sessionId: string) =>
+    ipcRenderer.invoke('bond:subscribe', sessionId) as Promise<{ ok: boolean }>,
+  unsubscribe: (sessionId: string) =>
+    ipcRenderer.invoke('bond:unsubscribe', sessionId) as Promise<{ ok: boolean }>,
   onChunk: (fn: (chunk: TaggedChunk) => void) => {
     const listener = (_: Electron.IpcRendererEvent, chunk: TaggedChunk) => fn(chunk)
     ipcRenderer.on('bond:chunk', listener)
