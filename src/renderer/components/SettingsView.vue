@@ -2,7 +2,7 @@
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { PhTrash, PhPlus, PhEye, PhEyeSlash } from '@phosphor-icons/vue'
 import { useAccentColor } from '../composables/useAccentColor'
-import { MODEL_IDS, type ModelId } from '../../shared/models'
+import type { ModelId } from '../../shared/models'
 import BondSelect from './BondSelect.vue'
 import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
@@ -123,10 +123,11 @@ function handleOpacityInput(e: Event) {
   window.bond.saveWindowOpacity(val)
 }
 
-const modelOptions = MODEL_IDS.map(id => ({
-  value: id,
-  label: id.charAt(0).toUpperCase() + id.slice(1)
-}))
+const modelOptions = [
+  { value: 'opus', label: 'High capability' },
+  { value: 'sonnet', label: 'Balanced' },
+  { value: 'haiku', label: 'Fast' },
+]
 
 const presetColors = [
   { hex: '#7a5c3b', label: 'Warm Brown' },
@@ -321,7 +322,7 @@ function handleModelChange(model: string) {
         <div class="section-header">
           <h2 class="text-sm font-semibold text-text-primary">Default Model</h2>
           <p class="text-xs text-muted mt-1">
-            The Anthropic model used for new chats. Bond runs it through Pi; configure provider credentials in Pi before starting a chat.
+            Your preferred capability tier. Bond maps it to the best available model from your connected Claude or ChatGPT subscription.
           </p>
         </div>
 
