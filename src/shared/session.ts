@@ -50,6 +50,7 @@ export interface SessionMessage {
   status?: string
   images?: AttachedImage[]
   imageIds?: string[]
+  data?: Record<string, unknown>
 }
 
 // --- Collections ---

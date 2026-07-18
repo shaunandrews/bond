@@ -1,0 +1,71 @@
+import { describe, expect, it } from 'vitest'
+import { mount } from '@vue/test-utils'
+import TurnActivity from './TurnActivity.vue'
+import type { TurnActivityData } from '../types/activity'
+
+function activity(overrides: Partial<TurnActivityData> = {}): TurnActivityData {
+  const now = Date.now()
+  return {
+    turnId: 'turn-1',
+    status: 'done',
+    startedAt: now - 3000,
+    endedAt: now,
+    events: [
+      { id: 'think-1', type: 'thinking', label: 'Thinking', ts: now - 2900, endTs: now - 2000, text: 'Reasoning text' },
+      { id: 'tool-1', type: 'tool', label: 'Read file.ts', ts: now - 1900, endTs: now - 500, toolName: 'Read', toolUseId: 'call-1', input: { path: 'file.ts' }, output: 'contents' },
+    ],
+    ...overrides,
+  }
+}
+
+describe('TurnActivity', () => {
+  it('renders a compact completed summary', () => {
+    const wrapper = mount(TurnActivity, { props: { data: activity() } })
+    expect(wrapper.text()).toContain('Thought for 3s')
+    expect(wrapper.text()).toContain('Used 1 tool')
+  })
+
+  it('expands chronological details with thinking and tool previews', async () => {
+    const wrapper = mount(TurnActivity, { props: { data: activity() } })
+    await wrapper.find('.activity-compact').trigger('click')
+    expect(wrapper.text()).toContain('Thinking')
+    expect(wrapper.text()).toContain('Read file.ts')
+
+    await wrapper.findAll('.event-row')[0].trigger('click')
+    expect(wrapper.text()).toContain('Reasoning text')
+
+    await wrapper.findAll('.event-row')[1].trigger('click')
+    expect(wrapper.text()).toContain('file.ts')
+    expect(wrapper.text()).toContain('contents')
+  })
+
+  it('offers a short tool output preview with a full reveal', async () => {
+    const output = 'x'.repeat(900)
+    const wrapper = mount(TurnActivity, { props: { data: activity({ events: [
+      { id: 'tool-1', type: 'tool', label: 'Ran command', ts: Date.now() - 1000, endTs: Date.now(), toolName: 'Bash', output },
+    ] }) } })
+
+    await wrapper.find('.activity-compact').trigger('click')
+    await wrapper.find('.event-row').trigger('click')
+    expect(wrapper.find('pre').text().length).toBeLessThan(output.length)
+    await wrapper.find('.detail-toggle').trigger('click')
+    expect(wrapper.find('pre').text()).toBe(output)
+  })
+
+  it('auto-expands failures', () => {
+    const wrapper = mount(TurnActivity, { props: { data: activity({ status: 'failed', expanded: true, events: [
+      { id: 'err-1', type: 'error', label: 'Error', ts: Date.now(), text: 'boom' },
+    ] }) } })
+    expect(wrapper.text()).toContain('Failed')
+    expect(wrapper.text()).toContain('Error')
+  })
+
+  it('emits approvals from approval events', async () => {
+    const wrapper = mount(TurnActivity, { props: { data: activity({ status: 'awaiting_approval', expanded: true, events: [
+      { id: 'approval-1', type: 'approval', label: 'Approval requested: Bash', ts: Date.now(), requestId: 'req-1', toolName: 'Bash', input: { command: 'npm test' }, status: 'pending' },
+    ] }) } })
+    await wrapper.find('.event-row').trigger('click')
+    await wrapper.find('.approval-actions button').trigger('click')
+    expect(wrapper.emitted('approve')?.[0]).toEqual(['req-1', true])
+  })
+})

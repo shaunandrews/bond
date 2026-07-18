@@ -195,6 +195,15 @@ describe('sessions module', () => {
       expect(msgs[0].summary).toBe('ran ls')
     })
 
+    it('persists JSON message data', () => {
+      const s = createSession()
+      const data = { turnId: 'turn-1', status: 'done', events: [{ id: 'evt-1', type: 'tool', output: 'ok' }] }
+      saveMessages(s.id, [
+        { id: 'msg-1', role: 'meta', kind: 'activity', data },
+      ])
+      expect(getMessages(s.id)[0].data).toEqual(data)
+    })
+
     it('upserts on re-save', () => {
       const s = createSession()
       saveMessages(s.id, [{ id: 'msg-1', role: 'user', text: 'Original' }])

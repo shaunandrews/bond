@@ -8,6 +8,7 @@ import MarkdownMessage from './MarkdownMessage.vue'
 import ArtifactFrame from './ArtifactFrame.vue'
 import EmbedRenderer from './EmbedRenderer.vue'
 import { parseArtifacts, hasRichContent } from '../lib/parseArtifacts'
+import TurnActivity from './TurnActivity.vue'
 
 function renderUserMarkdown(text: string): string {
   const raw = marked.parse(text, { async: false, gfm: true, breaks: true }) as string
@@ -135,6 +136,13 @@ function formatToolSummary(name: string, summary?: string): string {
     :streaming="msg.streaming"
     class="self-start w-full px-3.5 py-2.5 text-sm leading-relaxed"
     @dblclick="copyText(msg, $event)"
+  />
+
+  <!-- Turn activity -->
+  <TurnActivity
+    v-else-if="msg.kind === 'activity'"
+    :data="msg.data"
+    @approve="(requestId, approved) => $emit('approve', requestId, approved)"
   />
 
   <!-- Tool approval -->

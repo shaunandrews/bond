@@ -36,6 +36,7 @@ export function getDb(): Database.Database {
   migrateCreateCollectionsTable(_db)
   migrateCreateJournalTable(_db)
   migrateAddMessageUpdatedAt(_db)
+  migrateAddMessageDataColumn(_db)
   migrateCreatePendingApprovalsTable(_db)
   migrateCreateJournalCommentsTable(_db)
   migrateCreateSenseTables(_db)
@@ -80,7 +81,8 @@ function createSchema(db: Database.Database): void {
       kind TEXT,
       name TEXT,
       summary TEXT,
-      status TEXT
+      status TEXT,
+      data TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, position);
@@ -332,6 +334,13 @@ function migrateAddMessageUpdatedAt(db: Database.Database): void {
   const columns = db.pragma('table_info(messages)') as { name: string }[]
   if (!columns.some(c => c.name === 'updated_at')) {
     db.exec("ALTER TABLE messages ADD COLUMN updated_at TEXT")
+  }
+}
+
+function migrateAddMessageDataColumn(db: Database.Database): void {
+  const columns = db.pragma('table_info(messages)') as { name: string }[]
+  if (!columns.some(c => c.name === 'data')) {
+    db.exec('ALTER TABLE messages ADD COLUMN data TEXT')
   }
 }
 

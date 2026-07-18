@@ -56,6 +56,12 @@ function rowToMessage(row: Record<string, unknown>): SessionMessage {
       }
     } catch { /* ignore */ }
   }
+  if (row.data != null) {
+    try {
+      const parsed = JSON.parse(row.data as string)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) msg.data = parsed as Record<string, unknown>
+    } catch { /* ignore */ }
+  }
   return msg
 }
 
@@ -168,8 +174,8 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
 
     // Upsert each message — INSERT if new, UPDATE if changed
     const upsert = db.prepare(`
-      INSERT INTO messages (id, session_id, position, role, text, streaming, kind, name, summary, status, images, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, session_id, position, role, text, streaming, kind, name, summary, status, images, data, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         position = excluded.position,
         text = excluded.text,
@@ -177,6 +183,7 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
         summary = excluded.summary,
         status = excluded.status,
         images = excluded.images,
+        data = excluded.data,
         updated_at = excluded.updated_at
     `)
 
@@ -191,6 +198,7 @@ export function saveMessages(sessionId: string, messages: SessionMessage[]): boo
         m.summary ?? null,
         m.status ?? null,
         m.imageIds?.length ? JSON.stringify(m.imageIds) : m.images?.length ? JSON.stringify(m.images) : null,
+        m.data ? JSON.stringify(m.data) : null,
         now
       )
     }

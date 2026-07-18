@@ -72,7 +72,6 @@ const props = defineProps<{
   busy: boolean
   model: ModelId
   editMode: EditMode
-  trimBottom?: boolean
   contextUsage?: { inputTokens: number; contextWindow: number; costUsd: number }
 }>()
 const { busy } = toRefs(props)
@@ -323,7 +322,7 @@ function handleKeyDown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div :class="['pt-2 relative', trimBottom ? 'pb-1' : 'pb-5']">
+  <div class="pt-2 relative pb-5">
     <!-- Skill autocomplete menu -->
     <div v-if="showSkillMenu" class="skill-menu">
       <button

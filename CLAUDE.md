@@ -200,14 +200,15 @@ src/
       panelTypes.ts                  # Panel system types + injection key
       ViewShell.vue                  # View wrapper (sticky header/footer, scroll area)
       ChatInput.vue                  # Textarea + model/edit-mode selectors + attach + send/stop
-      MessageBubble.vue              # Renders all message variants
+      ApprovalPrompt.vue             # Tool approval prompt stacked above the composer
+      MessageBubble.vue              # Renders message variants incl. turn activity
+      TurnActivity.vue               # Unified in-chat turn activity timeline
       MarkdownMessage.vue            # Markdown with syntax highlighting + copy
       ThinkingIndicator.vue          # Standalone "Bond is working..." dots (unused, kept for reference)
       SessionItem.vue                # Single session row
       SessionSidebar.vue             # Sidebar with session lists + nav
       MediaView.vue                  # Image gallery view
       CopyButton.vue                 # Inline copy-to-clipboard button
-      ActivityBar.vue                # Expandable activity/event log bar
       MissionBriefing.vue            # Empty chat welcome screen
       SettingsView.vue               # Accent color, model, personality settings
       AboutView.vue                  # Architecture, tools, data paths, CLI reference
@@ -311,10 +312,20 @@ Unified chat box combining textarea, model selector, edit mode selector, attach 
 - **Events:** `submit(text: string, images: AttachedImage[])`, `cancel()`, `update:model(value: ModelId)`, `update:editMode(value: EditMode)`
 - Single bordered container with textarea on top and a toolbar row below (model select, edit mode select, attach, action button). Action button shows send (arrow-up, accent) when idle, stop (stop icon) when busy. Attach button opens native file picker for jpeg/png/gif/webp. Image thumbnails appear above textarea inside the box. Edit mode selector switches between readonly, scoped (with paths input), and full.
 
+### ApprovalPrompt
+Focused tool approval request stacked above ChatInput while leaving the normal composer usable. Shows the tool, description, and a formatted command/path/input preview.
+- **Props:** `requestId: string`, `toolName: string`, `input: Record<string, unknown>`, `description?: string`, `context?: string` (background session title)
+- **Events:** `respond(requestId: string, approved: boolean)`
+
 ### MessageBubble
-Renders all message variants based on the `Message` union type. Delegates markdown to MarkdownMessage. User messages render attached images above text. Thinking messages transition through three states: "Bond is working..." (no text yet) → "Thinking..." (streaming) → "Thought for Xs" accordion (finalized, click to expand).
+Renders all message variants based on the `Message` union type. Delegates markdown to MarkdownMessage and turn activity rows to TurnActivity. User messages render attached images above text.
 - **Props:** `msg: Message` — role/kind determines which variant renders
-- **Events:** `approve(requestId: string, approved: boolean)` — emitted for tool approval actions
+- **Events:** `approve(requestId: string, approved: boolean)` — emitted from approval controls inside turn activity
+
+### TurnActivity
+Unified in-chat activity row persisted as one `meta/activity` message per user turn. Compact row streams current status; expansion shows chronological thinking text, tool input/output previews, timings, approvals, and errors. Completed rows collapse to a small summary. Failures and approval requests set `expanded: true` automatically. Full details live in `SessionMessage.data` and the `messages.data` JSON column.
+- **Props:** `data: TurnActivityData`
+- **Events:** `approve(requestId: string, approved: boolean)`
 
 ### MarkdownMessage
 Renders markdown with syntax highlighting and copy-to-clipboard code blocks. Uses marked.js, DOMPurify, and highlight.js.
@@ -322,7 +333,7 @@ Renders markdown with syntax highlighting and copy-to-clipboard code blocks. Use
 - Throttled rendering during streaming. External links open via `window.bond.openExternal()`.
 
 ### ThinkingIndicator
-Standalone animated "Bond is working..." with blinking dots. No longer used in the main app — thinking UI is now handled inline by MessageBubble's `thinking` message variant. Kept as a standalone component file.
+Standalone animated "Bond is working..." with blinking dots. No longer used in the main app — live turn status is handled by TurnActivity. Kept as a standalone component file.
 
 ### SessionItem
 Single session row used in both active and archived lists inside SessionSidebar. Action button floats over content on hover (no reserved space).
@@ -391,8 +402,8 @@ Dev-only component catalog with live previews and prop/event documentation. Acce
 ## Composables
 
 ### useChat(deps)
-All chat state and logic. Handles message streaming, persistence, tool approvals, thinking message lifecycle, and HMR-safe state preservation. On submit, creates a thinking message immediately (Working state). Thinking deltas from the API accumulate into it (Thinking state). When the first non-thinking chunk arrives, it finalizes with duration (Thought state) or is removed if no thinking text was received.
-- **State:** `messages`, `busy`, `currentSessionId`
+All chat state and logic. Handles message streaming, persistence, tool approvals, turn activity, and HMR-safe state preservation. On submit, creates one `meta/activity` message for the turn. Thinking/tool/result/approval chunks update that activity message's `data.events`; assistant text still streams into normal bond messages. Pending approvals are exposed separately so App can stack approval prompts above the composer while normal input remains usable.
+- **State:** `messages`, `busy`, `currentSessionId`, `pendingApprovals`
 - **Methods:** `submit()`, `cancel()`, `respondToApproval()`, `subscribe()`, `unsubscribe()`, `loadSession()`, `clearMessages()`, `persistMessages()`
 
 ### useSessions(deps)
@@ -464,7 +475,8 @@ type Message =
   | { id, role: 'bond', text, streaming: boolean }
   | { id, role: 'meta', kind: 'tool', name, summary? }
   | { id, role: 'meta', kind: 'skill', name, args? }
-  | { id, role: 'meta', kind: 'thinking', text, durationSec?, streaming: boolean }
+  | { id, role: 'meta', kind: 'thinking', text, durationSec?, streaming: boolean } // legacy persisted rows only
+  | { id, role: 'meta', kind: 'activity', data: TurnActivityData }
   | { id, role: 'meta', kind: 'error', text }
   | { id, role: 'meta', kind: 'approval', requestId, toolName, input, title?, description?, status: 'pending' | 'approved' | 'denied' }
   | { id, role: 'meta', kind: 'system', text }

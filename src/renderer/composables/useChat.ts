@@ -3,24 +3,7 @@ import { ref, computed } from 'vue'
 import type { BondStreamChunk, TaggedChunk } from '../../shared/stream'
 import type { SessionMessage, AttachedImage } from '../../shared/session'
 import type { Message } from '../types/message'
-
-export interface ActivityEvent {
-  type: 'thinking' | 'tool' | 'responding'
-  label: string
-  ts: number
-  durationSec?: number
-  toolName?: string
-  input?: Record<string, unknown>
-  output?: string
-}
-
-export type ActivityState =
-  | { type: 'idle' }
-  | { type: 'working'; startedAt: number; events: ActivityEvent[] }
-  | { type: 'thinking'; snippet: string; startedAt: number; events: ActivityEvent[] }
-  | { type: 'tool'; name: string; detail?: string; startedAt: number; events: ActivityEvent[] }
-  | { type: 'responding'; startedAt: number; events: ActivityEvent[] }
-  | { type: 'done'; startedAt: number; endedAt: number; events: ActivityEvent[] }
+import type { TurnActivityData, TurnActivityEvent } from '../types/activity'
 
 export interface QueuedMessage {
   id: string
@@ -58,6 +41,7 @@ function toSessionMessages(msgs: Message[]): SessionMessage[] {
     if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: m.name, summary: m.args }
     if (m.kind === 'thinking') return { id: m.id, role: 'meta', kind: 'thinking', text: m.text, summary: m.durationSec != null ? String(m.durationSec) : undefined }
     if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', name: m.toolName, summary: m.description, status: m.status }
+    if (m.kind === 'activity') return { id: m.id, role: 'meta', kind: 'activity', data: m.data as unknown as Record<string, unknown> }
     if (m.kind === 'error') return { id: m.id, role: 'meta', kind: 'error', text: m.text }
     return { id: m.id, role: 'meta', kind: 'system', text: m.text }
   })
@@ -75,6 +59,7 @@ function fromSessionMessages(msgs: SessionMessage[]): Message[] {
       return { id: m.id, role: 'meta', kind: 'thinking', text: m.text ?? '', durationSec: m.summary ? parseInt(m.summary, 10) : undefined, streaming: false }
     }
     if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', requestId: '', toolName: m.name ?? '', input: {}, description: m.summary, status: (m.status as 'approved' | 'denied') ?? 'denied' }
+    if (m.kind === 'activity' && m.data) return { id: m.id, role: 'meta', kind: 'activity', data: m.data as unknown as TurnActivityData }
     if (m.kind === 'error') return { id: m.id, role: 'meta', kind: 'error', text: m.text ?? '' }
     return { id: m.id, role: 'meta', kind: 'system', text: m.text ?? '' }
   }).filter((m): m is Message => m !== null)
@@ -83,7 +68,7 @@ function fromSessionMessages(msgs: SessionMessage[]): Message[] {
 // Preserve chat state across HMR reloads so in-flight streaming
 // isn't lost when Vite hot-updates a module during a response.
 const _hmr = import.meta.hot?.data as
-  | { messages?: Message[]; busySessions?: string[]; sessionId?: string | null; backgroundMessages?: [string, Message[]][]; activityMap?: [string, ActivityState][]; thinkingBufs?: [string, string][]; eventsMap?: [string, ActivityEvent[]][]; queuedMessages?: QueuedMessage[] }
+  | { messages?: Message[]; busySessions?: string[]; sessionId?: string | null; backgroundMessages?: [string, Message[]][]; queuedMessages?: QueuedMessage[] }
   | undefined
 const _hmrNeedsPersist = !!(_hmr?.messages?.length || _hmr?.backgroundMessages?.length)
 
@@ -101,81 +86,8 @@ export function useChat(deps: ChatDeps = window.bond) {
   /** Messages for non-current sessions that are still receiving chunks */
   const backgroundMessages = new Map<string, Message[]>(_hmr?.backgroundMessages ?? [])
 
-  /** Per-session activity tracking */
-  const _activityMap = new Map<string, ActivityState>(_hmr?.activityMap ?? [])
-  const _thinkingBufs = new Map<string, string>(_hmr?.thinkingBufs ?? [])
-  const _eventsMap = new Map<string, ActivityEvent[]>(_hmr?.eventsMap ?? [])
-  const activity = ref<ActivityState>(
-    _hmr?.sessionId ? (_activityMap.get(_hmr.sessionId) ?? { type: 'idle' }) : { type: 'idle' }
-  )
-
-  function _getEvents(sid: string): ActivityEvent[] {
-    let events = _eventsMap.get(sid)
-    if (!events) { events = []; _eventsMap.set(sid, events) }
-    return events
-  }
-
-  function _getStartedAt(sid: string): number {
-    const existing = _activityMap.get(sid)
-    return (existing && existing.type !== 'idle') ? existing.startedAt : Date.now()
-  }
-
-  type ActivityBase =
-    | { type: 'working'; startedAt: number }
-    | { type: 'thinking'; snippet: string; startedAt: number }
-    | { type: 'tool'; name: string; detail?: string; startedAt: number }
-    | { type: 'responding'; startedAt: number }
-    | { type: 'done'; startedAt: number; endedAt: number }
-
-  function _setActivity(sid: string, base: ActivityBase) {
-    const events = _getEvents(sid)
-    const state = { ...base, events } as ActivityState
-    _activityMap.set(sid, state)
-    if (sid === currentSessionId.value) activity.value = state
-    // Persist done states to localStorage so the activity bar survives view/session switches
-    if (base.type === 'done') {
-      try {
-        localStorage.setItem(`bond:activity:${sid}`, JSON.stringify({
-          startedAt: base.startedAt,
-          endedAt: (base as { endedAt: number }).endedAt,
-          events,
-        }))
-      } catch { /* quota — best effort */ }
-    }
-  }
-
-  function _clearActivity(sid: string) {
-    _activityMap.delete(sid)
-    _thinkingBufs.delete(sid)
-    _eventsMap.delete(sid)
-    try { localStorage.removeItem(`bond:activity:${sid}`) } catch {}
-    if (sid === currentSessionId.value) activity.value = { type: 'idle' }
-  }
-
-  function _restoreActivity(sid: string): ActivityState | null {
-    try {
-      const raw = localStorage.getItem(`bond:activity:${sid}`)
-      if (!raw) return null
-      const data = JSON.parse(raw)
-      const events: ActivityEvent[] = data.events ?? []
-      // Hydrate the events into the maps so subsequent updates work
-      _eventsMap.set(sid, events)
-      const state: ActivityState = { type: 'done', startedAt: data.startedAt, endedAt: data.endedAt, events }
-      _activityMap.set(sid, state)
-      return state
-    } catch { return null }
-  }
-
-  function _finalizeThinkingEvent(sid: string) {
-    const events = _eventsMap.get(sid)
-    if (!events) return
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].type === 'thinking' && events[i].durationSec == null) {
-        events[i].durationSec = Math.max(1, Math.round((Date.now() - events[i].ts) / 1000))
-        break
-      }
-    }
-  }
+  const activeActivityIds = new Map<string, string>()
+  const activityRevision = ref(0)
 
   function _formatToolLabel(name: string, summary?: string): string {
     const filename = summary?.split('/').pop() || summary
@@ -197,6 +109,26 @@ export function useChat(deps: ChatDeps = window.bond) {
     queuedMessages.value.filter(m => m.sessionId === currentSessionId.value)
   )
 
+  const pendingApprovals = computed(() => {
+    activityRevision.value
+    const found = new Map<string, Extract<TurnActivityEvent, { type: 'approval' }> & { activityMessageId: string; sessionId: string }>()
+    const sources: Array<[string, Message[]]> = [
+      ...(currentSessionId.value ? [[currentSessionId.value, messages.value] as [string, Message[]]] : []),
+      ...backgroundMessages.entries(),
+    ]
+    for (const [sessionId, sessionMessages] of sources) {
+      for (const m of sessionMessages) {
+        if (m.role !== 'meta' || m.kind !== 'activity') continue
+        for (const evt of m.data.events) {
+          if (evt.type === 'approval' && evt.status === 'pending') {
+            found.set(evt.requestId, { ...evt, activityMessageId: m.id, sessionId })
+          }
+        }
+      }
+    }
+    return [...found.values()]
+  })
+
   function markBusy(sessionId: string) {
     busySessions.value = new Set([...busySessions.value, sessionId])
   }
@@ -208,7 +140,6 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   let unsub: (() => void) | undefined
-  const thinkingStartTimes = new Map<string, number>()
   const persistTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const streamingStashTimers = new Map<string, ReturnType<typeof setInterval>>()
   const queryEndCallbacks: Array<(sessionId: string) => void> = []
@@ -280,29 +211,63 @@ export function useChat(deps: ChatDeps = window.bond) {
     msgs.push(msg)
   }
 
-  function finalizeThinkingOn(msgs: Message[], sessionId: string) {
-    const startTime = thinkingStartTimes.get(sessionId) ?? 0
+  function existingActivityFor(sessionId: string, msgs = getMessagesFor(sessionId)): (Message & { role: 'meta'; kind: 'activity' }) | undefined {
+    const activeId = activeActivityIds.get(sessionId)
+    const byId = activeId ? msgs.find(m => m.id === activeId && m.role === 'meta' && m.kind === 'activity') : undefined
+    if (byId && byId.role === 'meta' && byId.kind === 'activity') return byId
+
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i]
-      if (m.role === 'meta' && m.kind === 'thinking' && m.streaming) {
-        if (!m.text) {
-          msgs.splice(i, 1)
-        } else {
-          m.streaming = false
-          m.durationSec = startTime
-            ? Math.round((Date.now() - startTime) / 1000)
-            : undefined
-        }
-        thinkingStartTimes.delete(sessionId)
-        break
+      if (m.role === 'meta' && m.kind === 'activity' && ['working', 'responding', 'awaiting_approval'].includes(m.data.status)) {
+        activeActivityIds.set(sessionId, m.id)
+        return m
       }
     }
   }
 
+  function activityFor(sessionId: string, msgs = getMessagesFor(sessionId)): Message & { role: 'meta'; kind: 'activity' } {
+    const existing = existingActivityFor(sessionId, msgs)
+    if (existing) return existing
+
+    const data: TurnActivityData = { turnId: uid(), status: 'working', startedAt: Date.now(), events: [] }
+    const msg: Message & { role: 'meta'; kind: 'activity' } = { id: uid(), role: 'meta', kind: 'activity', data, ts: data.startedAt }
+    addMessageTo(msgs, msg)
+    activeActivityIds.set(sessionId, msg.id)
+    return msg
+  }
+
+  function updateActivity(sessionId: string, updater: (data: TurnActivityData) => void) {
+    const msg = activityFor(sessionId)
+    updater(msg.data)
+    activityRevision.value++
+  }
+
+  function finalizeOpenActivityEvents(data: TurnActivityData, end = Date.now()) {
+    for (const evt of data.events) {
+      if ((evt.type === 'thinking' || evt.type === 'tool' || evt.type === 'responding') && evt.endTs == null) evt.endTs = end
+    }
+  }
+
+  function cancelPendingApprovals(data: TurnActivityData, end = Date.now()) {
+    for (const evt of data.events) {
+      if (evt.type === 'approval' && evt.status === 'pending') {
+        evt.status = 'cancelled'
+        evt.endTs = end
+      }
+    }
+  }
+
+  function lastActivityEvent(data: TurnActivityData): TurnActivityEvent | undefined {
+    return data.events[data.events.length - 1]
+  }
+
   function endStreamingOn(msgs: Message[]) {
-    const last = msgs[msgs.length - 1]
-    if (last?.role === 'bond' && last.streaming) {
-      last.streaming = false
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const msg = msgs[i]
+      if (msg.role === 'bond' && msg.streaming) {
+        msg.streaming = false
+        return
+      }
     }
   }
 
@@ -310,23 +275,26 @@ export function useChat(deps: ChatDeps = window.bond) {
     // Per-session busy tracking — always processed regardless of active session
     if (chunk.kind === 'query_start') {
       markBusy(chunk.sessionId)
-      _thinkingBufs.delete(chunk.sessionId)
-      _eventsMap.set(chunk.sessionId, [])
-      _setActivity(chunk.sessionId, { type: 'working', startedAt: Date.now() })
+      updateActivity(chunk.sessionId, data => { data.status = 'working'; data.startedAt ||= Date.now() })
       startStreamingStash(chunk.sessionId)
       return
     }
     if (chunk.kind === 'query_end') {
       markIdle(chunk.sessionId)
       stopStreamingStash(chunk.sessionId)
-      _finalizeThinkingEvent(chunk.sessionId)
-      const events = _getEvents(chunk.sessionId)
-      _setActivity(chunk.sessionId, { type: 'done', startedAt: _getStartedAt(chunk.sessionId), endedAt: Date.now() })
-      // Clean up buffers but keep events for the done state
-      _thinkingBufs.delete(chunk.sessionId)
+      const endedAt = Date.now()
+      const activityMsg = existingActivityFor(chunk.sessionId)
+      if (activityMsg) {
+        finalizeOpenActivityEvents(activityMsg.data, endedAt)
+        cancelPendingApprovals(activityMsg.data, endedAt)
+        activityMsg.data.status = !chunk.succeeded || activityMsg.data.status === 'failed' ? 'failed' : 'done'
+        activityMsg.data.endedAt = endedAt
+        if (activityMsg.data.status === 'failed') activityMsg.data.expanded = true
+        activityRevision.value++
+      }
+      activeActivityIds.delete(chunk.sessionId)
       queryEndCallbacks.forEach(fn => fn(chunk.sessionId))
       const msgs = getMessagesFor(chunk.sessionId)
-      finalizeThinkingOn(msgs, chunk.sessionId)
       endStreamingOn(msgs)
       // Persist then handle queue. The promise is tracked in lastPersistPromise
       // so loadSession can await it before reading from DB.
@@ -351,39 +319,19 @@ export function useChat(deps: ChatDeps = window.bond) {
     const sid = chunk.sessionId
     const msgs = getMessagesFor(sid)
 
-    // Thinking deltas accumulate into the current thinking message
+    // Thinking deltas accumulate into the activity timeline, not a separate transcript message.
     if (chunk.kind === 'thinking_text') {
-      // Push event on first thinking chunk of this round
-      const cur = _activityMap.get(sid)
-      if (cur?.type !== 'thinking') {
-        _getEvents(sid).push({ type: 'thinking', label: 'Thinking', ts: Date.now() })
-      }
-      // Update activity to thinking with snippet
-      let buf = _thinkingBufs.get(sid) ?? ''
-      buf += chunk.text
-      _thinkingBufs.set(sid, buf)
-      const clean = buf.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim()
-      const snippet = clean.length > 120 ? '…' + clean.slice(-120) : clean
-      _setActivity(sid, { type: 'thinking', snippet, startedAt: _getStartedAt(sid) })
-
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const m = msgs[i]
-        if (m.role === 'meta' && m.kind === 'thinking' && m.streaming) {
-          if (!m.text && !thinkingStartTimes.has(sid)) thinkingStartTimes.set(sid, Date.now())
-          m.text += chunk.text
-          return
+      updateActivity(sid, data => {
+        const last = lastActivityEvent(data)
+        if (last?.type === 'thinking' && last.endTs == null) {
+          last.text += chunk.text
+        } else {
+          data.events.push({ id: uid(), type: 'thinking', label: 'Thinking', ts: Date.now(), text: chunk.text })
         }
-      }
-      // No streaming thinking message exists — create one (e.g. mid-turn thinking)
-      thinkingStartTimes.set(sid, Date.now())
-      addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'thinking', text: chunk.text, streaming: true })
+        data.status = 'working'
+      })
       return
     }
-
-    // Any non-thinking chunk finalizes the thinking message and events
-    finalizeThinkingOn(msgs, sid)
-    _finalizeThinkingEvent(sid)
-    _thinkingBufs.delete(sid)
 
     switch (chunk.kind) {
       case 'usage_update': {
@@ -394,11 +342,14 @@ export function useChat(deps: ChatDeps = window.bond) {
       }
 
       case 'assistant_text': {
-        const cur = _activityMap.get(sid)
-        if (cur?.type !== 'responding') {
-          _getEvents(sid).push({ type: 'responding', label: 'Responding', ts: Date.now() })
-          _setActivity(sid, { type: 'responding', startedAt: _getStartedAt(sid) })
-        }
+        updateActivity(sid, data => {
+          const last = lastActivityEvent(data)
+          if (last?.type !== 'responding' || last.endTs != null) {
+            finalizeOpenActivityEvents(data)
+            data.events.push({ id: uid(), type: 'responding', label: 'Responding', ts: Date.now() })
+          }
+          data.status = 'responding'
+        })
         const last = msgs[msgs.length - 1]
         if (last?.role === 'bond' && last.streaming) {
           last.text += chunk.text
@@ -410,41 +361,53 @@ export function useChat(deps: ChatDeps = window.bond) {
       }
 
       case 'assistant_tool':
-        _getEvents(sid).push({ type: 'tool', label: _formatToolLabel(chunk.name, chunk.summary), ts: Date.now(), toolName: chunk.name, input: chunk.input })
-        _setActivity(sid, { type: 'tool', name: chunk.name, detail: chunk.summary, startedAt: _getStartedAt(sid) })
-        addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'tool', name: chunk.name, summary: chunk.summary })
+        updateActivity(sid, data => {
+          finalizeOpenActivityEvents(data)
+          data.status = 'working'
+          data.events.push({ id: uid(), type: 'tool', label: _formatToolLabel(chunk.name, chunk.summary), ts: Date.now(), toolUseId: chunk.toolUseId, toolName: chunk.name, input: chunk.input })
+        })
         schedulePersistFor(sid)
         break
 
       case 'tool_result': {
-        // Attach output to the most recent tool event
-        const evts = _getEvents(sid)
-        for (let i = evts.length - 1; i >= 0; i--) {
-          if (evts[i].type === 'tool' && !evts[i].output) {
-            evts[i].output = chunk.output
-            break
+        updateActivity(sid, data => {
+          const now = Date.now()
+          const ev = chunk.toolUseId
+            ? [...data.events].reverse().find(evt => evt.type === 'tool' && evt.toolUseId === chunk.toolUseId)
+            : [...data.events].reverse().find(evt => evt.type === 'tool' && !evt.output)
+          if (ev?.type === 'tool') {
+            ev.output = chunk.output
+            ev.endTs = now
+            ev.failed = chunk.isError
+            if (chunk.isError) data.expanded = true
           }
-        }
+        })
+        schedulePersistFor(sid)
         break
       }
 
       case 'tool_approval':
-        addMessageTo(msgs, {
-          id: uid(),
-          role: 'meta',
-          kind: 'approval',
-          requestId: chunk.requestId,
-          toolName: chunk.toolName,
-          input: chunk.input,
-          title: chunk.title,
-          description: chunk.description,
-          status: 'pending'
+        updateActivity(sid, data => {
+          const existing = data.events.find(evt => evt.type === 'approval' && evt.requestId === chunk.requestId)
+          if (existing) return
+          finalizeOpenActivityEvents(data)
+          data.status = 'awaiting_approval'
+          data.expanded = true
+          data.events.push({ id: uid(), type: 'approval', label: `Approval requested: ${chunk.toolName}`, ts: Date.now(), requestId: chunk.requestId, toolName: chunk.toolName, input: chunk.input, title: chunk.title, description: chunk.description, status: 'pending' })
         })
+        schedulePersistFor(sid)
         break
 
       case 'result':
+        endStreamingOn(msgs)
         if (chunk.errors?.length) {
-          addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text: chunk.errors.join('; ') })
+          const text = chunk.errors.join('; ')
+          updateActivity(sid, data => {
+            data.status = 'failed'
+            data.expanded = true
+            data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text })
+          })
+          addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text })
         }
         {
           const last = msgs[msgs.length - 1]
@@ -460,6 +423,14 @@ export function useChat(deps: ChatDeps = window.bond) {
         break
 
       case 'raw_error':
+        endStreamingOn(msgs)
+        updateActivity(sid, data => {
+          data.status = 'failed'
+          data.expanded = true
+          data.endedAt = Date.now()
+          cancelPendingApprovals(data, data.endedAt)
+          data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: chunk.message })
+        })
         addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text: chunk.message })
         flushPersistFor(sid)
         break
@@ -567,7 +538,6 @@ export function useChat(deps: ChatDeps = window.bond) {
 
     currentSessionId.value = sessionId
     deps.subscribe?.(sessionId).catch(() => {})
-    activity.value = _activityMap.get(sessionId) ?? _restoreActivity(sessionId) ?? { type: 'idle' }
     contextUsage.value = _contextUsageMap.get(sessionId) ?? { inputTokens: 0, contextWindow: 0, costUsd: 0 }
 
     // Restore from background buffer if available (preserves in-flight responses)
@@ -622,7 +592,6 @@ export function useChat(deps: ChatDeps = window.bond) {
   function clearMessages() {
     messages.value = []
     currentSessionId.value = null
-    activity.value = { type: 'idle' }
   }
 
   async function submit(text: string, images?: AttachedImage[]) {
@@ -641,7 +610,12 @@ export function useChat(deps: ChatDeps = window.bond) {
       return
     }
 
-    addMessageTo(messages.value, { id: uid(), role: 'user', text: trimmed, images: images?.length ? images : undefined })
+    const userMessageId = uid()
+    addMessageTo(messages.value, { id: userMessageId, role: 'user', text: trimmed, images: images?.length ? images : undefined })
+    const activityData: TurnActivityData = { turnId: uid(), userMessageId, status: 'working', startedAt: Date.now(), events: [] }
+    const activityMsg: Message & { role: 'meta'; kind: 'activity' } = { id: uid(), role: 'meta', kind: 'activity', data: activityData, ts: activityData.startedAt }
+    addMessageTo(messages.value, activityMsg)
+    activeActivityIds.set(sid, activityMsg.id)
 
     // Detect skill invocation: /skill-name [args]
     const skillMatch = trimmed.match(/^\/([a-z0-9-]+)(?:\s+(.*))?$/s)
@@ -649,8 +623,6 @@ export function useChat(deps: ChatDeps = window.bond) {
       addMessageTo(messages.value, { id: uid(), role: 'meta', kind: 'skill', name: skillMatch[1], args: skillMatch[2] })
     }
     markBusy(sid)
-    thinkingStartTimes.set(sid, Date.now())
-    addMessageTo(messages.value, { id: uid(), role: 'meta', kind: 'thinking', text: '', streaming: true })
 
     // Persist user message immediately — ensures it lands in DB before any crash
     await persistMessagesFor(sid)
@@ -674,29 +646,49 @@ export function useChat(deps: ChatDeps = window.bond) {
         const msgs = getMessagesFor(sid)
         addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text: res.error })
         markIdle(sid)
-        _clearActivity(sid)
-        finalizeThinkingOn(msgs, sid)
+        updateActivity(sid, data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: res.error! }) })
+        activeActivityIds.delete(sid)
         endStreamingOn(msgs)
         await persistMessagesFor(sid)
       }
     } catch {
       const msgs = getMessagesFor(sid)
       markIdle(sid)
-      _clearActivity(sid)
-      finalizeThinkingOn(msgs, sid)
+      updateActivity(sid, data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: 'Send failed' }) })
+      activeActivityIds.delete(sid)
       endStreamingOn(msgs)
       await persistMessagesFor(sid)
     }
   }
 
-  function respondToApproval(requestId: string, approved: boolean) {
-    const msg = messages.value.find(
-      (m) => m.role === 'meta' && m.kind === 'approval' && m.requestId === requestId
-    )
-    if (msg && msg.role === 'meta' && msg.kind === 'approval') {
-      msg.status = approved ? 'approved' : 'denied'
+  async function respondToApproval(requestId: string, approved: boolean) {
+    let match: { sessionId: string; message: Message & { role: 'meta'; kind: 'activity' }; event: Extract<TurnActivityEvent, { type: 'approval' }> } | undefined
+    const sources: Array<[string, Message[]]> = [
+      ...(currentSessionId.value ? [[currentSessionId.value, messages.value] as [string, Message[]]] : []),
+      ...backgroundMessages.entries(),
+    ]
+    for (const [sessionId, sessionMessages] of sources) {
+      for (const m of sessionMessages) {
+        if (m.role !== 'meta' || m.kind !== 'activity') continue
+        const evt = m.data.events.find((e): e is Extract<TurnActivityEvent, { type: 'approval' }> => e.type === 'approval' && e.requestId === requestId)
+        if (evt) match = { sessionId, message: m, event: evt }
+      }
     }
-    deps.respondToApproval(requestId, approved)
+    if (!match) return
+
+    try {
+      const result = await deps.respondToApproval(requestId, approved)
+      if (!result.ok) return
+    } catch {
+      return
+    }
+
+    match.event.status = approved ? 'approved' : 'denied'
+    match.event.endTs = Date.now()
+    const stillPending = match.message.data.events.some(e => e.type === 'approval' && e.status === 'pending')
+    if (match.message.data.status === 'awaiting_approval' && !stillPending) match.message.data.status = 'working'
+    activityRevision.value++
+    persistMessagesFor(match.sessionId)
   }
 
   function removeQueuedMessage(id: string) {
@@ -709,18 +701,17 @@ export function useChat(deps: ChatDeps = window.bond) {
       // Clear queued messages for this session
       queuedMessages.value = queuedMessages.value.filter(m => m.sessionId !== sid)
       markIdle(sid)
-      _finalizeThinkingEvent(sid)
-      const events = _getEvents(sid)
-      if (events.length > 0) {
-        _setActivity(sid, { type: 'done', startedAt: _getStartedAt(sid), endedAt: Date.now() })
-      } else {
-        _clearActivity(sid)
-      }
-      _thinkingBufs.delete(sid)
+      updateActivity(sid, data => {
+        const endedAt = Date.now()
+        finalizeOpenActivityEvents(data, endedAt)
+        cancelPendingApprovals(data, endedAt)
+        data.status = 'cancelled'
+        data.endedAt = endedAt
+      })
+      activeActivityIds.delete(sid)
     }
     deps.cancel(sid ?? undefined).catch(() => {})
     if (sid) {
-      finalizeThinkingOn(messages.value, sid)
       endStreamingOn(messages.value)
       flushPersistFor(sid)
     }
@@ -832,9 +823,6 @@ export function useChat(deps: ChatDeps = window.bond) {
       data.busySessions = [...busySessions.value]
       data.sessionId = currentSessionId.value
       data.backgroundMessages = [...backgroundMessages.entries()]
-      data.activityMap = [..._activityMap.entries()]
-      data.thinkingBufs = [..._thinkingBufs.entries()]
-      data.eventsMap = [..._eventsMap.entries()]
       data.queuedMessages = queuedMessages.value
     })
   }
@@ -858,7 +846,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     messages,
     busy,
     busySessionIds: busySessions,
-    activity,
+    pendingApprovals,
     contextUsage,
     currentSessionId,
     queuedMessages,

@@ -10,10 +10,10 @@ describe('piEventToChunks', () => {
   })
 
   it('maps Pi tool lifecycle events to Bond chunks', () => {
-    expect(piEventToChunks({ type: 'tool_execution_start', toolName: 'read', args: { path: '/tmp/a.txt' } }))
-      .toEqual([{ kind: 'assistant_tool', name: 'read', summary: '/tmp/a.txt', input: { path: '/tmp/a.txt' } }])
+    expect(piEventToChunks({ type: 'tool_execution_start', toolName: 'read', toolCallId: 'call-1', args: { path: '/tmp/a.txt' } }))
+      .toEqual([{ kind: 'assistant_tool', name: 'read', summary: '/tmp/a.txt', input: { path: '/tmp/a.txt' }, toolUseId: 'call-1' }])
     expect(piEventToChunks({ type: 'tool_execution_end', toolName: 'read', toolCallId: 'call-1', result: 'contents', isError: false }))
-      .toEqual([{ kind: 'tool_result', toolName: 'read', toolUseId: 'call-1', output: 'contents' }])
+      .toEqual([{ kind: 'tool_result', toolName: 'read', toolUseId: 'call-1', output: 'contents', isError: false }])
   })
 
   it('maps retry status and ignores unrelated events', () => {

@@ -6,7 +6,7 @@ import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
 import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
-import type { ModelId, AttachedImage, Message } from './types/message'
+import type { ModelId, AttachedImage } from './types/message'
 import type { EditMode } from '../shared/session'
 import { PhSidebarSimple, PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
@@ -14,7 +14,7 @@ import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import MissionBriefing from './components/MissionBriefing.vue'
 import ChatInput from './components/ChatInput.vue'
-import ActivityBar from './components/ActivityBar.vue'
+import ApprovalPrompt from './components/ApprovalPrompt.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import MediaView from './components/MediaView.vue'
 import CollectionsView from './components/CollectionsView.vue'
@@ -44,7 +44,6 @@ async function loadWindowOpacity() {
   } catch { /* use CSS default */ }
 }
 const selectedModel = ref<ModelId>('balanced')
-const activityExpanded = ref(false)
 const mediaCount = ref(0)
 const fieldManualOpen = ref(false)
 
@@ -54,49 +53,6 @@ async function refreshMediaCount() {
     mediaCount.value = images.length
   } catch { /* ignore */ }
 }
-
-type DisplayItem =
-  | { type: 'message'; msg: Message }
-  | { type: 'activity-group'; id: string; toolCount: number }
-
-const displayItems = computed<DisplayItem[]>(() => {
-  const msgs = chat.messages.value
-  const result: DisplayItem[] = []
-  let i = 0
-
-  while (i < msgs.length) {
-    const msg = msgs[i]
-    if (msg.role === 'meta' && (msg.kind === 'tool' || msg.kind === 'thinking')) {
-      const start = i
-      let toolCount = 0
-      while (i < msgs.length) {
-        const m = msgs[i]
-        if (m.role === 'meta' && (m.kind === 'tool' || m.kind === 'thinking')) {
-          if (m.kind === 'tool') toolCount++
-          i++
-        } else {
-          break
-        }
-      }
-      if (i - start >= 3) {
-        result.push({
-          type: 'activity-group',
-          id: `group-${msgs[start].id}`,
-          toolCount,
-        })
-      } else {
-        for (let k = start; k < i; k++) {
-          result.push({ type: 'message', msg: msgs[k] })
-        }
-      }
-    } else {
-      result.push({ type: 'message', msg })
-      i++
-    }
-  }
-
-  return result
-})
 
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
@@ -235,6 +191,11 @@ async function handleSubmit(text: string, images: AttachedImage[]) {
 const currentEditMode = computed<EditMode>(() =>
   sessions.activeSession.value?.editMode ?? { type: 'full' }
 )
+
+function approvalContext(sessionId: string): string | undefined {
+  if (sessionId === sessions.activeSessionId.value) return undefined
+  return sessions.sessions.value.find(session => session.id === sessionId)?.title ?? 'Background chat'
+}
 
 function handleModelChange(model: ModelId) {
   selectedModel.value = model
@@ -483,19 +444,12 @@ onUnmounted(() => {
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
           <MissionBriefing v-if="chat.messages.value.length === 0" />
           <template v-else>
-            <template v-for="item in displayItems" :key="item.type === 'message' ? item.msg.id : item.id">
-              <span
-                v-if="item.type === 'activity-group'"
-                class="activity-group-summary"
-                @click="activityExpanded = true"
-              >Used {{ item.toolCount }} {{ item.toolCount === 1 ? 'tool' : 'tools' }}</span>
-              <MessageBubble
-                v-else
-                :msg="item.msg"
-                @approve="chat.respondToApproval"
-                @openActivity="activityExpanded = true"
-              />
-            </template>
+            <MessageBubble
+              v-for="msg in chat.messages.value"
+              :key="msg.id"
+              :msg="msg"
+              @approve="chat.respondToApproval"
+            />
           </template>
         </div>
 
@@ -517,8 +471,19 @@ onUnmounted(() => {
                 </button>
               </div>
             </TransitionGroup>
-            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :trimBottom="chat.activity.value.type !== 'idle'" :contextUsage="chat.contextUsage.value" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
-            <ActivityBar :activity="chat.activity.value" v-model:expanded="activityExpanded" />
+            <div v-if="chat.pendingApprovals.value.length" class="approval-stack">
+              <ApprovalPrompt
+                v-for="approval in chat.pendingApprovals.value"
+                :key="approval.requestId"
+                :requestId="approval.requestId"
+                :toolName="approval.toolName"
+                :input="approval.input"
+                :description="approval.description"
+                :context="approvalContext(approval.sessionId)"
+                @respond="chat.respondToApproval"
+              />
+            </div>
+            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :contextUsage="chat.contextUsage.value" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
           </div>
         </template>
       </ViewShell>
@@ -589,18 +554,11 @@ onUnmounted(() => {
   margin-inline: auto;
 }
 
-.activity-group-summary {
-  display: block;
-  text-align: center;
-  font-size: 11px;
-  color: var(--color-muted);
-  opacity: 0.55;
-  cursor: pointer;
-  padding: 2px 0;
-  transition: opacity var(--transition-fast);
-}
-.activity-group-summary:hover {
-  opacity: 0.85;
+.approval-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0;
 }
 
 .panel-toggle-active {

@@ -3,7 +3,9 @@ import { ref } from 'vue'
 import { PhCaretRight, PhGear, PhPlus, PhTrash } from '@phosphor-icons/vue'
 import BondToolbar from './BondToolbar.vue'
 import ChatInput from './ChatInput.vue'
+import ApprovalPrompt from './ApprovalPrompt.vue'
 import MessageBubble from './MessageBubble.vue'
+import TurnActivity from './TurnActivity.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
@@ -38,6 +40,10 @@ const sampleMessages: Record<string, Message> = {
   bond: { id: '2', role: 'bond', text: 'There are several ways to **center a div** in CSS:\n\n1. **Flexbox** — the modern go-to\n2. **Grid** — equally good\n3. **Margin auto** — for horizontal centering\n\n```css\n.parent {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n}\n```', streaming: false },
   bondStreaming: { id: '3', role: 'bond', text: 'Let me think about that...', streaming: true },
   tool: { id: '4', role: 'meta', kind: 'tool', name: 'read_file', summary: 'Read src/app.css' },
+  activity: { id: '7', role: 'meta', kind: 'activity', data: { turnId: 'turn-1', status: 'done', startedAt: Date.now() - 4200, endedAt: Date.now(), events: [
+    { id: 'e1', type: 'thinking', label: 'Thinking', ts: Date.now() - 4000, endTs: Date.now() - 2600, text: 'Need inspect the stylesheet before suggesting a fix.' },
+    { id: 'e2', type: 'tool', label: 'Read app.css', ts: Date.now() - 2400, endTs: Date.now() - 1000, toolName: 'Read', toolUseId: 'tool-1', input: { path: 'src/renderer/app.css' }, output: '.parent { display: flex; }' },
+  ] } },
   error: { id: '5', role: 'meta', kind: 'error', text: 'Connection lost. Please try again.' },
   system: { id: '6', role: 'meta', kind: 'system', text: 'Session started' },
 }
@@ -235,14 +241,44 @@ const components = [
     ],
   },
   {
+    name: 'ApprovalPrompt',
+    file: 'components/ApprovalPrompt.vue',
+    category: 'Composed',
+    description: 'Focused tool approval request stacked above the chat composer.',
+    props: [
+      { name: 'requestId', type: 'string', description: 'Approval request identifier' },
+      { name: 'toolName', type: 'string', description: 'Tool awaiting approval' },
+      { name: 'input', type: 'Record<string, unknown>', description: 'Command, path, or other tool input' },
+      { name: 'description', type: 'string', description: 'Optional explanation of the requested action' },
+      { name: 'context', type: 'string', description: 'Optional background session title' },
+    ],
+    events: [
+      { name: 'respond', payload: '(requestId: string, approved: boolean)', description: 'Allow or deny the request' },
+    ],
+  },
+  {
     name: 'MessageBubble',
     file: 'components/MessageBubble.vue',
     category: 'Composed',
-    description: 'Renders all message variants: user, bond, tool, error, system.',
+    description: 'Renders all message variants: user, bond, turn activity, approval, error, system.',
     props: [
       { name: 'msg', type: 'Message', description: 'Union type — role determines which variant renders' },
     ],
-    events: [],
+    events: [
+      { name: 'approve', payload: '(requestId: string, approved: boolean)', description: 'Emitted by activity approval controls' },
+    ],
+  },
+  {
+    name: 'TurnActivity',
+    file: 'components/TurnActivity.vue',
+    category: 'Composed',
+    description: 'Unified in-chat turn activity row with expandable chronological thinking/tool/approval/error details.',
+    props: [
+      { name: 'data', type: 'TurnActivityData', description: 'Persisted activity payload stored on the activity message data column' },
+    ],
+    events: [
+      { name: 'approve', payload: '(requestId: string, approved: boolean)', description: 'Approve or deny an approval event' },
+    ],
   },
   {
     name: 'MarkdownMessage',
@@ -569,6 +605,11 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
                   </div>
                 </template>
 
+                <!-- ApprovalPrompt -->
+                <template v-if="comp.name === 'ApprovalPrompt'">
+                  <ApprovalPrompt requestId="demo-approval" toolName="Bash" :input="{ command: 'npm run test:run' }" description="Run the complete test suite" @respond="() => {}" />
+                </template>
+
                 <!-- MessageBubble -->
                 <template v-if="comp.name === 'MessageBubble'">
                   <div class="dev-preview-messages">
@@ -578,6 +619,8 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
                     <MessageBubble :msg="sampleMessages.bond" />
                     <span class="dev-preview-label">bond (streaming)</span>
                     <MessageBubble :msg="sampleMessages.bondStreaming" />
+                    <span class="dev-preview-label">activity</span>
+                    <MessageBubble :msg="sampleMessages.activity" />
                     <span class="dev-preview-label">tool</span>
                     <MessageBubble :msg="sampleMessages.tool" />
                     <span class="dev-preview-label">error</span>
@@ -585,6 +628,11 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
                     <span class="dev-preview-label">system</span>
                     <MessageBubble :msg="sampleMessages.system" />
                   </div>
+                </template>
+
+                <!-- TurnActivity -->
+                <template v-if="comp.name === 'TurnActivity'">
+                  <TurnActivity v-if="sampleMessages.activity.role === 'meta' && sampleMessages.activity.kind === 'activity'" :data="sampleMessages.activity.data" @approve="() => {}" />
                 </template>
 
                 <!-- MarkdownMessage -->

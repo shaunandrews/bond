@@ -157,11 +157,11 @@ export function piEventToChunks(event: any): BondStreamChunk[] {
     }
   }
   if (event.type === 'tool_execution_start') {
-    return [{ kind: 'assistant_tool', name: event.toolName, summary: summarizeInput(event.args), input: event.args }]
+    return [{ kind: 'assistant_tool', name: event.toolName, summary: summarizeInput(event.args), input: event.args, toolUseId: event.toolCallId }]
   }
   if (event.type === 'tool_execution_end') {
     const output = typeof event.result === 'string' ? event.result : JSON.stringify(event.result)
-    return [{ kind: 'tool_result', toolName: event.toolName, toolUseId: event.toolCallId, output: output.slice(0, 4_000) }]
+    return [{ kind: 'tool_result', toolName: event.toolName, toolUseId: event.toolCallId, output: output.slice(0, 4_000), isError: !!event.isError }]
   }
   if (event.type === 'auto_retry_start') {
     return [{ kind: 'system', subtype: 'api_retry', text: event.errorMessage }]

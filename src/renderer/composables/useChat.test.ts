@@ -62,17 +62,17 @@ describe('useChat', () => {
       expect(chat.busy.value).toBe(false)
     })
 
-    it('adds thinking message during send and removes empty one on query_end', async () => {
+    it('adds an activity message during send and finalizes it on query_end', async () => {
       chat.currentSessionId.value = 'sess-1'
       chat.subscribe()
       const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
 
       await chat.submit('hello')
       expect(chat.messages.value).toHaveLength(2)
-      expect(chat.messages.value[1]).toMatchObject({ role: 'meta', kind: 'thinking', streaming: true })
+      expect(chat.messages.value[1]).toMatchObject({ role: 'meta', kind: 'activity' })
 
       handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-      expect(chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'thinking')).toBeUndefined()
+      expect(chat.messages.value[1]).toMatchObject({ role: 'meta', kind: 'activity', data: expect.objectContaining({ status: 'done' }) })
     })
 
     it('adds error message when send fails', async () => {
@@ -369,6 +369,18 @@ describe('useChat', () => {
       expect(savedMsgs.some(m => m.text === 'different message')).toBe(false)
     })
 
+    it('exposes approvals requested by a background session', async () => {
+      chat.currentSessionId.value = 'sess-1'
+      chat.subscribe()
+      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      await chat.submit('hello')
+      await chat.loadSession('sess-2')
+
+      handler({ kind: 'tool_approval', requestId: 'req-bg', toolName: 'Bash', input: { command: 'npm test' }, sessionId: 'sess-1' })
+
+      expect(chat.pendingApprovals.value).toMatchObject([{ requestId: 'req-bg', sessionId: 'sess-1' }])
+    })
+
     it('loadSession serializes overlapping calls (Fix 4)', async () => {
       chat.currentSessionId.value = 'sess-1'
       chat.subscribe()
@@ -425,8 +437,8 @@ describe('useChat', () => {
       const handler = getChunkHandler()
       handler({ kind: 'assistant_text', text: 'hi' })
 
-      expect(chat.messages.value).toHaveLength(1)
-      expect(chat.messages.value[0]).toMatchObject({ role: 'bond', text: 'hi', streaming: true })
+      expect(chat.messages.value).toHaveLength(2)
+      expect(chat.messages.value.find(m => m.role === 'bond')).toMatchObject({ role: 'bond', text: 'hi', streaming: true })
     })
 
     it('appends to existing streaming bond message', () => {
@@ -434,41 +446,106 @@ describe('useChat', () => {
       handler({ kind: 'assistant_text', text: 'hello' })
       handler({ kind: 'assistant_text', text: ' world' })
 
-      expect(chat.messages.value).toHaveLength(1)
-      expect(chat.messages.value[0]).toMatchObject({ role: 'bond', text: 'hello world' })
+      expect(chat.messages.value).toHaveLength(2)
+      expect(chat.messages.value.find(m => m.role === 'bond')).toMatchObject({ role: 'bond', text: 'hello world' })
     })
 
-    it('adds tool meta message', () => {
+    it('adds tool activity event', () => {
       const handler = getChunkHandler()
-      handler({ kind: 'assistant_tool', name: 'Read', summary: 'file.ts' })
+      handler({ kind: 'assistant_tool', name: 'Read', summary: 'file.ts', toolUseId: 'call-1' })
 
       expect(chat.messages.value).toHaveLength(1)
-      expect(chat.messages.value[0]).toMatchObject({ role: 'meta', kind: 'tool', name: 'Read' })
+      const activity = chat.messages.value[0]
+      expect(activity).toMatchObject({ role: 'meta', kind: 'activity' })
+      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({ type: 'tool', toolName: 'Read', toolUseId: 'call-1' })
+    })
+
+    it('matches tool results by id and auto-expands failed tools', () => {
+      const handler = getChunkHandler()
+      handler({ kind: 'assistant_tool', name: 'Read', toolUseId: 'call-1' })
+      handler({ kind: 'assistant_tool', name: 'Bash', toolUseId: 'call-2' })
+      handler({ kind: 'tool_result', toolName: 'Read', toolUseId: 'call-1', output: 'missing', isError: true })
+
+      const activity = chat.messages.value[0]
+      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({
+        type: 'tool', toolUseId: 'call-1', output: 'missing', failed: true,
+      })
+      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.expanded).toBe(true)
+    })
+
+    it('exposes pending approvals and records the decision', async () => {
+      const handler = getChunkHandler()
+      handler({ kind: 'tool_approval', requestId: 'req-1', toolName: 'Bash', input: { command: 'npm test' }, description: 'Run tests' })
+
+      expect(chat.pendingApprovals.value).toHaveLength(1)
+      await chat.respondToApproval('req-1', true)
+      expect(chat.pendingApprovals.value).toHaveLength(0)
+      expect(deps.respondToApproval).toHaveBeenCalledWith('req-1', true)
+    })
+
+    it('clears pending approvals when the turn ends', () => {
+      const handler = getChunkHandler()
+      handler({ kind: 'tool_approval', requestId: 'req-1', toolName: 'Bash', input: {} })
+      handler({ kind: 'query_end', succeeded: false })
+
+      expect(chat.pendingApprovals.value).toHaveLength(0)
+      const activity = chat.messages.value[0]
+      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({ status: 'cancelled' })
+    })
+
+    it('deduplicates replayed approval requests', () => {
+      const handler = getChunkHandler()
+      const approval = { kind: 'tool_approval', requestId: 'req-1', toolName: 'Bash', input: { command: 'npm test' } }
+      handler(approval)
+      handler(approval)
+
+      expect(chat.pendingApprovals.value).toHaveLength(1)
+      const activity = chat.messages.value[0]
+      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events).toHaveLength(1)
+    })
+
+    it('keeps approval pending when the response fails', async () => {
+      const handler = getChunkHandler()
+      handler({ kind: 'tool_approval', requestId: 'req-1', toolName: 'Bash', input: {} })
+      ;(deps.respondToApproval as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false })
+
+      await chat.respondToApproval('req-1', true)
+      expect(chat.pendingApprovals.value).toHaveLength(1)
     })
 
     it('adds error on result with errors', () => {
       const handler = getChunkHandler()
       handler({ kind: 'result', subtype: 'done', errors: ['bad', 'worse'] })
 
-      expect(chat.messages.value).toHaveLength(1)
-      expect(chat.messages.value[0]).toMatchObject({ role: 'meta', kind: 'error', text: 'bad; worse' })
+      expect(chat.messages.value).toHaveLength(2)
+      expect(chat.messages.value.find(m => m.role === 'meta' && m.kind === 'error')).toMatchObject({ role: 'meta', kind: 'error', text: 'bad; worse' })
+    })
+
+    it('finalizes assistant text when a result or raw error arrives', () => {
+      const handler = getChunkHandler()
+      handler({ kind: 'assistant_text', text: 'partial' })
+      const bond = chat.messages.value.find(m => m.role === 'bond')
+      handler({ kind: 'raw_error', message: 'oops' })
+
+      expect(bond).toMatchObject({ streaming: false })
     })
 
     it('marks streaming done on result', () => {
       const handler = getChunkHandler()
       handler({ kind: 'assistant_text', text: 'hi' })
-      expect(chat.messages.value[0]).toMatchObject({ streaming: true })
+      const bond = chat.messages.value.find(m => m.role === 'bond')
+      expect(bond).toMatchObject({ streaming: true })
 
       handler({ kind: 'result', subtype: 'done' })
-      expect(chat.messages.value[0]).toMatchObject({ streaming: false })
+      expect(bond).toMatchObject({ streaming: false })
     })
 
     it('adds error on raw_error', () => {
       const handler = getChunkHandler()
       handler({ kind: 'raw_error', message: 'oops' })
 
-      expect(chat.messages.value).toHaveLength(1)
-      expect(chat.messages.value[0]).toMatchObject({ role: 'meta', kind: 'error', text: 'oops' })
+      expect(chat.messages.value).toHaveLength(2)
+      expect(chat.messages.value.find(m => m.role === 'meta' && m.kind === 'error')).toMatchObject({ role: 'meta', kind: 'error', text: 'oops' })
     })
 
     it('adds system message', () => {
@@ -486,35 +563,24 @@ describe('useChat', () => {
       expect(chat.messages.value[0]).toMatchObject({ text: 'init' })
     })
 
-    it('removes empty thinking placeholder on non-thinking chunk', () => {
+    it('accumulates thinking text into an activity event', () => {
       const handler = getChunkHandler()
-      chat.messages.value.push({ id: '1', role: 'meta', kind: 'thinking', text: '', streaming: true } as any)
-      handler({ kind: 'assistant_text', text: 'hi' })
-
-      expect(chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'thinking')).toBeUndefined()
-      expect(chat.messages.value[chat.messages.value.length - 1]).toMatchObject({ role: 'bond', text: 'hi' })
-    })
-
-    it('accumulates thinking text into a thinking message', () => {
-      const handler = getChunkHandler()
-      chat.messages.value.push({ id: '1', role: 'meta', kind: 'thinking', text: '', streaming: true } as any)
       handler({ kind: 'thinking_text', text: 'Let me ' })
       handler({ kind: 'thinking_text', text: 'think...' })
 
-      const thinking = chat.messages.value[chat.messages.value.length - 1]
-      expect(thinking).toMatchObject({
-        role: 'meta', kind: 'thinking', text: 'Let me think...', streaming: true
+      const activity = chat.messages.value[0]
+      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({
+        type: 'thinking', text: 'Let me think...'
       })
     })
 
-    it('finalizes thinking message when assistant text arrives', () => {
+    it('finalizes thinking event when assistant text arrives', () => {
       const handler = getChunkHandler()
-      chat.messages.value.push({ id: '1', role: 'meta', kind: 'thinking', text: '', streaming: true } as any)
       handler({ kind: 'thinking_text', text: 'reasoning' })
       handler({ kind: 'assistant_text', text: 'hi' })
 
-      const thinking = chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'thinking')
-      expect(thinking).toMatchObject({ role: 'meta', kind: 'thinking', streaming: false, text: 'reasoning' })
+      const activity = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
+      expect(activity && activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({ type: 'thinking', text: 'reasoning', endTs: expect.any(Number) })
       expect(chat.messages.value[chat.messages.value.length - 1]).toMatchObject({ role: 'bond', text: 'hi' })
     })
   })
