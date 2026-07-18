@@ -7,6 +7,8 @@ import type { Message } from '../types/message'
 import type { TurnActivityData, TurnActivityEvent } from '../types/activity'
 
 const TRANSCRIPT_PAGE_SIZE = 80
+const TRANSCRIPT_BACKUP_KEY = 'bond:transcript-tail-backup'
+const TRANSCRIPT_BACKUP_LIMIT = 100
 
 export interface QueuedMessage {
   id: string
@@ -38,15 +40,29 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+/** Electron IPC cannot clone Vue reactive proxies. Build plain JSON payloads. */
+function plainJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function plainImages(images?: AttachedImage[]): AttachedImage[] | undefined {
+  return images?.map(image => ({ data: image.data, mediaType: image.mediaType }))
+}
+
+function plainEditMode(mode: EditMode): EditMode {
+  if (mode.type === 'scoped') return { type: 'scoped', allowedPaths: [...mode.allowedPaths] }
+  return { type: mode.type }
+}
+
 function toTranscriptMessage(m: Message): TranscriptMessage {
   const base = { id: m.id, role: m.role === 'bond' ? 'bond' as const : m.role, createdAt: m.ts ? new Date(m.ts).toISOString() : undefined, updatedAt: nowIso() }
-  if (m.role === 'user') return { ...base, role: 'user', text: m.text, images: m.images, imageIds: m.imageIds }
+  if (m.role === 'user') return { ...base, role: 'user', text: m.text, images: plainImages(m.images), imageIds: m.imageIds ? [...m.imageIds] : undefined }
   if (m.role === 'bond') return { ...base, role: 'bond', text: m.text }
-  if (m.kind === 'activity') return { ...base, role: 'meta', kind: 'activity', data: m.data as unknown as Record<string, unknown> }
+  if (m.kind === 'activity') return { ...base, role: 'meta', kind: 'activity', data: plainJson(m.data) as unknown as Record<string, unknown> }
   if (m.kind === 'tool') return { ...base, role: 'meta', kind: 'tool', text: m.summary ?? null, data: { name: m.name, summary: m.summary } }
   if (m.kind === 'skill') return { ...base, role: 'meta', kind: 'skill', text: m.args ?? null, data: { name: m.name, args: m.args } }
   if (m.kind === 'thinking') return { ...base, role: 'meta', kind: 'thinking', text: m.text, data: { durationSec: m.durationSec } }
-  if (m.kind === 'approval') return { ...base, role: 'meta', kind: 'approval', text: m.description ?? null, data: m as unknown as Record<string, unknown> }
+  if (m.kind === 'approval') return { ...base, role: 'meta', kind: 'approval', text: m.description ?? null, data: plainJson(m) as unknown as Record<string, unknown> }
   if (m.kind === 'error') return { ...base, role: 'meta', kind: 'error', text: m.text }
   return { ...base, role: 'meta', kind: 'system', text: m.text }
 }
@@ -385,7 +401,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     busy.value = true
 
     try {
-      const input: BondSendInput = { text: trimmed, images, turnId, userMessageId, assistantMessageId, activityMessageId, editMode: editMode.value }
+      const input: BondSendInput = { text: trimmed, images: plainImages(images), turnId, userMessageId, assistantMessageId, activityMessageId, editMode: plainEditMode(editMode.value) }
       const res = await deps.send(input)
       if (res.ok && res.imageIds?.length) {
         for (let i = messages.value.length - 1; i >= 0; i--) {
@@ -456,25 +472,31 @@ export function useChat(deps: ChatDeps = window.bond) {
   function stashToLocalStorage() {
     if (!messages.value.length) return
     try {
-      localStorage.setItem('bond:transcript-backup', JSON.stringify(messages.value.map(toTranscriptMessage)))
+      const tail = messages.value.slice(-TRANSCRIPT_BACKUP_LIMIT).map(toTranscriptMessage)
+      localStorage.setItem(TRANSCRIPT_BACKUP_KEY, JSON.stringify(tail))
+      localStorage.removeItem('bond:transcript-backup')
       localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
     } catch { /* best effort */ }
   }
 
   async function restoreFromBackupIfNeeded(): Promise<boolean> {
     try {
-      const raw = localStorage.getItem('bond:transcript-backup')
+      const raw = localStorage.getItem(TRANSCRIPT_BACKUP_KEY) ?? localStorage.getItem('bond:transcript-backup')
       if (!raw) return false
-      const backed = JSON.parse(raw) as TranscriptMessage[]
-      const dbPage = await deps.listTranscript({ limit: Math.max(backed.length, TRANSCRIPT_PAGE_SIZE) })
-      const textLen = (msgs: TranscriptMessage[]) => msgs.reduce((sum, m) => sum + (m.text?.length ?? 0), 0)
-      if (backed.length > dbPage.messages.length || textLen(backed) > textLen(dbPage.messages) + 50) {
+      const backed = (JSON.parse(raw) as TranscriptMessage[]).slice(-TRANSCRIPT_BACKUP_LIMIT)
+      const dbPage = await deps.listTranscript({ limit: TRANSCRIPT_PAGE_SIZE })
+      // SQLite is canonical. The stash is only emergency recovery for a
+      // completely empty store; merging it into non-empty history resurrects
+      // deleted or superseded transcript rows.
+      if (dbPage.messages.length === 0 && backed.length > 0) {
         await deps.upsertTranscript(backed)
-        localStorage.removeItem('bond:transcript-backup')
         return true
       }
-      localStorage.removeItem('bond:transcript-backup')
     } catch { /* corrupt backup — ignore */ }
+    finally {
+      localStorage.removeItem(TRANSCRIPT_BACKUP_KEY)
+      localStorage.removeItem('bond:transcript-backup')
+    }
     return false
   }
 

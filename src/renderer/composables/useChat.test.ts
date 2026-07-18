@@ -114,10 +114,17 @@ describe('useChat continuous transcript', () => {
     expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[1][0]).toMatchObject({ text: 'second' })
   })
 
-  it('sends the selected edit mode with continuous turns', async () => {
-    chat.setEditMode({ type: 'readonly' })
-    await chat.submit('read only')
+  it('sends IPC-cloneable payloads instead of Vue reactive proxies', async () => {
+    ;(deps.send as ReturnType<typeof vi.fn>).mockImplementation(async input => {
+      expect(() => structuredClone(input)).not.toThrow()
+      return { ok: true }
+    })
+    chat.setEditMode({ type: 'scoped', allowedPaths: ['/tmp/project'] })
+    await chat.submit('scoped work', [{ data: 'abc', mediaType: 'image/png' }])
 
-    expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ editMode: { type: 'readonly' } })
+    expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      editMode: { type: 'scoped', allowedPaths: ['/tmp/project'] },
+      images: [{ data: 'abc', mediaType: 'image/png' }],
+    })
   })
 })
