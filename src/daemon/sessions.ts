@@ -86,6 +86,21 @@ export function createSession(options?: { title?: string }): Session {
   return { id, title, summary: '', archived: false, favorited: false, editMode: DEFAULT_EDIT_MODE, createdAt: now, updatedAt: now }
 }
 
+/** Stable owner for images attached to the continuous transcript (which has no per-session id). */
+export const GLOBAL_TRANSCRIPT_SESSION_ID = 'global-transcript'
+
+/**
+ * The continuous transcript is not a per-session chat, but `images.session_id`
+ * is still a NOT NULL foreign key onto `sessions(id)`. Ensure a stable owner row
+ * exists so attaching an image to the transcript can't violate that constraint.
+ */
+export function ensureGlobalTranscriptSession(): void {
+  const now = new Date().toISOString()
+  getDb().prepare(
+    "INSERT OR IGNORE INTO sessions (id, title, summary, archived, created_at, updated_at) VALUES (?, 'Continuous transcript', '', 0, ?, ?)"
+  ).run(GLOBAL_TRANSCRIPT_SESSION_ID, now, now)
+}
+
 export function getSession(id: string): Session | null {
   const db = getDb()
   const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id)

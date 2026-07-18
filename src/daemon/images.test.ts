@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { setDataDir } from './paths'
 import { getDb, closeDb } from './db'
 import { saveImage, saveImages, getImage, getImages, getImagePath, getImagePaths, deleteSessionImages, getImagesDir } from './images'
+import { GLOBAL_TRANSCRIPT_SESSION_ID, ensureGlobalTranscriptSession } from './sessions'
 
 let testDir: string
 
@@ -173,6 +174,32 @@ describe('images module', () => {
       deleteSessionImages('s1')
 
       expect(getImage(s2Ids[0])).not.toBeNull()
+    })
+  })
+
+  // Regression: the continuous-transcript cutover attached images to a phantom
+  // 'global-transcript' session that never existed, so every image send failed
+  // with a FOREIGN KEY constraint violation.
+  describe('continuous transcript image owner', () => {
+    it('rejects saving to the global transcript before its owner session exists', () => {
+      expect(() => saveImages(GLOBAL_TRANSCRIPT_SESSION_ID, [{ data: TINY_PNG, mediaType: 'image/png' }])).toThrow(/FOREIGN KEY/)
+    })
+
+    it('saves transcript images once the owner session is ensured', () => {
+      ensureGlobalTranscriptSession()
+      const ids = saveImages(GLOBAL_TRANSCRIPT_SESSION_ID, [{ data: TINY_PNG, mediaType: 'image/png' }])
+
+      expect(ids).toHaveLength(1)
+      const row = getDb().prepare('SELECT session_id FROM images WHERE id = ?').get(ids[0]) as { session_id: string }
+      expect(row.session_id).toBe(GLOBAL_TRANSCRIPT_SESSION_ID)
+    })
+
+    it('is idempotent', () => {
+      ensureGlobalTranscriptSession()
+      ensureGlobalTranscriptSession()
+
+      const count = getDb().prepare('SELECT COUNT(*) as n FROM sessions WHERE id = ?').get(GLOBAL_TRANSCRIPT_SESSION_ID) as { n: number }
+      expect(count.n).toBe(1)
     })
   })
 })

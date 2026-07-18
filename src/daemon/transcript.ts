@@ -359,6 +359,11 @@ export function listMessages(options: { beforeSeq?: number; limit?: number } = {
   return { messages, nextBeforeSeq }
 }
 
+export function getMaxMessageSeq(db: Database.Database = getDb()): number {
+  ensureTranscriptSchema(db)
+  return (db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM messages').get() as { seq: number }).seq
+}
+
 export function getMessagesForRange(fromSeq: number, toSeq: number): TranscriptMessage[] {
   const db = getDb()
   ensureTranscriptSchema(db)
