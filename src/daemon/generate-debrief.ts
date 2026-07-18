@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { runBondTextQuery } from './agent'
 import type { SessionMessage } from '../shared/session'
 import type { SessionDebrief } from '../shared/sense'
 import { getMessages, getSession } from './sessions'
@@ -188,34 +188,10 @@ interface ParsedDebrief {
 
 async function callSonnet(prompt: string): Promise<ParsedDebrief | null> {
   try {
-    const q = query({
-      prompt,
-      options: {
-        model: 'sonnet',
-        allowedTools: [],
-        systemPrompt: 'You analyze conversations and produce structured JSON debriefs. Reply with only valid JSON.',
-        maxTurns: 1,
-        env: {
-          ...process.env,
-          CLAUDE_AGENT_SDK_CLIENT_APP: 'bond-electron/0.1.0'
-        } as Record<string, string | undefined>
-      } as any
-    })
-
-    let resultText = ''
-    const timeout = new Promise<void>((_, reject) =>
+    const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('debrief timeout')), 30000)
     )
-
-    const collect = (async () => {
-      for await (const message of q) {
-        if (message.type === 'result' && message.subtype === 'success') {
-          resultText = typeof message.result === 'string' ? message.result : ''
-        }
-      }
-    })()
-
-    await Promise.race([collect, timeout])
+    const resultText = await Promise.race([runBondTextQuery(prompt, 'sonnet'), timeout])
 
     if (!resultText) return null
 
@@ -233,7 +209,7 @@ async function callSonnet(prompt: string): Promise<ParsedDebrief | null> {
 
     return parsed as ParsedDebrief
   } catch (err: any) {
-    console.warn('[bond] debrief Sonnet call failed:', err.message)
+    console.warn('[bond] debrief Pi call failed:', err.message)
     return null
   }
 }

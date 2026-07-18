@@ -100,7 +100,6 @@ import {
 
 const activeQueries = new Map<string, { ac: AbortController; promise: Promise<boolean> }>()
 let currentModel: string = 'sonnet'
-const knownSdkSessions = new Set<string>()
 let serverWss: WebSocketServer | null = null
 
 // Track which clients are subscribed to which sessions
@@ -303,67 +302,22 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const cleanText = text ? text.replace(/@\[([^\]]+)\]\(project:[a-f0-9-]+\)/g, '@$1') : text
 
         const ac = new AbortController()
-        let shouldResume = knownSdkSessions.has(sessionId)
-
-        // Retry loop for startup failures only (runBondQuery throws when chunkCount === 0).
-        // Mid-stream crashes return false with raw_error already broadcast — no auto-retry.
-        const queryPromise = (async () => {
-          let succeeded = false
-
-          for (let attempt = 0; attempt < 3; attempt++) {
-            try {
-              succeeded = await runBondQuery(cleanText ?? '', {
-                abortSignal: ac.signal,
-                onChunk: (chunk) => broadcastChunk(sessionId, chunk),
-                model: currentModel,
-                sessionId,
-                resumeSession: shouldResume,
-                imageIds,
-                editMode: session.editMode,
-              })
-              break // Query ran (success or graceful failure) — stop retrying
-            } catch (e) {
-              if (ac.signal.aborted) return false
-
-              const errorMsg = e instanceof Error ? e.message : String(e)
-              const isAlreadyInUse = errorMsg.includes('already in use')
-
-              if (attempt === 2) {
-                // Final attempt — broadcast error to user
-                broadcastChunk(sessionId, { kind: 'raw_error', message: errorMsg })
-                return false
-              }
-
-              if (shouldResume && !isAlreadyInUse) {
-                // Resume failed for a non-collision reason — switch to fresh
-                console.warn('[bond] resume failed, will retry fresh:', sessionId)
-                knownSdkSessions.delete(sessionId)
-                shouldResume = false
-              } else if (!shouldResume && isAlreadyInUse) {
-                // Fresh start rejected — SDK already has this session on disk. Switch to resume.
-                console.warn('[bond] session exists in SDK, will retry with resume:', sessionId)
-                shouldResume = true
-              } else {
-                // Other startup failure — retry same strategy after a delay
-                console.warn('[bond] startup failure, retrying after delay:', sessionId)
-                await new Promise(r => setTimeout(r, 500))
-              }
-            }
-          }
-
-          return succeeded
-        })()
+        // Pi JSONL files are opened deterministically by session ID. There is no
+        // subprocess collision/retry dance: one active query per Bond session.
+        const queryPromise = runBondQuery(cleanText ?? '', {
+          abortSignal: ac.signal,
+          onChunk: (chunk) => broadcastChunk(sessionId, chunk),
+          model: currentModel,
+          sessionId,
+          imageIds,
+          editMode: session.editMode,
+        })
 
         activeQueries.set(sessionId, { ac, promise: queryPromise })
         broadcastChunk(sessionId, { kind: 'query_start' })
 
         // Fire-and-forget: clean up when the query finishes, don't block the RPC response
         queryPromise.then((succeeded) => {
-          if (succeeded) {
-            knownSdkSessions.add(sessionId)
-          } else {
-            knownSdkSessions.delete(sessionId)
-          }
           activeQueries.delete(sessionId)
           // Clear pending approvals — they're no longer actionable after query ends
           pendingApprovalChunks.delete(sessionId)
@@ -1048,7 +1002,6 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
         clearSessionApprovals(sid)
       }
       activeQueries.clear()
-      knownSdkSessions.clear()
 
       // Clean up sense controller
       if (senseController) {

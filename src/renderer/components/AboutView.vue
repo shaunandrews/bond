@@ -17,26 +17,23 @@ const layers = [
   {
     name: 'Daemon',
     tech: 'Node.js + WebSocket + SQLite',
-    description: 'Standalone process on a Unix socket. Runs agent queries via the Claude Agent SDK, streams responses, persists sessions, and runs the Sense ambient awareness pipeline (screen capture, OCR, indexing).',
+    description: 'Standalone process on a Unix socket. Runs Pi agent sessions, streams responses, persists Pi JSONL transcripts, and runs the Sense ambient awareness pipeline (screen capture, OCR, indexing).',
     files: 'src/daemon/',
   },
   {
-    name: 'Claude API',
-    tech: 'Claude Agent SDK',
-    description: 'Queries are dispatched through @anthropic-ai/claude-agent-sdk. Authenticates via your existing Claude Code CLI session.',
-    files: 'src/daemon/agent.ts',
+    name: 'Pi Runtime',
+    tech: 'Pi SDK',
+    description: 'Queries run through @earendil-works/pi-coding-agent. Provider credentials and model availability are managed by Pi.',
+    files: 'src/daemon/pi/',
   },
 ]
 
 const tools = [
-  { name: 'Read', description: 'Read file contents' },
-  { name: 'Glob', description: 'Find files by pattern' },
-  { name: 'Grep', description: 'Search file contents' },
-  { name: 'Edit', description: 'Modify existing files' },
-  { name: 'Write', description: 'Create new files' },
-  { name: 'Bash', description: 'Run shell commands' },
-  { name: 'WebSearch', description: 'Search the web' },
-  { name: 'WebFetch', description: 'Fetch a URL' },
+  { name: 'read', description: 'Read file contents' },
+  { name: 'find / grep / ls', description: 'Find and search files' },
+  { name: 'edit', description: 'Modify existing files' },
+  { name: 'write', description: 'Create new files' },
+  { name: 'bash', description: 'Run shell commands' },
 ]
 
 const editModes = [
@@ -51,6 +48,7 @@ const dataPaths = [
   { path: '~/.bond/daemon.log', purpose: 'Daemon output log' },
   { path: '~/Library/Application Support/bond/bond.db', purpose: 'SQLite database (sessions, messages, settings, sense captures)' },
   { path: '~/Library/Application Support/bond/sense/stills/', purpose: 'Sense screenshot JPEGs organized by date' },
+  { path: '~/Library/Application Support/bond/pi/sessions/', purpose: 'Pi JSONL agent transcripts' },
 ]
 </script>
 
@@ -59,7 +57,7 @@ const dataPaths = [
     <!-- Hero -->
     <section class="about-hero">
       <div class="hero-mark">B</div>
-      <p class="hero-tagline">A macOS assistant powered by Claude.</p>
+      <p class="hero-tagline">A macOS assistant powered by Pi.</p>
       <p class="hero-version">Version {{ version }}</p>
     </section>
 
@@ -67,7 +65,7 @@ const dataPaths = [
     <section class="about-section">
       <h2 class="section-title">Architecture</h2>
       <p class="section-intro">
-        Bond separates concerns across four layers. The renderer never touches the Agent SDK directly — all queries flow through a standalone daemon over a Unix socket.
+        Bond separates concerns across four layers. The renderer never touches Pi directly — all queries flow through a standalone daemon over a Unix socket.
       </p>
 
       <div class="arch-stack">
@@ -117,7 +115,7 @@ const dataPaths = [
     <section class="about-section">
       <h2 class="section-title">Data &amp; Storage</h2>
       <p class="section-intro">
-        All data stays on your machine. Sessions and settings are stored in a local SQLite database. The daemon communicates over a Unix domain socket — nothing leaves your network except API calls to Claude.
+        All data stays on your machine. Bond metadata stays in SQLite and agent transcripts live in local Pi JSONL files. The daemon communicates over a Unix domain socket — nothing leaves your network except calls to your configured model provider.
       </p>
       <div class="data-table">
         <div v-for="item in dataPaths" :key="item.path" class="data-row">

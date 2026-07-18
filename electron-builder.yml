@@ -26,7 +26,7 @@ npmRebuild: false
 asar: true
 
 # Daemon runs as a separate system Node process, so it lives outside the ASAR.
-# Its external deps (better-sqlite3, claude-agent-sdk) go alongside it.
+# Pi is bundled into its entrypoint; only native better-sqlite3 ships beside it.
 extraResources:
   # Daemon bundle
   - from: out/daemon
@@ -39,16 +39,6 @@ extraResources:
     to: daemon/bin/sense
     filter:
       - "**/*"
-
-  # @anthropic-ai/claude-agent-sdk (sdk.mjs + cli.js are self-contained bundles)
-  - from: node_modules/@anthropic-ai/claude-agent-sdk
-    to: daemon/node_modules/@anthropic-ai/claude-agent-sdk
-    filter:
-      - package.json
-      - sdk.mjs
-      - cli.js
-      - vendor/ripgrep/arm64-darwin/**
-      - vendor/audio-capture/arm64-darwin/**
 
   # better-sqlite3 (native addon)
   - from: node_modules/better-sqlite3
@@ -69,33 +59,6 @@ extraResources:
     filter:
       - "**/*"
       - "!test/**"
-
-  # ajv runtime files (required by sdk.mjs and cli.js via createRequire)
-  - from: node_modules/ajv
-    to: daemon/node_modules/ajv
-    filter:
-      - package.json
-      - "dist/runtime/**"
-  - from: node_modules/ajv-formats
-    to: daemon/node_modules/ajv-formats
-    filter:
-      - package.json
-      - dist/formats.js
-      - dist/formats.js.map
-
-  # ajv transitive deps
-  - from: node_modules/fast-deep-equal
-    to: daemon/node_modules/fast-deep-equal
-    filter:
-      - "**/*"
-      - "!benchmark/**"
-      - "!spec/**"
-  - from: node_modules/fast-uri
-    to: daemon/node_modules/fast-uri
-    filter:
-      - "**/*"
-      - "!test/**"
-      - "!benchmark/**"
 
 files:
   - "!src/**"

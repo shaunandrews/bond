@@ -1,6 +1,6 @@
 export { setDataDir, getDataDir } from './paths'
 export { closeDb } from './db'
-export { runBondQuery, resolvePendingApproval, clearSessionApprovals, bondMessageToChunks } from './agent'
+export { runBondQuery, resolvePendingApproval, clearSessionApprovals } from './agent'
 export type { BondStreamChunk } from './agent'
 export {
   listSessions,

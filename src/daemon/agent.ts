@@ -1,18 +1,12 @@
-import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { resolve, normalize } from 'node:path'
-import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { BondStreamChunk } from '../shared/stream'
 import type { EditMode } from '../shared/session'
 import { getSoul, getSetting } from './settings'
-import { getImagePaths } from './images'
-import { getSkillsDir } from './paths'
 import { scanSkills, type SkillInfo } from './skills'
 import { listCollections, countItems } from './collections'
 import { getDb } from './db'
 import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
 import { listDebriefs } from './debriefs'
+import { runPiBondQuery, resolvePiPendingApproval, clearPiSessionApprovals, runPiTextPrompt } from './pi/runtime'
 
 export function getCachedSkills(): SkillInfo[] {
   return scanSkills()
@@ -21,12 +15,12 @@ export function getCachedSkills(): SkillInfo[] {
 const BOND_BASE_PROMPT =
   'You are Bond, a standalone desktop assistant app for Mac. ' +
   'Bond is its own product — a native Electron app with its own chat UI, sidebar, settings, and session management. ' +
-  'You are NOT Claude, Claude Code, or the Claude website. You are powered by Claude (an AI model by Anthropic), but your identity is Bond. ' +
+  'You are not a provider-branded chatbot. Your identity is Bond; models are supplied through Pi. ' +
   'Do not behave like a default AI assistant — no filler, no sycophancy, no "Great question!" preambles, no hedging with unnecessary caveats. You have a personality; use it.\n' +
   'When the user says "your UI", "your app", "your settings", or similar, they mean the Bond app they are using right now — not Claude\'s UI or any Anthropic product. ' +
   'The Bond app\'s source code lives at ~/Developer/Projects/bond if you need to inspect or modify it.\n\n' +
-  'You can read files with Read, search with Glob and Grep, edit files with Edit and Write, and run shell commands with Bash. ' +
-  'You can search the web with WebSearch and fetch page content with WebFetch. ' +
+  'You can read files with read, search with grep/find/ls, edit files with edit/write, and run shell commands with bash. ' +
+  'Use the available local tools rather than claiming access to web search when none is configured. ' +
   'Write operations require user approval before they execute. Stay concise. ' +
   'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.\n\n' +
   'Skills extend your capabilities. They live in ~/.bond/skills/<name>/SKILL.md. ' +
@@ -190,10 +184,10 @@ function buildRecentDebriefContext(): string {
 
 function buildEditModeSuffix(editMode: EditMode): string {
   if (editMode.type === 'readonly') {
-    return '\n\nThis session is in READ-ONLY mode. You can only use Read, Glob, Grep, WebSearch, and WebFetch. You cannot edit files, write files, or run shell commands.'
+    return '\n\nThis session is in READ-ONLY mode. You can only use read, grep, find, and ls. You cannot edit files, write files, or run shell commands.'
   }
   if (editMode.type === 'scoped') {
-    return `\n\nThis session is in SCOPED WRITE mode. Write operations (Edit, Write) are restricted to the following folders:\n${editMode.allowedPaths.map(p => `- ${p}`).join('\n')}\nBash commands still require user approval. Do not attempt to write to files outside these folders.`
+    return `\n\nThis session is in SCOPED WRITE mode. Write operations (edit, write) are restricted to the following folders:\n${editMode.allowedPaths.map(p => `- ${p}`).join('\n')}\nbash commands still require user approval. Do not attempt to write to files outside these folders.`
   }
   return ''
 }
@@ -226,179 +220,15 @@ export function refreshSkillsCache(): SkillInfo[] {
   return scanSkills()
 }
 
-/**
- * Load MCP server configs from ~/.claude.json (same format Claude Code uses).
- * Returns a record suitable for the SDK's mcpServers option.
- */
-function loadMcpServers(): Record<string, unknown> | undefined {
-  try {
-    const raw = readFileSync(resolve(homedir(), '.claude.json'), 'utf-8')
-    const cfg = JSON.parse(raw)
-    const servers = cfg?.mcpServers
-    if (!servers || typeof servers !== 'object' || Object.keys(servers).length === 0) return undefined
-    console.log('[bond] loaded MCP servers:', Object.keys(servers).join(', '))
-    return servers
-  } catch {
-    return undefined
-  }
-}
+export type { BondStreamChunk }
 
-const WRITE_TOOLS = new Set(['Edit', 'Write', 'Bash'])
-const READ_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch']
-const ALL_TOOLS = [...READ_TOOLS, 'Edit', 'Write', 'Bash']
-
-function extractTargetPath(input: Record<string, unknown>): string | null {
-  if (typeof input.file_path === 'string') return resolve(input.file_path)
-  return null
-}
-
-function isWithinAllowedPaths(targetPath: string, allowedPaths: string[]): boolean {
-  const target = normalize(targetPath)
-  return allowedPaths.some(allowed => {
-    const norm = normalize(resolve(allowed.replace(/^~/, homedir())))
-    return target === norm || target.startsWith(norm + '/')
-  })
-}
-
-type AllowResult = { behavior: 'allow'; updatedInput?: Record<string, unknown> }
-type DenyResult = { behavior: 'deny'; message: string }
-type ApprovalResolve = (result: AllowResult | DenyResult) => void
-const pendingApprovals = new Map<string, { resolve: ApprovalResolve; sessionId: string }>()
-
+/** Pi owns execution and JSONL persistence; Bond owns prompt composition and UI chunks. */
 export function resolvePendingApproval(requestId: string, approved: boolean, input?: Record<string, unknown>): void {
-  const entry = pendingApprovals.get(requestId)
-  if (!entry) return
-  pendingApprovals.delete(requestId)
-  entry.resolve(approved ? { behavior: 'allow', ...(input ? { updatedInput: input } : {}) } : { behavior: 'deny', message: 'User denied this action' })
+  resolvePiPendingApproval(requestId, approved, input)
 }
 
 export function clearSessionApprovals(sessionId: string): void {
-  for (const [id, entry] of pendingApprovals) {
-    if (entry.sessionId === sessionId) {
-      entry.resolve({ behavior: 'deny', message: 'Request cancelled' })
-      pendingApprovals.delete(id)
-    }
-  }
-}
-
-export type { BondStreamChunk }
-
-function summarizeToolInput(input: Record<string, unknown>): string | undefined {
-  try {
-    const path = input.file_path ?? input.path ?? input.pattern
-    if (typeof path === 'string') return path
-    return JSON.stringify(input).slice(0, 200)
-  } catch {
-    return undefined
-  }
-}
-
-function* flattenToolBlocks(msg: SDKMessage): Generator<BondStreamChunk> {
-  if (msg.type !== 'assistant' || !msg.message?.content) return
-  for (const block of msg.message.content) {
-    if (block.type === 'tool_use' && 'name' in block) {
-      const name = String(block.name)
-      const input =
-        'input' in block && block.input && typeof block.input === 'object'
-          ? (block.input as Record<string, unknown>)
-          : {}
-      yield { kind: 'assistant_tool', name, summary: summarizeToolInput(input), input }
-    }
-  }
-}
-
-function extractToolResultText(message: { message?: { content?: unknown[] } }): string | undefined {
-  const content = message?.message?.content
-  if (!Array.isArray(content)) return undefined
-  const parts: string[] = []
-  for (const block of content) {
-    if (typeof block === 'string') { parts.push(block); continue }
-    if (block && typeof block === 'object') {
-      if ('type' in block && block.type === 'tool_result' && 'content' in block) {
-        const c = block.content
-        if (typeof c === 'string') { parts.push(c); continue }
-        if (Array.isArray(c)) {
-          for (const sub of c) {
-            if (typeof sub === 'string') parts.push(sub)
-            else if (sub && typeof sub === 'object' && 'text' in sub && typeof sub.text === 'string') parts.push(sub.text)
-          }
-        }
-      }
-      if ('text' in block && typeof block.text === 'string') parts.push(block.text)
-    }
-  }
-  return parts.length > 0 ? parts.join('\n') : undefined
-}
-
-function extractStreamDelta(msg: SDKMessage): BondStreamChunk | null {
-  if (msg.type !== 'stream_event') return null
-  const evt = msg.event as { type: string; delta?: { type: string; text?: string; thinking?: string } }
-  if (evt.type === 'content_block_delta') {
-    if (evt.delta?.type === 'text_delta' && evt.delta.text) {
-      return { kind: 'assistant_text', text: evt.delta.text }
-    }
-    if (evt.delta?.type === 'thinking_delta' && evt.delta.thinking) {
-      return { kind: 'thinking_text', text: evt.delta.thinking }
-    }
-  }
-  return null
-}
-
-export function* bondMessageToChunks(message: SDKMessage): Generator<BondStreamChunk> {
-  if (message.type === 'stream_event') {
-    const delta = extractStreamDelta(message)
-    if (delta) yield delta
-    return
-  }
-  if (message.type === 'assistant') {
-    // Text was already streamed via deltas — only emit tool blocks
-    yield* flattenToolBlocks(message)
-    return
-  }
-  if (message.type === 'user' && message.parent_tool_use_id) {
-    const output = extractToolResultText(message as any)
-    if (output !== undefined) {
-      yield {
-        kind: 'tool_result',
-        toolName: '',
-        toolUseId: message.parent_tool_use_id,
-        output: output.length > 4000 ? output.slice(0, 4000) + '\n…(truncated)' : output
-      }
-    }
-    return
-  }
-  if (message.type === 'result') {
-    if (message.subtype === 'success') {
-      yield {
-        kind: 'result',
-        subtype: message.subtype,
-        result: message.result
-      }
-    } else {
-      yield {
-        kind: 'result',
-        subtype: message.subtype,
-        errors: message.errors
-      }
-    }
-    return
-  }
-  if (message.type === 'auth_status') {
-    yield {
-      kind: 'auth_status',
-      authenticating: message.isAuthenticating,
-      lines: message.output ?? [],
-      error: message.error
-    }
-    return
-  }
-  if (message.type === 'system' && message.subtype === 'api_retry') {
-    yield {
-      kind: 'system',
-      subtype: 'api_retry',
-      text: String(message.error ?? 'Retrying API request…')
-    }
-  }
+  clearPiSessionApprovals(sessionId)
 }
 
 export async function runBondQuery(
@@ -408,198 +238,17 @@ export async function runBondQuery(
     onChunk: (c: BondStreamChunk) => void
     model?: string
     sessionId?: string
-    resumeSession?: boolean
     imageIds?: string[]
     editMode?: EditMode
   }
 ): Promise<boolean> {
-  const cwd = homedir()
-  const ac = new AbortController()
-
-  const editMode = options.editMode ?? { type: 'full' as const }
-  const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS
-  const systemPrompt = buildSystemPrompt({ editMode })
-
-  let lastStderrHint: 'already_in_use' | null = null
-
-  const queryOptions: Record<string, unknown> = {
-    abortController: ac,
-    cwd,
-    tools: [...tools],
-    allowedTools: [...tools],
-    model: options.model,
-    includePartialMessages: true,
-    permissionMode: 'default',
-    systemPrompt,
-    canUseTool: async (
-      toolName: string,
-      input: Record<string, unknown>,
-      sdkOptions: { title?: string; displayName?: string; description?: string; toolUseID: string }
-    ) => {
-      if (!WRITE_TOOLS.has(toolName)) {
-        return { behavior: 'allow' as const, updatedInput: input }
-      }
-      if (editMode.type === 'readonly') {
-        return { behavior: 'deny' as const, message: 'Session is in read-only mode' }
-      }
-      if (editMode.type === 'scoped') {
-        const targetPath = extractTargetPath(input)
-        if (targetPath && !isWithinAllowedPaths(targetPath, editMode.allowedPaths)) {
-          return { behavior: 'deny' as const, message: `Path ${targetPath} is outside allowed folders` }
-        }
-      }
-      const requestId = randomUUID()
-      options.onChunk({
-        kind: 'tool_approval',
-        requestId,
-        toolName,
-        input,
-        title: sdkOptions.title ?? sdkOptions.displayName,
-        description: sdkOptions.description
-      })
-      return new Promise<AllowResult | DenyResult>((resolve) => {
-        pendingApprovals.set(requestId, { resolve, sessionId: options.sessionId ?? '' })
-      })
-    },
-    stderr: (text: string) => {
-      console.error('[bond] sdk stderr:', text.trimEnd())
-      if (text.includes('already in use')) {
-        lastStderrHint = 'already_in_use'
-      }
-    },
-    plugins: [
-      { type: 'local', path: resolve(getSkillsDir(), '..') }
-    ],
-    mcpServers: loadMcpServers(),
-    env: {
-      ...process.env,
-      CLAUDE_AGENT_SDK_CLIENT_APP: 'bond-electron/0.1.0'
-    } as Record<string, string | undefined>
-  }
-
-  if (options.sessionId) {
-    if (options.resumeSession) {
-      queryOptions.resume = options.sessionId
-    } else {
-      queryOptions.sessionId = options.sessionId
-    }
-  }
-
-  let effectivePrompt = prompt
-
-  if (options.imageIds?.length) {
-    const imagePaths = getImagePaths(options.imageIds)
-    if (imagePaths.length) {
-      const imageList = imagePaths.map(p => `  - ${p}`).join('\n')
-      const imageNote = `<attached-images>\nThe user attached ${imagePaths.length} image(s) to this message. You MUST read each file with the Read tool before responding:\n${imageList}\n</attached-images>`
-      effectivePrompt = prompt ? `${imageNote}\n\n${prompt}` : imageNote
-    }
-  }
-
-  const q = query({
-    prompt: effectivePrompt,
-    options: queryOptions as any
+  return runPiBondQuery(prompt, {
+    ...options,
+    systemPrompt: buildSystemPrompt({ editMode: options.editMode }),
   })
+}
 
-  options.abortSignal.addEventListener(
-    'abort',
-    () => {
-      clearSessionApprovals(options.sessionId ?? '')
-      ac.abort()
-      try {
-        q.close()
-      } catch {
-        /* ignore */
-      }
-    },
-    { once: true }
-  )
-
-  let chunkCount = 0
-  let succeeded = false
-  let lastMessageId: string | null = null
-  let lastInputTokens = 0
-  let contextWindowLimit = 0
-  let cumulativeCost = 0
-
-  try {
-    for await (const message of q) {
-      if (options.abortSignal.aborted) break
-
-      // Extract usage from assistant messages (deduplicate by message ID)
-      if (message.type === 'assistant') {
-        const msg = message as any
-        const msgId = msg.message?.id
-        if (msgId && msgId !== lastMessageId) {
-          lastMessageId = msgId
-          const u = msg.message?.usage
-          if (u) {
-            lastInputTokens =
-              (u.input_tokens ?? 0) +
-              (u.cache_read_input_tokens ?? 0) +
-              (u.cache_creation_input_tokens ?? 0)
-
-            if (contextWindowLimit > 0) {
-              options.onChunk({
-                kind: 'usage_update',
-                inputTokens: lastInputTokens,
-                contextWindow: contextWindowLimit,
-                costUsd: cumulativeCost
-              })
-            }
-          }
-        }
-      }
-
-      // Extract contextWindow and cost from result messages
-      if (message.type === 'result') {
-        const msg = message as any
-        cumulativeCost = msg.total_cost_usd ?? cumulativeCost
-
-        const models = msg.modelUsage ?? {}
-        const primary = Object.values(models)[0] as any
-        if (primary?.contextWindow) {
-          contextWindowLimit = primary.contextWindow
-        }
-
-        if (contextWindowLimit > 0) {
-          options.onChunk({
-            kind: 'usage_update',
-            inputTokens: lastInputTokens,
-            contextWindow: contextWindowLimit,
-            costUsd: cumulativeCost
-          })
-        }
-      }
-
-      for (const chunk of bondMessageToChunks(message)) {
-        chunkCount++
-        if (chunk.kind === 'result' && chunk.subtype === 'success') {
-          succeeded = true
-        }
-        options.onChunk(chunk)
-      }
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    console.error('[bond] query error:', msg)
-    // Startup failures (no chunks emitted) are re-thrown so the caller
-    // can retry — e.g. "Session ID already in use" after a cancel.
-    if (chunkCount === 0) {
-      // The SDK often puts the real error on stderr while throwing a generic
-      // "process exited with code 1". Enrich the message so retry logic can match.
-      if (lastStderrHint === 'already_in_use' && !msg.includes('already in use')) {
-        throw new Error(`${msg} (session already in use)`)
-      }
-      throw e
-    }
-    options.onChunk({ kind: 'raw_error', message: msg })
-  } finally {
-    try { q.close() } catch { /* ensure subprocess cleanup */ }
-  }
-  if (chunkCount === 0) {
-    console.warn('[bond] query completed with no chunks emitted')
-  }
-
-  return succeeded
+/** Small non-tool Pi run used for titles and debriefs. */
+export async function runBondTextQuery(prompt: string, model: 'haiku' | 'sonnet' | 'opus' = 'haiku'): Promise<string> {
+  return runPiTextPrompt(prompt, model)
 }

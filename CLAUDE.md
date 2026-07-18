@@ -1,4 +1,4 @@
-# Bond — Claude Code Instructions
+# Bond — Development Instructions
 
 ## Testing
 
@@ -43,7 +43,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
 | `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`) |
-| `agent.ts` | Runs `query()` from Claude Agent SDK, streams chunks, handles tool approvals |
+| `agent.ts` / `pi/runtime.ts` | Builds Bond context, runs Pi sessions, streams chunks, handles tool approvals |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
 | `db.ts` | Database init, migrations, WAL mode |
@@ -104,7 +104,8 @@ src/
   daemon/
     main.ts                          # Daemon entry point
     server.ts                        # WebSocket JSON-RPC server
-    agent.ts                         # Claude Agent SDK integration
+    agent.ts                         # Bond prompt and Pi runtime entrypoint
+     pi/runtime.ts                    # Pi session, event, and permission bridge
     sessions.ts                      # Session CRUD (SQLite)
     images.ts                        # Image file storage + images table
     db.ts                            # Database management + migrations

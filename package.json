@@ -1,14 +1,14 @@
 {
   "name": "bond",
   "version": "0.1.0",
-  "description": "Bond — local Electron agent using the Claude Agent SDK",
+  "description": "Bond — local Electron assistant powered by Pi", 
   "main": "./out/main/index.js",
   "type": "module",
   "scripts": {
     "dev": "npm run build:daemon && electron-vite dev",
     "build": "electron-vite build && npm run build:daemon && npm run build:native",
     "build:native": "bash scripts/build-native-helpers.sh",
-    "build:daemon": "esbuild src/daemon/main.ts --bundle --platform=node --format=esm --outfile=out/daemon/main.mjs --external:@anthropic-ai/claude-agent-sdk --external:better-sqlite3 --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
+    "build:daemon": "esbuild src/daemon/main.ts --bundle --platform=node --format=esm --outfile=out/daemon/main.mjs --external:better-sqlite3 --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
     "build:cli": "esbuild src/cli/media.ts src/cli/screenshot.ts src/cli/soul.ts src/cli/sense.ts src/cli/collection.ts --bundle --platform=node --format=esm --outdir=out/cli --external:ws --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
     "preview": "electron-vite preview",
     "pack": "npm run build && electron-builder --dir",
@@ -21,7 +21,6 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.86",
     "@phosphor-icons/vue": "^2.2.1",
     "@tailwindcss/vite": "^4.2.2",
     "@types/better-sqlite3": "^7.6.13",
@@ -47,6 +46,9 @@
     "vue": "^3.5.31"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.80.10",
+    "@earendil-works/pi-ai": "^0.80.10",
+    "@earendil-works/pi-coding-agent": "^0.80.10",
     "ws": "^8.20.0"
   }
 }

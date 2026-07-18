@@ -1,6 +1,6 @@
 # Bond
 
-Bond is a macOS desktop assistant powered by the [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview). It runs a standalone daemon that manages Claude conversations, tool use, and session persistence — with a Vue 3 + Tailwind CSS interface wrapped in Electron.
+Bond is a macOS desktop assistant powered by [Pi](https://github.com/badlogic/pi-mono). It runs a standalone daemon that manages agent sessions, tool use, and Pi JSONL transcript persistence — with a Vue 3 + Tailwind CSS interface wrapped in Electron.
 
 ![Bond](screenshot.png)
 
@@ -14,7 +14,7 @@ Bond is a desktop AI assistant for chat, coding, memory, skills, collections, Se
 
 ### AI Chat
 
-Conversational AI powered by Claude (Opus, Sonnet, or Haiku). Streams responses in real-time, renders rich Markdown, syntax-highlighted code, and interactive artifacts. Attach images, switch models mid-conversation, and pick up right where you left off — sessions persist across restarts.
+Conversational AI powered through Pi (with the configured provider and model). Streams responses in real-time, renders rich Markdown, syntax-highlighted code, and interactive artifacts. Attach images, switch models mid-conversation, and pick up right where you left off — sessions persist across restarts.
 
 ### System Access Control
 
@@ -61,8 +61,8 @@ Store, browse, and manage images. Download from URLs, search by filename, and re
 
 ## Requirements
 
-- **Node.js 18+**
-- **Claude Code subscription** — Bond authenticates through your existing Claude Code CLI session. No API key or `.env` file needed.
+- **Node.js 22.19+**
+- **A Pi-configured model provider** — configure credentials through Pi (for example an Anthropic API key or supported OAuth flow).
 
 ## Quick start
 
@@ -122,11 +122,11 @@ Bond separates concerns across four layers. The renderer never touches the Agent
 └────────┬─────────┘
          │ Unix socket (WebSocket + JSON-RPC 2.0)
 ┌────────┴─────────┐
-│     Daemon       │  Agent SDK, SQLite, session state
+│     Daemon       │  Pi SDK, SQLite, session state
 └────────┬─────────┘
          │ HTTPS
 ┌────────┴─────────┐
-│   Claude API     │
+│ Model provider   │
 └──────────────────┘
 ```
 
@@ -135,9 +135,9 @@ Bond separates concerns across four layers. The renderer never touches the Agent
 A standalone Node.js process that runs independently of the Electron app. Communicates over a Unix domain socket at `~/.bond/bond.sock` using WebSocket with JSON-RPC 2.0.
 
 **Responsibilities:**
-- Run agent queries via `@anthropic-ai/claude-agent-sdk`
+- Run agent queries via `@earendil-works/pi-coding-agent`
 - Stream response chunks to subscribed clients
-- Manage sessions and messages in SQLite (`~/Library/Application Support/bond/bond.db`)
+- Manage Bond metadata in SQLite and canonical agent transcripts in Pi JSONL
 - Handle tool approvals (allow/deny flow)
 - Auto-generate session titles via Haiku
 - Persist settings (model, soul/personality, accent color)
@@ -153,7 +153,7 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `skills.*` — list, refresh, remove
 - `sense.*` — status, enable, disable, pause, resume, now, today, search, apps, timeline, capture, sessions, settings, clear, stats
 
-**Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
+**Agent tools:** `read`, `grep`, `find`, `ls`, `edit`, `write`, and `bash` — scoped by edit mode (readonly, scoped, or full).
 
 **Sense (ambient screen awareness):** The daemon runs a capture pipeline — window detection via native helpers, screenshot capture (requested from Electron main process), OCR via Apple Vision, accessibility tree extraction, security redaction, and SQLite indexing. Three Objective-C native binaries (`bond-window-helper`, `bond-ocr-helper`, `bond-accessibility-helper`) live in `src/native/` and compile via `scripts/build-native-helpers.sh`.
 
@@ -204,6 +204,8 @@ Types and utilities shared across all layers:
 ~/Library/Application Support/bond/
   bond.db            # SQLite (sessions, messages, settings, sense captures)
   images/            # Stored chat images
+  pi/
+    sessions/           # Pi JSONL agent transcripts
   sense/
     stills/          # Screenshot JPEGs organized by date
       2026-04-05/
@@ -220,9 +222,9 @@ Types and utilities shared across all layers:
 
 ### Packaging
 
-The daemon runs as a separate system Node.js process, so it lives outside the ASAR archive in `Contents/Resources/daemon/` alongside its native dependencies (`better-sqlite3`, `@anthropic-ai/claude-agent-sdk`). The ASAR contains only the Electron main/preload/renderer code and the `ws` module.
+The daemon runs as a separate system Node.js process, so it lives outside the ASAR archive in `Contents/Resources/daemon/`. Pi is bundled into the daemon; its native SQLite dependency ships beside it.
 
-Recipients need Node.js 20+ and Claude Code installed and authenticated. Unsigned builds require `xattr -cr Bond.app` before first launch.
+Recipients need Node.js 22.19+ and Pi-compatible model credentials. Unsigned builds require `xattr -cr Bond.app` before first launch.
 
 ## Repository layout
 
@@ -233,7 +235,7 @@ scripts/
 src/
   cli/                   # CLI modules (media, collections, sense, etc.)
   native/                # Objective-C native helpers (window, OCR, accessibility)
-  daemon/                # Standalone daemon (Agent SDK, SQLite, WebSocket server)
+  daemon/                # Standalone daemon (Pi SDK, SQLite, WebSocket server)
     sense/               # Sense ambient awareness (controller, capture pipeline, OCR, storage)
   main/                  # Electron main process (window, IPC proxy, daemon lifecycle, Sense capture)
   preload/               # contextBridge → window.bond API

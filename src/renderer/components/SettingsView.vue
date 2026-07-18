@@ -292,7 +292,7 @@ function handleModelChange(model: string) {
         <div class="section-header">
           <h2 class="text-sm font-semibold text-text-primary">Default Model</h2>
           <p class="text-xs text-muted mt-1">
-            The model used for new chats. You can still switch models per-conversation in the chat input.
+            The Anthropic model used for new chats. Bond runs it through Pi; configure provider credentials in Pi before starting a chat.
           </p>
         </div>
 
