@@ -8,10 +8,9 @@ import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown, PhX, PhDotsThree, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
-import BondFlyoutMenu from './components/BondFlyoutMenu.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import MissionBriefing from './components/MissionBriefing.vue'
 import ChatInput from './components/ChatInput.vue'
@@ -183,15 +182,6 @@ async function handleResumeThread(sessionId: string) {
 function syncRightPanelWidth() {
   const actual = rightPanelRef.value?.getSize()
   if (actual != null) rightPanelWidth.value = actual
-}
-
-// Overflow menu for extra panel types
-const overflowMenuOpen = ref(false)
-const overflowBtnRef = ref<InstanceType<typeof BondButton> | null>(null)
-
-function openPanelFromOverflow(panel: RightPanelContent) {
-  overflowMenuOpen.value = false
-  toggleRightPanel(panel)
 }
 
 const sidebarStyle = computed(() => ({
@@ -476,31 +466,18 @@ onUnmounted(() => {
           </BondButton>
         </template>
         <template #header-end>
-          <BondButton ref="overflowBtnRef" variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && ['collections', 'sense', 'media', 'memory'].includes(rightPanelContent) }" @click.stop="overflowMenuOpen = !overflowMenuOpen" v-tooltip="'More panels'">
-            <PhDotsThree :size="16" weight="bold" />
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'collections' }" @click.stop="toggleRightPanel('collections')" v-tooltip="'Collections'">
+            <PhListBullets :size="16" weight="bold" />
           </BondButton>
-          <BondFlyoutMenu :open="overflowMenuOpen" :anchor="overflowBtnRef?.$el" :width="180" @close="overflowMenuOpen = false">
-            <nav class="overflow-menu">
-              <button :class="['overflow-menu-item', { active: rightPanelOpen && rightPanelContent === 'collections' }]" @click="openPanelFromOverflow('collections')">
-                <PhListBullets :size="14" weight="bold" />
-                <span>Collections</span>
-                <span v-if="collections.activeCollections.value.length" class="overflow-badge">{{ collections.activeCollections.value.length }}</span>
-              </button>
-              <button :class="['overflow-menu-item', { active: rightPanelOpen && rightPanelContent === 'sense' }]" @click="openPanelFromOverflow('sense')">
-                <PhClockCounterClockwise :size="14" weight="bold" />
-                <span>Sense</span>
-              </button>
-              <button :class="['overflow-menu-item', { active: rightPanelOpen && rightPanelContent === 'media' }]" @click="openPanelFromOverflow('media')">
-                <PhImages :size="14" weight="bold" />
-                <span>Media</span>
-                <span v-if="mediaCount" class="overflow-badge">{{ mediaCount }}</span>
-              </button>
-              <button :class="['overflow-menu-item', { active: rightPanelOpen && rightPanelContent === 'memory' }]" @click="openPanelFromOverflow('memory')">
-                <PhBrain :size="14" weight="bold" />
-                <span>Memory</span>
-              </button>
-            </nav>
-          </BondFlyoutMenu>
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'sense' }" @click.stop="toggleRightPanel('sense')" v-tooltip="'Sense'">
+            <PhClockCounterClockwise :size="16" weight="bold" />
+          </BondButton>
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'media' }" @click.stop="toggleRightPanel('media')" v-tooltip="`Media${mediaCount ? ` (${mediaCount})` : ''}`">
+            <PhImages :size="16" weight="bold" />
+          </BondButton>
+          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'memory' }" @click.stop="toggleRightPanel('memory')" v-tooltip="'Memory'">
+            <PhBrain :size="16" weight="bold" />
+          </BondButton>
         </template>
 
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">

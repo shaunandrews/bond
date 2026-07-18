@@ -10,7 +10,6 @@ import { PhPlus, PhTrash } from '@phosphor-icons/vue'
 const records = ref<ImageRecord[]>([])
 const imageData = ref<Map<string, AttachedImage>>(new Map())
 const loading = ref(true)
-const loadingMore = ref(false)
 const loadedCount = ref(0)
 const fileInput = ref<HTMLInputElement | null>(null)
 let removeImageListener: (() => void) | null = null
@@ -47,20 +46,15 @@ function openImage(record: ImageRecord) {
 }
 
 async function loadNextBatch() {
-  if (loadingMore.value || loadedCount.value >= records.value.length) return
-  loadingMore.value = true
   const batch = records.value.slice(loadedCount.value, loadedCount.value + IMAGE_BATCH_SIZE)
-  try {
-    const images = await window.bond.getImages(batch.map(record => record.id))
-    const next = new Map(imageData.value)
-    batch.forEach((record, i) => {
-      if (images[i]) next.set(record.id, images[i]!)
-    })
-    imageData.value = next
-    loadedCount.value += batch.length
-  } finally {
-    loadingMore.value = false
-  }
+  if (!batch.length) return
+  const images = await window.bond.getImages(batch.map(record => record.id))
+  const next = new Map(imageData.value)
+  batch.forEach((record, i) => {
+    if (images[i]) next.set(record.id, images[i]!)
+  })
+  imageData.value = next
+  loadedCount.value += batch.length
 }
 
 async function loadImages() {
@@ -69,16 +63,11 @@ async function loadImages() {
     records.value = await window.bond.listImages()
     imageData.value = new Map()
     loadedCount.value = 0
-    await loadNextBatch()
+    while (loadedCount.value < records.value.length) {
+      await loadNextBatch()
+    }
   } finally {
     loading.value = false
-  }
-}
-
-function handleScroll(event: Event) {
-  const el = event.currentTarget as HTMLElement
-  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 500) {
-    void loadNextBatch()
   }
 }
 
@@ -137,7 +126,7 @@ onUnmounted(() => {
       </template>
     </BondToolbar>
 
-    <div class="media-panel-scroll" @scroll="handleScroll">
+    <div class="media-panel-scroll">
       <div v-if="loading" class="media-empty">
         <BondText size="sm" color="muted">Loading...</BondText>
       </div>
@@ -174,9 +163,6 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-        </div>
-        <div v-if="loadingMore" class="media-loading-more">
-          <BondText size="xs" color="muted">Loading more images...</BondText>
         </div>
       </template>
     </div>
@@ -231,12 +217,6 @@ onUnmounted(() => {
 
 .media-summary {
   padding-bottom: 0.5rem;
-}
-
-.media-loading-more {
-  display: flex;
-  justify-content: center;
-  padding: 0.75rem 0;
 }
 
 .media-grid {
