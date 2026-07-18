@@ -1,5 +1,29 @@
 # Bond — Development Instructions
 
+## Commands
+
+```bash
+npm run dev            # Build daemon, then launch the Electron app with renderer hot-reload
+npm run build          # Full build: electron-vite (main/preload/renderer) + daemon (esbuild) + native helpers
+npm run build:daemon   # Bundle the daemon only → out/daemon/main.mjs (esbuild)
+npm run build:cli      # Bundle bin/bond CLI subcommands → out/cli/*.js (esbuild)
+npm run build:native   # Compile the Obj-C Sense helpers → out/daemon/bin/sense/ (macOS only)
+npm run test:run       # Run the whole test suite once
+npx vitest run src/renderer/composables/useChat.test.ts   # Run a single test file
+npx vitest run -t "streams thinking deltas"               # Run tests matching a name
+npx tsc --noEmit       # Typecheck the project (no lint tooling is configured)
+```
+
+The daemon is a **separate long-lived process**, not part of the Vite dev server. `npm run dev` hot-reloads the renderer but **not** the daemon — after changing anything under `src/daemon/` or `src/shared/`, rebuild and restart it. Skills are cached at daemon startup, so new or edited skills also require a daemon restart. Use the `bin/bond` CLI to manage it during development:
+
+```bash
+bin/bond status          # Is the daemon running? (pid, socket, log paths)
+bin/bond dev             # Stop daemon, rebuild it, then run electron-vite dev
+bin/bond rebuild daemon  # Stop, rebuild daemon, restart — after daemon/shared changes
+bin/bond restart         # Stop + start without rebuilding
+bin/bond log             # Tail ~/.bond/daemon.log
+```
+
 ## Testing
 
 Bond uses **Vitest** with **happy-dom** and **@vue/test-utils** for testing.
@@ -29,11 +53,13 @@ Test files live next to their source: `useChat.ts` → `useChat.test.ts`, `ChatI
 
 ## Architecture
 
-Bond uses a daemon architecture. The renderer never talks to the Agent SDK directly.
+Bond uses a daemon architecture. The renderer never talks to Pi (the agent runtime) directly.
 
 ```
-Renderer (Vue) → Electron IPC → Main Process → Unix Socket (JSON-RPC 2.0) → Daemon → Claude API
+Renderer (Vue) → Electron IPC → Main Process → WebSocket over Unix socket (JSON-RPC 2.0) → Daemon → Pi → model provider
 ```
+
+The daemon runs an HTTP + WebSocket server (`ws`) bound to the Unix socket `~/.bond/bond.sock`. `BondClient` (`src/shared/client.ts`) is the shared WebSocket client used by both the main process and the CLI. All agent work runs through **Pi** (`@earendil-works/pi-coding-agent`), which resolves Bond's capability tiers against the user's connected subscription — Bond never calls a provider API directly. Pi session transcripts persist as JSONL under `~/Library/Application Support/bond/pi/sessions/`.
 
 ### Daemon (`src/daemon/`)
 
@@ -44,12 +70,17 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
 | `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`) |
 | `agent.ts` / `pi/runtime.ts` | Builds Bond context, runs Pi sessions, streams chunks, handles tool approvals |
+| `pi/runtime.ts` | Pi session lifecycle, event streaming, edit-mode → tool/permission mapping, tier resolution, Pi OAuth |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
+| `collections.ts` | Collections + items CRUD (SQLite) |
+| `debriefs.ts` | Session debrief storage (SQLite) |
+| `generate-debrief.ts` | Auto-generates session debriefs (summary + topics) |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
 | `db.ts` | Database init, migrations, WAL mode |
 | `settings.ts` | Key-value settings storage (soul, model, accent color) |
-| `generate-title.ts` | Auto-generates session titles via Haiku |
+| `generate-title.ts` | Auto-generates session titles via the fast model tier |
 | `paths.ts` | Data directory resolution |
+| `index.ts` | Daemon library exports |
 | `skills.ts` | Skill scanning from ~/.bond/skills/ |
 | `sense/controller.ts` | Sense state machine (disabled/armed/recording/idle/paused/suspended) |
 | `sense/presence.ts` | Idle detection via `ioreg -c IOHIDSystem` polling |
@@ -81,10 +112,11 @@ Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, sett
 | `client.ts` | `BondClient` WebSocket client class |
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Collection, and media/collection types |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
-| `models.ts` | `ModelId` type (`'opus' | 'sonnet' | 'haiku'`) |
+| `models.ts` | `ModelId` — provider-neutral capability tiers (`'high' | 'balanced' | 'fast'`); Pi maps them to concrete models |
 
 ### CLI (`bin/bond`)
 
+`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow). See the "Commands" section above for the common daemon workflows.
 
 ## Project Structure
 
@@ -440,7 +472,7 @@ type Message =
 
 ## Edit Modes
 
-Sessions support three edit modes that control which Agent SDK tools are available:
+Sessions support three edit modes that control which Pi tools are available:
 
 ```typescript
 type EditMode =
@@ -449,7 +481,7 @@ type EditMode =
   | { type: 'scoped', allowedPaths: string[] }     // Read/write restricted to specific paths
 ```
 
-The edit mode selector appears in ChatInput's toolbar. The daemon's `agent.ts` maps these to tool configurations and system prompt suffixes.
+The edit mode selector appears in ChatInput's toolbar. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
 
 ## Image Storage
 
