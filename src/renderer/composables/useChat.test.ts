@@ -54,18 +54,24 @@ describe('useChat continuous transcript', () => {
     expect(chat.messages.value[0]).toMatchObject({ id: 'u1', role: 'user', text: 'hello' })
   })
 
-  it('submits with stable turn/message IDs and upserts instead of session saves', async () => {
-    await chat.submit('hello')
+  it('lets the daemon insert canonical turn rows before renderer upserts', async () => {
+    let resolveSend!: (value: { ok: boolean }) => void
+    ;(deps.send as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(resolve => { resolveSend = resolve }))
+
+    const submitting = chat.submit('hello')
+    await vi.waitFor(() => expect(deps.send).toHaveBeenCalledTimes(1))
 
     expect(deps.createSession).not.toHaveBeenCalled()
     expect(deps.subscribe).toHaveBeenCalledWith()
-    expect(deps.send).toHaveBeenCalledTimes(1)
+    expect(deps.upsertTranscript).not.toHaveBeenCalled()
     const input = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(input).toMatchObject({ text: 'hello', editMode: { type: 'full' } })
     expect(input.turnId).toEqual(expect.any(String))
     expect(input.userMessageId).toEqual(chat.messages.value[0].id)
     expect(input.activityMessageId).toEqual(chat.messages.value[1].id)
-    expect(deps.upsertTranscript).toHaveBeenCalled()
+
+    resolveSend({ ok: true })
+    await submitting
   })
 
   it('streams assistant text into the stable assistant message ID', async () => {

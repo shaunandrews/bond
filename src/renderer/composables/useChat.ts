@@ -383,7 +383,6 @@ export function useChat(deps: ChatDeps = window.bond) {
     const skillMatch = trimmed.match(/^\/([a-z0-9-]+)(?:\s+(.*))?$/s)
     if (skillMatch) addMessage({ id: uid(), role: 'meta', kind: 'skill', name: skillMatch[1], args: skillMatch[2] })
     busy.value = true
-    await persistMessages()
 
     try {
       const input: BondSendInput = { text: trimmed, images, turnId, userMessageId, assistantMessageId, activityMessageId, editMode: editMode.value }
@@ -403,9 +402,11 @@ export function useChat(deps: ChatDeps = window.bond) {
         endStreaming()
         await persistMessages()
       }
-    } catch {
+    } catch (error) {
       busy.value = false
-      updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: 'Send failed' }) })
+      const detail = error instanceof Error ? error.message : String(error)
+      console.error('[bond] send failed:', error)
+      updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: detail || 'Send failed' }) })
       activeActivityId.value = null
       endStreaming()
       await persistMessages()
