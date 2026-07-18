@@ -38,6 +38,8 @@ const activeCollection = computed(() =>
 )
 
 function handleArchiveSelect(id: string) {
+  // Archived collections are not editable in place. Restore one before opening it.
+  emit('unarchive', id)
   emit('select', id)
   archiveFlyoutOpen.value = false
 }
