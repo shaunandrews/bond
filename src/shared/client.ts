@@ -4,6 +4,7 @@ import type { Session, SessionMessage, AttachedImage, ImageRecord, Collection, C
 import type { TranscriptMessage, TranscriptPage } from './transcript'
 import type { SenseStatus, SenseSettings, SenseCapture, SessionDebrief } from './sense'
 import type { CoreMemory, MemoryItem, MemoryItemInput, MemorySourcesResult, RetrievedMemory, WorkingState } from './memory'
+import type { OnboardingFirstRunState, SandboxStatus } from './onboarding'
 import {
   makeRequest,
   isResponse,
@@ -488,6 +489,34 @@ export class BondClient {
 
   async senseStats(): Promise<{ storageBytes: number; captureCount: number; sessionCount: number; oldestCapture: string | null }> {
     return await this.call('sense.stats') as { storageBytes: number; captureCount: number; sessionCount: number; oldestCapture: string | null }
+  }
+
+  // --- Onboarding ---
+
+  async onboardingStatus(): Promise<OnboardingFirstRunState> {
+    return await this.call('onboarding.status') as OnboardingFirstRunState
+  }
+
+  async onboardingBegin(): Promise<OnboardingFirstRunState> {
+    return await this.call('onboarding.begin') as OnboardingFirstRunState
+  }
+
+  async onboardingSkip(): Promise<OnboardingFirstRunState> {
+    return await this.call('onboarding.skip') as OnboardingFirstRunState
+  }
+
+  // --- New-user sandbox ---
+
+  async sandboxStatus(): Promise<SandboxStatus> {
+    return await this.call('sandbox.status') as SandboxStatus
+  }
+
+  async sandboxEnter(): Promise<SandboxStatus> {
+    return await this.call('sandbox.enter') as SandboxStatus
+  }
+
+  async sandboxExit(): Promise<SandboxStatus> {
+    return await this.call('sandbox.exit') as SandboxStatus
   }
 
   // --- Memory ---

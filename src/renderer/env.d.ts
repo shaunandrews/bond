@@ -82,6 +82,11 @@ declare global {
       senseClear: (range?: { from?: string; to?: string }) => Promise<unknown>
       senseStats: () => Promise<unknown>
       hasScreenRecordingPermission: () => Promise<boolean>
+      // Onboarding + new-user sandbox
+      onboardingStatus: () => Promise<import('../../shared/onboarding').OnboardingFirstRunState>
+      onboardingBegin: () => Promise<import('../../shared/onboarding').OnboardingFirstRunState>
+      onboardingSkip: () => Promise<import('../../shared/onboarding').OnboardingFirstRunState>
+      sandboxStatus: () => Promise<import('../../shared/onboarding').SandboxStatus>
       // Memory
       memoryCore: () => Promise<import('../../shared/memory').CoreMemory>
       memoryUpdateCore: (core: import('../../shared/memory').CoreMemory) => Promise<import('../../shared/memory').CoreMemory>

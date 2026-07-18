@@ -185,6 +185,12 @@ contextBridge.exposeInMainWorld('bond', {
   senseStats: () => ipcRenderer.invoke('sense:stats'),
   hasScreenRecordingPermission: () => ipcRenderer.invoke('sense:hasPermission'),
 
+  // Onboarding + new-user sandbox
+  onboardingStatus: () => ipcRenderer.invoke('onboarding:status'),
+  onboardingBegin: () => ipcRenderer.invoke('onboarding:begin'),
+  onboardingSkip: () => ipcRenderer.invoke('onboarding:skip'),
+  sandboxStatus: () => ipcRenderer.invoke('sandbox:status') as Promise<import('../shared/onboarding').SandboxStatus>,
+
   // Memory
   memoryCore: () => ipcRenderer.invoke('memory:core'),
   memoryUpdateCore: (core: CoreMemory) => ipcRenderer.invoke('memory:updateCore', core),

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron'
 import { join, resolve } from 'node:path'
-import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync, watch, type FSWatcher } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync, appendFileSync, watch, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
@@ -242,6 +242,17 @@ function createWindow(): void {
     mainWindow = null
   })
 
+  // Dev-only: mirror renderer [entrance] logs and errors to a file so the
+  // first-run entrance can be diagnosed without opening DevTools.
+  if (!app.isPackaged) {
+    mainWindow.webContents.on('console-message', (_event, level, message) => {
+      if (!message.includes('[entrance]') && level < 3) return
+      try {
+        appendFileSync('/tmp/bond-renderer.log', `${new Date().toISOString()} [${level}] ${message}\n`)
+      } catch { /* best effort */ }
+    })
+  }
+
   // Register mainWindow with the window router for chunk routing and broadcasts
   registerWindow(mainWindow)
 
@@ -259,6 +270,132 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+}
+
+/**
+ * New-user simulation = the REAL app running against an isolated, empty
+ * sandbox data directory in the daemon. Entering swaps the data set and
+ * reloads the window so the genuine first-run experience triggers naturally;
+ * exiting restores the real data and reloads again.
+ */
+let simulationActive = false
+
+function reloadIntoCurrentData(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow()
+  else {
+    mainWindow.webContents.reload()
+    mainWindow.focus()
+  }
+}
+
+/**
+ * Flag the current page to skip its beforeunload transcript persistence.
+ * Must complete BEFORE the daemon's data swap: otherwise the dying page's
+ * persist fires against the post-swap data set and leaks the real transcript
+ * into the sandbox (which then no longer looks like a fresh install).
+ * executeJavaScript resolves only after the script ran, so this is a
+ * synchronous guarantee inside the page.
+ */
+async function suppressRendererPersist(): Promise<void> {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  try {
+    await mainWindow.webContents.executeJavaScript('window.__bondSuppressPersist = true; true')
+  } catch { /* page unloaded or unresponsive — nothing left to persist */ }
+}
+
+async function enterNewUserSimulation(): Promise<void> {
+  if (simulationActive) return
+  await suppressRendererPersist()
+  await client.sandboxEnter()
+  simulationActive = true
+  buildApplicationMenu()
+  reloadIntoCurrentData()
+}
+
+async function exitNewUserSimulation(): Promise<void> {
+  if (!simulationActive) {
+    // The daemon may be sandboxed from a previous window session — trust it.
+    const status = await client.sandboxStatus()
+    if (!status.sandboxed) return
+  }
+  await suppressRendererPersist()
+  await client.sandboxExit()
+  simulationActive = false
+  buildApplicationMenu()
+  reloadIntoCurrentData()
+}
+
+function toggleNewUserSimulation(): void {
+  void (simulationActive ? exitNewUserSimulation() : enterNewUserSimulation()).catch(error => {
+    console.error('[bond] new-user simulation toggle failed:', error)
+  })
+}
+
+/**
+ * Install the native application (menu-bar) menu. Bond ships no custom menu
+ * otherwise, so this reproduces the standard macOS menus and adds the
+ * "Run New-User Simulation" action at the OS level (not in in-app Settings).
+ */
+function buildApplicationMenu(): void {
+  const isMac = process.platform === 'darwin'
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' as const },
+        { type: 'separator' as const },
+        { label: simulationActive ? 'Exit New-User Simulation' : 'Run New-User Simulation', accelerator: 'CommandOrControl+Alt+N', click: () => toggleNewUserSimulation() },
+        { type: 'separator' as const },
+        { role: 'services' as const },
+        { type: 'separator' as const },
+        { role: 'hide' as const },
+        { role: 'hideOthers' as const },
+        { role: 'unhide' as const },
+        { type: 'separator' as const },
+        { role: 'quit' as const },
+      ],
+    }] : []),
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' as const },
+        { role: 'redo' as const },
+        { type: 'separator' as const },
+        { role: 'cut' as const },
+        { role: 'copy' as const },
+        { role: 'paste' as const },
+        ...(isMac
+          ? [{ role: 'pasteAndMatchStyle' as const }, { role: 'delete' as const }, { role: 'selectAll' as const }]
+          : [{ role: 'delete' as const }, { type: 'separator' as const }, { role: 'selectAll' as const }]),
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        ...(!isMac ? [{ label: simulationActive ? 'Exit New-User Simulation' : 'Run New-User Simulation', accelerator: 'CommandOrControl+Alt+N', click: () => toggleNewUserSimulation() }, { type: 'separator' as const }] : []),
+        { role: 'reload' as const },
+        { role: 'forceReload' as const },
+        { role: 'toggleDevTools' as const },
+        { type: 'separator' as const },
+        { role: 'resetZoom' as const },
+        { role: 'zoomIn' as const },
+        { role: 'zoomOut' as const },
+        { type: 'separator' as const },
+        { role: 'togglefullscreen' as const },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' as const },
+        { role: 'zoom' as const },
+        ...(isMac
+          ? [{ type: 'separator' as const }, { role: 'front' as const }]
+          : [{ role: 'close' as const }]),
+      ],
+    },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 function createSettingsWindow(): void {
@@ -454,6 +591,10 @@ app.whenReady().then(async () => {
   initQuickChat(client)
 
   createWindow()
+  try {
+    simulationActive = (await client.sandboxStatus()).sandboxed
+  } catch { /* older daemon without sandbox support */ }
+  buildApplicationMenu()
 
   // --- Dev: capture screenshot via file trigger ---
   // Touch /tmp/bond-capture to trigger, result lands at /tmp/bond-screenshot.png
@@ -492,7 +633,6 @@ app.whenReady().then(async () => {
       mainWindow.focus()
     }
   })
-
   // --- External links (stays client-side) ---
   ipcMain.handle('shell:openExternal', (_e, url: string) => {
     if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
@@ -672,6 +812,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('sense:updateSettings', (_e, updates: Record<string, unknown>) => client.senseUpdateSettings(updates))
   ipcMain.handle('sense:clear', (_e, range?: { from?: string; to?: string }) => client.senseClear(range))
   ipcMain.handle('sense:stats', () => client.senseStats())
+
+  // Onboarding IPC handlers
+  ipcMain.handle('onboarding:status', () => client.onboardingStatus())
+  ipcMain.handle('onboarding:begin', () => client.onboardingBegin())
+  ipcMain.handle('onboarding:skip', () => client.onboardingSkip())
+  ipcMain.handle('sandbox:status', () => client.sandboxStatus())
 
   // Memory IPC handlers
   ipcMain.handle('memory:core', () => client.memoryCore())

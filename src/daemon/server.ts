@@ -7,7 +7,7 @@ import type { BondSendInput, TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
-import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, insertTurnStart, startTurn, completeTurn, getSourceMessages } from './transcript'
+import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, insertTurnStart, startTurn, completeTurn, getSourceMessages, getMaxMessageSeq } from './transcript'
 import { ensureActiveEpoch } from './epochs'
 import type { ModelId } from '../shared/models'
 import {
@@ -36,6 +36,8 @@ import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
 import {
+  GLOBAL_TRANSCRIPT_SESSION_ID,
+  ensureGlobalTranscriptSession,
   listSessions,
   createSession,
   getSession,
@@ -102,9 +104,12 @@ import {
   deleteImage,
   importImage
 } from './images'
-import { readCoreMemory, writeCoreMemoryAtomic } from './memory/core-memory'
-import { getMemoryItem, listRecentMemory, searchMemory, upsertMemoryItem } from './memory/store'
+import { readCoreMemory, withCoreMemoryLock, writeCoreMemoryAtomic } from './memory/core-memory'
+import { getMemoryItem, getMemoryItemSourceIds, listRecentMemory, searchMemory, upsertMemoryItem } from './memory/store'
 import { createWorkingState } from './memory/working-state'
+import { finalObserverHook, memoryFlushHook, scheduleEpochObservation, waitForMemoryQueue } from './memory/service'
+import { beginFirstRun, getFirstRunStatus, skipFirstRun } from './onboarding'
+import { enterSandbox, exitSandbox, isSandboxed } from './sandbox'
 
 // --- State ---
 
@@ -119,6 +124,33 @@ type ActiveQuery = {
 let activeQuery: ActiveQuery | null = null
 let currentModel: string = 'balanced'
 let serverWss: WebSocketServer | null = null
+
+/**
+ * Quiesce everything that writes through getDb() before swapping the data
+ * directory (sandbox enter/exit): abort any streaming query, drain the
+ * background memory queue, and suspend Sense capture. Sense wakes on the
+ * post-swap side so a simulation never records into (or out of) the wrong
+ * data set.
+ */
+async function settleForDataSwap(): Promise<void> {
+  if (activeQuery) {
+    const existing = activeQuery
+    existing.ac.abort()
+    if (existing.sessionId) {
+      clearSessionApprovals(existing.sessionId)
+      pendingApprovalChunks.delete(existing.sessionId)
+      try { clearSessionPendingApprovals(existing.sessionId) } catch { /* best effort */ }
+    }
+    try { await existing.promise } catch { /* already handled */ }
+    if (activeQuery?.turnId === existing.turnId) activeQuery = null
+  }
+  try { await waitForMemoryQueue() } catch { /* observer failures never block the swap */ }
+  senseController?.suspend()
+}
+
+function wakeAfterDataSwap(): void {
+  senseController?.wake()
+}
 
 // Track which clients are subscribed to which sessions; global subscribers receive all tagged chunks.
 const sessionSubscribers = new Map<string, Set<WebSocket>>()
@@ -353,11 +385,16 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
         let imageIds: string[] | undefined
         if (images?.length) {
-          imageIds = saveImages(sessionId ?? 'global-transcript', images)
+          if (!sessionId) ensureGlobalTranscriptSession()
+          imageIds = saveImages(sessionId ?? GLOBAL_TRANSCRIPT_SESSION_ID, images)
         }
 
         const cleanText = text.replace(/@\[([^\]]+)\]\(project:[a-f0-9-]+\)/g, '@$1')
-        const epochResult = await ensureActiveEpoch()
+        const epochResult = await ensureActiveEpoch({
+          finalObserver: finalObserverHook,
+          memoryFlush: memoryFlushHook,
+          logger: console,
+        })
         const epoch = epochResult.epoch
         const turnId = typeof input.turnId === 'string' ? input.turnId : randomUUID()
         const userMessageId = typeof input.userMessageId === 'string' ? input.userMessageId : randomUUID()
@@ -399,6 +436,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           imageIds,
           editMode: input.editMode ?? session?.editMode,
           contextEnvelope,
+          memorySourceMessageId: userMessageId,
         }).then((result) => {
           const succeeded = result.succeeded
           if (assistantText.trim()) {
@@ -410,6 +448,15 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
             contextTokens: result.contextTokens,
             contextWindow: result.contextWindow,
           })
+          if (succeeded && !ac.signal.aborted) {
+            scheduleEpochObservation({
+              epochId: epoch.id,
+              toSeq: getMaxMessageSeq(),
+              sessionId: sessionId ?? epoch.piSessionId,
+              userText: cleanText,
+              logger: console,
+            })
+          }
           return succeeded
         }).catch((error) => {
           completeTurn({ turnId, status: ac.signal.aborted ? 'cancelled' : 'failed' })
@@ -1017,6 +1064,35 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, stats))
       }
 
+      // --- Onboarding ---
+      case 'onboarding.status':
+        return JSON.stringify(makeResponse(id, getFirstRunStatus()))
+      case 'onboarding.begin':
+        return JSON.stringify(makeResponse(id, beginFirstRun()))
+      case 'onboarding.skip':
+        return JSON.stringify(makeResponse(id, skipFirstRun()))
+
+      // --- New-user sandbox ---
+      case 'sandbox.status':
+        return JSON.stringify(makeResponse(id, { sandboxed: isSandboxed() }))
+      case 'sandbox.enter': {
+        // Sense stays suspended while sandboxed — a fresh install has no Sense.
+        await settleForDataSwap()
+        try {
+          enterSandbox()
+        } catch (error) {
+          wakeAfterDataSwap()
+          throw error
+        }
+        return JSON.stringify(makeResponse(id, { sandboxed: true }))
+      }
+      case 'sandbox.exit': {
+        await settleForDataSwap()
+        exitSandbox()
+        wakeAfterDataSwap()
+        return JSON.stringify(makeResponse(id, { sandboxed: false }))
+      }
+
       // --- Memory ---
       case 'memory.core': {
         return JSON.stringify(makeResponse(id, readCoreMemory() as CoreMemory))
@@ -1024,7 +1100,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       case 'memory.updateCore': {
         const core = getParam(p, 'core') as CoreMemory | undefined
         if (!core) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'core is required'))
-        return JSON.stringify(makeResponse(id, writeCoreMemoryAtomic({ ...core, updatedAt: new Date().toISOString() })))
+        const saved = await withCoreMemoryLock(() => writeCoreMemoryAtomic({ ...core, updatedAt: new Date().toISOString() }))
+        return JSON.stringify(makeResponse(id, saved))
       }
       case 'memory.working': {
         return JSON.stringify(makeResponse(id, readWorkingMemory()))
@@ -1063,7 +1140,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const memoryId = getStringParam(p, 'id')
         if (!memoryId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
         const item = getMemoryItem(memoryId)
-        const sourceIds = item ? sourceIdsForMemoryTags(item.tags) : []
+        const relatedSourceIds = item ? getMemoryItemSourceIds(item.id) : []
+        const sourceIds = relatedSourceIds.length > 0 ? relatedSourceIds : (item ? sourceIdsForMemoryTags(item.tags) : [])
         return JSON.stringify(makeResponse(id, { sourceIds, messages: getSourceMessages(sourceIds) }))
       }
 

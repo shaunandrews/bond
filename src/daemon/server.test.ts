@@ -46,6 +46,45 @@ afterEach(async () => {
   rmSync(tempDir, { recursive: true, force: true })
 })
 
+describe('onboarding RPC', () => {
+  it('reports pending status and seeds the intro into the real transcript on begin', async () => {
+    expect((await client.onboardingStatus()).status).toBe('pending')
+
+    await client.onboardingBegin()
+
+    const page = await client.listTranscript()
+    expect(page.messages).toHaveLength(1)
+    expect(page.messages[0].role).toBe('bond')
+    expect(page.messages[0].text).toContain('what should I call you?')
+
+    // Idempotent — a reload does not duplicate the intro.
+    await client.onboardingBegin()
+    expect((await client.listTranscript()).messages).toHaveLength(1)
+  })
+
+  it('marks first-run onboarding skipped', async () => {
+    expect((await client.onboardingSkip()).status).toBe('skipped')
+    expect((await client.onboardingStatus()).status).toBe('skipped')
+  })
+})
+
+describe('sandbox RPC', () => {
+  it('enters an isolated empty data set and restores the real one on exit', async () => {
+    await client.onboardingBegin() // seed real transcript with one message
+    expect((await client.sandboxStatus()).sandboxed).toBe(false)
+
+    await client.sandboxEnter()
+    expect((await client.sandboxStatus()).sandboxed).toBe(true)
+    expect((await client.listTranscript()).messages).toHaveLength(0)
+    // Sandbox looks like a genuine fresh install.
+    expect((await client.onboardingStatus()).status).toBe('pending')
+
+    await client.sandboxExit()
+    expect((await client.sandboxStatus()).sandboxed).toBe(false)
+    expect((await client.listTranscript()).messages).toHaveLength(1)
+  })
+})
+
 describe('session CRUD', () => {
   it('creates and lists sessions', async () => {
     const session = await client.createSession()
