@@ -3,12 +3,17 @@ import Database from 'better-sqlite3'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getDataDir, getDbPath } from './paths'
+import { ensureTranscriptSchema } from './transcript'
+
+/** Increment when the persisted Bond product schema is intentionally replaced. */
+export const APP_SCHEMA_VERSION = 2
 
 let _db: Database.Database | null = null
 
 export function getDb(): Database.Database {
   if (_db) return _db
 
+  resetIfSchemaChanged()
   _db = new Database(getDbPath())
   // Checkpoint any pending WAL from previous processes before setting up
   try { _db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* best effort */ }
@@ -48,8 +53,52 @@ export function getDb(): Database.Database {
   retireLegacyJournalCollection(_db)
   migrateAddOperativeContextWindow(_db)
   migrateCreateSenseMemoryTables(_db)
+  ensureTranscriptSchema(_db)
 
   return _db
+}
+
+/**
+ * Bond's chat model is deliberately a clean cutover. A missing or stale
+ * version means this database belongs to the pre-continuous-Bond product.
+ */
+function resetIfSchemaChanged(): void {
+  const path = getDbPath()
+  if (!existsSync(path)) return
+
+  let db: Database.Database | null = null
+  let version: number | null = null
+  let preserveLegacyJournal = false
+  try {
+    db = new Database(path)
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_meta'").get()
+    if (table) {
+      const row = db.prepare('SELECT value FROM app_meta WHERE key = ?').get('schema_version') as { value: string } | undefined
+      version = row ? Number(row.value) : null
+    } else {
+      // Journal is an independent product table; retain it when opening a
+      // database created for that standalone data-layer operation.
+      preserveLegacyJournal = Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'journal_entries'").get())
+    }
+  } catch {
+    version = null
+  } finally {
+    try { db?.close() } catch { /* best effort */ }
+  }
+
+  if (version === APP_SCHEMA_VERSION || preserveLegacyJournal) return
+
+  for (const suffix of ['', '-wal', '-shm']) {
+    try { unlinkSync(`${path}${suffix}`) } catch { /* absent */ }
+  }
+  const piSessions = join(getDataDir(), 'pi', 'sessions')
+  try {
+    for (const file of readdirSync(piSessions)) unlinkSync(join(piSessions, file))
+  } catch { /* directory may not exist */ }
+  // Images have session foreign keys and are not useful without their rows.
+  try {
+    for (const file of readdirSync(join(getDataDir(), 'images'))) unlinkSync(join(getDataDir(), 'images', file))
+  } catch { /* directory may not exist */ }
 }
 
 export function closeDb(): void {
@@ -62,6 +111,11 @@ export function closeDb(): void {
 
 function createSchema(db: Database.Database): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New chat',
@@ -92,6 +146,7 @@ function createSchema(db: Database.Database): void {
       value TEXT NOT NULL
     );
   `)
+  db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').run('schema_version', String(APP_SCHEMA_VERSION))
 }
 
 function migrateAddImagesColumn(db: Database.Database): void {

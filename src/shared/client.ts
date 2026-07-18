@@ -1,6 +1,7 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
 import type { Session, SessionMessage, AttachedImage, ImageRecord, Collection, CollectionItem, FieldDef, ItemComment, EditMode } from './session'
+import type { TranscriptMessage, TranscriptPage } from './transcript'
 import type { SenseStatus, SenseSettings, SenseCapture, SessionDebrief } from './sense'
 import {
   makeRequest,
@@ -231,6 +232,20 @@ export class BondClient {
 
   async startPiOAuth(provider: 'anthropic' | 'openai-codex'): Promise<{ url: string; instructions?: string; deviceCode?: string }> {
     return await this.call('pi.startOAuth', { provider }) as { url: string; instructions?: string; deviceCode?: string }
+  }
+
+  // --- Continuous transcript ---
+
+  async listTranscript(options: { beforeSeq?: number; limit?: number } = {}): Promise<TranscriptPage> {
+    return await this.call('transcript.list', options) as TranscriptPage
+  }
+
+  async upsertTranscript(messages: TranscriptMessage[]): Promise<{ ok: boolean }> {
+    return await this.call('transcript.upsert', { messages }) as { ok: boolean }
+  }
+
+  async searchTranscript(query: string, limit?: number): Promise<{ messages: TranscriptMessage[] }> {
+    return await this.call('transcript.search', { query, limit }) as { messages: TranscriptMessage[] }
   }
 
   // --- Sessions ---

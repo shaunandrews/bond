@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import type { TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
+import type { TranscriptMessage } from '../shared/transcript'
+import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages } from './transcript'
 import type { ModelId } from '../shared/models'
 import {
   makeResponse,
@@ -411,6 +413,29 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
       case 'bond.getModel':
         return JSON.stringify(makeResponse(id, currentModel))
+
+      // --- Continuous transcript ---
+      case 'transcript.list': {
+        const before = getParam(p, 'beforeSeq')
+        const limitValue = getParam(p, 'limit')
+        const beforeSeq = typeof before === 'number' ? before : undefined
+        const limit = typeof limitValue === 'number' ? limitValue : undefined
+        return JSON.stringify(makeResponse(id, listTranscriptMessages({ beforeSeq, limit })))
+      }
+
+      case 'transcript.upsert': {
+        const messages = getParam(p, 'messages')
+        if (!Array.isArray(messages)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'messages must be an array'))
+        upsertTranscriptMessages(messages as TranscriptMessage[])
+        return JSON.stringify(makeResponse(id, { ok: true }))
+      }
+
+      case 'transcript.search': {
+        const query = getStringParam(p, 'query')
+        if (!query) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'query is required'))
+        const limitValue = getParam(p, 'limit')
+        return JSON.stringify(makeResponse(id, { messages: searchTranscriptMessages(query, { limit: typeof limitValue === 'number' ? limitValue : undefined }) }))
+      }
 
       // --- Sessions ---
       case 'session.list':

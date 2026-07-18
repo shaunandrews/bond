@@ -13,6 +13,17 @@ export {
 } from './sessions'
 export { generateTitleAndSummary } from './generate-title'
 export {
+  calculateSoftLimit,
+  closeEpoch,
+  createEpoch,
+  ensureActiveEpoch,
+  findActiveEpoch,
+  findEpoch,
+  type Epoch,
+  type EnsureActiveEpochOptions,
+  type EnsureActiveEpochResult,
+} from './epochs'
+export {
   getSoul,
   saveSoul,
   getModelSetting,
