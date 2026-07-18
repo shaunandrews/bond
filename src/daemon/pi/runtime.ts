@@ -262,6 +262,9 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
           const toolName = event.toolName as string
           const input = (event.input ?? {}) as Record<string, unknown>
           if (!requiresApproval(toolName)) return
+          // Full access is a standing approval for this session. Scoped mode still
+          // prompts because its whole purpose is a human-checked boundary.
+          if (editMode.type === 'full') return
           if (editMode.type === 'readonly') return { block: true, reason: 'This session is read-only.' }
           if (editMode.type === 'scoped' && (toolName === 'edit' || toolName === 'write')) {
             const target = input.path ?? input.file_path
