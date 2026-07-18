@@ -229,8 +229,8 @@ export class BondClient {
     return await this.call('pi.status') as { configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }
   }
 
-  async savePiAnthropicApiKey(apiKey: string): Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }> {
-    return await this.call('pi.saveAnthropicApiKey', { apiKey }) as { configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }
+  async startPiOAuth(provider: 'anthropic' | 'openai-codex'): Promise<{ url: string; instructions?: string; deviceCode?: string }> {
+    return await this.call('pi.startOAuth', { provider }) as { url: string; instructions?: string; deviceCode?: string }
   }
 
   // --- Sessions ---

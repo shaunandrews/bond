@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('bond', {
   setModel: (model: string) => ipcRenderer.invoke('bond:setModel', model) as Promise<{ ok: boolean }>,
   getModel: () => ipcRenderer.invoke('bond:getModel') as Promise<string>,
   getPiStatus: () => ipcRenderer.invoke('pi:status') as Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }>,
-  savePiAnthropicApiKey: (apiKey: string) => ipcRenderer.invoke('pi:saveAnthropicApiKey', apiKey) as Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }>,
+  startPiOAuth: (provider: 'anthropic' | 'openai-codex') => ipcRenderer.invoke('pi:startOAuth', provider) as Promise<{ url: string; instructions?: string; deviceCode?: string }>,
 
   onModelChanged: (fn: (model: string) => void) => {
     const listener = (_: Electron.IpcRendererEvent, model: string) => fn(model)

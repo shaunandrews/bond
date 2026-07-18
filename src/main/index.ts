@@ -563,7 +563,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('pi:status', () => client.getPiStatus())
-  ipcMain.handle('pi:saveAnthropicApiKey', (_e, apiKey: string) => client.savePiAnthropicApiKey(apiKey))
+  ipcMain.handle('pi:startOAuth', (_e, provider: 'anthropic' | 'openai-codex') => client.startPiOAuth(provider))
 
   // --- Context menu ---
   ipcMain.handle('context-menu:show', (_e, items: { id: string; label: string; type?: string }[]) => {

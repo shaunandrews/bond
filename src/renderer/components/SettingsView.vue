@@ -19,9 +19,9 @@ const soulDirty = computed(() => soul.value !== originalSoul.value)
 const defaultModel = ref<ModelId>('sonnet')
 const piConfigured = ref(false)
 const piProviders = ref<string[]>([])
-const piApiKey = ref('')
 const piSetupError = ref('')
-const piSaving = ref(false)
+const piSigningIn = ref(false)
+const piSetupMessage = ref('')
 const skills = ref<SkillInfo[]>([])
 const showNewSkillModal = ref(false)
 const newSkillDescription = ref('')
@@ -100,19 +100,20 @@ async function loadPiStatus() {
   piProviders.value = status.providers.map(provider => provider.providerId)
 }
 
-async function savePiApiKey() {
-  if (!piApiKey.value.trim()) return
-  piSaving.value = true
+async function startPiOAuth(provider: 'anthropic' | 'openai-codex') {
+  piSigningIn.value = true
   piSetupError.value = ''
+  piSetupMessage.value = ''
   try {
-    const status = await window.bond.savePiAnthropicApiKey(piApiKey.value)
-    piConfigured.value = status.configured
-    piProviders.value = status.providers.map(provider => provider.providerId)
-    piApiKey.value = ''
+    const flow = await window.bond.startPiOAuth(provider)
+    await window.bond.openExternal(flow.url)
+    piSetupMessage.value = flow.deviceCode
+      ? `Enter code ${flow.deviceCode} in the browser, then return here.`
+      : 'Finish signing in in your browser, then click Refresh.'
   } catch (error) {
-    piSetupError.value = error instanceof Error ? error.message : 'Could not save the Pi credential.'
+    piSetupError.value = error instanceof Error ? error.message : 'Could not start Pi sign-in.'
   } finally {
-    piSaving.value = false
+    piSigningIn.value = false
   }
 }
 
@@ -335,25 +336,17 @@ function handleModelChange(model: string) {
         <div class="section-header">
           <h2 class="text-sm font-semibold text-text-primary">Pi connection</h2>
           <p class="text-xs text-muted mt-1">
-            {{ piConfigured ? `Connected through ${piProviders.join(', ')}.` : 'Add an Anthropic API key to let Pi run Bond.' }}
+            {{ piConfigured ? `Connected through ${piProviders.join(', ')}.` : 'Use the subscription you already pay for. No API key required.' }}
           </p>
         </div>
         <div v-if="!piConfigured" class="flex gap-2">
-          <input
-            v-model="piApiKey"
-            type="password"
-            autocomplete="off"
-            spellcheck="false"
-            class="settings-input flex-1"
-            placeholder="sk-ant-…"
-            @keyup.enter="savePiApiKey"
-          />
-          <BondButton :disabled="!piApiKey.trim() || piSaving" @click="savePiApiKey">
-            {{ piSaving ? 'Saving…' : 'Connect' }}
-          </BondButton>
+          <BondButton :disabled="piSigningIn" @click="startPiOAuth('openai-codex')">Sign in with ChatGPT</BondButton>
+          <BondButton :disabled="piSigningIn" @click="startPiOAuth('anthropic')">Sign in with Claude</BondButton>
+          <BondButton variant="ghost" :disabled="piSigningIn" @click="loadPiStatus">Refresh</BondButton>
         </div>
+        <p v-if="piSetupMessage" class="text-xs text-muted mt-2">{{ piSetupMessage }}</p>
         <p v-if="piSetupError" class="text-xs text-err mt-2">{{ piSetupError }}</p>
-        <p class="text-xs text-muted mt-2">Stored by Pi in its credential store, not in Bond’s SQLite database.</p>
+        <p class="text-xs text-muted mt-2">Pi stores and refreshes the OAuth token in its credential store.</p>
       </section>
 
       <section class="settings-section">

@@ -38,7 +38,7 @@ declare global {
       setModel: (model: string) => Promise<{ ok: boolean }>
       getModel: () => Promise<string>
       getPiStatus: () => Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }>
-      savePiAnthropicApiKey: (apiKey: string) => Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }>
+      startPiOAuth: (provider: 'anthropic' | 'openai-codex') => Promise<{ url: string; instructions?: string; deviceCode?: string }>
       onModelChanged: (fn: (model: string) => void) => () => void
       getSoul: () => Promise<string>
       saveSoul: (content: string) => Promise<boolean>

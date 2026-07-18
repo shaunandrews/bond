@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { extname, join, normalize, resolve } from 'node:path'
-import { getModel } from '@earendil-works/pi-ai/compat'
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -124,9 +123,19 @@ function imageContent(imageIds: string[] | undefined) {
   })
 }
 
-function selectModel(name: string | undefined) {
-  const id = MODEL_IDS[name as keyof typeof MODEL_IDS] ?? MODEL_IDS.sonnet
-  return getModel('anthropic', id)
+async function selectModel(name: string | undefined) {
+  const runtime = await ModelRuntime.create()
+  const preferred = MODEL_IDS[name as keyof typeof MODEL_IDS] ?? MODEL_IDS.sonnet
+  const available = await runtime.getAvailable()
+  const anthropic = available.find(model => model.provider === 'anthropic' && model.id === preferred)
+  if (anthropic) return { model: anthropic, modelRuntime: runtime }
+
+  const codexIds = { opus: 'gpt-5.6-terra', sonnet: 'gpt-5.5', haiku: 'gpt-5.4-mini' }
+  const tier = name === 'opus' || name === 'haiku' ? name : 'sonnet'
+  const codex = available.find(model => model.provider === 'openai-codex' && model.id === codexIds[tier])
+    ?? available.find(model => model.provider === 'openai-codex')
+  if (codex) return { model: codex, modelRuntime: runtime }
+  throw new Error('No authenticated Claude or ChatGPT subscription is available in Pi.')
 }
 
 /** Translate Pi's SDK event vocabulary into the renderer's stable stream protocol. */
@@ -161,22 +170,49 @@ export async function getPiAuthStatus(): Promise<PiAuthStatus> {
   const runtime = await ModelRuntime.create()
   const credentials = await runtime.listCredentials()
   return {
-    // Bond's current model picker exposes Anthropic models. Other Pi credentials
-    // remain intact, but do not make those models callable.
-    configured: credentials.some(({ providerId }) => providerId === 'anthropic'),
+    configured: credentials.some(({ providerId, type }) =>
+      (providerId === 'anthropic' || providerId === 'openai-codex') && type === 'oauth'
+    ),
     providers: credentials.map(({ providerId, type }) => ({ providerId, type })),
   }
 }
 
-/** Store an Anthropic API key in Pi's own encrypted-compatible credential store. */
-export async function savePiAnthropicApiKey(apiKey: string): Promise<PiAuthStatus> {
-  if (!apiKey.trim()) throw new Error('An API key is required.')
-  const runtime = await ModelRuntime.create()
-  await runtime.login('anthropic', 'api_key', {
-    prompt: async () => apiKey.trim(),
-    notify: () => {},
+type OAuthStart = { url: string; instructions?: string; deviceCode?: string }
+const oauthStarts = new Map<string, Promise<OAuthStart>>()
+
+/** Start Pi's provider-owned subscription OAuth flow and return its browser URL. */
+export function startPiOAuth(providerId: 'anthropic' | 'openai-codex'): Promise<OAuthStart> {
+  const existing = oauthStarts.get(providerId)
+  if (existing) return existing
+
+  const started = new Promise<OAuthStart>((resolveStart, rejectStart) => {
+    void (async () => {
+      try {
+        const runtime = await ModelRuntime.create()
+        let announced = false
+        await runtime.login(providerId, 'oauth', {
+          prompt: async () => new Promise<string>(() => {}), // local OAuth callback normally wins
+          notify: (event) => {
+            if (announced) return
+            if (event.type === 'auth_url') {
+              announced = true
+              resolveStart({ url: event.url, instructions: event.instructions })
+            } else if (event.type === 'device_code') {
+              announced = true
+              resolveStart({ url: event.verificationUri, deviceCode: event.userCode })
+            }
+          },
+        })
+        if (!announced) rejectStart(new Error('Pi did not provide a browser sign-in URL.'))
+      } catch (error) {
+        rejectStart(error)
+      } finally {
+        oauthStarts.delete(providerId)
+      }
+    })()
   })
-  return getPiAuthStatus()
+  oauthStarts.set(providerId, started)
+  return started
 }
 
 export interface PiBondQueryOptions {
@@ -237,9 +273,11 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
   const sessionManager = isNewSession
     ? SessionManager.create(homedir(), getSessionDir(), { id: sessionId })
     : SessionManager.open(sessionFile, getSessionDir(), homedir())
+  const { model, modelRuntime } = await selectModel(options.model)
   const { session } = await createAgentSession({
     cwd: homedir(),
-    model: selectModel(options.model),
+    model,
+    modelRuntime,
     tools,
     resourceLoader: loader,
     sessionManager,
@@ -289,9 +327,11 @@ export async function runPiTextPrompt(prompt: string, model: 'haiku' | 'sonnet' 
     systemPromptOverride: () => 'Reply only with the requested content. Do not use tools.'
   })
   await loader.reload()
+  const { model: selectedModel, modelRuntime } = await selectModel(model)
   const { session } = await createAgentSession({
     cwd: homedir(),
-    model: selectModel(model),
+    model: selectedModel,
+    modelRuntime,
     noTools: 'all',
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(),

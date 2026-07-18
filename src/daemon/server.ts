@@ -26,7 +26,7 @@ import {
   refreshSkillsCache,
   buildSystemPromptPreview,
 } from './agent'
-import { getPiAuthStatus, savePiAnthropicApiKey } from './pi/runtime'
+import { getPiAuthStatus, startPiOAuth } from './pi/runtime'
 import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
@@ -480,10 +480,12 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       // --- Pi setup ---
       case 'pi.status':
         return JSON.stringify(makeResponse(id, await getPiAuthStatus()))
-      case 'pi.saveAnthropicApiKey': {
-        const apiKey = getStringParam(p, 'apiKey')
-        if (!apiKey) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'apiKey is required'))
-        return JSON.stringify(makeResponse(id, await savePiAnthropicApiKey(apiKey)))
+      case 'pi.startOAuth': {
+        const provider = getStringParam(p, 'provider')
+        if (provider !== 'anthropic' && provider !== 'openai-codex') {
+          return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'A supported OAuth provider is required'))
+        }
+        return JSON.stringify(makeResponse(id, await startPiOAuth(provider)))
       }
 
       // --- Settings ---
