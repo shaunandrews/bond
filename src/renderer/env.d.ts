@@ -96,7 +96,7 @@ declare global {
       senseMemory: (limit?: number) => Promise<{ debriefs: import('../../shared/sense').SessionDebrief[] }>
       senseDebrief: (id?: string, sessionId?: string) => Promise<import('../../shared/sense').SessionDebrief | null>
       senseDeleteDebrief: (id: string) => Promise<{ ok: boolean }>
-      senseSystemPromptPreview: (projectId?: string) => Promise<{ prompt: string }>
+      senseSystemPromptPreview: (editMode?: import('../../shared/session').EditMode) => Promise<{ prompt: string }>
       // Connection status
       onConnectionLost: (fn: () => void) => () => void
       onConnectionRestored: (fn: () => void) => () => void

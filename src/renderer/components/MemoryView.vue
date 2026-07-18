@@ -8,6 +8,9 @@ import MemoryDebriefCard from './MemoryDebriefCard.vue'
 import MemoryDebriefDetail from './MemoryDebriefDetail.vue'
 import type { SessionDebrief } from '../../shared/sense'
 
+const props = defineProps<{
+  editMode?: import('../../shared/session').EditMode
+}>()
 const memory = useMemory()
 const emit = defineEmits<{ (e: 'openSession', sessionId: string): void }>()
 
@@ -27,7 +30,7 @@ const showPrompt = computed(() => activeTab.value === 'prompt')
 async function loadPromptPreview() {
   promptLoading.value = true
   try {
-    const result = await window.bond.senseSystemPromptPreview()
+    const result = await window.bond.senseSystemPromptPreview(props.editMode)
     promptPreview.value = result.prompt
   } catch (err) {
     console.error('Failed to load prompt preview:', err)
@@ -37,7 +40,7 @@ async function loadPromptPreview() {
   }
 }
 
-watch(activeTab, (val) => {
+watch([activeTab, () => props.editMode], ([val]) => {
   if (val === 'prompt') loadPromptPreview()
 })
 

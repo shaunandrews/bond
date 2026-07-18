@@ -209,7 +209,7 @@ contextBridge.exposeInMainWorld('bond', {
     ipcRenderer.invoke('sense:debrief', id, sessionId),
   senseDeleteDebrief: (id: string) =>
     ipcRenderer.invoke('sense:deleteDebrief', id),
-  senseSystemPromptPreview: (projectId?: string) =>
-    ipcRenderer.invoke('sense:systemPromptPreview', projectId),
+  senseSystemPromptPreview: (editMode?: import('../shared/session').EditMode) =>
+    ipcRenderer.invoke('sense:systemPromptPreview', editMode),
 
 })

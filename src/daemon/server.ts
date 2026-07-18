@@ -4,7 +4,7 @@ import { existsSync, unlinkSync, readFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import type { TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
-import type { SessionMessage, AttachedImage } from '../shared/session'
+import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
 import type { ModelId } from '../shared/models'
 import {
   makeResponse,
@@ -1081,8 +1081,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, { ok }))
       }
       case 'sense.systemPromptPreview': {
-        const projectId = getStringParam(p, 'projectId')
-        const prompt = buildSystemPromptPreview({ projectId: projectId ?? undefined })
+        const editMode = getParam(p, 'editMode') as EditMode | undefined
+        const prompt = buildSystemPromptPreview({ editMode })
         return JSON.stringify(makeResponse(id, { prompt }))
       }
       case 'sense.backfill': {

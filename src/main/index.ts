@@ -680,7 +680,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('sense:memory', (_e, limit?: number) => client.senseMemory(limit))
   ipcMain.handle('sense:debrief', (_e, id?: string, sessionId?: string) => client.senseDebrief(id, sessionId))
   ipcMain.handle('sense:deleteDebrief', (_e, id: string) => client.senseDeleteDebrief(id))
-  ipcMain.handle('sense:systemPromptPreview', (_e, projectId?: string) => client.senseSystemPromptPreview(projectId))
+  ipcMain.handle('sense:systemPromptPreview', (_e, editMode?: import('../shared/session').EditMode) => client.senseSystemPromptPreview(editMode))
   ipcMain.handle('sense:hasPermission', () => {
     const { hasScreenRecordingPermission } = require('./sense') as typeof import('./sense')
     return hasScreenRecordingPermission()

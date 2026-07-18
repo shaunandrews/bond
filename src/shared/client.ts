@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, Collection, CollectionItem, FieldDef, ItemComment } from './session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, Collection, CollectionItem, FieldDef, ItemComment, EditMode } from './session'
 import type { SenseStatus, SenseSettings, SenseCapture, SessionDebrief } from './sense'
 import {
   makeRequest,
@@ -511,8 +511,8 @@ export class BondClient {
     return await this.call('sense.deleteDebrief', { id }) as { ok: boolean }
   }
 
-  async senseSystemPromptPreview(projectId?: string): Promise<{ prompt: string }> {
-    return await this.call('sense.systemPromptPreview', { projectId }) as { prompt: string }
+  async senseSystemPromptPreview(editMode?: EditMode): Promise<{ prompt: string }> {
+    return await this.call('sense.systemPromptPreview', { editMode }) as { prompt: string }
   }
 
   onSenseRequestCapture(fn: SenseRequestCaptureListener): () => void {

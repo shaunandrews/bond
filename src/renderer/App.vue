@@ -539,7 +539,7 @@ onUnmounted(() => {
         @back="collections.select(null)"
       />
       <SensePanelView v-else-if="rightPanelContent === 'sense'" />
-      <MemoryView v-else-if="rightPanelContent === 'memory'" @openSession="handleOpenDebriefSession" />
+      <MemoryView v-else-if="rightPanelContent === 'memory'" :editMode="currentEditMode" @openSession="handleOpenDebriefSession" />
       <MediaView v-else-if="rightPanelContent === 'media'" />
     </BondPanel>
   </BondPanelGroup>
