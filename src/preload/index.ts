@@ -92,7 +92,13 @@ contextBridge.exposeInMainWorld('bond', {
   listImages: () => ipcRenderer.invoke('image:list') as Promise<ImageRecord[]>,
   getImage: (imageId: string) => ipcRenderer.invoke('image:get', imageId) as Promise<AttachedImage | null>,
   getImages: (ids: string[]) => ipcRenderer.invoke('image:getMultiple', ids) as Promise<(AttachedImage | null)[]>,
+  importImage: (data: string, mediaType: string) => ipcRenderer.invoke('image:import', data, mediaType) as Promise<ImageRecord>,
   deleteImage: (imageId: string) => ipcRenderer.invoke('image:delete', imageId) as Promise<boolean>,
+  onImageChanged: (fn: () => void) => {
+    const listener = () => fn()
+    ipcRenderer.on('bond:imageChanged', listener)
+    return () => ipcRenderer.removeListener('bond:imageChanged', listener)
+  },
 
   // Skills
   listSkills: () => ipcRenderer.invoke('skills:list') as Promise<{ name: string; description: string; argumentHint: string }[]>,

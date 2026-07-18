@@ -19,7 +19,9 @@ declare global {
       listImages: () => Promise<import('../../shared/session').ImageRecord[]>
       getImage: (imageId: string) => Promise<import('../../shared/session').AttachedImage | null>
       getImages: (ids: string[]) => Promise<(import('../../shared/session').AttachedImage | null)[]>
+      importImage: (data: string, mediaType: string) => Promise<import('../../shared/session').ImageRecord>
       deleteImage: (imageId: string) => Promise<boolean>
+      onImageChanged: (fn: () => void) => () => void
       listSkills: () => Promise<{ name: string; description: string; argumentHint: string }[]>
       refreshSkills: () => Promise<{ name: string; description: string; argumentHint: string }[]>
       removeSkill: (name: string) => Promise<{ ok: boolean }>

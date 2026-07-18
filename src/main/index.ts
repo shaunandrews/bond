@@ -252,6 +252,7 @@ function createWindow(): void {
 
   // Broadcast entity change events to all windows
   client.onCollectionsChanged(() => broadcast('bond:collectionsChanged'))
+  client.onImageChanged(() => broadcast('bond:imageChanged'))
   // Journal changes now flow through collections channel
 
   const devUrl = process.env.ELECTRON_RENDERER_URL
@@ -598,6 +599,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('image:list', () => client.listImages())
   ipcMain.handle('image:get', (_e, imageId: string) => client.getImage(imageId))
   ipcMain.handle('image:getMultiple', (_e, ids: string[]) => client.getImages(ids))
+  ipcMain.handle('image:import', (_e, data: string, mediaType: string) => client.importImage(data, mediaType))
   ipcMain.handle('image:delete', (_e, imageId: string) => client.deleteImage(imageId))
 
   // --- Collections ---

@@ -12,6 +12,7 @@ import {
 
 type ChunkListener = (chunk: TaggedChunk) => void
 type CollectionChangeListener = () => void
+type ImageChangeListener = () => void
 type SenseRequestCaptureListener = (payload: { captureDir: string; captureId: string }) => void
 type SenseStateChangedListener = (payload: { state: string }) => void
 
@@ -26,6 +27,7 @@ export class BondClient {
   private pending = new Map<string | number, PendingRequest>()
   private chunkListeners = new Set<ChunkListener>()
   private collectionChangeListeners = new Set<CollectionChangeListener>()
+  private imageChangeListeners = new Set<ImageChangeListener>()
   private senseRequestCaptureListeners = new Set<SenseRequestCaptureListener>()
   private senseStateChangedListeners = new Set<SenseStateChangedListener>()
   private disconnectListeners = new Set<() => void>()
@@ -128,6 +130,10 @@ export class BondClient {
           }
         } else if (msg.method === 'collection.changed') {
           for (const fn of this.collectionChangeListeners) {
+            fn()
+          }
+        } else if (msg.method === 'image.changed') {
+          for (const fn of this.imageChangeListeners) {
             fn()
           }
         } else if (msg.method === 'sense.requestCapture' && msg.params) {
@@ -346,6 +352,11 @@ export class BondClient {
   onCollectionsChanged(fn: CollectionChangeListener): () => void {
     this.collectionChangeListeners.add(fn)
     return () => this.collectionChangeListeners.delete(fn)
+  }
+
+  onImageChanged(fn: ImageChangeListener): () => void {
+    this.imageChangeListeners.add(fn)
+    return () => this.imageChangeListeners.delete(fn)
   }
 
   // --- Collection item comments ---

@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import type { ImageRecord, AttachedImage } from '../../shared/session'
 import { imageDataUri } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondToolbar from './BondToolbar.vue'
+import BondButton from './BondButton.vue'
+import { PhPlus, PhTrash } from '@phosphor-icons/vue'
 
 const records = ref<ImageRecord[]>([])
 const imageData = ref<Map<string, AttachedImage>>(new Map())
 const loading = ref(true)
+const fileInput = ref<HTMLInputElement | null>(null)
+let removeImageListener: (() => void) | null = null
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -39,21 +43,59 @@ function openImage(record: ImageRecord) {
   win.document.body.appendChild(el)
 }
 
-onMounted(async () => {
+async function loadImages() {
+  loading.value = true
   try {
     records.value = await window.bond.listImages()
-    if (records.value.length) {
-      const ids = records.value.map(r => r.id)
-      const images = await window.bond.getImages(ids)
-      const map = new Map<string, AttachedImage>()
-      ids.forEach((id, i) => {
-        if (images[i]) map.set(id, images[i]!)
-      })
-      imageData.value = map
-    }
+    const ids = records.value.map(r => r.id)
+    const images = ids.length ? await window.bond.getImages(ids) : []
+    const map = new Map<string, AttachedImage>()
+    ids.forEach((id, i) => {
+      if (images[i]) map.set(id, images[i]!)
+    })
+    imageData.value = map
   } finally {
     loading.value = false
   }
+}
+
+function chooseImage() {
+  fileInput.value?.click()
+}
+
+async function importFiles(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(file)
+    })
+    const comma = dataUrl.indexOf(',')
+    if (comma !== -1) {
+      await window.bond.importImage(dataUrl.slice(comma + 1), file.type)
+    }
+  }
+  await loadImages()
+}
+
+async function removeImage(record: ImageRecord) {
+  if (await window.bond.deleteImage(record.id)) {
+    await loadImages()
+  }
+}
+
+onMounted(async () => {
+  removeImageListener = window.bond.onImageChanged(loadImages)
+  await loadImages()
+})
+
+onUnmounted(() => {
+  removeImageListener?.()
 })
 </script>
 
@@ -63,6 +105,12 @@ onMounted(async () => {
       <template #start>
         <BondText size="sm" weight="medium" color="muted">Media</BondText>
         <span v-if="records.length" class="media-panel-badge">{{ records.length }}</span>
+      </template>
+      <template #end>
+        <input ref="fileInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden @change="importFiles" />
+        <BondButton variant="ghost" size="sm" icon @click="chooseImage" v-tooltip="'Add images'">
+          <PhPlus :size="16" weight="bold" />
+        </BondButton>
       </template>
     </BondToolbar>
 
@@ -96,8 +144,10 @@ onMounted(async () => {
               />
               <div v-else class="media-placeholder" />
               <div class="media-meta">
-                <BondText size="xs" truncate>{{ formatSize(record.sizeBytes) }}</BondText>
-                <BondText size="xs">{{ formatDate(record.createdAt) }}</BondText>
+                <BondText size="xs" truncate>{{ record.filename }}</BondText>
+                <BondButton variant="ghost" size="sm" icon @click.stop="removeImage(record)" v-tooltip="'Delete image'">
+                  <PhTrash :size="13" />
+                </BondButton>
               </div>
             </div>
           </div>

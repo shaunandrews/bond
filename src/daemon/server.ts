@@ -170,6 +170,14 @@ function broadcastChunk(sessionId: string, chunk: BondStreamChunk): void {
   }
 }
 
+function broadcastImageChanged(): void {
+  if (!serverWss) return
+  const msg = JSON.stringify(makeNotification('image.changed', {}))
+  for (const client of serverWss.clients) {
+    if (client.readyState === WebSocket.OPEN) client.send(msg)
+  }
+}
+
 function broadcastCollectionsChanged(): void {
   if (!serverWss) return
   const msg = JSON.stringify(makeNotification('collection.changed', {}))
@@ -593,13 +601,17 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const data = getStringParam(p, 'data')
         const mediaType = getStringParam(p, 'mediaType')
         if (!data || !mediaType) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'data and mediaType are required'))
-        return JSON.stringify(makeResponse(id, importImage(data, mediaType as any)))
+        const image = importImage(data, mediaType as any)
+        broadcastImageChanged()
+        return JSON.stringify(makeResponse(id, image))
       }
 
       case 'image.delete': {
         const imageId = getStringParam(p, 'id')
         if (!imageId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, deleteImage(imageId)))
+        const deleted = deleteImage(imageId)
+        if (deleted) broadcastImageChanged()
+        return JSON.stringify(makeResponse(id, deleted))
       }
 
       // --- Collections ---
