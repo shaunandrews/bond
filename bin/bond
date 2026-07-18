@@ -51,10 +51,28 @@ cmd_start() {
     echo -e "${D}Already running${N} (pid $pid)"
     return 0
   fi
+  local daemon="$PROJECT_DIR/out/daemon/main.mjs"
+  if [[ ! -f "$daemon" ]]; then
+    echo -e "${B}Building daemon...${N}"
+    (cd "$PROJECT_DIR" && npm run build:daemon)
+  fi
   echo -e "${B}Starting daemon...${N}"
-  cd "$PROJECT_DIR"
-  npm run dev &
-  echo -e "${G}Dev server starting${N}"
+  mkdir -p "$BOND_DIR"
+  nohup node "$daemon" >> "$LOG_FILE" 2>&1 </dev/null &
+  local child=$!
+  for _ in {1..30}; do
+    if daemon_pid >/dev/null; then
+      echo -e "${G}Daemon running${N} (pid $(daemon_pid))"
+      return 0
+    fi
+    if ! kill -0 "$child" 2>/dev/null; then
+      echo -e "${R}Daemon failed to start${N}; see $LOG_FILE"
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo -e "${R}Daemon did not become ready${N}; see $LOG_FILE"
+  return 1
 }
 
 cmd_restart() {
