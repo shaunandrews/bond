@@ -33,6 +33,7 @@ defineProps<{
 
 <style scoped>
 .bond-toolbar {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
@@ -49,11 +50,10 @@ defineProps<{
   padding-left: 5.5rem;
 }
 
-.bond-toolbar--blur {
-  position: relative;
-}
-
-.bond-toolbar--blur::before {
+/* The blur layer is always present but invisible until the `blur` prop turns
+   it on (ViewShell passes scrolled state) — driving it with opacity instead
+   of toggling the pseudo-element lets it fade smoothly in and out. */
+.bond-toolbar::before {
   content: '';
   position: absolute;
   top: 0;
@@ -61,8 +61,15 @@ defineProps<{
   right: 0;
   bottom: -24px;
   z-index: -1;
+  pointer-events: none;
   backdrop-filter: blur(12px);
   mask-image: linear-gradient(to bottom, black 40%, transparent);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.bond-toolbar--blur::before {
+  opacity: 1;
 }
 
 .bond-toolbar__start {

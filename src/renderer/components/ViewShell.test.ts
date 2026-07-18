@@ -23,6 +23,16 @@ describe('ViewShell', () => {
     expect(wrapper.find('.bond-toolbar__start').exists()).toBe(false)
   })
 
+  it('only enables header blur after scrolling', async () => {
+    const wrapper = mount(ViewShell, { props: { title: 'Test' } })
+    const scrollArea = wrapper.find('.view-scroll-area')
+
+    expect(wrapper.find('.bond-toolbar--blur').exists()).toBe(false)
+    Object.defineProperty(scrollArea.element, 'scrollTop', { value: 20, configurable: true })
+    await scrollArea.trigger('scroll')
+    expect(wrapper.find('.bond-toolbar--blur').exists()).toBe(true)
+  })
+
   it('header-start is inside the toolbar which is inside view-header', () => {
     const wrapper = mount(ViewShell, {
       props: { title: 'Test' },

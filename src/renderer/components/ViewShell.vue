@@ -13,6 +13,7 @@ const emit = defineEmits<{
 }>()
 
 const scrollAreaEl = ref<HTMLElement | null>(null)
+const scrolled = ref(false)
 const editing = ref(false)
 const editValue = ref('')
 const inputRef = ref<HTMLInputElement | null>(null)
@@ -40,6 +41,10 @@ function cancelEdit() {
   editing.value = false
 }
 
+function onScroll(event: Event) {
+  scrolled.value = (event.currentTarget as HTMLElement).scrollTop > 0
+}
+
 function onInputKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter') { e.preventDefault(); commitEdit() }
   else if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
@@ -50,11 +55,11 @@ defineExpose({ scrollAreaEl })
 
 <template>
   <div class="view-shell">
-    <div ref="scrollAreaEl" class="view-scroll-area">
+    <div ref="scrollAreaEl" class="view-scroll-area" @scroll.passive="onScroll">
       <BondToolbar
         label="View navigation"
         drag
-        blur
+        :blur="scrolled"
         :insetStart="insetStart"
         class="view-header"
       >
