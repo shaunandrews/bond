@@ -231,7 +231,7 @@ const components = [
     name: 'ChatInput',
     file: 'components/ChatInput.vue',
     category: 'Composed',
-    description: 'Textarea with Send/Stop buttons and model selector. Handles Enter-to-submit, auto-focuses after response.',
+    description: 'Composer with attachments, contextual Send/Stop actions, and a combined reasoning and permissions menu.',
     props: [
       { name: 'busy', type: 'boolean', description: 'When true, disables input and enables Stop button' },
     ],

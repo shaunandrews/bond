@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, toRefs, nextTick, onMounted } from 'vue'
-import { PhArrowUp, PhPaperclip, PhX } from '@phosphor-icons/vue'
+import { PhArrowUp, PhCheck, PhPaperclip, PhSlidersHorizontal, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
 import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode, type ImageMediaType } from '../../shared/session'
 import BondButton from './BondButton.vue'
-import BondSelect from './BondSelect.vue'
+import BondFlyoutMenu from './BondFlyoutMenu.vue'
+import BondText from './BondText.vue'
 import ContextGauge from './ContextGauge.vue'
 
 function highlightMarkdownSyntax(text: string): string {
@@ -73,6 +74,7 @@ const props = defineProps<{
   model: ModelId
   editMode: EditMode
   contextUsage?: { inputTokens: number; contextWindow: number; costUsd: number }
+  placeholder?: string
 }>()
 const { busy } = toRefs(props)
 
@@ -114,8 +116,14 @@ function handleScopedPathsChange(e: Event) {
   emit('update:editMode', { type: 'scoped', allowedPaths: paths })
 }
 
-const modelOptions = MODEL_IDS.map(id => ({ value: id, label: id.charAt(0).toUpperCase() + id.slice(1) }))
-const editModeOptions = EDIT_MODE_OPTIONS.map(o => ({ value: o.value, label: o.label }))
+const modelLabels: Record<ModelId, string> = {
+  high: 'High',
+  balanced: 'Balanced',
+  fast: 'Fast',
+}
+
+const settingsMenuOpen = ref(false)
+const settingsButtonRef = ref<InstanceType<typeof BondButton> | null>(null)
 
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const previewEl = ref<HTMLElement | null>(null)
@@ -379,7 +387,7 @@ function handleKeyDown(e: KeyboardEvent) {
         <textarea
           ref="inputEl"
           rows="2"
-          placeholder="Ask Bond something…"
+          :placeholder="props.placeholder ?? 'Ask Bond something…'"
           :spellcheck="false"
           @keydown="handleKeyDown"
           @input="autoResize(); updateSkillMenu(); updatePreview()"
@@ -403,7 +411,9 @@ function handleKeyDown(e: KeyboardEvent) {
 
       <!-- Toolbar -->
       <div class="flex items-center justify-between pt-1">
-        <div class="flex items-center gap-s">
+        <!-- self-end: the 26px ghost button otherwise centers against the 32px
+             send button and its bottom edge floats 3px high. -->
+        <div class="flex items-center gap-s self-end">
           <BondButton
             variant="ghost"
             size="sm"
@@ -421,24 +431,70 @@ function handleKeyDown(e: KeyboardEvent) {
             class="hidden"
             @change="handleFileChange"
           />
-          <BondSelect
-            :modelValue="model"
-            :options="modelOptions"
-            placement="top"
-            variant="minimal"
-            size="sm"
-            @update:modelValue="emit('update:model', $event as ModelId)"
-          />
-          <BondSelect
-            :modelValue="editMode.type"
-            :options="editModeOptions"
-            placement="top"
-            variant="minimal"
-            size="sm"
-            @update:modelValue="handleEditModeChange"
-          />
         </div>
         <div class="flex items-center gap-3">
+          <ContextGauge
+            v-if="contextUsage"
+            :used="contextUsage.inputTokens"
+            :limit="contextUsage.contextWindow"
+            :cost="contextUsage.costUsd"
+          />
+          <BondButton
+            ref="settingsButtonRef"
+            data-action="composer-settings"
+            variant="ghost"
+            size="sm"
+            icon
+            :aria-expanded="settingsMenuOpen"
+            aria-haspopup="menu"
+            aria-label="Reasoning and permissions"
+            @click.stop="settingsMenuOpen = !settingsMenuOpen"
+            v-tooltip="'Reasoning and permissions'"
+          >
+            <PhSlidersHorizontal :size="16" weight="bold" />
+          </BondButton>
+          <BondFlyoutMenu
+            :open="settingsMenuOpen"
+            :anchor="settingsButtonRef?.$el ?? null"
+            placement="top-end"
+            :width="244"
+            padding
+            @close="settingsMenuOpen = false"
+          >
+            <div class="composer-settings-section">
+              <BondText as="div" size="xs" weight="medium" color="muted" class="composer-settings-label">Reasoning</BondText>
+              <button
+                v-for="modelId in MODEL_IDS"
+                :key="modelId"
+                type="button"
+                class="composer-settings-option"
+                :data-model="modelId"
+                role="menuitemradio"
+                :aria-checked="model === modelId"
+                @click="emit('update:model', modelId)"
+              >
+                <span>{{ modelLabels[modelId] }}</span>
+                <PhCheck v-if="model === modelId" :size="14" weight="bold" />
+              </button>
+            </div>
+            <div class="composer-settings-divider" />
+            <div class="composer-settings-section">
+              <BondText as="div" size="xs" weight="medium" color="muted" class="composer-settings-label">Permissions</BondText>
+              <button
+                v-for="option in EDIT_MODE_OPTIONS"
+                :key="option.value"
+                type="button"
+                class="composer-settings-option"
+                :data-edit-mode="option.value"
+                role="menuitemradio"
+                :aria-checked="editMode.type === option.value"
+                @click="handleEditModeChange(option.value)"
+              >
+                <span>{{ option.label }}</span>
+                <PhCheck v-if="editMode.type === option.value" :size="14" weight="bold" />
+              </button>
+            </div>
+          </BondFlyoutMenu>
           <BondButton
             v-if="busy"
             variant="ghost"
@@ -448,12 +504,6 @@ function handleKeyDown(e: KeyboardEvent) {
           >
             Esc to stop
           </BondButton>
-          <ContextGauge
-            v-if="contextUsage"
-            :used="contextUsage.inputTokens"
-            :limit="contextUsage.contextWindow"
-            :cost="contextUsage.costUsd"
-          />
           <button
             type="button"
             data-action="send"
@@ -589,5 +639,48 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 .skill-menu-item.is-selected {
   background: var(--color-tint);
+}
+
+.composer-settings-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.composer-settings-label {
+  padding: 0.5rem 0.625rem 0.25rem;
+}
+
+.composer-settings-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.45rem 0.625rem;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.composer-settings-option:hover,
+.composer-settings-option:focus-visible {
+  background: var(--color-tint);
+  outline: none;
+}
+
+.composer-settings-option svg {
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+
+.composer-settings-divider {
+  height: 1px;
+  margin: 0.25rem 0.375rem;
+  background: var(--color-border);
 }
 </style>
