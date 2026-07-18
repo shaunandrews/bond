@@ -39,8 +39,6 @@ export interface SenseSettings {
   autoContextInChat: boolean
   clipboardCapture: boolean
   textExtractionPreference: 'auto' | 'accessibility' | 'ocr'
-  chatMemoryInject: boolean
-  chatMemoryWindowDays: number
 }
 
 export const DEFAULT_SENSE_SETTINGS: SenseSettings = {
@@ -56,8 +54,6 @@ export const DEFAULT_SENSE_SETTINGS: SenseSettings = {
   autoContextInChat: false,
   clipboardCapture: true,
   textExtractionPreference: 'auto',
-  chatMemoryInject: true,
-  chatMemoryWindowDays: 7,
 }
 
 export type SenseState = 'disabled' | 'armed' | 'recording' | 'idle' | 'paused' | 'suspended'
@@ -112,7 +108,7 @@ export interface AppTextQuality {
   updatedAt: string
 }
 
-// --- Sense Memory: Session Debriefs & Facts ---
+// --- Sense Memory compatibility types ---
 
 export interface SessionDebrief {
   id: string
@@ -122,6 +118,7 @@ export interface SessionDebrief {
 
   summary: string
   topics: string[]
+  /** Legacy fields retained for old debrief rows; active code writes empty arrays. */
   decisions: string[]
   openThreads: string[]
   keyFacts: string[]
@@ -142,7 +139,7 @@ export interface SenseFact {
   updatedAt: string
 }
 
-/** Open thread enriched with source session context (returned by sense.threads RPC) */
+/** Legacy open thread shape retained for old data compatibility. */
 export interface OpenThread {
   thread: string
   debriefId: string
@@ -151,7 +148,7 @@ export interface OpenThread {
   createdAt: string
 }
 
-/** Decision enriched with source session context (returned by sense.decisions RPC) */
+/** Legacy decision shape retained for old data compatibility. */
 export interface DecisionWithContext {
   decision: string
   debriefId: string

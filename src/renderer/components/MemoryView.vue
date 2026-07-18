@@ -4,37 +4,25 @@ import { useMemory } from '../composables/useMemory'
 import BondToolbar from './BondToolbar.vue'
 import BondText from './BondText.vue'
 import BondTab from './BondTab.vue'
-import MemoryFactCard from './MemoryFactCard.vue'
-import MemoryThreadCard from './MemoryThreadCard.vue'
-import MemoryDecisionItem from './MemoryDecisionItem.vue'
 import MemoryDebriefCard from './MemoryDebriefCard.vue'
 import MemoryDebriefDetail from './MemoryDebriefDetail.vue'
 import type { SessionDebrief } from '../../shared/sense'
 
 const memory = useMemory()
-const emit = defineEmits<{ (e: 'resume', sessionId: string): void }>()
+const emit = defineEmits<{ (e: 'openSession', sessionId: string): void }>()
 
-type FilterType = 'all' | 'facts' | 'threads' | 'decisions' | 'prompt'
-const filter = ref<FilterType>('all')
+type TabType = 'debriefs' | 'prompt'
+const activeTab = ref<TabType>('debriefs')
 const activeDebrief = ref<SessionDebrief | null>(null)
-
-// System prompt preview state
 const promptPreview = ref('')
 const promptLoading = ref(false)
 
-const filterTabs = [
-  { id: 'all', label: 'All' },
-  { id: 'facts', label: 'Facts' },
-  { id: 'threads', label: 'Threads' },
-  { id: 'decisions', label: 'Decisions' },
+const tabs = [
+  { id: 'debriefs', label: 'Debriefs' },
   { id: 'prompt', label: 'Prompt' },
 ]
 
-const showFacts = computed(() => filter.value === 'all' || filter.value === 'facts')
-const showThreads = computed(() => filter.value === 'all' || filter.value === 'threads')
-const showDecisions = computed(() => filter.value === 'all' || filter.value === 'decisions')
-const showDebriefs = computed(() => filter.value === 'all' || filter.value === 'decisions')
-const showPrompt = computed(() => filter.value === 'prompt')
+const showPrompt = computed(() => activeTab.value === 'prompt')
 
 async function loadPromptPreview() {
   promptLoading.value = true
@@ -49,11 +37,8 @@ async function loadPromptPreview() {
   }
 }
 
-// Load prompt when switching to that tab
-watch(filter, (val) => {
-  if (val === 'prompt' && !promptPreview.value) {
-    loadPromptPreview()
-  }
+watch(activeTab, (val) => {
+  if (val === 'prompt') loadPromptPreview()
 })
 
 function handleSelectDebrief(id: string) {
@@ -61,53 +46,27 @@ function handleSelectDebrief(id: string) {
   if (d) activeDebrief.value = d
 }
 
-function handleBackFromDebrief() {
-  activeDebrief.value = null
-}
-
-function handlePinFact(fact: string) {
-  memory.pinFact(fact)
-}
-
-function handleUpdateFact(id: string, text: string) {
-  memory.updateFact(id, text)
-}
-
-function handleDismissThread(debriefId: string, thread: string) {
-  memory.dismissThread(debriefId, thread)
-}
-
-function handleRemoveDecision(debriefId: string, decision: string) {
-  memory.removeDecision(debriefId, decision)
-}
-
 function handleDeleteDebrief(id: string) {
   memory.deleteDebrief(id)
   activeDebrief.value = null
 }
 
-function handleResumeThread(sessionId: string) {
-  emit('resume', sessionId)
-}
-
 onMounted(() => {
-  if (memory.facts.value.length === 0 && memory.debriefs.value.length === 0 && !memory.loading.value) {
+  if (memory.debriefs.value.length === 0 && !memory.loading.value) {
     memory.loadMemory()
   }
 })
 </script>
 
 <template>
-  <!-- Detail view for a selected debrief -->
   <MemoryDebriefDetail
     v-if="activeDebrief"
     :debrief="activeDebrief"
-    @back="handleBackFromDebrief"
-    @pinFact="handlePinFact"
+    @back="activeDebrief = null"
     @delete="handleDeleteDebrief"
+    @openSession="emit('openSession', $event)"
   />
 
-  <!-- List view -->
   <div v-else class="memory-panel">
     <BondToolbar label="Memory" drag blur>
       <template #middle>
@@ -115,11 +74,10 @@ onMounted(() => {
       </template>
     </BondToolbar>
 
-    <div class="memory-filter">
-      <BondTab :tabs="filterTabs" :modelValue="filter" @update:modelValue="filter = $event as FilterType" />
+    <div class="memory-tabs">
+      <BondTab :tabs="tabs" :modelValue="activeTab" @update:modelValue="activeTab = $event as TabType" />
     </div>
 
-    <!-- System Prompt preview -->
     <div v-if="showPrompt" class="memory-body">
       <div v-if="promptLoading" class="memory-empty">
         <BondText size="sm" color="muted">Loading prompt...</BondText>
@@ -127,8 +85,7 @@ onMounted(() => {
       <div v-else class="prompt-preview">
         <div class="prompt-header">
           <BondText size="xs" color="muted">
-            This is the full system prompt Bond would inject into a new chat right now.
-            Editing facts, threads, and decisions above changes what appears here.
+            Exact full system prompt used for a new Bond query right now.
           </BondText>
           <button class="prompt-refresh" @click="loadPromptPreview">
             <BondText size="xs" color="accent">Refresh</BondText>
@@ -138,90 +95,28 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Memory sections -->
     <div v-else class="memory-body">
-      <!-- Loading -->
       <div v-if="memory.loading.value" class="memory-empty">
-        <BondText size="sm" color="muted">Loading memory...</BondText>
+        <BondText size="sm" color="muted">Loading debriefs...</BondText>
       </div>
 
-      <!-- Empty state -->
       <div v-else-if="memory.isEmpty.value" class="memory-empty">
-        <BondText size="sm" color="muted">No memories yet. Bond builds memory as you archive sessions.</BondText>
+        <BondText size="sm" color="muted">No debriefs yet. Archive sessions to generate them.</BondText>
       </div>
 
-      <!-- Content sections -->
-      <template v-else>
-        <!-- Pinned Facts -->
-        <section v-if="showFacts && memory.facts.value.length > 0" class="memory-section">
-          <BondText size="xs" weight="semibold" color="muted" as="h3" class="section-heading">
-            Pinned Facts ({{ memory.facts.value.length }})
-          </BondText>
-          <div class="facts-grid">
-            <MemoryFactCard
-              v-for="fact in memory.facts.value"
-              :key="fact.id"
-              :fact="fact"
-              @forget="memory.forgetFact($event)"
-              @update="handleUpdateFact"
-            />
-          </div>
-        </section>
-
-        <div v-if="showFacts && memory.facts.value.length === 0 && filter === 'facts'" class="memory-empty-section">
-          <BondText size="xs" color="muted">No pinned facts. Say "remember that..." in a chat to pin one.</BondText>
+      <section v-else class="memory-section">
+        <BondText size="xs" weight="semibold" color="muted" as="h3" class="section-heading">
+          Session Debriefs ({{ memory.debriefs.value.length }})
+        </BondText>
+        <div class="debriefs-list">
+          <MemoryDebriefCard
+            v-for="debrief in memory.debriefs.value"
+            :key="debrief.id"
+            :debrief="debrief"
+            @select="handleSelectDebrief"
+          />
         </div>
-
-        <!-- Open Threads -->
-        <section v-if="showThreads && memory.threads.value.length > 0" class="memory-section">
-          <BondText size="xs" weight="semibold" color="muted" as="h3" class="section-heading">
-            Open Threads ({{ memory.threads.value.length }})
-          </BondText>
-          <div class="threads-list">
-            <MemoryThreadCard
-              v-for="(thread, i) in memory.threads.value"
-              :key="i"
-              :thread="thread"
-              @resume="handleResumeThread"
-              @dismiss="handleDismissThread"
-            />
-          </div>
-        </section>
-
-        <div v-if="showThreads && memory.threads.value.length === 0 && filter === 'threads'" class="memory-empty-section">
-          <BondText size="xs" color="muted">No open threads. Nice — everything's resolved.</BondText>
-        </div>
-
-        <!-- Recent Decisions -->
-        <section v-if="showDecisions && memory.decisions.value.length > 0" class="memory-section">
-          <BondText size="xs" weight="semibold" color="muted" as="h3" class="section-heading">
-            Recent Decisions
-          </BondText>
-          <div class="decisions-list">
-            <MemoryDecisionItem
-              v-for="(decision, i) in memory.decisions.value"
-              :key="i"
-              :decision="decision"
-              @remove="handleRemoveDecision"
-            />
-          </div>
-        </section>
-
-        <!-- Session Debriefs -->
-        <section v-if="showDebriefs && memory.debriefs.value.length > 0" class="memory-section">
-          <BondText size="xs" weight="semibold" color="muted" as="h3" class="section-heading">
-            Session Debriefs
-          </BondText>
-          <div class="debriefs-list">
-            <MemoryDebriefCard
-              v-for="debrief in memory.debriefs.value"
-              :key="debrief.id"
-              :debrief="debrief"
-              @select="handleSelectDebrief"
-            />
-          </div>
-        </section>
-      </template>
+      </section>
     </div>
   </div>
 </template>
@@ -236,7 +131,7 @@ onMounted(() => {
   background: var(--color-bg);
 }
 
-.memory-filter {
+.memory-tabs {
   padding: 0.375rem 0.75rem;
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
@@ -264,26 +159,10 @@ onMounted(() => {
   padding: 0 0.125rem;
 }
 
-.facts-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.375rem;
-}
-
-.threads-list,
 .debriefs-list {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-}
-
-.decisions-list {
-  display: flex;
-  flex-direction: column;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 0.375rem 0.625rem;
 }
 
 .memory-empty {
@@ -295,12 +174,6 @@ onMounted(() => {
   text-align: center;
 }
 
-.memory-empty-section {
-  padding: 1rem 0.125rem;
-  text-align: center;
-}
-
-/* Prompt preview */
 .prompt-preview {
   display: flex;
   flex-direction: column;

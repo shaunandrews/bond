@@ -169,7 +169,7 @@ function toggleRightPanel(panel?: RightPanelContent) {
   localStorage.setItem('bond:right-panel-content', rightPanelContent.value)
 }
 
-async function handleResumeThread(sessionId: string) {
+async function handleOpenDebriefSession(sessionId: string) {
   const session = sessions.sessions.value.find(s => s.id === sessionId)
   if (!session) return
   if (session.archived) await sessions.unarchive(sessionId)
@@ -539,7 +539,7 @@ onUnmounted(() => {
         @back="collections.select(null)"
       />
       <SensePanelView v-else-if="rightPanelContent === 'sense'" />
-      <MemoryView v-else-if="rightPanelContent === 'memory'" @resume="handleResumeThread" />
+      <MemoryView v-else-if="rightPanelContent === 'memory'" @openSession="handleOpenDebriefSession" />
       <MediaView v-else-if="rightPanelContent === 'media'" />
     </BondPanel>
   </BondPanelGroup>

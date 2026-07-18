@@ -78,18 +78,7 @@ import {
   getDebriefBySession,
   listDebriefs,
   searchDebriefs,
-  getRecentOpenThreads,
-  getRecentOpenThreadsEnriched,
-  getRecentDecisions,
-  createFact,
-  getActiveFacts,
-  listFacts,
-  deactivateFact,
-  updateFact,
   deleteDebrief,
-  removeDebriefThread,
-  removeDebriefDecision,
-  searchFacts,
 } from './debriefs'
 import { backfillDebriefs } from './generate-debrief'
 import {
@@ -966,7 +955,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const limit = getNumberParam(p, 'limit') ?? 20
         const db = getDb()
 
-        // Cross-channel search: screen captures + debriefs + facts
+        // Cross-channel search: screen captures + session debriefs
         const captures = db.prepare(`
           SELECT *, 'see' as channel FROM sense_captures
           WHERE text_content LIKE ? OR app_name LIKE ? OR window_title LIKE ?
@@ -979,16 +968,10 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           channel: 'chat' as const,
         }))
 
-        const factResults = searchFacts(searchQuery).map(f => ({
-          ...f,
-          channel: 'fact' as const,
-        }))
-
         // Unified results sorted by date
         const unified = [
           ...captures.map(c => ({ ...c, _sortDate: c.captured_at as string })),
           ...debriefResults.map(d => ({ ...d, _sortDate: d.createdAt })),
-          ...factResults.map(f => ({ ...f, _sortDate: f.createdAt })),
         ].sort((a, b) => b._sortDate.localeCompare(a._sortDate)).slice(0, limit)
 
         return JSON.stringify(makeResponse(id, unified))
@@ -1077,24 +1060,11 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, stats))
       }
 
-      // --- Sense Memory ---
+      // --- Sense Debriefs ---
       case 'sense.memory': {
-        const limit = getNumberParam(p, 'limit') ?? 5
+        const limit = getNumberParam(p, 'limit') ?? 20
         const debriefs = listDebriefs({ limit })
-        const facts = getActiveFacts()
-        return JSON.stringify(makeResponse(id, { debriefs, facts }))
-      }
-      case 'sense.threads': {
-        const limit = getNumberParam(p, 'limit') ?? 10
-        const projectId = getStringParam(p, 'projectId')
-        const threads = getRecentOpenThreadsEnriched({ limit, projectId: projectId ?? undefined, excludeResolved: true })
-        return JSON.stringify(makeResponse(id, threads))
-      }
-      case 'sense.decisions': {
-        const limit = getNumberParam(p, 'limit') ?? 10
-        const projectId = getStringParam(p, 'projectId')
-        const decisions = getRecentDecisions({ limit, projectId: projectId ?? undefined })
-        return JSON.stringify(makeResponse(id, decisions))
+        return JSON.stringify(makeResponse(id, { debriefs }))
       }
       case 'sense.debrief': {
         const debriefId = getStringParam(p, 'id')
@@ -1104,50 +1074,10 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         else if (sessionId) debrief = getDebriefBySession(sessionId)
         return JSON.stringify(makeResponse(id, debrief))
       }
-      case 'sense.remember': {
-        const fact = getStringParam(p, 'fact')
-        if (!fact) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'fact is required'))
-        const projectId = getStringParam(p, 'projectId')
-        const created = createFact(fact, { projectId: projectId ?? undefined })
-        return JSON.stringify(makeResponse(id, created))
-      }
-      case 'sense.facts': {
-        const projectId = getStringParam(p, 'projectId')
-        const facts = listFacts({ active: true, projectId: projectId ?? undefined })
-        return JSON.stringify(makeResponse(id, facts))
-      }
-      case 'sense.forget': {
-        const factId = getStringParam(p, 'id')
-        if (!factId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const ok = deactivateFact(factId)
-        return JSON.stringify(makeResponse(id, { ok }))
-      }
-      case 'sense.updateFact': {
-        const factId = getStringParam(p, 'id')
-        const factText = getStringParam(p, 'fact')
-        if (!factId || !factText) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id and fact are required'))
-        const updated = updateFact(factId, factText)
-        if (!updated) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'fact not found'))
-        return JSON.stringify(makeResponse(id, updated))
-      }
       case 'sense.deleteDebrief': {
         const debriefId = getStringParam(p, 'id')
         if (!debriefId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
         const ok = deleteDebrief(debriefId)
-        return JSON.stringify(makeResponse(id, { ok }))
-      }
-      case 'sense.dismissThread': {
-        const debriefId = getStringParam(p, 'debriefId')
-        const thread = getStringParam(p, 'thread')
-        if (!debriefId || !thread) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'debriefId and thread are required'))
-        const ok = removeDebriefThread(debriefId, thread)
-        return JSON.stringify(makeResponse(id, { ok }))
-      }
-      case 'sense.removeDecision': {
-        const debriefId = getStringParam(p, 'debriefId')
-        const decision = getStringParam(p, 'decision')
-        if (!debriefId || !decision) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'debriefId and decision are required'))
-        const ok = removeDebriefDecision(debriefId, decision)
         return JSON.stringify(makeResponse(id, { ok }))
       }
       case 'sense.systemPromptPreview': {

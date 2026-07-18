@@ -28,11 +28,8 @@ function summaryPreview(summary: string): string {
       <BondText size="xs" color="muted" class="debrief-date">{{ formatDate(debrief.createdAt) }}</BondText>
     </div>
     <BondText size="xs" color="muted" class="debrief-summary">{{ summaryPreview(debrief.summary) }}</BondText>
-    <div class="debrief-tags" v-if="debrief.topics.length > 0 || debrief.decisions.length > 0">
-      <span v-for="topic in debrief.topics.slice(0, 3)" :key="topic" class="debrief-tag">{{ topic }}</span>
-      <BondText v-if="debrief.decisions.length > 0" size="xs" color="muted">
-        {{ debrief.decisions.length }} decision{{ debrief.decisions.length === 1 ? '' : 's' }}
-      </BondText>
+    <div class="debrief-tags" v-if="debrief.topics.length > 0">
+      <span v-for="topic in debrief.topics.slice(0, 4)" :key="topic" class="debrief-tag">{{ topic }}</span>
     </div>
   </div>
 </template>

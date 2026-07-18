@@ -61,9 +61,6 @@ export async function generateDebrief(sessionId: string): Promise<SessionDebrief
     parsed = {
       summary: `Session "${session.title}" with ${substantive.length} messages.`,
       topics: [],
-      decisions: [],
-      openThreads: [],
-      keyFacts: [],
     }
   }
 
@@ -88,9 +85,9 @@ export async function generateDebrief(sessionId: string): Promise<SessionDebrief
     projectId: session.projectId ?? null,
     summary: parsed.summary,
     topics: parsed.topics,
-    decisions: parsed.decisions,
-    openThreads: parsed.openThreads,
-    keyFacts: parsed.keyFacts,
+    decisions: [],
+    openThreads: [],
+    keyFacts: [],
     messageCount: substantive.length,
     durationSeconds,
     createdAt: now,
@@ -178,11 +175,8 @@ function buildPrompt(transcript: string): string {
 The JSON must have these fields:
 - "summary": 2-3 sentence overview of what happened
 - "topics": array of tag-like topic labels (e.g. "memory-system", "css-layout", "bug-fix")
-- "decisions": array of things agreed on or concluded. A decision is something the user agreed to or that was concluded during the conversation.
-- "openThreads": array of unresolved items or carry-forward work. An open thread is something discussed but not resolved — work that's still in progress.
-- "keyFacts": array of durable facts learned (user preferences, project conventions, technical constraints)
 
-If the session is trivial (routine task, no decisions or threads), use empty arrays — don't force extraction.
+If the session is trivial, still provide a concise summary and use an empty topics array if no clear labels apply.
 
 Conversation:
 ${transcript}
@@ -193,9 +187,7 @@ Reply with ONLY valid JSON, no markdown fences:`
 interface ParsedDebrief {
   summary: string
   topics: string[]
-  decisions: string[]
-  openThreads: string[]
-  keyFacts: string[]
+
 }
 
 async function callSonnet(prompt: string): Promise<ParsedDebrief | null> {
@@ -240,15 +232,8 @@ async function callSonnet(prompt: string): Promise<ParsedDebrief | null> {
     // Validate structure
     if (typeof parsed.summary !== 'string') return null
     if (!Array.isArray(parsed.topics)) parsed.topics = []
-    if (!Array.isArray(parsed.decisions)) parsed.decisions = []
-    if (!Array.isArray(parsed.openThreads)) parsed.openThreads = []
-    if (!Array.isArray(parsed.keyFacts)) parsed.keyFacts = []
-
     // Ensure all array items are strings
     parsed.topics = parsed.topics.filter((t: unknown) => typeof t === 'string')
-    parsed.decisions = parsed.decisions.filter((d: unknown) => typeof d === 'string')
-    parsed.openThreads = parsed.openThreads.filter((t: unknown) => typeof t === 'string')
-    parsed.keyFacts = parsed.keyFacts.filter((f: unknown) => typeof f === 'string')
 
     return parsed as ParsedDebrief
   } catch (err: any) {

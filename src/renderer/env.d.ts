@@ -92,18 +92,10 @@ declare global {
       senseClear: (range?: { from?: string; to?: string }) => Promise<unknown>
       senseStats: () => Promise<unknown>
       hasScreenRecordingPermission: () => Promise<boolean>
-      // Sense Memory
-      senseMemory: (limit?: number) => Promise<{ debriefs: import('../../shared/sense').SessionDebrief[]; facts: import('../../shared/sense').SenseFact[] }>
-      senseThreads: (limit?: number, projectId?: string) => Promise<import('../../shared/sense').OpenThread[]>
-      senseDecisions: (limit?: number, projectId?: string) => Promise<import('../../shared/sense').DecisionWithContext[]>
+      // Sense Debriefs
+      senseMemory: (limit?: number) => Promise<{ debriefs: import('../../shared/sense').SessionDebrief[] }>
       senseDebrief: (id?: string, sessionId?: string) => Promise<import('../../shared/sense').SessionDebrief | null>
-      senseRemember: (fact: string, projectId?: string) => Promise<import('../../shared/sense').SenseFact>
-      senseFacts: (projectId?: string) => Promise<import('../../shared/sense').SenseFact[]>
-      senseForget: (id: string) => Promise<{ ok: boolean }>
-      senseUpdateFact: (id: string, fact: string) => Promise<import('../../shared/sense').SenseFact>
       senseDeleteDebrief: (id: string) => Promise<{ ok: boolean }>
-      senseDismissThread: (debriefId: string, thread: string) => Promise<{ ok: boolean }>
-      senseRemoveDecision: (debriefId: string, decision: string) => Promise<{ ok: boolean }>
       senseSystemPromptPreview: (projectId?: string) => Promise<{ prompt: string }>
       // Connection status
       onConnectionLost: (fn: () => void) => () => void

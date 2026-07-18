@@ -189,6 +189,9 @@ src/
       SenseDetail.vue                # Screenshot viewer with metadata and extracted text
       SenseAppLegend.vue             # App color legend with filter chips
       SenseSearch.vue                # Inline search with results flyout
+      MemoryView.vue                 # Session debriefs + exact prompt preview
+      MemoryDebriefCard.vue          # Debrief list card
+      MemoryDebriefDetail.vue        # Debrief summary/topics/session detail
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
 electron.vite.config.ts                  # Build config (main, preload, renderer)
@@ -345,6 +348,13 @@ Inline search input in the header bar. Debounced 300ms text search with results 
 - **Props:** `results: SenseCapture[]`, `query: string`
 - **Events:** `search(query: string)`, `select(capture: SenseCapture)`, `clear()`
 - **Expose:** `focus()`
+
+### MemoryView
+Right-panel memory view. Session Debriefs are the only active memory concept; Facts, Threads, and Decisions are legacy database compatibility only and are not shown, edited, or injected into prompts.
+- **Tabs:** Debriefs, Prompt
+- **Debriefs:** list/select/delete session debriefs; detail shows summary, topics, metadata, and a session link
+- **Prompt:** exact full system prompt returned by `sense.systemPromptPreview`, built by the same daemon `buildSystemPrompt()` used for real agent queries
+- **Events:** `openSession(sessionId)`
 
 ### DevComponents
 Dev-only component catalog with live previews and prop/event documentation. Accessible from the Settings window Components tab. Not rendered in production flows.

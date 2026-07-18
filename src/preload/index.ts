@@ -202,29 +202,13 @@ contextBridge.exposeInMainWorld('bond', {
   senseStats: () => ipcRenderer.invoke('sense:stats'),
   hasScreenRecordingPermission: () => ipcRenderer.invoke('sense:hasPermission'),
 
-  // Sense Memory
+  // Sense Debriefs
   senseMemory: (limit?: number) =>
     ipcRenderer.invoke('sense:memory', limit),
-  senseThreads: (limit?: number, projectId?: string) =>
-    ipcRenderer.invoke('sense:threads', limit, projectId),
-  senseDecisions: (limit?: number, projectId?: string) =>
-    ipcRenderer.invoke('sense:decisions', limit, projectId),
   senseDebrief: (id?: string, sessionId?: string) =>
     ipcRenderer.invoke('sense:debrief', id, sessionId),
-  senseRemember: (fact: string, projectId?: string) =>
-    ipcRenderer.invoke('sense:remember', fact, projectId),
-  senseFacts: (projectId?: string) =>
-    ipcRenderer.invoke('sense:facts', projectId),
-  senseForget: (id: string) =>
-    ipcRenderer.invoke('sense:forget', id),
-  senseUpdateFact: (id: string, fact: string) =>
-    ipcRenderer.invoke('sense:updateFact', id, fact),
   senseDeleteDebrief: (id: string) =>
     ipcRenderer.invoke('sense:deleteDebrief', id),
-  senseDismissThread: (debriefId: string, thread: string) =>
-    ipcRenderer.invoke('sense:dismissThread', debriefId, thread),
-  senseRemoveDecision: (debriefId: string, decision: string) =>
-    ipcRenderer.invoke('sense:removeDecision', debriefId, decision),
   senseSystemPromptPreview: (projectId?: string) =>
     ipcRenderer.invoke('sense:systemPromptPreview', projectId),
 

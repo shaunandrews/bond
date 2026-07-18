@@ -13,16 +13,11 @@
  *   bond sense today                          Today's summary
  *   bond sense yesterday                      Yesterday's summary
  *   bond sense week                           Weekly summary
- *   bond sense search <query>                 Cross-channel search (see + chat + facts)
+ *   bond sense search <query>                 Cross-channel search (screen + debriefs)
  *   bond sense apps [today|week]              App usage breakdown
  *   bond sense timeline [range]               Chronological activity
- *   bond sense memory                         Recent debriefs + active facts
- *   bond sense threads                        Open threads from recent sessions
- *   bond sense decisions                      Recent decisions
+ *   bond sense memory                         Recent session debriefs
  *   bond sense debrief <session-id>           Full debrief detail
- *   bond sense remember <fact>                Pin a fact
- *   bond sense facts                          List active facts
- *   bond sense forget <id|number>             Deactivate a fact
  *   bond sense backfill [--limit N]           Generate debriefs for old sessions
  *   bond sense exclude <bundleId>             Add app to blacklist
  *   bond sense include <bundleId>             Remove app from blacklist
@@ -298,17 +293,7 @@ async function main(): Promise<void> {
 
       case 'memory': {
         const result = await call(ws, 'sense.memory', { limit: 5 }) as {
-          debriefs: { session_title?: string; sessionTitle?: string; summary: string; created_at?: string; createdAt?: string; topics: string[] | string; decisions: string[] | string; open_threads?: string[] | string; openThreads?: string[] | string }[]
-          facts: { id: string; fact: string; project_id?: string; projectId?: string }[]
-        }
-        if (result.facts.length > 0) {
-          console.log(`${BOLD}Pinned Facts${RESET}`)
-          for (const f of result.facts) {
-            const proj = f.project_id || f.projectId
-            const tag = proj ? ` ${DIM}[project]${RESET}` : ''
-            console.log(`  - ${f.fact}${tag}`)
-          }
-          console.log()
+          debriefs: { session_title?: string; sessionTitle?: string; summary: string; created_at?: string; createdAt?: string; topics: string[] | string }[]
         }
         if (result.debriefs.length > 0) {
           console.log(`${BOLD}Recent Debriefs${RESET}`)
@@ -319,35 +304,8 @@ async function main(): Promise<void> {
             console.log(`    ${d.summary}`)
           }
         }
-        if (result.debriefs.length === 0 && result.facts.length === 0) {
-          console.log(`${DIM}No memory data yet. Archive some sessions to generate debriefs.${RESET}`)
-        }
-        break
-      }
-
-      case 'threads': {
-        const threads = await call(ws, 'sense.threads', { limit: 10 }) as string[]
-        if (threads.length === 0) {
-          console.log(`${DIM}No open threads${RESET}`)
-        } else {
-          console.log(`${BOLD}Open Threads${RESET}`)
-          for (const t of threads) {
-            console.log(`  - ${t}`)
-          }
-        }
-        break
-      }
-
-      case 'decisions': {
-        const decisions = await call(ws, 'sense.decisions', { limit: 10 }) as
-          { decision: string; sessionTitle: string; createdAt: string }[]
-        if (decisions.length === 0) {
-          console.log(`${DIM}No recent decisions${RESET}`)
-        } else {
-          console.log(`${BOLD}Recent Decisions${RESET}`)
-          for (const d of decisions) {
-            console.log(`  - ${d.decision}  ${DIM}(${d.sessionTitle})${RESET}`)
-          }
+        if (result.debriefs.length === 0) {
+          console.log(`${DIM}No debriefs yet. Archive some sessions to generate debriefs.${RESET}`)
         }
         break
       }
@@ -357,9 +315,7 @@ async function main(): Promise<void> {
         if (!sessionId) { console.error('Usage: bond sense debrief <session-id>'); process.exit(1) }
         const debrief = await call(ws, 'sense.debrief', { sessionId }) as {
           sessionTitle: string; session_title?: string; summary: string
-          topics: string[] | string; decisions: string[] | string
-          open_threads?: string[] | string; openThreads?: string[] | string
-          key_facts?: string[] | string; keyFacts?: string[] | string
+          topics: string[] | string
           messageCount?: number; message_count?: number
           durationSeconds?: number; duration_seconds?: number
           createdAt?: string; created_at?: string
@@ -372,77 +328,7 @@ async function main(): Promise<void> {
           console.log(`  ${debrief.summary}`)
           const topics = parseArr(debrief.topics)
           if (topics.length > 0) console.log(`\n  ${DIM}Topics:${RESET} ${topics.join(', ')}`)
-          const decisions = parseArr(debrief.decisions)
-          if (decisions.length > 0) {
-            console.log(`\n  ${BOLD}Decisions:${RESET}`)
-            for (const d of decisions) console.log(`    - ${d}`)
-          }
-          const threads = parseArr(debrief.openThreads ?? debrief.open_threads)
-          if (threads.length > 0) {
-            console.log(`\n  ${BOLD}Open Threads:${RESET}`)
-            for (const t of threads) console.log(`    - ${t}`)
-          }
-          const facts = parseArr(debrief.keyFacts ?? debrief.key_facts)
-          if (facts.length > 0) {
-            console.log(`\n  ${BOLD}Key Facts:${RESET}`)
-            for (const f of facts) console.log(`    - ${f}`)
-          }
-        }
-        break
-      }
 
-      case 'remember': {
-        const fact = args.slice(1).join(' ')
-        if (!fact) { console.error('Usage: bond sense remember <fact>'); process.exit(1) }
-        const projectArg = args.indexOf('--project')
-        let projectId: string | undefined
-        let factText = fact
-        if (projectArg !== -1) {
-          projectId = args[projectArg + 1]
-          factText = args.slice(1, projectArg).join(' ')
-        }
-        await call(ws, 'sense.remember', { fact: factText, projectId })
-        console.log(`${GREEN}Remembered${RESET}: ${factText}`)
-        break
-      }
-
-      case 'facts': {
-        const facts = await call(ws, 'sense.facts') as
-          { id: string; fact: string; source: string; project_id?: string; projectId?: string; created_at?: string; createdAt?: string }[]
-        if (facts.length === 0) {
-          console.log(`${DIM}No pinned facts${RESET}`)
-        } else {
-          console.log(`${BOLD}Active Facts${RESET}`)
-          for (let i = 0; i < facts.length; i++) {
-            const f = facts[i]
-            const proj = f.project_id || f.projectId
-            const src = f.source === 'debrief' ? ` ${DIM}[from debrief]${RESET}` : ''
-            const tag = proj ? ` ${DIM}[project]${RESET}` : ''
-            console.log(`  ${DIM}${i + 1}.${RESET} ${f.fact}${src}${tag}`)
-          }
-        }
-        break
-      }
-
-      case 'forget': {
-        const target = args[1]
-        if (!target) { console.error('Usage: bond sense forget <id|number>'); process.exit(1) }
-        // Support numeric index (1-based) or UUID
-        let factId = target
-        if (/^\d+$/.test(target)) {
-          const facts = await call(ws, 'sense.facts') as { id: string }[]
-          const idx = parseInt(target, 10) - 1
-          if (idx < 0 || idx >= facts.length) {
-            console.error(`Invalid fact number: ${target} (${facts.length} facts exist)`)
-            process.exit(1)
-          }
-          factId = facts[idx].id
-        }
-        const result = await call(ws, 'sense.forget', { id: factId }) as { ok: boolean }
-        if (result.ok) {
-          console.log(`${YELLOW}Forgotten${RESET}`)
-        } else {
-          console.log(`${RED}Fact not found${RESET}`)
         }
         break
       }
@@ -461,7 +347,7 @@ async function main(): Promise<void> {
 
       default:
         console.error(`Unknown command: ${cmd}`)
-        console.error('Usage: bond sense [status|on|off|pause|resume|now|today|search|apps|timeline|memory|threads|decisions|debrief|remember|facts|forget|backfill|exclude|include|excluded|clear|stats|config]')
+        console.error('Usage: bond sense [status|on|off|pause|resume|now|today|search|apps|timeline|memory|debrief|backfill|exclude|include|excluded|clear|stats|config]')
         process.exit(1)
     }
   } finally {

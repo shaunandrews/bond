@@ -275,6 +275,16 @@ const components = [
       { name: 'remove', payload: 'id: string', description: 'Delete a session' },
     ],
   },
+  {
+    name: 'MemoryView',
+    file: 'components/MemoryView.vue',
+    category: 'Composed',
+    description: 'Right-panel memory view with Debriefs and Prompt tabs. Lists/selects/deletes session debriefs and shows the exact system prompt preview.',
+    props: [],
+    events: [
+      { name: 'openSession', payload: 'sessionId: string', description: 'User clicked the session link in a debrief detail' },
+    ],
+  },
 ]
 
 const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const

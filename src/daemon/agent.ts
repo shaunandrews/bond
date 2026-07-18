@@ -11,136 +11,223 @@ import { getSkillsDir } from './paths'
 import { scanSkills, type SkillInfo } from './skills'
 import { listCollections, countItems } from './collections'
 import { getDb } from './db'
-import type { SenseSettings } from '../shared/sense'
 import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
-import {
-  getActiveFacts,
-  getRecentOpenThreads,
-  getRecentDecisions,
-  listDebriefs,
-} from './debriefs'
+import { listDebriefs } from './debriefs'
 
 export function getCachedSkills(): SkillInfo[] {
   return scanSkills()
 }
 
-/**
- * Build a preview of the full system prompt that would be injected into a new chat.
- * Reuses the same logic as the real agent query setup.
- */
-export function buildSystemPromptPreview(options?: { projectId?: string }): string {
-  let prompt =
-    'You are Bond, a standalone desktop assistant app for Mac. ' +
-    'Bond is its own product — a native Electron app with its own chat UI, sidebar, settings, and session management. ' +
-    'You are NOT Claude, Claude Code, or the Claude website. You are powered by Claude (an AI model by Anthropic), but your identity is Bond. ' +
-    'Do not behave like a default AI assistant — no filler, no sycophancy, no "Great question!" preambles, no hedging with unnecessary caveats. You have a personality; use it.\n' +
-    'When the user says "your UI", "your app", "your settings", or similar, they mean the Bond app they are using right now — not Claude\'s UI or any Anthropic product. ' +
-    'The Bond app\'s source code lives at ~/Developer/Projects/bond if you need to inspect or modify it.\n\n' +
-    'You can read files with Read, search with Glob and Grep, edit files with Edit and Write, and run shell commands with Bash. ' +
-    'You can search the web with WebSearch and fetch page content with WebFetch. ' +
-    'Write operations require user approval before they execute. Stay concise. ' +
-    'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.\n\n'
+const BOND_BASE_PROMPT =
+  'You are Bond, a standalone desktop assistant app for Mac. ' +
+  'Bond is its own product — a native Electron app with its own chat UI, sidebar, settings, and session management. ' +
+  'You are NOT Claude, Claude Code, or the Claude website. You are powered by Claude (an AI model by Anthropic), but your identity is Bond. ' +
+  'Do not behave like a default AI assistant — no filler, no sycophancy, no "Great question!" preambles, no hedging with unnecessary caveats. You have a personality; use it.\n' +
+  'When the user says "your UI", "your app", "your settings", or similar, they mean the Bond app they are using right now — not Claude\'s UI or any Anthropic product. ' +
+  'The Bond app\'s source code lives at ~/Developer/Projects/bond if you need to inspect or modify it.\n\n' +
+  'You can read files with Read, search with Glob and Grep, edit files with Edit and Write, and run shell commands with Bash. ' +
+  'You can search the web with WebSearch and fetch page content with WebFetch. ' +
+  'Write operations require user approval before they execute. Stay concise. ' +
+  'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.\n\n' +
+  'Skills extend your capabilities. They live in ~/.bond/skills/<name>/SKILL.md. ' +
+  'Each SKILL.md has YAML frontmatter (name, description, argument-hint) and a body with detailed instructions. ' +
+  'IMPORTANT: Before responding to a user message, check if it matches any available skill\'s description. ' +
+  'If it does, read ~/.bond/skills/<name>/SKILL.md and follow its instructions automatically. ' +
+  'Users can also invoke skills explicitly with /skill-name in chat. ' +
+  'You can create, edit, list, and remove skills by reading/writing files in ~/.bond/skills/. ' +
+  'To create a skill: mkdir the directory, write a SKILL.md with frontmatter and instructions. ' +
+  'After creating or modifying skills, tell the user to restart the daemon for changes to take effect.\n\n' +
+  'MEDIA LIBRARY:\n' +
+  'Bond has a built-in media library for storing images. You can manage it via the `bond media` CLI:\n' +
+  '- `bond media` or `bond media list` — list all images in the library\n' +
+  '- `bond media add <url>` — download an image from a URL and add it to the library\n' +
+  '- `bond media info <id|number>` — show details for an image\n' +
+  '- `bond media open <id|number>` — open an image in Preview\n' +
+  '- `bond media rm <id|number>` — delete an image\n' +
+  '- `bond media purge` — delete all images\n' +
+  'When the user asks you to download, save, or add images to their media library, use `bond media add <url>`. ' +
+  'You can combine this with WebSearch to find images and then download them. ' +
+  'Images are stored permanently in ~/Library/Application Support/bond/images/.\n\n' +
+  'ARTIFACTS — RICH VISUAL CONTENT IN CHAT:\n' +
+  'For visual content that is not already covered by Bond data embeds (collections, journal, or media), use <bond-artifact> blocks to render rich HTML+Tailwind. ' +
+  'Good uses: recommendations, comparisons, data visualizations, styled tables, dashboards, step-by-step guides, image grids. ' +
+  'Do NOT use artifacts to display Bond\'s own entities (collections, journal, or media) — use <bond-embed> for those instead.\n\n' +
+  'Syntax (the tag MUST start on its own line, not inline with other text):\n' +
+  '<bond-artifact title="Optional Title" chrome="none">\n' +
+  '  HTML content with Tailwind utility classes\n' +
+  '</bond-artifact>\n\n' +
+  'Attributes:\n' +
+  '- title: optional label shown above the artifact (only shown when chrome is "default")\n' +
+  '- layout: "normal" (default, message width), "wide" (up to 960px, for tables and comparisons), or "full" (edge-to-edge, for carousels, galleries, dashboards, and immersive content)\n' +
+  '- chrome: "default" (border + header) or "none" (seamless, blends into chat). Use chrome="none" by default.\n\n' +
+  'Available inside the artifact:\n' +
+  '- All Tailwind CSS utility classes (loaded via CDN)\n' +
+  '- Bond color tokens as CSS variables: --color-bg, --color-surface, --color-border, --color-text-primary, --color-muted, --color-accent, --color-err, --color-ok, --color-tint\n' +
+  '- JavaScript for interactivity (event handlers, state, animations)\n' +
+  '- Links are auto-intercepted and opened in the user\'s browser\n' +
+  '- postMessage bridge:\n' +
+  '  window.parent.postMessage({ type: "bond:openExternal", url: "..." }, "*")\n' +
+  '  window.parent.postMessage({ type: "bond:copyText", text: "..." }, "*")\n\n' +
+  'Design guidelines:\n' +
+  '- Use Bond color tokens (var(--color-*)), keep backgrounds native, and use chrome="none" by default.\n\n' +
+  'IMAGES IN ARTIFACTS:\n' +
+  '- NEVER guess or hallucinate image URLs. Use WebSearch to find actual image URLs first. If you cannot verify a URL, do NOT include <img> tags.\n\n' +
+  'Do NOT mention or reference the artifact system to the user — just use it naturally.\n\n' +
+  'ENTITY EMBEDS — COMPLETE REFERENCE:\n' +
+  '<bond-embed type="media" />                            — all images (default limit 12)\n' +
+  '<bond-embed type="media" ids="id1,id2" />             — specific images by ID\n' +
+  '<bond-embed type="media" search="screenshot" />       — filter by filename\n' +
+  '<bond-embed type="media" limit="6" />                 — cap the count\n' +
+  'Tag MUST be on its own line. Self-closing. Mix freely with markdown commentary. ALWAYS use embeds when showing Bond data to the user.\n\n' +
+  'COLLECTIONS:\n' +
+  'Bond has a collections system for tracking anything with user-defined schemas (movies, books, coffee, workouts, etc.). Manage via the `bond collection` CLI.\n' +
+  '- `bond collection` — list all collections\n' +
+  '- `bond collection create <name> --icon 🎬 --schema \'<json>\'` — create a collection\n' +
+  '- `bond collection show <name|id>` / `ls` / `add` / `update` / `done` / `info` / `rm` / `archive` — manage collections and items\n' +
+  'When the user talks about items conversationally, use the CLI to create/update items. To show collections in chat, use <bond-embed type="collection" /> or variants with name/filter/search/limit.\n\n' +
+  'JOURNAL:\n' +
+  'Bond has a shared journal where both you and the user can write entries. It persists reflections, decision logs, project summaries, and freeform notes across sessions.\n' +
+  '- `bond journal` — list recent entries\n' +
+  '- `bond journal add "your entry text"` — write an entry (title + tags auto-generated)\n' +
+  '- `bond journal show <id|number|title>` / `search` / `pin` / `rm` — manage entries\n' +
+  'Write journal entries when the user asks, or when a chat produces a meaningful summary, decision, or milestone worth preserving. Always use author "user". To show journal entries in chat, use <bond-embed type="journal" /> or variants with ids/author/search/limit.\n\n'
 
-  // Skills
+function buildSkillsPrompt(): string {
   const skills = getCachedSkills()
-  if (skills.length > 0) {
-    prompt += 'Available skills:\n'
-    for (const s of skills) {
-      prompt += '- /' + s.name + ': ' + s.description
-      if (s.argumentHint) prompt += ' ' + s.argumentHint
-      prompt += '\n'
-    }
+  if (skills.length === 0) return ''
+  let prompt = '\nAvailable skills:\n'
+  for (const s of skills) {
+    prompt += '- /' + s.name + ': ' + s.description
+    if (s.argumentHint) prompt += ' ' + s.argumentHint
     prompt += '\n'
   }
+  prompt += 'When a user request clearly matches a skill, read its SKILL.md and follow the instructions without being asked.\n'
+  return prompt
+}
 
-  // Collections
+function buildCollectionsPrompt(): string {
   const collections = listCollections().filter(c => !c.archived)
-  if (collections.length > 0) {
-    const lines = collections.map(c => {
-      const icon = c.icon ? `${c.icon} ` : ''
-      const count = countItems(c.id)
-      return `- ${icon}${c.name} (${count} items)`
-    })
-    prompt += 'Current collections:\n' + lines.join('\n') + '\n\n'
-  }
+  if (collections.length === 0) return ''
+  const lines = collections.map(c => {
+    const icon = c.icon ? `${c.icon} ` : ''
+    const count = countItems(c.id)
+    const fields = c.schema.map(f => f.name).join(', ')
+    return `- ${icon}${c.name} (${count} items) — fields: ${fields}`
+  })
+  return '\nCurrent collections:\n' + lines.join('\n') + '\n'
+}
 
-  // Memory injection
-  let memSenseSettings = DEFAULT_SENSE_SETTINGS
+function buildSenseInstructions(): string {
+  return '\nSENSE — AWARENESS & SESSION DEBRIEFS:\n' +
+    'Bond has built-in screen awareness and session debriefs across chats.\n' +
+    'Screen:\n' +
+    '- `bond sense now` — current screen context\n' +
+    '- `bond sense today` / `bond sense yesterday` — daily summaries\n' +
+    '- `bond sense search <query>` — search screen captures and session debriefs\n' +
+    '- `bond sense apps [today|week]` — app usage breakdown\n' +
+    '- `bond sense timeline [range]` — chronological activity\n' +
+    'Debriefs:\n' +
+    '- `bond sense memory` — recent session debriefs\n' +
+    '- `bond sense debrief <session-id>` — full debrief for a session\n' +
+    'Use Sense data when the user references past activity, needs work summaries, wants to recall something they saw, or when context would help. Don\'t dump raw OCR — synthesize and summarize.\n'
+}
+
+function loadSenseSettings() {
   try {
     const raw = getSetting('sense')
-    if (raw) memSenseSettings = { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
+    if (raw) return { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
   } catch { /* defaults */ }
+  return DEFAULT_SENSE_SETTINGS
+}
 
-  if (memSenseSettings.chatMemoryInject) {
-    const sessionProjectId = options?.projectId ?? null
-    const facts = getActiveFacts({ projectId: sessionProjectId ?? undefined, limit: 10 })
-    const openThreads = getRecentOpenThreads({
-      limit: 5,
-      projectId: sessionProjectId ?? undefined,
-      excludeResolved: true,
-    })
-    const decisions = getRecentDecisions({
-      limit: 5,
-      projectId: sessionProjectId ?? undefined,
-    })
-    const latestDebrief = (sessionProjectId
-      ? listDebriefs({ limit: 1, projectId: sessionProjectId })[0]
-      : null
-    ) ?? listDebriefs({ limit: 1 })[0]
+function buildRecentScreenContext(): string {
+  try {
+    const senseSettings = loadSenseSettings()
+    if (!senseSettings.enabled || !senseSettings.autoContextInChat) return ''
 
-    let memoryBlock = ''
-    let wordCount = 0
+    const db = getDb()
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    const recentApps = db.prepare(`
+      SELECT app_name, window_title, MAX(captured_at) as last_seen
+      FROM sense_captures
+      WHERE captured_at >= ? AND app_name IS NOT NULL
+      GROUP BY app_bundle_id
+      ORDER BY last_seen DESC
+      LIMIT 5
+    `).all(fiveMinAgo) as { app_name: string; window_title: string; last_seen: string }[]
 
-    if (facts.length > 0) {
-      memoryBlock += 'Known facts:\n'
-      for (const f of facts) {
-        memoryBlock += `- ${f.fact}\n`
-        wordCount += f.fact.split(/\s+/).length + 1
-      }
+    if (recentApps.length === 0) return ''
+    const active = recentApps[0]
+    const previous = recentApps.slice(1).map(a => `${a.app_name} (${a.window_title})`).join(', ')
+    let contextBlock = '\nRECENT SCREEN CONTEXT (last 5 minutes):\n'
+    contextBlock += `- Active app: ${active.app_name} (${active.window_title})\n`
+    if (previous) contextBlock += `- Previously: ${previous}\n`
+
+    const lastCapture = db.prepare(`
+      SELECT text_content FROM sense_captures
+      WHERE captured_at >= ? AND text_content IS NOT NULL AND text_status = 'done'
+      ORDER BY captured_at DESC LIMIT 1
+    `).get(fiveMinAgo) as { text_content: string } | undefined
+
+    if (lastCapture?.text_content) {
+      const lines = lastCapture.text_content.split('\n').filter(l => l.trim().length > 3).slice(0, 5)
+      if (lines.length > 0) contextBlock += `- Key visible text: ${lines.map(l => `"${l.trim().slice(0, 80)}"`).join(', ')}\n`
     }
-
-    if (openThreads.length > 0 && wordCount < 250) {
-      memoryBlock += 'Open threads:\n'
-      for (const thread of openThreads) {
-        if (wordCount > 250) break
-        memoryBlock += `- ${thread}\n`
-        wordCount += thread.split(/\s+/).length + 1
-      }
-    }
-
-    if (decisions.length > 0 && wordCount < 280) {
-      memoryBlock += 'Recent decisions:\n'
-      for (const d of decisions) {
-        if (wordCount > 280) break
-        memoryBlock += `- ${d.decision} (${d.sessionTitle})\n`
-        wordCount += d.decision.split(/\s+/).length + 3
-      }
-    }
-
-    if (latestDebrief && wordCount < 300) {
-      memoryBlock += `\nLast session: "${latestDebrief.sessionTitle}" — ${latestDebrief.summary}\n`
-    }
-
-    if (memoryBlock) {
-      prompt += 'RECENT MEMORY:\n' + memoryBlock + '\n'
-    }
-  } else {
-    prompt += '(Memory injection is disabled in Sense settings)\n\n'
+    return contextBlock
+  } catch {
+    return ''
   }
+}
 
-  // Soul
-  const soul = getSoul().trim()
-  if (soul) {
-    prompt += `<soul>\n${soul}\n</soul>\n\n`
+function buildRecentDebriefContext(projectId?: string): string {
+  try {
+    const debriefs = projectId
+      ? listDebriefs({ limit: 3, projectId })
+      : listDebriefs({ limit: 3 })
+    if (debriefs.length === 0) return ''
+    let block = '\nRECENT SESSION DEBRIEFS:\n'
+    for (const d of debriefs) {
+      block += `- "${d.sessionTitle}" (${d.createdAt}): ${d.summary}\n`
+      if (d.topics.length > 0) block += `  Topics: ${d.topics.slice(0, 6).join(', ')}\n`
+    }
+    return block
+  } catch {
+    return ''
   }
+}
 
-  // Date/time
+function buildEditModeSuffix(editMode: EditMode): string {
+  if (editMode.type === 'readonly') {
+    return '\n\nThis session is in READ-ONLY mode. You can only use Read, Glob, Grep, WebSearch, and WebFetch. You cannot edit files, write files, or run shell commands.'
+  }
+  if (editMode.type === 'scoped') {
+    return `\n\nThis session is in SCOPED WRITE mode. Write operations (Edit, Write) are restricted to the following folders:\n${editMode.allowedPaths.map(p => `- ${p}`).join('\n')}\nBash commands still require user approval. Do not attempt to write to files outside these folders.`
+  }
+  return ''
+}
+
+export function buildSystemPrompt(options?: { projectId?: string; editMode?: EditMode }): string {
+  const editMode = options?.editMode ?? { type: 'full' as const }
+  let prompt = BOND_BASE_PROMPT
+  prompt += buildSkillsPrompt()
+  prompt += buildCollectionsPrompt()
+  prompt += buildSenseInstructions()
+  prompt += buildRecentScreenContext()
+  prompt += buildRecentDebriefContext(options?.projectId)
+
   const now = new Date()
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-  prompt += `CURRENT DATE AND TIME: ${dateStr}, ${timeStr}\n`
+  const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  prompt += `\nCURRENT DATE AND TIME: ${dateStr}, ${timeStr}\n`
+  prompt += buildEditModeSuffix(editMode)
 
-  return prompt
+  const soul = getSoul().trim()
+  return soul ? `${prompt}\n\n<soul>\n${soul}\n</soul>` : prompt
+}
+
+/** Build the exact full system prompt used for a new Bond query. */
+export function buildSystemPromptPreview(options?: { projectId?: string; editMode?: EditMode }): string {
+  return buildSystemPrompt(options)
 }
 
 export function refreshSkillsCache(): SkillInfo[] {
@@ -337,309 +424,9 @@ export async function runBondQuery(
   const cwd = homedir()
   const ac = new AbortController()
 
-  let basePrompt =
-    'You are Bond, a standalone desktop assistant app for Mac. ' +
-    'Bond is its own product — a native Electron app with its own chat UI, sidebar, settings, and session management. ' +
-    'You are NOT Claude, Claude Code, or the Claude website. You are powered by Claude (an AI model by Anthropic), but your identity is Bond. ' +
-    'Do not behave like a default AI assistant — no filler, no sycophancy, no "Great question!" preambles, no hedging with unnecessary caveats. You have a personality; use it.\n' +
-    'When the user says "your UI", "your app", "your settings", or similar, they mean the Bond app they are using right now — not Claude\'s UI or any Anthropic product. ' +
-    'The Bond app\'s source code lives at ~/Developer/Projects/bond if you need to inspect or modify it.\n\n' +
-    'You can read files with Read, search with Glob and Grep, edit files with Edit and Write, and run shell commands with Bash. ' +
-    'You can search the web with WebSearch and fetch page content with WebFetch. ' +
-    'Write operations require user approval before they execute. Stay concise. ' +
-    'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.\n\n' +
-    'Skills extend your capabilities. They live in ~/.bond/skills/<name>/SKILL.md. ' +
-    'Each SKILL.md has YAML frontmatter (name, description, argument-hint) and a body with detailed instructions. ' +
-    'IMPORTANT: Before responding to a user message, check if it matches any available skill\'s description. ' +
-    'If it does, read ~/.bond/skills/<name>/SKILL.md and follow its instructions automatically. ' +
-    'Users can also invoke skills explicitly with /skill-name in chat. ' +
-    'You can create, edit, list, and remove skills by reading/writing files in ~/.bond/skills/. ' +
-    'To create a skill: mkdir the directory, write a SKILL.md with frontmatter and instructions. ' +
-    'After creating or modifying skills, tell the user to restart the daemon for changes to take effect.\n\n' +
-    'MEDIA LIBRARY:\n' +
-    'Bond has a built-in media library for storing images. You can manage it via the `bond media` CLI:\n' +
-    '- `bond media` or `bond media list` — list all images in the library\n' +
-    '- `bond media add <url>` — download an image from a URL and add it to the library\n' +
-    '- `bond media info <id|number>` — show details for an image\n' +
-    '- `bond media open <id|number>` — open an image in Preview\n' +
-    '- `bond media rm <id|number>` — delete an image\n' +
-    '- `bond media purge` — delete all images\n' +
-    'When the user asks you to download, save, or add images to their media library, use `bond media add <url>`. ' +
-    'You can combine this with WebSearch to find images and then download them. ' +
-    'Images are stored permanently in ~/Library/Application Support/bond/images/.\n\n' +
-    'ARTIFACTS — RICH VISUAL CONTENT IN CHAT:\n' +
-    'For visual content that is not already covered by Bond data embeds (collections, journal, or media), use <bond-artifact> blocks to render rich HTML+Tailwind. ' +
-    'Good uses: recommendations, comparisons, data visualizations, styled tables, dashboards, step-by-step guides, image grids. ' +
-    'Do NOT use artifacts to display Bond\'s own entities (collections, journal, or media) — use <bond-embed> for those instead.\n\n' +
-    'Syntax (the tag MUST start on its own line, not inline with other text):\n' +
-    '<bond-artifact title="Optional Title" chrome="none">\n' +
-    '  HTML content with Tailwind utility classes\n' +
-    '</bond-artifact>\n\n' +
-    'Attributes:\n' +
-    '- title: optional label shown above the artifact (only shown when chrome is "default")\n' +
-    '- layout: "normal" (default, message width), "wide" (up to 960px, for tables and comparisons), or "full" (edge-to-edge, for carousels, galleries, dashboards, and immersive content)\n' +
-    '- chrome: "default" (border + header) or "none" (seamless, blends into chat). Use chrome="none" by default.\n\n' +
-    'Available inside the artifact:\n' +
-    '- All Tailwind CSS utility classes (loaded via CDN)\n' +
-    '- Bond color tokens as CSS variables: --color-bg, --color-surface, --color-border, --color-text-primary, --color-muted, --color-accent, --color-err, --color-ok, --color-tint\n' +
-    '- JavaScript for interactivity (event handlers, state, animations)\n' +
-    '- Links are auto-intercepted and opened in the user\'s browser\n' +
-    '- postMessage bridge:\n' +
-    '  window.parent.postMessage({ type: "bond:openExternal", url: "..." }, "*")\n' +
-    '  window.parent.postMessage({ type: "bond:copyText", text: "..." }, "*")\n\n' +
-    'Design guidelines:\n' +
-    '- Use Bond color tokens (var(--color-*)) so artifacts match the theme in light and dark mode. Never hardcode colors.\n' +
-    '- Keep backgrounds transparent or use var(--color-bg)/var(--color-surface)\n' +
-    '- Use chrome="none" by default so content feels native to the conversation\n' +
-    '- You can mix markdown text and artifacts freely\n\n' +
-    'IMAGES IN ARTIFACTS:\n' +
-    '- NEVER guess or hallucinate image URLs. You do not have movie poster URLs, book cover URLs, or any image URLs memorized.\n' +
-    '- To include real images: use WebSearch to find the actual image URL first, then use it in the artifact.\n' +
-    '- If you cannot search for images or do not have a verified URL, do NOT include <img> tags. Design the artifact to look good without images — use icons, colored backgrounds, typography, and layout instead.\n' +
-    '- Broken images are hidden automatically, but the layout should never depend on images being present.\n\n' +
-    'Do NOT mention or reference the artifact system to the user — just use it naturally.\n\n' +
-    'ENTITY EMBEDS — COMPLETE REFERENCE:\n' +
-    '<bond-embed type="media" />                            — all images (default limit 12)\n' +
-    '<bond-embed type="media" ids="id1,id2" />             — specific images by ID\n' +
-    '<bond-embed type="media" search="screenshot" />       — filter by filename\n' +
-    '<bond-embed type="media" limit="6" />                 — cap the count\n' +
-    'Tag MUST be on its own line. Self-closing. Mix freely with markdown commentary.\n' +
-    'ALWAYS use embeds (not artifacts, not markdown, not CLI output) when showing Bond data to the user.\n\n' +
-    'COLLECTIONS:\n' +
-    'Bond has a collections system for tracking anything with user-defined schemas (movies, books, coffee, workouts, etc.). ' +
-    'Manage via the `bond collection` CLI:\n' +
-    '- `bond collection` — list all collections\n' +
-    '- `bond collection create <name> --icon 🎬 --schema \'<json>\'` — create a collection\n' +
-    '- `bond collection show <name|id>` — show collection details\n' +
-    '- `bond collection ls <name|id>` — list items\n' +
-    '- `bond collection ls <name|id> --<field> <value>` — filter items\n' +
-    '- `bond collection add <name|id> --<field> <value>` — add an item\n' +
-    '- `bond collection update <name|id> <item> --<field> <value>` — update item\n' +
-    '- `bond collection done <name|id> <item>` — mark status field as done\n' +
-    '- `bond collection info <name|id> <item>` — show item details\n' +
-    '- `bond collection rm <name|id> [item]` — delete collection or item\n' +
-    '- `bond collection archive <name|id>` — archive a collection\n' +
-    'When the user talks about items conversationally (e.g. "just watched Dune, it was great"), use the CLI to create/update items.\n' +
-    'To SHOW collections in chat, use:\n' +
-    '<bond-embed type="collection" />                              — all collections as cards\n' +
-    '<bond-embed type="collection" name="Movies" />                — items for one collection\n' +
-    '<bond-embed type="collection" name="Movies" filter="status=Want to see" /> — filtered\n' +
-    '<bond-embed type="collection" name="Movies" search="Dune" /> — text search\n' +
-    '<bond-embed type="collection" name="Movies" limit="5" />     — cap results\n'
-
-  basePrompt +=
-    'JOURNAL:\n' +
-    'Bond has a shared journal where both you and the user can write entries. ' +
-    'It\'s a space for reflections, decision logs, project summaries, and freeform notes that persist across sessions.\n' +
-    '- `bond journal` — list recent entries\n' +
-    '- `bond journal add "your entry text"` — write an entry (title + tags auto-generated)\n' +
-    '- `bond journal show <id|number|title>` — read full entry\n' +
-    '- `bond journal search <query>` — search entries\n' +
-    '- `bond journal pin <id|number|title>` — pin/unpin\n' +
-    '- `bond journal rm <id|number|title>` — delete\n' +
-    'Write journal entries when the user asks, or when a chat produces a meaningful summary, decision, or milestone worth preserving. ' +
-    'Always use author "user" — the CLI defaults to this. ' +
-    'Use tags to categorize entries.\n' +
-    'To SHOW journal entries in chat, use:\n' +
-    '<bond-embed type="journal" />                              — recent entries\n' +
-    '<bond-embed type="journal" ids="id1,id2" />                — specific entries\n' +
-    '<bond-embed type="journal" author="bond" />                — only Bond\'s entries\n' +
-    '<bond-embed type="journal" search="connectors" />          — search results\n' +
-    '<bond-embed type="journal" limit="5" />                    — cap results\n\n'
-
-  // Inject available skills so the AI can match user requests proactively
-  const skills = getCachedSkills()
-  if (skills.length > 0) {
-    basePrompt += '\nAvailable skills:\n'
-    for (const s of skills) {
-      basePrompt += '- /' + s.name + ': ' + s.description
-      if (s.argumentHint) basePrompt += ' ' + s.argumentHint
-      basePrompt += '\n'
-    }
-    basePrompt += 'When a user request clearly matches a skill, read its SKILL.md and follow the instructions without being asked.\n'
-  }
-
-  // Inject current collections context
-  const collections = listCollections().filter(c => !c.archived)
-  if (collections.length > 0) {
-    const lines = collections.map(c => {
-      const icon = c.icon ? `${c.icon} ` : ''
-      const count = countItems(c.id)
-      const fields = c.schema.map(f => f.name).join(', ')
-      return `- ${icon}${c.name} (${count} items) — fields: ${fields}`
-    })
-    basePrompt += '\nCurrent collections:\n' + lines.join('\n') + '\n'
-  }
-
-  // Sense system prompt
-  basePrompt +=
-    '\nSENSE — AWARENESS & MEMORY:\n' +
-    'Bond has built-in screen awareness and memory across sessions.\n' +
-    'Screen:\n' +
-    '- `bond sense now` — current screen context\n' +
-    '- `bond sense today` / `bond sense yesterday` — daily summaries\n' +
-    '- `bond sense search <query>` — cross-channel search (screen + chat memory + facts)\n' +
-    '- `bond sense apps [today|week]` — app usage breakdown\n' +
-    '- `bond sense timeline [range]` — chronological activity\n' +
-    'Memory:\n' +
-    '- `bond sense memory` — recent session debriefs + pinned facts\n' +
-    '- `bond sense threads` — open threads from recent sessions\n' +
-    '- `bond sense decisions` — recent decisions\n' +
-    '- `bond sense debrief <session-id>` — full debrief for a session\n' +
-    '- `bond sense remember "<fact>"` — pin a fact to memory\n' +
-    '- `bond sense facts` — list pinned facts\n' +
-    '- `bond sense forget <id|number>` — remove a pinned fact\n' +
-    'Use Sense data when the user references past activity, needs work summaries, ' +
-    'wants to recall something they saw, or when context would help you give better answers. ' +
-    'Don\'t dump raw OCR — synthesize and summarize.\n' +
-    'When the user says "remember this" or "keep in mind that...", use `bond sense remember` to pin the fact. ' +
-    'You can also pin facts proactively when the user states a clear preference or convention.\n'
-
-
-
-  // Sense auto-context injection
-  try {
-    let senseSettings = DEFAULT_SENSE_SETTINGS
-    try {
-      const raw = getSetting('sense')
-      if (raw) senseSettings = { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
-    } catch { /* defaults */ }
-
-    if (senseSettings.enabled && senseSettings.autoContextInChat) {
-      const db = getDb()
-      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
-
-      // Recent app activity
-      const recentApps = db.prepare(`
-        SELECT app_name, window_title, MAX(captured_at) as last_seen
-        FROM sense_captures
-        WHERE captured_at >= ? AND app_name IS NOT NULL
-        GROUP BY app_bundle_id
-        ORDER BY last_seen DESC
-        LIMIT 5
-      `).all(fiveMinAgo) as { app_name: string; window_title: string; last_seen: string }[]
-
-      if (recentApps.length > 0) {
-        const active = recentApps[0]
-        const previous = recentApps.slice(1).map(a => `${a.app_name} (${a.window_title})`).join(', ')
-
-        let contextBlock = '\nRECENT SCREEN CONTEXT (last 5 minutes):\n'
-        contextBlock += `- Active app: ${active.app_name} (${active.window_title})\n`
-        if (previous) contextBlock += `- Previously: ${previous}\n`
-
-        // Key visible text from most recent capture
-        const lastCapture = db.prepare(`
-          SELECT text_content FROM sense_captures
-          WHERE captured_at >= ? AND text_content IS NOT NULL AND text_status = 'done'
-          ORDER BY captured_at DESC LIMIT 1
-        `).get(fiveMinAgo) as { text_content: string } | undefined
-
-        if (lastCapture?.text_content) {
-          // Extract first few meaningful lines
-          const lines = lastCapture.text_content.split('\n').filter(l => l.trim().length > 3).slice(0, 5)
-          if (lines.length > 0) {
-            contextBlock += `- Key visible text: ${lines.map(l => `"${l.trim().slice(0, 80)}"`).join(', ')}\n`
-          }
-        }
-
-        basePrompt += contextBlock
-      }
-    }
-  } catch { /* non-fatal */ }
-
-  // Chat memory auto-injection
-  try {
-    let memSenseSettings = DEFAULT_SENSE_SETTINGS
-    try {
-      const raw = getSetting('sense')
-      if (raw) memSenseSettings = { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
-    } catch { /* defaults */ }
-
-    if (memSenseSettings.chatMemoryInject) {
-      const sessionProjectId = null
-
-      // Pinned facts — always loaded, highest priority
-      const facts = getActiveFacts({ projectId: sessionProjectId ?? undefined, limit: 10 })
-
-      // Open threads — deduplicated, project-scoped when possible
-      const openThreads = getRecentOpenThreads({
-        limit: 5,
-        projectId: sessionProjectId ?? undefined,
-        excludeResolved: true,
-      })
-
-      // Recent decisions
-      const decisions = getRecentDecisions({
-        limit: 5,
-        projectId: sessionProjectId ?? undefined,
-      })
-
-      // Latest debrief summary — prefer project-scoped, fall back to any
-      const latestDebrief = (sessionProjectId
-        ? listDebriefs({ limit: 1, projectId: sessionProjectId })[0]
-        : null
-      ) ?? listDebriefs({ limit: 1 })[0]
-
-      let memoryBlock = ''
-      let wordCount = 0
-
-      if (facts.length > 0) {
-        memoryBlock += '\nKnown facts:\n'
-        for (const f of facts) {
-          memoryBlock += `- ${f.fact}\n`
-          wordCount += f.fact.split(/\s+/).length + 1
-        }
-      }
-
-      if (openThreads.length > 0 && wordCount < 250) {
-        memoryBlock += 'Open threads:\n'
-        for (const thread of openThreads) {
-          if (wordCount > 250) break
-          memoryBlock += `- ${thread}\n`
-          wordCount += thread.split(/\s+/).length + 1
-        }
-      }
-
-      if (decisions.length > 0 && wordCount < 280) {
-        memoryBlock += 'Recent decisions:\n'
-        for (const d of decisions) {
-          if (wordCount > 280) break
-          memoryBlock += `- ${d.decision} (${d.sessionTitle})\n`
-          wordCount += d.decision.split(/\s+/).length + 3
-        }
-      }
-
-      if (latestDebrief && wordCount < 300) {
-        memoryBlock += `\nLast session: "${latestDebrief.sessionTitle}" — ${latestDebrief.summary}\n`
-      }
-
-      if (memoryBlock) {
-        basePrompt += '\nRECENT MEMORY:\n' + memoryBlock
-      }
-    }
-  } catch { /* non-fatal */ }
-
-  // Current date and time with day of week
-  const now = new Date()
-  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-  const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
-  basePrompt += `\nCURRENT DATE AND TIME: ${dateStr}, ${timeStr}\n`
-
-  const editMode = options.editMode ?? { type: 'full' }
+  const editMode = options.editMode ?? { type: 'full' as const }
   const tools = editMode.type === 'readonly' ? READ_TOOLS : ALL_TOOLS
-
-  let modePrompt = ''
-  if (editMode.type === 'readonly') {
-    modePrompt = '\n\nThis session is in READ-ONLY mode. You can only use Read, Glob, Grep, WebSearch, and WebFetch. You cannot edit files, write files, or run shell commands.'
-  } else if (editMode.type === 'scoped') {
-    modePrompt = `\n\nThis session is in SCOPED WRITE mode. Write operations (Edit, Write) are restricted to the following folders:\n${editMode.allowedPaths.map(p => `- ${p}`).join('\n')}\nBash commands still require user approval. Do not attempt to write to files outside these folders.`
-  }
-
-  const soul = getSoul().trim()
-  const base = basePrompt + modePrompt
-  const systemPrompt = soul
-    ? `${base}\n\n<soul>\n${soul}\n</soul>`
-    : base
+  const systemPrompt = buildSystemPrompt({ editMode })
 
   let lastStderrHint: 'already_in_use' | null = null
 
