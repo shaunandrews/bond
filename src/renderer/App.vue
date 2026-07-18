@@ -43,7 +43,7 @@ async function loadWindowOpacity() {
     applyWindowOpacity(val)
   } catch { /* use CSS default */ }
 }
-const selectedModel = ref<ModelId>('sonnet')
+const selectedModel = ref<ModelId>('balanced')
 const activityExpanded = ref(false)
 const mediaCount = ref(0)
 const fieldManualOpen = ref(false)

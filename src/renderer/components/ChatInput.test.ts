@@ -4,7 +4,7 @@ import ChatInput from './ChatInput.vue'
 
 describe('ChatInput', () => {
   function createWrapper(busy = false) {
-    return mount(ChatInput, { props: { busy, model: 'sonnet' as const, editMode: { type: 'full' as const } } })
+    return mount(ChatInput, { props: { busy, model: 'balanced' as const, editMode: { type: 'full' as const } } })
   }
 
   it('emits submit with text on Enter', async () => {

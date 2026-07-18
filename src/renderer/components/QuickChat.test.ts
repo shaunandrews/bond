@@ -13,7 +13,7 @@ describe('QuickChat', () => {
       getMessages: vi.fn().mockResolvedValue([]),
       saveMessages: vi.fn().mockResolvedValue(true),
       getImages: vi.fn().mockResolvedValue([]),
-      getModel: vi.fn().mockResolvedValue('sonnet'),
+      getModel: vi.fn().mockResolvedValue('balanced'),
       setModel: vi.fn().mockResolvedValue({ ok: true }),
       onQuickChatInit: vi.fn().mockReturnValue(() => {}),
       onQuickChatDismiss: vi.fn().mockReturnValue(() => {}),

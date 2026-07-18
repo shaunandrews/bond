@@ -6,7 +6,7 @@ import { getDb } from './db'
 import { randomUUID } from 'node:crypto'
 
 /**
- * Generate a structured debrief for an archived session using Sonnet.
+ * Generate a structured debrief for an archived session using Bond's balanced tier.
  * Non-blocking — errors are logged and swallowed, never propagated.
  */
 export async function generateDebrief(sessionId: string): Promise<SessionDebrief | null> {
@@ -48,11 +48,11 @@ export async function generateDebrief(sessionId: string): Promise<SessionDebrief
   const prompt = buildPrompt(transcript)
 
   // Try generation, retry once on parse failure
-  let parsed = await callSonnet(prompt)
+  let parsed = await callBalanced(prompt)
   if (!parsed) {
     // Retry with shorter prompt
     const shortTranscript = transcript.slice(0, 5000)
-    parsed = await callSonnet(buildPrompt(shortTranscript))
+    parsed = await callBalanced(buildPrompt(shortTranscript))
   }
 
   if (!parsed) {
@@ -149,7 +149,7 @@ export async function backfillDebriefs(limit = 50): Promise<{ generated: number;
       console.warn(`[bond] backfill failed for session ${session.id}:`, err.message)
       failed++
     }
-    // Rate limit — 2s between Sonnet calls
+    // Rate limit — 2s between background model calls
     await new Promise(r => setTimeout(r, 2000))
   }
 
@@ -186,12 +186,12 @@ interface ParsedDebrief {
 
 }
 
-async function callSonnet(prompt: string): Promise<ParsedDebrief | null> {
+async function callBalanced(prompt: string): Promise<ParsedDebrief | null> {
   try {
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('debrief timeout')), 30000)
     )
-    const resultText = await Promise.race([runBondTextQuery(prompt, 'sonnet'), timeout])
+    const resultText = await Promise.race([runBondTextQuery(prompt, 'balanced'), timeout])
 
     if (!resultText) return null
 

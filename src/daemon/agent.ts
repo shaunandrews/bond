@@ -249,6 +249,6 @@ export async function runBondQuery(
 }
 
 /** Small non-tool Pi run used for titles and debriefs. */
-export async function runBondTextQuery(prompt: string, model: 'haiku' | 'sonnet' | 'opus' = 'haiku'): Promise<string> {
+export async function runBondTextQuery(prompt: string, model: 'fast' | 'balanced' | 'high' = 'fast'): Promise<string> {
   return runPiTextPrompt(prompt, model)
 }

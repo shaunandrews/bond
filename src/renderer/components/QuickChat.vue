@@ -10,7 +10,7 @@ import ChatInput from './ChatInput.vue'
 const chat = useChat()
 const sessionId = ref<string | null>(null)
 const senseApps = ref<string[]>([])
-const selectedModel = ref<ModelId>('sonnet')
+const selectedModel = ref<ModelId>('balanced')
 const editMode = ref<EditMode>({ type: 'full' })
 const ready = ref(false)
 const animateIn = ref(false)

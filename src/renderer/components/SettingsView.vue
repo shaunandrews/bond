@@ -16,7 +16,7 @@ const emit = defineEmits<{
 const soul = ref('')
 const originalSoul = ref('')
 const soulDirty = computed(() => soul.value !== originalSoul.value)
-const defaultModel = ref<ModelId>('sonnet')
+const defaultModel = ref<ModelId>('balanced')
 const piConfigured = ref(false)
 const piProviders = ref<string[]>([])
 const piSetupError = ref('')
@@ -124,9 +124,9 @@ function handleOpacityInput(e: Event) {
 }
 
 const modelOptions = [
-  { value: 'opus', label: 'High capability' },
-  { value: 'sonnet', label: 'Balanced' },
-  { value: 'haiku', label: 'Fast' },
+  { value: 'high', label: 'High capability' },
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'fast', label: 'Fast' },
 ]
 
 const presetColors = [

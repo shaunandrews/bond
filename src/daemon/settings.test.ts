@@ -62,23 +62,25 @@ describe('settings module', () => {
   })
 
   describe('model', () => {
-    it('defaults to sonnet', () => {
-      expect(getModelSetting()).toBe('sonnet')
+    it('defaults to balanced', () => {
+      expect(getModelSetting()).toBe('balanced')
     })
 
     it('saves and retrieves valid model', () => {
-      saveModelSetting('opus')
-      expect(getModelSetting()).toBe('opus')
+      saveModelSetting('high')
+      expect(getModelSetting()).toBe('high')
     })
 
-    it('saves haiku', () => {
-      saveModelSetting('haiku')
-      expect(getModelSetting()).toBe('haiku')
+    it('saves fast tier', () => {
+      saveModelSetting('fast')
+      expect(getModelSetting()).toBe('fast')
     })
 
-    it('falls back to sonnet for invalid model', () => {
+    it('migrates old provider labels and falls back to balanced', () => {
+      setSetting('model', 'sonnet')
+      expect(getModelSetting()).toBe('balanced')
       setSetting('model', 'gpt-4')
-      expect(getModelSetting()).toBe('sonnet')
+      expect(getModelSetting()).toBe('balanced')
     })
   })
 

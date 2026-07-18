@@ -29,7 +29,7 @@ function toggle(name: string) {
 // Interactive state for previews
 const demoInput = ref('Hello world')
 const demoTextarea = ref('Some longer text here...')
-const demoSelect = ref('sonnet')
+const demoSelect = ref('balanced')
 const demoTab = ref('tab1')
 
 // Sample data for previews
@@ -500,9 +500,9 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
                     <BondSelect
                       v-model="demoSelect"
                       :options="[
-                        { value: 'sonnet', label: 'Sonnet' },
-                        { value: 'opus', label: 'Opus' },
-                        { value: 'haiku', label: 'Haiku' },
+                        { value: 'balanced', label: 'Balanced' },
+                        { value: 'high', label: 'High capability' },
+                        { value: 'fast', label: 'Fast' },
                       ]"
                     />
                   </div>
@@ -511,7 +511,7 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
                     <BondSelect
                       model-value="sonnet"
                       disabled
-                      :options="[{ value: 'sonnet', label: 'Sonnet' }]"
+                      :options="[{ value: 'balanced', label: 'Balanced' }]"
                     />
                   </div>
                 </template>

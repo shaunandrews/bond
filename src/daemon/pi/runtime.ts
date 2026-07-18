@@ -21,10 +21,18 @@ type PendingApproval = { sessionId: string; resolve: (result: ApprovalResult) =>
 
 const pendingApprovals = new Map<string, PendingApproval>()
 const MODEL_IDS = {
-  opus: 'claude-opus-4-6',
-  sonnet: 'claude-sonnet-4-5',
-  haiku: 'claude-haiku-4-5',
+  high: 'claude-opus-4-6',
+  balanced: 'claude-sonnet-4-5',
+  fast: 'claude-haiku-4-5',
 } as const
+
+function normalizeTier(value: string | undefined): keyof typeof MODEL_IDS {
+  // Preserve existing saved choices while removing provider names from the product UI.
+  if (value === 'opus') return 'high'
+  if (value === 'sonnet') return 'balanced'
+  if (value === 'haiku') return 'fast'
+  return value === 'high' || value === 'fast' ? value : 'balanced'
+}
 
 function getSessionDir(): string {
   const dir = join(getDataDir(), 'pi', 'sessions')
@@ -125,13 +133,13 @@ function imageContent(imageIds: string[] | undefined) {
 
 async function selectModel(name: string | undefined) {
   const runtime = await ModelRuntime.create()
-  const preferred = MODEL_IDS[name as keyof typeof MODEL_IDS] ?? MODEL_IDS.sonnet
+  const tier = normalizeTier(name)
+  const preferred = MODEL_IDS[tier]
   const available = await runtime.getAvailable()
   const anthropic = available.find(model => model.provider === 'anthropic' && model.id === preferred)
   if (anthropic) return { model: anthropic, modelRuntime: runtime }
 
-  const codexIds = { opus: 'gpt-5.6-terra', sonnet: 'gpt-5.5', haiku: 'gpt-5.4-mini' }
-  const tier = name === 'opus' || name === 'haiku' ? name : 'sonnet'
+  const codexIds = { high: 'gpt-5.6-terra', balanced: 'gpt-5.5', fast: 'gpt-5.4-mini' }
   const codex = available.find(model => model.provider === 'openai-codex' && model.id === codexIds[tier])
     ?? available.find(model => model.provider === 'openai-codex')
   if (codex) return { model: codex, modelRuntime: runtime }
@@ -316,7 +324,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
 }
 
 /** A non-persistent, no-tool Pi request for small structured background tasks. */
-export async function runPiTextPrompt(prompt: string, model: 'haiku' | 'sonnet' | 'opus'): Promise<string> {
+export async function runPiTextPrompt(prompt: string, model: 'fast' | 'balanced' | 'high'): Promise<string> {
   const loader = new DefaultResourceLoader({
     cwd: homedir(),
     agentDir: getAgentDir(),

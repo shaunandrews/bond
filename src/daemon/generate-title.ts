@@ -17,7 +17,7 @@ export async function generateTitleAndSummary(
   try {
     const resultText = await runBondTextQuery(
       `Generate a short title (2-4 words, no quotes) and a one-sentence summary for this conversation. Reply with ONLY valid JSON: {"title": "...", "summary": "..."}\n\n${transcript}`,
-      'haiku'
+      'fast'
     )
 
     // The result might have markdown or extra text — extract JSON

@@ -100,7 +100,7 @@ import {
 // --- State ---
 
 const activeQueries = new Map<string, { ac: AbortController; promise: Promise<boolean> }>()
-let currentModel: string = 'sonnet'
+let currentModel: string = 'balanced'
 let serverWss: WebSocketServer | null = null
 
 // Track which clients are subscribed to which sessions

@@ -87,9 +87,9 @@ describe('messages', () => {
 
 describe('settings', () => {
   it('gets and sets model', async () => {
-    await client.setModel('opus')
+    await client.setModel('high')
     const model = await client.getModel()
-    expect(model).toBe('opus')
+    expect(model).toBe('high')
   })
 
   it('gets and sets soul', async () => {

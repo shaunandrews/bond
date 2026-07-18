@@ -23,8 +23,11 @@ export function saveSoul(content: string): boolean {
 
 export function getModelSetting(): ModelId {
   const raw = getSetting('model')
+  if (raw === 'opus') return 'high'
+  if (raw === 'sonnet') return 'balanced'
+  if (raw === 'haiku') return 'fast'
   if (raw && (MODEL_IDS as readonly string[]).includes(raw)) return raw as ModelId
-  return 'sonnet'
+  return 'balanced'
 }
 
 export function saveModelSetting(model: ModelId): boolean {
