@@ -245,7 +245,8 @@ async function search(query: string) {
   }
   try {
     const results = await window.bond.senseSearch(query, 50)
-    searchResults.value = (results as unknown as Record<string, unknown>[]).map(normalizeCaptureRow)
+    const captureRows = (results as unknown as Record<string, unknown>[]).filter(isCaptureSearchRow)
+    searchResults.value = captureRows.map(normalizeCaptureRow)
   } catch (err) {
     console.error('Failed to search sense:', err)
     searchResults.value = []
@@ -284,6 +285,10 @@ function jumpToCapture(capture: SenseCapture) {
     activeCapture.value = capture
     selectCapture(capture.id)
   }
+}
+
+export function isCaptureSearchRow(row: Record<string, unknown>): boolean {
+  return typeof (row.capturedAt ?? row.captured_at) === 'string'
 }
 
 // Normalize snake_case DB rows to camelCase SenseCapture

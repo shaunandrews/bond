@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { appHue, appColor } from './useSense'
+import { appHue, appColor, isCaptureSearchRow } from './useSense'
 
 describe('useSense pure functions', () => {
   describe('appHue', () => {
@@ -25,6 +25,20 @@ describe('useSense pure functions', () => {
     it('handles empty string', () => {
       const hue = appHue('')
       expect(hue).toBe(0)
+    })
+  })
+
+  describe('isCaptureSearchRow', () => {
+    it('accepts snake_case capture rows', () => {
+      expect(isCaptureSearchRow({ id: 'capture-1', captured_at: '2026-07-17T12:00:00Z' })).toBe(true)
+    })
+
+    it('accepts camelCase capture rows', () => {
+      expect(isCaptureSearchRow({ id: 'capture-1', capturedAt: '2026-07-17T12:00:00Z' })).toBe(true)
+    })
+
+    it('rejects debrief and fact rows', () => {
+      expect(isCaptureSearchRow({ id: 'memory-1', createdAt: '2026-07-17T12:00:00Z', channel: 'chat' })).toBe(false)
     })
   })
 
