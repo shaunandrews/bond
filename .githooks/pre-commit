@@ -1,0 +1,7 @@
+#!/bin/sh
+# Tracked pre-commit hook. Enabled via `git config core.hooksPath .githooks`,
+# which the "prepare" npm script wires up automatically on `npm install`.
+set -e
+root="$(git rev-parse --show-toplevel)"
+npm run typecheck --prefix "$root"
+npm run test:run --prefix "$root"

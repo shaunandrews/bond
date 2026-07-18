@@ -26,8 +26,7 @@ describe('MessageBubble', () => {
 
     const md = wrapper.findComponent(MarkdownMessage)
     expect(md.exists()).toBe(true)
-    expect(md.props('text')).toBe('**bold**')
-    expect(md.props('streaming')).toBe(false)
+    expect(md.props()).toMatchObject({ text: '**bold**', streaming: false })
   })
 
   it('renders tool call as minimal summary', () => {

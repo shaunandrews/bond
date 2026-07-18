@@ -15,7 +15,12 @@
     "dist": "npm run build && electron-builder",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "prepare": "git config core.hooksPath .githooks || true"
+  },
+  "engines": {
+    "node": ">=22.19"
   },
   "keywords": [],
   "author": "",

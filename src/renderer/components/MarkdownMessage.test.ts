@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, VueWrapper } from '@vue/test-utils'
+import type { ComponentPublicInstance } from 'vue'
 import MarkdownMessage from './MarkdownMessage.vue'
+
+// VTU's mount return type collapses SFC prop types to built-ins under this
+// toolchain, so setProps() loses `text`/`streaming`. Mount through a typed
+// helper that pins the instance type, keeping setProps() type-safe.
+type MdProps = { text: string; streaming: boolean }
+type MdWrapper = VueWrapper<unknown, ComponentPublicInstance<MdProps>>
+
+function mountMd(props: MdProps): MdWrapper {
+  return mount(MarkdownMessage, { props }) as unknown as MdWrapper
+}
 
 describe('MarkdownMessage', () => {
   beforeEach(() => {
@@ -12,16 +23,12 @@ describe('MarkdownMessage', () => {
   })
 
   it('renders markdown immediately when not streaming', () => {
-    const wrapper = mount(MarkdownMessage, {
-      props: { text: '**bold text**', streaming: false },
-    })
+    const wrapper = mountMd({ text: '**bold text**', streaming: false })
     expect(wrapper.html()).toContain('<strong>bold text</strong>')
   })
 
   it('renders markdown during streaming after timer tick', async () => {
-    const wrapper = mount(MarkdownMessage, {
-      props: { text: 'Hello', streaming: true },
-    })
+    const wrapper = mountMd({ text: 'Hello', streaming: true })
 
     // Initial render is throttled via rAF (setTimeout 16ms fallback)
     vi.advanceTimersByTime(20)
@@ -36,9 +43,7 @@ describe('MarkdownMessage', () => {
   })
 
   it('does a final render when streaming ends', async () => {
-    const wrapper = mount(MarkdownMessage, {
-      props: { text: 'partial', streaming: true },
-    })
+    const wrapper = mountMd({ text: 'partial', streaming: true })
 
     vi.advanceTimersByTime(20)
 
@@ -50,9 +55,7 @@ describe('MarkdownMessage', () => {
 
   it('renders code blocks with syntax highlighting', () => {
     const code = '```js\nconst x = 1\n```'
-    const wrapper = mount(MarkdownMessage, {
-      props: { text: code, streaming: false },
-    })
+    const wrapper = mountMd({ text: code, streaming: false })
     expect(wrapper.find('.code-block').exists()).toBe(true)
     expect(wrapper.find('.code-block-lang').text()).toBe('js')
     expect(wrapper.find('.code-block-copy').exists()).toBe(true)

@@ -12,6 +12,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     createdAt: overrides.createdAt ?? '2026-03-01T00:00:00Z',
     updatedAt: overrides.updatedAt ?? '2026-03-01T00:00:00Z',
     archived: overrides.archived ?? false,
+    favorited: overrides.favorited ?? false,
     editMode: overrides.editMode ?? { type: 'full' },
   }
 }

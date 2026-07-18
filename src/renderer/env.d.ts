@@ -87,6 +87,10 @@ declare global {
       senseDebrief: (id?: string, sessionId?: string) => Promise<import('../../shared/sense').SessionDebrief | null>
       senseDeleteDebrief: (id: string) => Promise<{ ok: boolean }>
       senseSystemPromptPreview: (editMode?: import('../../shared/session').EditMode) => Promise<{ prompt: string }>
+      // Quick Chat
+      onQuickChatInit: (fn: (data: { sessionId: string; senseApps: string[] }) => void) => () => void
+      onQuickChatDismiss: (fn: () => void) => () => void
+      quickChatDismissed: () => Promise<void>
       // Connection status
       onConnectionLost: (fn: () => void) => () => void
       onConnectionRestored: (fn: () => void) => () => void

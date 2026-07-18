@@ -264,8 +264,12 @@ describe('sessions module', () => {
 
       const approvals = getPendingApprovals(s.id)
       expect(approvals).toHaveLength(1)
-      expect(approvals[0].requestId).toBe('req-1')
-      expect(approvals[0].toolName).toBe('bash')
+      const approval = approvals[0]
+      expect(approval.kind).toBe('tool_approval')
+      if (approval.kind === 'tool_approval') {
+        expect(approval.requestId).toBe('req-1')
+        expect(approval.toolName).toBe('bash')
+      }
     })
 
     it('ignores non-approval chunks', () => {
