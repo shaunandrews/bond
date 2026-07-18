@@ -5,7 +5,7 @@ import { useChat } from './composables/useChat'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
-import type { ModelId, AttachedImage } from './types/message'
+import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
 import { PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
@@ -23,6 +23,8 @@ import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
 import BondPanelHandle from './components/BondPanelHandle.vue'
 import FieldManual from './components/FieldManual.vue'
+import { shouldPersistOnUnload } from './lib/persistGuard'
+import { playTypewriter } from './lib/typewriter'
 
 const isQuickChatMode = new URLSearchParams(window.location.search).get('mode') === 'quick-chat'
 
@@ -43,6 +45,78 @@ async function loadWindowOpacity() {
 const selectedModel = ref<ModelId>('balanced')
 const mediaCount = ref(0)
 const fieldManualOpen = ref(false)
+// True while the daemon is serving the isolated new-user sandbox data set.
+// The app behaves identically — this only drives persistence guards.
+const sandboxed = ref(false)
+
+// First-run intro reveal. Nothing is ever hidden or swapped: the real
+// transcript renders normally, and while `revealText` is non-null the intro
+// message's text is overridden with a progressively growing prefix, so it
+// streams in exactly like any other Bond reply. The composer waits below the
+// window edge while the text streams, then rises in and takes focus.
+const revealText = ref<string | null>(null)
+const revealStreaming = ref(false)
+// True while the first-run interview is still open — drives the contextual
+// composer placeholder. Re-checked after every turn (completion happens
+// daemon-side via the complete_onboarding tool, invisible to the renderer).
+const onboardingActive = ref(false)
+const composerPlaceholder = computed<string | undefined>(() => {
+  if (!onboardingActive.value) return undefined
+  const hasAnswered = chat.messages.value.some(msg => msg.role === 'user')
+  return hasAnswered ? 'Your answer…' : 'Your name…'
+})
+
+// Composer entrance phase. The flight transform lives INSIDE .composer-clip
+// (overflow: clip), so the offstage composer can never contribute scrollable
+// overflow to the chat scroll area. That phantom overflow is what previously
+// let the boot scrollToBottom() shove the intro message out of the viewport
+// and drag it back down during the flight — the transcript physically cannot
+// move now.
+const composerPhase = ref<'hidden' | 'entering' | 'done'>('done')
+// Suppresses MissionBriefing until onboarding status is known, so a genuinely
+// fresh install doesn't flash the welcome screen before the entrance begins.
+const bootStatusKnown = ref(false)
+
+const displayMessages = computed<Message[]>(() => {
+  if (revealText.value === null) return chat.messages.value
+  return chat.messages.value.map(msg =>
+    msg.role === 'bond' && msg.id === 'onboarding-intro'
+      ? { ...msg, text: revealText.value as string, streaming: revealStreaming.value }
+      : msg
+  )
+})
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// The text reveal is plain streaming and is COMPLETELY finished (revealText
+// back to null, override released) before the composer moves. Only the
+// composer animates, and its flight is gated in CSS via prefers-reduced-motion.
+async function playEntrance(introText: string) {
+  revealText.value = ''
+  revealStreaming.value = true
+  composerPhase.value = 'hidden'
+  await playTypewriter(introText, text => {
+    revealText.value = text
+  })
+  revealStreaming.value = false
+  revealText.value = null
+  await delay(250)
+  composerPhase.value = 'entering'
+  await delay(700)
+  composerPhase.value = 'done'
+  chatInputRef.value?.focus()
+}
+
+// The interview ends daemon-side (complete_onboarding tool), so re-check when
+// each turn finishes and drop the contextual placeholder once it's done.
+watch(() => chat.busy.value, async (busy) => {
+  if (busy || !onboardingActive.value) return
+  try {
+    onboardingActive.value = (await window.bond.onboardingStatus()).status === 'pending'
+  } catch { /* keep the current placeholder */ }
+})
 
 async function refreshMediaCount() {
   try {
@@ -126,6 +200,10 @@ chat.onQueryEnd(() => {
   refreshMediaCount()
 })
 
+function handleCancel() {
+  chat.cancel()
+}
+
 async function handleSubmit(text: string, images: AttachedImage[]) {
   nextTick(scrollToBottom)
   await chat.submit(text, images?.length ? images : undefined)
@@ -146,6 +224,7 @@ function handleEditModeChange(mode: EditMode) {
   currentEditMode.value = mode
   chat.setEditMode(mode)
 }
+
 
 async function handleCreateSkill(description: string) {
   await chat.init()
@@ -186,6 +265,9 @@ function onKeyDown(e: KeyboardEvent) {
 }
 
 function handleBeforeUnload() {
+  // Never persist across the sandbox boundary: not while sandboxed, and not
+  // while main is mid-swap (it sets the suppress flag before swapping data).
+  if (!shouldPersistOnUnload(sandboxed.value)) return
   chat.stashToLocalStorage()
   chat.persistMessages()
 }
@@ -202,17 +284,41 @@ onMounted(async () => {
   })
   removeCollectionsListener = window.bond.onCollectionsChanged(() => collections.load())
   removeConnectionLostListener = window.bond.onConnectionLost(() => {
-    chat.stashToLocalStorage()
+    if (!sandboxed.value) chat.stashToLocalStorage()
   })
   removeFullscreenListener = window.bond.onFullscreenChanged((fs: boolean) => {
     isFullScreen.value = fs
   })
   removeConnectionRestoredListener = window.bond.onConnectionRestored(async () => {
+    if (sandboxed.value) return
     await chat.repersistAll()
     const restored = await chat.restoreFromBackupIfNeeded()
     if (restored) await chat.loadTranscript()
   })
   chat.subscribe()
+  try {
+    sandboxed.value = (await window.bond.sandboxStatus()).sandboxed
+  } catch { /* older daemon without sandbox support */ }
+  let firstRunPending = false
+  try {
+    // A genuinely fresh install (or the sandbox, which looks identical) gets
+    // Bond's intro seeded as the first real transcript message; the interview
+    // itself is the normal agent driven by the first-run system prompt.
+    const onboardingState = await window.bond.onboardingStatus()
+    console.log(`[entrance] boot: onboarding=${onboardingState.status} sandboxed=${sandboxed.value}`)
+    if (onboardingState.status === 'pending') {
+      firstRunPending = true
+      onboardingActive.value = true
+      // Hold the intro empty and the composer offstage from the first paint.
+      revealText.value = ''
+      revealStreaming.value = true
+      composerPhase.value = 'hidden'
+      await window.bond.onboardingBegin()
+    }
+  } catch (error) {
+    console.log(`[entrance] boot: status check failed — ${error instanceof Error ? error.message : String(error)}`)
+  }
+  bootStatusKnown.value = true
   loadAccent()
   loadWindowOpacity()
   refreshMediaCount()
@@ -221,10 +327,26 @@ onMounted(async () => {
   selectedModel.value = model as ModelId
   if (chat.messages.value.length === 0) {
     await chat.init()
-    const restored = await chat.restoreFromBackupIfNeeded()
+    // The localStorage stash is emergency recovery for the REAL transcript;
+    // restoring it inside the sandbox would leak real data into the simulation.
+    const restored = sandboxed.value ? false : await chat.restoreFromBackupIfNeeded()
     if (restored) await chat.loadTranscript()
   } else {
     await chat.init()
+  }
+  if (firstRunPending) {
+    // Play the entrance only for the untouched opener — a reload mid-interview
+    // shows the transcript normally.
+    const first = chat.messages.value[0]
+    console.log(`[entrance] gate: count=${chat.messages.value.length} first=${first ? `${first.role}/${first.id}/${'text' in first ? (first.text?.length ?? 0) : 'n/a'}ch` : 'none'}`)
+    if (chat.messages.value.length === 1 && first?.role === 'bond' && first.text) {
+      void playEntrance(first.text)
+    } else {
+      console.log('[entrance] gate failed — showing transcript normally')
+      revealText.value = null
+      revealStreaming.value = false
+      composerPhase.value = 'done'
+    }
   }
   nextTick(scrollToBottom)
 })
@@ -240,15 +362,18 @@ onUnmounted(() => {
   removeConnectionLostListener?.()
   removeConnectionRestoredListener?.()
   removeFullscreenListener?.()
-  chat.stashToLocalStorage()
-  chat.persistMessages()
+  if (shouldPersistOnUnload(sandboxed.value)) {
+    chat.stashToLocalStorage()
+    chat.persistMessages()
+  }
   chat.unsubscribe()
 })
 </script>
 
 <template>
   <QuickChat v-if="isQuickChatMode" />
-  <BondPanelGroup v-else direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
+  <template v-else>
+  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
     <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="420">
       <div class="main-panel-wrap">
       <ViewShell
@@ -256,26 +381,14 @@ onUnmounted(() => {
         title="Bond"
         :insetStart="!isFullScreen"
       >
-        <template #header-end>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'collections' }" @click.stop="toggleRightPanel('collections')" v-tooltip="'Collections'">
-            <PhListBullets :size="16" weight="bold" />
-          </BondButton>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'sense' }" @click.stop="toggleRightPanel('sense')" v-tooltip="'Sense'">
-            <PhClockCounterClockwise :size="16" weight="bold" />
-          </BondButton>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'media' }" @click.stop="toggleRightPanel('media')" v-tooltip="`Media${mediaCount ? ` (${mediaCount})` : ''}`">
-            <PhImages :size="16" weight="bold" />
-          </BondButton>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'memory' }" @click.stop="toggleRightPanel('memory')" v-tooltip="'Memory'">
-            <PhBrain :size="16" weight="bold" />
-          </BondButton>
-        </template>
-
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
-          <MissionBriefing v-if="chat.messages.value.length === 0" />
+          <!-- revealText !== null means the first-run entrance owns the screen:
+               MissionBriefing must never mount during it. Its 100vh-tall exit
+               transition shoves the streaming intro below the fold. -->
+          <MissionBriefing v-if="bootStatusKnown && revealText === null && chat.messages.value.length === 0" />
           <template v-else>
             <MessageBubble
-              v-for="msg in chat.messages.value"
+              v-for="msg in displayMessages"
               :key="msg.id"
               :msg="msg"
               @approve="chat.respondToApproval"
@@ -313,33 +426,94 @@ onUnmounted(() => {
                 @respond="chat.respondToApproval"
               />
             </div>
-            <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :contextUsage="chat.contextUsage.value" @submit="handleSubmit" @cancel="chat.cancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
+            <!-- .composer-clip clips the offstage composer so its transformed
+                 box can't create scrollable overflow (which would shift the
+                 transcript). The flight classes live on the inner wrapper;
+                 both are inert in steady state. -->
+            <div class="composer-clip">
+              <div
+                :class="{
+                  'composer-offstage': composerPhase === 'hidden',
+                  'composer-entering': composerPhase === 'entering',
+                }"
+              >
+                <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :contextUsage="chat.contextUsage.value" :placeholder="composerPlaceholder" @submit="handleSubmit" @cancel="handleCancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
+              </div>
+            </div>
           </div>
         </template>
       </ViewShell>
       </div>
     </BondPanel>
 
-    <BondPanelHandle v-show="!rightPanelHidden" id="handle-1" />
+    <BondPanelHandle v-show="!rightPanelHidden" id="handle-0" />
 
-    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="['sense', 'memory'].includes(rightPanelContent) ? 300 : 260" :maxSize="99999" :style="rightPanelStyle">
+    <BondPanel ref="rightPanelRef" id="right-panel" class="right-panel" unit="px" :defaultSize="320" :minSize="['sense', 'memory'].includes(rightPanelContent) ? 300 : 260" :maxSize="99999" :style="rightPanelStyle">
       <CollectionsView v-if="rightPanelContent === 'collections'"
         :collections="collections.activeCollections.value"
         :archivedCollections="collections.archivedCollections.value"
         :activeCollectionId="collections.activeCollectionId.value"
-        @select="collections.select"
-        @archive="collections.archive"
-        @unarchive="collections.unarchive"
-        @remove="collections.remove"
+        @select="collections.select($event)"
+        @archive="collections.archive($event)"
+        @unarchive="collections.unarchive($event)"
+        @remove="collections.remove($event)"
         @back="collections.select(null)"
       />
       <SensePanelView v-else-if="rightPanelContent === 'sense'" />
-      <MemoryView v-else-if="rightPanelContent === 'memory'" :editMode="currentEditMode" />
+      <MemoryView v-else-if="rightPanelContent === 'memory'" />
       <MediaView v-else-if="rightPanelContent === 'media'" />
     </BondPanel>
   </BondPanelGroup>
 
-  <FieldManual v-if="!isQuickChatMode" :open="fieldManualOpen" @close="fieldManualOpen = false" />
+  <nav class="right-panel-controls no-drag" aria-label="Panel views">
+    <BondButton
+      variant="ghost"
+      size="sm"
+      icon
+      :aria-label="rightPanelOpen && rightPanelContent === 'collections' ? 'Close Collections panel' : 'Open Collections panel'"
+      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'collections' }"
+      @click.stop="toggleRightPanel('collections')"
+      v-tooltip="rightPanelOpen && rightPanelContent === 'collections' ? 'Close Collections' : 'Collections'"
+    >
+      <PhListBullets :size="16" weight="bold" />
+    </BondButton>
+    <BondButton
+      variant="ghost"
+      size="sm"
+      icon
+      :aria-label="rightPanelOpen && rightPanelContent === 'sense' ? 'Close Sense panel' : 'Open Sense panel'"
+      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'sense' }"
+      @click.stop="toggleRightPanel('sense')"
+      v-tooltip="rightPanelOpen && rightPanelContent === 'sense' ? 'Close Sense' : 'Sense'"
+    >
+      <PhClockCounterClockwise :size="16" weight="bold" />
+    </BondButton>
+    <BondButton
+      variant="ghost"
+      size="sm"
+      icon
+      :aria-label="rightPanelOpen && rightPanelContent === 'media' ? 'Close Media panel' : 'Open Media panel'"
+      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'media' }"
+      @click.stop="toggleRightPanel('media')"
+      v-tooltip="rightPanelOpen && rightPanelContent === 'media' ? 'Close Media' : `Media${mediaCount ? ` (${mediaCount})` : ''}`"
+    >
+      <PhImages :size="16" weight="bold" />
+    </BondButton>
+    <BondButton
+      variant="ghost"
+      size="sm"
+      icon
+      :aria-label="rightPanelOpen && rightPanelContent === 'memory' ? 'Close Memory panel' : 'Open Memory panel'"
+      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'memory' }"
+      @click.stop="toggleRightPanel('memory')"
+      v-tooltip="rightPanelOpen && rightPanelContent === 'memory' ? 'Close Memory' : 'Memory'"
+    >
+      <PhBrain :size="16" weight="bold" />
+    </BondButton>
+  </nav>
+
+  <FieldManual :open="fieldManualOpen" @close="fieldManualOpen = false" />
+  </template>
 </template>
 
 <style>
@@ -350,6 +524,39 @@ onUnmounted(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+/* Clips the offstage composer at its own slot's bounds. overflow: clip (not
+   hidden) clips paint without creating a scroll container, and clipped boxes
+   don't contribute to the scroll area's scrollable overflow — the guarantee
+   that the transcript can't shift during the entrance. The 4px padding /
+   -4px margin pair is layout-neutral and keeps the composer's 2px focus ring
+   inside the clip box. */
+.composer-clip {
+  overflow: clip;
+  padding: 4px;
+  margin: -4px;
+}
+
+/* First-run entrance: after the intro has fully streamed in, the composer
+   rises from below with a little depth, then takes focus. These classes are
+   absent in steady state — a lingering transform/will-change here would break
+   the backdrop-filter glass of the composer inside it. Under
+   prefers-reduced-motion the flight is skipped (the composer just sits in
+   place) while the text streaming still plays. */
+@media (prefers-reduced-motion: no-preference) {
+  .composer-offstage {
+    transform: perspective(900px) translateY(110%) rotateX(14deg) scale(0.96);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .composer-entering {
+    transition:
+      transform 0.7s cubic-bezier(0.3, 1.4, 0.45, 1),
+      opacity 0.45s ease-out;
+    transform: perspective(900px) translateY(0) rotateX(0deg) scale(1);
+    opacity: 1;
+  }
 }
 
 .scroll-to-bottom-wrap {
@@ -389,6 +596,26 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 6px;
   padding: 4px 0;
+}
+
+.right-panel {
+  position: relative;
+  background: var(--color-bg);
+}
+
+.right-panel-controls {
+  position: fixed;
+  top: 0;
+  right: 0.75rem;
+  z-index: 22;
+  height: var(--toolbar-height);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.right-panel .bond-toolbar__end {
+  margin-right: 8.5rem;
 }
 
 .panel-toggle-active {
