@@ -170,6 +170,16 @@ function toggleRightPanel(panel?: RightPanelContent) {
   localStorage.setItem('bond:right-panel-content', rightPanelContent.value)
 }
 
+async function handleResumeThread(sessionId: string) {
+  const session = sessions.sessions.value.find(s => s.id === sessionId)
+  if (!session) return
+  if (session.archived) await sessions.unarchive(sessionId)
+  sessions.select(sessionId)
+  await chat.loadSession(sessionId)
+  toggleRightPanel()
+  nextTick(() => chatInputRef.value?.focus())
+}
+
 function syncRightPanelWidth() {
   const actual = rightPanelRef.value?.getSize()
   if (actual != null) rightPanelWidth.value = actual
@@ -552,7 +562,7 @@ onUnmounted(() => {
         @back="collections.select(null)"
       />
       <SensePanelView v-else-if="rightPanelContent === 'sense'" />
-      <MemoryView v-else-if="rightPanelContent === 'memory'" />
+      <MemoryView v-else-if="rightPanelContent === 'memory'" @resume="handleResumeThread" />
       <MediaView v-else-if="rightPanelContent === 'media'" />
     </BondPanel>
   </BondPanelGroup>

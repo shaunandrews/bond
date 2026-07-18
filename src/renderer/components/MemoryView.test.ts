@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import MemoryView from './MemoryView.vue'
+import MemoryThreadCard from './MemoryThreadCard.vue'
 import { useMemory } from '../composables/useMemory'
 import type { SenseFact, SessionDebrief, OpenThread, DecisionWithContext } from '../../shared/sense'
 
@@ -119,6 +120,9 @@ describe('MemoryView', () => {
     expect(wrapper.text()).toContain('Fix the bug')
     expect(wrapper.text()).toContain('Debug Session')
     expect(wrapper.text()).toContain('Resume')
+
+    wrapper.findComponent(MemoryThreadCard).vm.$emit('resume', 's1')
+    expect(wrapper.emitted('resume')).toEqual([['s1']])
   })
 
   it('renders debrief card with summary preview and topics', async () => {

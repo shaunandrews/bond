@@ -12,6 +12,7 @@ import MemoryDebriefDetail from './MemoryDebriefDetail.vue'
 import type { SessionDebrief } from '../../shared/sense'
 
 const memory = useMemory()
+const emit = defineEmits<{ (e: 'resume', sessionId: string): void }>()
 
 type FilterType = 'all' | 'facts' | 'threads' | 'decisions' | 'prompt'
 const filter = ref<FilterType>('all')
@@ -86,7 +87,7 @@ function handleDeleteDebrief(id: string) {
 }
 
 function handleResumeThread(sessionId: string) {
-  console.log('Resume thread from session:', sessionId)
+  emit('resume', sessionId)
 }
 
 onMounted(() => {
