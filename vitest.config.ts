@@ -12,9 +12,13 @@ export default defineConfig({
       include: ['src/**/*.{ts,vue}'],
       exclude: ['src/**/*.test.ts', 'src/**/*.d.ts', 'src/**/main.ts', 'src/**/index.ts'],
       reporter: ['text', 'json-summary'],
+      // Ratcheted just below current coverage so new code can't regress the
+      // suite. Raise these as coverage climbs; don't lower them.
       thresholds: {
-        lines: 20,
-        branches: 15,
+        lines: 29,
+        branches: 19,
+        functions: 27,
+        statements: 29,
       },
     },
   },

@@ -150,21 +150,9 @@ cmd_soul() {
 }
 
 _ensure_cli() {
-  local cli_files=(media screenshot soul collection sense)
-  local needs_build=false
-  for f in "${cli_files[@]}"; do
-    local src="$PROJECT_DIR/src/cli/$f.ts"
-    local out="$PROJECT_DIR/out/cli/$f.js"
-    # Build if output missing or source is newer
-    if [[ ! -f "$out" ]] || [[ -f "$src" && "$src" -nt "$out" ]]; then
-      needs_build=true
-      break
-    fi
-  done
-  if $needs_build; then
-    cd "$PROJECT_DIR"
-    npm run build:cli --silent 2>/dev/null
-  fi
+  # Rebuild bundled CLI subcommands only when a source is newer than its output.
+  # scripts/build.mjs owns the entry list so it can't drift from build:cli.
+  node "$PROJECT_DIR/scripts/build.mjs" cli --if-stale 2>/dev/null
 }
 
 cmd_screenshot() {
