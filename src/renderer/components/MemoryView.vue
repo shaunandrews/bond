@@ -34,7 +34,8 @@ async function loadPromptPreview() {
     promptPreview.value = result.prompt
   } catch (err) {
     console.error('Failed to load prompt preview:', err)
-    promptPreview.value = 'Failed to load system prompt preview.'
+    const message = err instanceof Error ? err.message : String(err)
+    promptPreview.value = `Failed to load system prompt preview: ${message}`
   } finally {
     promptLoading.value = false
   }

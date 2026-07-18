@@ -682,7 +682,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('sense:memory', (_e, limit?: number) => client.senseMemory(limit))
   ipcMain.handle('sense:debrief', (_e, id?: string, sessionId?: string) => client.senseDebrief(id, sessionId))
   ipcMain.handle('sense:deleteDebrief', (_e, id: string) => client.senseDeleteDebrief(id))
-  ipcMain.handle('sense:systemPromptPreview', (_e, editMode?: import('../shared/session').EditMode) => client.senseSystemPromptPreview(editMode))
+  ipcMain.handle('sense:systemPromptPreview', async (_e, editMode?: import('../shared/session').EditMode) => {
+    try {
+      return await client.senseSystemPromptPreview(editMode)
+    } catch (err) {
+      console.error('[bond] system prompt preview failed:', err)
+      throw err
+    }
+  })
   ipcMain.handle('sense:hasPermission', () => {
     const { hasScreenRecordingPermission } = require('./sense') as typeof import('./sense')
     return hasScreenRecordingPermission()
