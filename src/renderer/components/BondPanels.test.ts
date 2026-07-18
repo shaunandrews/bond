@@ -738,6 +738,37 @@ describe('BondPanelGroup', () => {
       w.unmount()
     })
 
+    it('resizes a trailing pixel panel through the first handle', async () => {
+      const w = mount(
+        defineComponent({
+          components: { BondPanelGroup, BondPanel, BondPanelHandle },
+          template: `
+            <BondPanelGroup direction="horizontal">
+              <BondPanel id="main" :defaultSize="80" :minSize="30">
+                <div>Main</div>
+              </BondPanel>
+              <BondPanelHandle id="handle-0" />
+              <BondPanel id="right-panel" unit="px" :defaultSize="320" :minSize="260" :maxSize="99999">
+                <div>Right panel</div>
+              </BondPanel>
+            </BondPanelGroup>
+          `,
+        }),
+        { attachTo: document.body },
+      )
+      await nextTick()
+
+      const group = w.find('.bond-panel-group').element as HTMLElement
+      Object.defineProperty(group, 'offsetWidth', { configurable: true, value: 1000 })
+
+      await w.find('.bond-panel-handle').trigger('keydown', { key: 'ArrowLeft' })
+      await nextTick()
+
+      const rightPanelStyle = w.find('[data-panel-id="right-panel"]').attributes('style') ?? ''
+      expect(getFlexBasisPx(rightPanelStyle)).toBe(370)
+      w.unmount()
+    })
+
     it('pixel panel collapse and expand works', async () => {
       const w = mount(
         defineComponent({
