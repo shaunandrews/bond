@@ -27,10 +27,18 @@ const tabs = [
 
 const showPrompt = computed(() => activeTab.value === 'prompt')
 
+function serializableEditMode(): import('../../shared/session').EditMode | undefined {
+  if (!props.editMode) return undefined
+  if (props.editMode.type === 'scoped') {
+    return { type: 'scoped', allowedPaths: [...props.editMode.allowedPaths] }
+  }
+  return { type: props.editMode.type }
+}
+
 async function loadPromptPreview() {
   promptLoading.value = true
   try {
-    const result = await window.bond.senseSystemPromptPreview(props.editMode)
+    const result = await window.bond.senseSystemPromptPreview(serializableEditMode())
     promptPreview.value = result.prompt
   } catch (err) {
     console.error('Failed to load prompt preview:', err)
