@@ -562,6 +562,9 @@ app.whenReady().then(async () => {
     return client.getModel()
   })
 
+  ipcMain.handle('pi:status', () => client.getPiStatus())
+  ipcMain.handle('pi:saveAnthropicApiKey', (_e, apiKey: string) => client.savePiAnthropicApiKey(apiKey))
+
   // --- Context menu ---
   ipcMain.handle('context-menu:show', (_e, items: { id: string; label: string; type?: string }[]) => {
     const win = BrowserWindow.getFocusedWindow()

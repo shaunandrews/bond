@@ -225,6 +225,14 @@ export class BondClient {
     return await this.call('bond.getModel') as string
   }
 
+  async getPiStatus(): Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }> {
+    return await this.call('pi.status') as { configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }
+  }
+
+  async savePiAnthropicApiKey(apiKey: string): Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }> {
+    return await this.call('pi.saveAnthropicApiKey', { apiKey }) as { configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }
+  }
+
   // --- Sessions ---
 
   async listSessions(): Promise<Session[]> {

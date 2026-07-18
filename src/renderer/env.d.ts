@@ -37,6 +37,8 @@ declare global {
       onCreateSkill: (fn: (description: string) => void) => () => void
       setModel: (model: string) => Promise<{ ok: boolean }>
       getModel: () => Promise<string>
+      getPiStatus: () => Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }>
+      savePiAnthropicApiKey: (apiKey: string) => Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }>
       onModelChanged: (fn: (model: string) => void) => () => void
       getSoul: () => Promise<string>
       saveSoul: (content: string) => Promise<boolean>

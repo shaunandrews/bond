@@ -26,6 +26,7 @@ import {
   refreshSkillsCache,
   buildSystemPromptPreview,
 } from './agent'
+import { getPiAuthStatus, savePiAnthropicApiKey } from './pi/runtime'
 import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
@@ -474,6 +475,15 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const result = await generateTitleAndSummary(msgs)
         updateSession(sid, result)
         return JSON.stringify(makeResponse(id, result))
+      }
+
+      // --- Pi setup ---
+      case 'pi.status':
+        return JSON.stringify(makeResponse(id, await getPiAuthStatus()))
+      case 'pi.saveAnthropicApiKey': {
+        const apiKey = getStringParam(p, 'apiKey')
+        if (!apiKey) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'apiKey is required'))
+        return JSON.stringify(makeResponse(id, await savePiAnthropicApiKey(apiKey)))
       }
 
       // --- Settings ---

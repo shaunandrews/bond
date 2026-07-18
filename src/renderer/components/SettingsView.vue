@@ -17,6 +17,11 @@ const soul = ref('')
 const originalSoul = ref('')
 const soulDirty = computed(() => soul.value !== originalSoul.value)
 const defaultModel = ref<ModelId>('sonnet')
+const piConfigured = ref(false)
+const piProviders = ref<string[]>([])
+const piApiKey = ref('')
+const piSetupError = ref('')
+const piSaving = ref(false)
 const skills = ref<SkillInfo[]>([])
 const showNewSkillModal = ref(false)
 const newSkillDescription = ref('')
@@ -89,6 +94,28 @@ async function loadWindowOpacity() {
   windowOpacity.value = await window.bond.getWindowOpacity()
 }
 
+async function loadPiStatus() {
+  const status = await window.bond.getPiStatus()
+  piConfigured.value = status.configured
+  piProviders.value = status.providers.map(provider => provider.providerId)
+}
+
+async function savePiApiKey() {
+  if (!piApiKey.value.trim()) return
+  piSaving.value = true
+  piSetupError.value = ''
+  try {
+    const status = await window.bond.savePiAnthropicApiKey(piApiKey.value)
+    piConfigured.value = status.configured
+    piProviders.value = status.providers.map(provider => provider.providerId)
+    piApiKey.value = ''
+  } catch (error) {
+    piSetupError.value = error instanceof Error ? error.message : 'Could not save the Pi credential.'
+  } finally {
+    piSaving.value = false
+  }
+}
+
 function handleOpacityInput(e: Event) {
   const val = parseFloat((e.target as HTMLInputElement).value)
   windowOpacity.value = val
@@ -117,7 +144,8 @@ onMounted(async () => {
     window.bond.getModel(),
     window.bond.listSkills(),
     loadWindowOpacity(),
-    loadSenseStatus()
+    loadSenseStatus(),
+    loadPiStatus()
   ])
   soul.value = s
   originalSoul.value = s
@@ -305,6 +333,31 @@ function handleModelChange(model: string) {
 
       <section class="settings-section">
         <div class="section-header">
+          <h2 class="text-sm font-semibold text-text-primary">Pi connection</h2>
+          <p class="text-xs text-muted mt-1">
+            {{ piConfigured ? `Connected through ${piProviders.join(', ')}.` : 'Add an Anthropic API key to let Pi run Bond.' }}
+          </p>
+        </div>
+        <div v-if="!piConfigured" class="flex gap-2">
+          <input
+            v-model="piApiKey"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            class="settings-input flex-1"
+            placeholder="sk-ant-…"
+            @keyup.enter="savePiApiKey"
+          />
+          <BondButton :disabled="!piApiKey.trim() || piSaving" @click="savePiApiKey">
+            {{ piSaving ? 'Saving…' : 'Connect' }}
+          </BondButton>
+        </div>
+        <p v-if="piSetupError" class="text-xs text-err mt-2">{{ piSetupError }}</p>
+        <p class="text-xs text-muted mt-2">Stored by Pi in its credential store, not in Bond’s SQLite database.</p>
+      </section>
+
+      <section class="settings-section">
+        <div class="section-header">
           <h2 class="text-sm font-semibold text-text-primary">Personality</h2>
           <p class="text-xs text-muted mt-1">
             Shape how Bond talks and thinks. This is included in every conversation as part of its system prompt.
@@ -402,6 +455,18 @@ function handleModelChange(model: string) {
   display: flex;
   flex-direction: column;
 }
+
+.settings-input {
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  outline: none;
+}
+.settings-input:focus { border-color: var(--color-accent); }
 
 .soul-editor {
   width: 100%;

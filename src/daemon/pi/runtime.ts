@@ -9,6 +9,7 @@ import {
   SessionManager,
   SettingsManager,
   getAgentDir,
+  ModelRuntime,
 } from '@earendil-works/pi-coding-agent'
 import type { BondStreamChunk } from '../../shared/stream'
 import type { EditMode } from '../../shared/session'
@@ -151,6 +152,33 @@ export function piEventToChunks(event: any): BondStreamChunk[] {
   return []
 }
 
+export interface PiAuthStatus {
+  configured: boolean
+  providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }>
+}
+
+export async function getPiAuthStatus(): Promise<PiAuthStatus> {
+  const runtime = await ModelRuntime.create()
+  const credentials = await runtime.listCredentials()
+  return {
+    // Bond's current model picker exposes Anthropic models. Other Pi credentials
+    // remain intact, but do not make those models callable.
+    configured: credentials.some(({ providerId }) => providerId === 'anthropic'),
+    providers: credentials.map(({ providerId, type }) => ({ providerId, type })),
+  }
+}
+
+/** Store an Anthropic API key in Pi's own encrypted-compatible credential store. */
+export async function savePiAnthropicApiKey(apiKey: string): Promise<PiAuthStatus> {
+  if (!apiKey.trim()) throw new Error('An API key is required.')
+  const runtime = await ModelRuntime.create()
+  await runtime.login('anthropic', 'api_key', {
+    prompt: async () => apiKey.trim(),
+    notify: () => {},
+  })
+  return getPiAuthStatus()
+}
+
 export interface PiBondQueryOptions {
   abortSignal: AbortSignal
   onChunk: (chunk: BondStreamChunk) => void
@@ -167,6 +195,11 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
   const sessionFile = findSessionFile(sessionId)
   const isNewSession = !sessionFile
   const editMode = options.editMode ?? { type: 'full' as const }
+  const auth = await getPiAuthStatus()
+  if (!auth.configured) {
+    options.onChunk({ kind: 'raw_error', message: 'Pi is not connected. Open Settings → Pi connection and add an Anthropic API key.' })
+    return false
+  }
   const tools = editMode.type === 'readonly'
     ? ['read', 'grep', 'find', 'ls']
     : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash']
