@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getMemoryItem } from './store'
-import { forgetMemory, rememberMemory, searchMemoryTool, validateToolSourceIds } from './tools'
+import { MEMORY_TOOL_NAMES, forgetMemory, registerMemoryTools, rememberMemory, searchMemoryTool, validateToolSourceIds } from './tools'
 
 const dbs: Database.Database[] = []
 function memoryDb() {
@@ -32,5 +32,18 @@ describe('memory tools', () => {
   it('validates source id shape before writes', () => {
     const errors = validateToolSourceIds(['ok', '', 3], false)
     expect(errors).toEqual(['sourceIds must be an array of non-empty strings'])
+  })
+
+  it('rejects credential-like text before durable storage', () => {
+    const db = memoryDb()
+    const result = rememberMemory({ text: 'password=super-secret-value' }, { db })
+    expect(result.ok).toBe(false)
+    expect(result.errors[0]).toContain('Refusing to store memory')
+  })
+
+  it('registers the complete Bond memory toolset with Pi', () => {
+    const names: string[] = []
+    registerMemoryTools({ registerTool: (tool: { name: string }) => names.push(tool.name) } as any)
+    expect(names).toEqual(MEMORY_TOOL_NAMES)
   })
 })

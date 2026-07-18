@@ -5,6 +5,15 @@ import { getDataDir } from '../paths'
 import { type CoreMemory } from './types'
 import { validateCoreMemory } from './parser'
 
+let coreMutationQueue: Promise<void> = Promise.resolve()
+
+/** Serialize read-modify-write operations so background reflection cannot overwrite explicit user changes. */
+export function withCoreMemoryLock<T>(operation: () => T | Promise<T>): Promise<T> {
+  const result = coreMutationQueue.then(operation, operation)
+  coreMutationQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
 export function coreMemoryPath(baseDir = getDataDir()): string {
   return join(baseDir, 'memory', 'core.json')
 }

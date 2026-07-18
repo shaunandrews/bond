@@ -9,7 +9,7 @@ import { PhPlus, PhTrash } from '@phosphor-icons/vue'
 
 const records = ref<ImageRecord[]>([])
 const imageData = ref<Map<string, AttachedImage>>(new Map())
-const loading = ref(true)
+const loading = ref(false)
 const loadedCount = ref(0)
 const fileInput = ref<HTMLInputElement | null>(null)
 let removeImageListener: (() => void) | null = null

@@ -36,6 +36,26 @@ describe('agent prompt/context integration', () => {
     expect(prompt).not.toContain('bond sense debrief')
   })
 
+  it('includes the first-run interview only while onboarding is pending', async () => {
+    // Empty test DB → genuine first run
+    expect(buildSystemPromptPreview()).toContain('FIRST-RUN ONBOARDING')
+
+    const { completeFirstRun } = await import('./onboarding')
+    completeFirstRun()
+    expect(buildSystemPromptPreview()).not.toContain('FIRST-RUN ONBOARDING')
+  })
+
+  it('teaches Bond its memory layers and tools', () => {
+    const prompt = buildSystemPromptPreview()
+    expect(prompt).toContain('Bond has a persistent memory system')
+    expect(prompt).toContain('memory_status')
+    expect(prompt).toContain('memory_search')
+    expect(prompt).toContain('memory_recall')
+    expect(prompt).toContain('history_search')
+    expect(prompt).toContain('memory_manage')
+    expect(prompt).toContain('Never claim that you lack memory')
+  })
+
   it('builds a bounded escaped context envelope from memory, transcript recall, screen context, and epoch handoff', () => {
     writeCoreMemoryAtomic({ version: 1, facts: ['Core fact <unsafe>'], preferences: [], decisions: [], updatedAt: '2026-01-01T00:00:00.000Z' })
     setSetting('memory.working', JSON.stringify(createWorkingState({ goal: 'Ship context envelope' })))

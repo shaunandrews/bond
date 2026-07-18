@@ -84,6 +84,9 @@ async function runSearch() {
   await memory.search(query.value, 20)
 }
 
+const displayedResults = computed(() => memory.results.value)
+const displayedSources = computed(() => memory.sources.value.messages)
+
 function selectItem(item: MemoryItem) {
   selectedItem.value = item
   editText.value = item.text
@@ -158,7 +161,7 @@ onMounted(() => {
         <div class="search-row"><BondInput v-model="query" placeholder="Search memory" @keyup.enter="runSearch" /><BondButton size="sm" @click="runSearch">Search</BondButton></div>
         <div v-if="memory.isEmpty.value" class="memory-empty"><BondText size="sm" color="muted">No memory items found.</BondText></div>
         <div v-else class="results">
-          <article v-for="result in memory.results.value" :key="result.item.id" class="memory-card" :class="{ active: selectedItem?.id === result.item.id }" @click="selectItem(result.item)">
+          <article v-for="result in displayedResults" :key="result.item.id" class="memory-card" :class="{ active: selectedItem?.id === result.item.id }" @click="selectItem(result.item)">
             <div class="card-head"><span class="kind">{{ result.item.kind }}</span><BondText size="xs" color="muted">{{ result.item.updatedAt.slice(0, 10) }}</BondText></div>
             <BondText size="sm">{{ result.item.text }}</BondText>
             <div class="card-actions"><button @click.stop="showSource(result.item)">Source</button><button @click.stop="deleteItem(result.item)">Delete</button></div>
@@ -173,8 +176,8 @@ onMounted(() => {
 
       <section v-else class="stack">
         <BondText size="xs" color="muted">Original messages attached to the selected memory item.</BondText>
-        <div v-if="memory.sources.value.messages.length === 0" class="memory-empty"><BondText size="sm" color="muted">Select an item source from Search.</BondText></div>
-        <article v-for="msg in memory.sources.value.messages" :key="msg.id" class="source-card">
+        <div v-if="displayedSources.length === 0" class="memory-empty"><BondText size="sm" color="muted">Select an item source from Search.</BondText></div>
+        <article v-for="msg in displayedSources" :key="msg.id" class="source-card">
           <BondText size="xs" weight="semibold" color="muted">{{ roleLabel(msg.role) }} · #{{ msg.seq }}</BondText>
           <p>{{ msg.text }}</p>
         </article>

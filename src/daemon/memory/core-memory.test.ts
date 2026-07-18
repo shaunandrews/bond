@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { readCoreMemory, updateCoreMemory, writeCoreMemoryAtomic } from './core-memory'
+import { readCoreMemory, updateCoreMemory, withCoreMemoryLock, writeCoreMemoryAtomic } from './core-memory'
 
 describe('core memory', () => {
   it('writes core memory atomically and leaves no temp files', () => {
@@ -34,6 +34,19 @@ describe('core memory', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  it('serializes asynchronous core mutations', async () => {
+    const order: string[] = []
+    const first = withCoreMemoryLock(async () => {
+      order.push('first-start')
+      await new Promise(resolve => setTimeout(resolve, 10))
+      order.push('first-end')
+    })
+    const second = withCoreMemoryLock(() => { order.push('second') })
+
+    await Promise.all([first, second])
+    expect(order).toEqual(['first-start', 'first-end', 'second'])
   })
 
   it('updates via read-modify-atomic-write', () => {

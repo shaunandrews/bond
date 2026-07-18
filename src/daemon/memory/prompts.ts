@@ -55,6 +55,12 @@ Rules:
 - Do not invent facts, preferences, decisions, or source ids.
 - Prefer fewer, high-signal memories over summaries.
 - Keep text standalone and concise.
+- Store only durable information explicitly supported by user-authored messages. Assistant statements may provide context but are not evidence of personal facts.
+- Preserve explicit user preferences, corrections, decisions, and remember requests.
+- Do not infer personal facts from jokes, speculation, hypotheticals, or screen activity.
+- Never store credentials, secrets, authentication material, private keys, financial data, or giant code/tool outputs.
+- Temporary task details belong in workingState, not durable memories.
+- Return no memory rather than manufacturing significance.
 
 Current working state:
 ${state}
@@ -77,8 +83,11 @@ Return one JSON object only, no markdown:
 Rules:
 - core arrays should be the complete desired core memory after reflection, not a patch.
 - Preserve still-relevant existing core items.
+- Core contains only stable identity facts, preferences, corrections, and durable operating rules explicitly supported by user-authored messages.
 - Use sourceIds from the transcript message ids only.
 - Do not invent or overgeneralize. If unsure, omit.
+- Do not promote temporary work details, Sense observations, jokes, speculation, credentials, secrets, or tool output into core memory.
+- Assistant statements are not evidence of personal facts.
 
 Existing core memory:
 ${JSON.stringify(input.coreMemory, null, 2)}

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
-import { buildFtsQuery, ensureMemorySchema, getMemoryItem, listRecentMemory, searchMemory, upsertMemoryItem } from './store'
+import { buildFtsQuery, ensureMemorySchema, getMemoryItem, getMemoryItemSourceIds, listRecentMemory, searchMemory, setMemoryItemSources, upsertMemoryItem } from './store'
 
 const dbs: Database.Database[] = []
 function memoryDb(): Database.Database {
@@ -43,12 +43,22 @@ describe('memory store', () => {
     expect(searchMemory('library', { projectId: 'bond' }, db)).toEqual([])
   })
 
-  it('falls back to recent active memory for empty queries', () => {
+  it('does not leak recent memory into empty searches', () => {
     const db = memoryDb()
     upsertMemoryItem({ id: 'old', text: 'old', updatedAt: '2026-01-01T00:00:00.000Z' }, db)
     upsertMemoryItem({ id: 'new', text: 'new', updatedAt: '2026-01-02T00:00:00.000Z' }, db)
 
-    expect(searchMemory('***', { limit: 1 }, db).map(r => r.item.id)).toEqual(['new'])
+    expect(searchMemory('***', { limit: 1 }, db)).toEqual([])
     expect(listRecentMemory({ limit: 2 }, db).map(item => item.id)).toEqual(['new', 'old'])
+  })
+
+  it('stores source messages in a relational table', () => {
+    const db = memoryDb()
+    db.exec('CREATE TABLE messages (id TEXT PRIMARY KEY)')
+    db.prepare('INSERT INTO messages (id) VALUES (?)').run('u1')
+    upsertMemoryItem({ id: 'm1', text: 'A sourced fact' }, db)
+
+    expect(setMemoryItemSources('m1', ['u1', 'missing'], db)).toEqual(['u1'])
+    expect(getMemoryItemSourceIds('m1', db)).toEqual(['u1'])
   })
 })

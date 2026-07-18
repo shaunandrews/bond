@@ -40,6 +40,13 @@ export function ensureMemorySchema(db: Database.Database = getDb()): void {
 
     CREATE INDEX IF NOT EXISTS idx_memory_items_active ON memory_items(active, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_items_project ON memory_items(project_id, active, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS memory_item_sources (
+      memory_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      PRIMARY KEY (memory_id, message_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_item_sources_message ON memory_item_sources(message_id);
   `)
 
   const hasFts = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_items_fts'").get()
@@ -171,11 +178,44 @@ export function getMemoryItem(id: string, db: Database.Database = getDb()): Memo
   return row ? rowToItem(row) : null
 }
 
+export function findActiveMemoryByText(text: string, db: Database.Database = getDb()): MemoryItem | null {
+  ensureMemorySchema(db)
+  const row = db.prepare(`SELECT ${COLS} FROM memory_items WHERE active = 1 AND text = ? COLLATE NOCASE LIMIT 1`).get(text.trim()) as MemoryItemRow | undefined
+  return row ? rowToItem(row) : null
+}
+
+export function setMemoryItemSources(memoryId: string, sourceIds: string[], db: Database.Database = getDb()): string[] {
+  ensureMemorySchema(db)
+  const unique = [...new Set(sourceIds.filter(Boolean))]
+  const existing = unique.length === 0 ? [] : db.prepare(
+    `SELECT id FROM messages WHERE id IN (${unique.map(() => '?').join(',')})`
+  ).all(...unique).map(row => (row as { id: string }).id)
+
+  db.transaction(() => {
+    db.prepare('DELETE FROM memory_item_sources WHERE memory_id = ?').run(memoryId)
+    const insert = db.prepare('INSERT INTO memory_item_sources (memory_id, message_id) VALUES (?, ?)')
+    for (const messageId of existing) insert.run(memoryId, messageId)
+  })()
+  return existing
+}
+
+export function getMemoryItemSourceIds(memoryId: string, db: Database.Database = getDb()): string[] {
+  ensureMemorySchema(db)
+  return db.prepare('SELECT message_id FROM memory_item_sources WHERE memory_id = ? ORDER BY rowid')
+    .all(memoryId)
+    .map(row => (row as { message_id: string }).message_id)
+}
+
+export function countActiveMemoryItems(db: Database.Database = getDb()): number {
+  ensureMemorySchema(db)
+  return (db.prepare('SELECT COUNT(*) AS count FROM memory_items WHERE active = 1').get() as { count: number }).count
+}
+
 export function searchMemory(query: string, options: { projectId?: string | null; limit?: number } = {}, db: Database.Database = getDb()): RetrievedMemory[] {
   ensureMemorySchema(db)
   const limit = Math.max(1, Math.min(MEMORY_CAPS.searchLimit, Math.floor(options.limit ?? 8)))
   const match = buildFtsQuery(query)
-  if (!match) return listRecentMemory({ projectId: options.projectId, limit }, db).map(item => ({ item, score: 0 }))
+  if (!match) return []
 
   const projectFilter = options.projectId === undefined ? '' : 'AND m.project_id IS ?'
   const params: unknown[] = [match]
