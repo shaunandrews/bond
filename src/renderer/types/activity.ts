@@ -10,6 +10,7 @@ export type TurnActivityEvent =
 export interface TurnActivityData {
   turnId: string
   userMessageId?: string
+  assistantMessageId?: string
   status: TurnActivityStatus
   startedAt: number
   endedAt?: number

@@ -2,104 +2,147 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MemoryView from './MemoryView.vue'
 import { useMemory } from '../composables/useMemory'
-import type { SessionDebrief } from '../../shared/sense'
+import type { CoreMemory, MemoryItem, WorkingState } from '../../shared/memory'
 
-function makeDebrief(overrides: Partial<SessionDebrief> = {}): SessionDebrief {
+const core: CoreMemory = {
+  version: 1,
+  facts: ['Shaun likes concise answers'],
+  preferences: ['Use tests'],
+  decisions: ['Continuous transcript is canonical'],
+  updatedAt: '2026-01-01T00:00:00.000Z',
+}
+
+const working: WorkingState = {
+  sessionId: null,
+  projectId: null,
+  goal: 'Clean up session UI',
+  facts: ['Renderer owns composer state'],
+  preferences: [],
+  decisions: [],
+  openThreads: ['Remove dead tests'],
+  updatedAt: '2026-01-01T00:00:00.000Z',
+}
+
+function makeItem(overrides: Partial<MemoryItem> = {}): MemoryItem {
   return {
-    id: 'd1',
-    sessionId: 's1',
-    sessionTitle: 'Session One',
-    summary: 'Session summary',
-    topics: ['memory'],
-    messageCount: 5,
-    durationSeconds: 180,
+    id: 'm1',
+    kind: 'fact',
+    text: 'Bond has one continuous transcript',
+    source: 'user',
+    projectId: null,
+    tags: ['source:msg1'],
+    confidence: 0.9,
+    active: true,
     createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
 }
 
-function setupBond(data?: { debriefs?: SessionDebrief[]; prompt?: string }) {
+function setupBond() {
+  const item = makeItem()
   const bondMock = {
-    senseMemory: vi.fn().mockResolvedValue({ debriefs: data?.debriefs ?? [] }),
-    senseDeleteDebrief: vi.fn().mockResolvedValue({ ok: true }),
-    senseSystemPromptPreview: vi.fn().mockResolvedValue({ prompt: data?.prompt ?? 'SYSTEM PROMPT' }),
+    memoryCore: vi.fn().mockResolvedValue(core),
+    memoryWorking: vi.fn().mockResolvedValue(working),
+    memorySearch: vi.fn().mockResolvedValue({ results: [{ item, score: 0.9 }] }),
+    memoryUpdateCore: vi.fn().mockResolvedValue(core),
+    memoryUpdateWorking: vi.fn().mockResolvedValue(working),
+    memoryClearWorking: vi.fn().mockResolvedValue({ ...working, goal: '', facts: [], preferences: [], decisions: [], openThreads: [] }),
+    memoryUpsert: vi.fn().mockImplementation(async (input) => ({ ...item, ...input })),
+    memoryDelete: vi.fn().mockResolvedValue({ ok: true }),
+    memorySources: vi.fn().mockResolvedValue({ sourceIds: ['msg1'], messages: [{ id: 'msg1', seq: 7, role: 'user', text: 'Original note' }] }),
   }
   ;(window as any).bond = bondMock
-  return bondMock
+  return { bondMock, item }
+}
+
+async function switchTab(wrapper: ReturnType<typeof mount>, label: string) {
+  await wrapper.findAll('button').find(b => b.text() === label)!.trigger('click')
+  await flushPromises()
 }
 
 describe('MemoryView', () => {
   beforeEach(() => {
     setupBond()
     const mem = useMemory()
-    mem.debriefs.value = []
+    mem.core.value = { version: 1, facts: [], preferences: [], decisions: [], updatedAt: '2026-01-01T00:00:00.000Z' }
+    mem.working.value = { sessionId: null, projectId: null, goal: '', facts: [], preferences: [], decisions: [], openThreads: [], updatedAt: '2026-01-01T00:00:00.000Z' }
+    mem.results.value = []
+    mem.sources.value = { sourceIds: [], messages: [] }
     mem.loading.value = false
+    mem.saving.value = false
+    mem.error.value = null
   })
 
-  it('loads and renders session debriefs', async () => {
-    setupBond({ debriefs: [makeDebrief()] })
-
+  it('loads and renders core memory', async () => {
+    const { bondMock } = setupBond()
     const wrapper = mount(MemoryView)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Session Debriefs (1)')
-    expect(wrapper.text()).toContain('Session One')
-    expect(wrapper.text()).toContain('Session summary')
+    expect(bondMock.memoryCore).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Stable details Bond should keep across work')
+    expect(wrapper.text()).toContain('Facts')
   })
 
-  it('shows an empty debrief state', async () => {
+  it('saves edited core memory', async () => {
+    const { bondMock } = setupBond()
     const wrapper = mount(MemoryView)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('No debriefs yet')
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('A durable fact')
+    await wrapper.findAll('button').find(b => b.text() === 'Save core')!.trigger('click')
+    await flushPromises()
+
+    expect(bondMock.memoryUpdateCore).toHaveBeenCalledWith(expect.objectContaining({ facts: ['A durable fact'] }))
   })
 
-  it('opens debrief detail with summary topics and session link', async () => {
-    setupBond({ debriefs: [makeDebrief()] })
+  it('renders working memory tab', async () => {
     const wrapper = mount(MemoryView)
     await flushPromises()
+    await switchTab(wrapper, 'Working')
 
-    await wrapper.find('.debrief-card').trigger('click')
-
-    expect(wrapper.text()).toContain('Summary')
-    expect(wrapper.text()).toContain('Topics')
-    expect(wrapper.text()).toContain('Open “Session One”')
+    expect(wrapper.text()).toContain('Current scratchpad')
+    expect(wrapper.find('input').element.value).toBe('Clean up session UI')
   })
 
-  it('emits openSession from detail link', async () => {
-    setupBond({ debriefs: [makeDebrief({ sessionId: 's1' })] })
+  it('searches and renders memory results', async () => {
+    const { bondMock } = setupBond()
     const wrapper = mount(MemoryView)
     await flushPromises()
-    await wrapper.find('.debrief-card').trigger('click')
+    await switchTab(wrapper, 'Search')
 
-    await wrapper.find('.session-link').trigger('click')
+    await wrapper.find('.search-row input').setValue('continuous')
+    await wrapper.find('.search-row button').trigger('click')
+    await flushPromises()
 
-    expect(wrapper.emitted('openSession')?.[0]).toEqual(['s1'])
+    expect(bondMock.memorySearch).toHaveBeenLastCalledWith('continuous', 20)
+    expect(wrapper.text()).toContain('Bond has one continuous transcript')
   })
 
-  it('deletes selected debriefs', async () => {
-    const bondMock = setupBond({ debriefs: [makeDebrief()] })
+  it('shows source messages for a memory item', async () => {
+    const { bondMock } = setupBond()
     const wrapper = mount(MemoryView)
     await flushPromises()
-    await wrapper.find('.debrief-card').trigger('click')
+    await switchTab(wrapper, 'Search')
 
-    await wrapper.find('.delete-btn').trigger('click')
+    await wrapper.find('.card-actions button').trigger('click')
     await flushPromises()
 
-    expect(bondMock.senseDeleteDebrief).toHaveBeenCalledWith('d1')
-    expect(wrapper.text()).toContain('No debriefs yet')
+    expect(bondMock.memorySources).toHaveBeenCalledWith('m1')
+    expect(wrapper.text()).toContain('Original messages attached to the selected memory item')
+    expect(wrapper.text()).toContain('Original note')
   })
 
-  it('shows exact prompt preview tab', async () => {
-    const bondMock = setupBond({ prompt: 'EXACT PROMPT' })
+  it('deletes a memory result', async () => {
+    const { bondMock } = setupBond()
     const wrapper = mount(MemoryView)
     await flushPromises()
+    await switchTab(wrapper, 'Search')
 
-    await wrapper.findAll('button').find(b => b.text() === 'Prompt')!.trigger('click')
+    await wrapper.findAll('.card-actions button')[1].trigger('click')
     await flushPromises()
 
-    expect(bondMock.senseSystemPromptPreview).toHaveBeenCalled()
-    expect(wrapper.text()).toContain('Exact full system prompt')
-    expect(wrapper.find('.prompt-text').text()).toContain('EXACT PROMPT')
+    expect(bondMock.memoryDelete).toHaveBeenCalledWith('m1')
   })
 })

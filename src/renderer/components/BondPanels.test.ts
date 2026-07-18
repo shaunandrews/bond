@@ -1019,7 +1019,7 @@ describe('BondPanelGroup', () => {
           components: { BondPanelGroup, BondPanel, BondPanelHandle },
           template: `
             <BondPanelGroup direction="vertical">
-              <BondPanel id="top" :defaultSize="50" header="Chats">
+              <BondPanel id="top" :defaultSize="50" header="Transcript">
                 <template #header-extra>
                   <button class="extra-btn">+</button>
                 </template>

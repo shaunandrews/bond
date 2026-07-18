@@ -1,83 +1,82 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useMemory } from './useMemory'
-import type { SessionDebrief } from '../../shared/sense'
+import type { CoreMemory, MemoryItem, WorkingState } from '../../shared/memory'
 
-function makeDebrief(overrides: Partial<SessionDebrief> = {}): SessionDebrief {
+function core(): CoreMemory {
+  return { version: 1, facts: ['Bond uses Vitest'], preferences: [], decisions: [], updatedAt: '2026-01-01T00:00:00.000Z' }
+}
+
+function working(): WorkingState {
+  return { sessionId: null, projectId: null, goal: 'Ship memory', facts: [], preferences: [], decisions: [], openThreads: [], updatedAt: '2026-01-01T00:00:00.000Z' }
+}
+
+function item(overrides: Partial<MemoryItem> = {}): MemoryItem {
   return {
-    id: 'd1',
-    sessionId: 's1',
-    sessionTitle: 'Session One',
-    summary: 'Did some work',
-    topics: ['work'],
-    messageCount: 4,
-    durationSeconds: 120,
+    id: 'm1',
+    kind: 'fact',
+    text: 'Shaun likes restrained UI',
+    source: 'user',
+    projectId: null,
+    tags: [],
+    confidence: 1,
+    active: true,
     createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
 }
 
 function setupBond() {
   const bondMock = {
-    senseMemory: vi.fn().mockResolvedValue({ debriefs: [] }),
-    senseDeleteDebrief: vi.fn().mockResolvedValue({ ok: true }),
+    memoryCore: vi.fn().mockResolvedValue(core()),
+    memoryWorking: vi.fn().mockResolvedValue(working()),
+    memorySearch: vi.fn().mockResolvedValue({ results: [{ item: item(), score: 0 }] }),
+    memoryUpdateCore: vi.fn().mockImplementation(async (value: CoreMemory) => value),
+    memoryUpdateWorking: vi.fn().mockImplementation(async (value: WorkingState) => value),
+    memoryClearWorking: vi.fn().mockResolvedValue({ ...working(), goal: '' }),
+    memoryUpsert: vi.fn().mockImplementation(async (value: MemoryItem) => ({ ...item(), ...value })),
+    memoryDelete: vi.fn().mockResolvedValue({ ok: true }),
+    memorySources: vi.fn().mockResolvedValue({ sourceIds: ['u1'], messages: [] }),
   }
   ;(window as any).bond = bondMock
   return bondMock
 }
 
 describe('useMemory', () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     setupBond()
     const mem = useMemory()
-    mem.debriefs.value = []
+    mem.results.value = []
     mem.loading.value = false
+    mem.error.value = null
   })
 
-  it('loads debriefs', async () => {
-    const debriefs = [makeDebrief()]
-    const bondMock = setupBond()
-    bondMock.senseMemory.mockResolvedValue({ debriefs })
-
+  it('loads core, working, and recent memory', async () => {
     const mem = useMemory()
     await mem.loadMemory()
 
-    expect(bondMock.senseMemory).toHaveBeenCalled()
-    expect(mem.debriefs.value).toEqual(debriefs)
-    expect(mem.isEmpty.value).toBe(false)
+    expect(mem.core.value.facts).toEqual(['Bond uses Vitest'])
+    expect(mem.working.value.goal).toBe('Ship memory')
+    expect(mem.results.value[0].item.text).toContain('restrained UI')
   })
 
-  it('sets loading while loading', async () => {
-    let resolveFn!: (value: { debriefs: SessionDebrief[] }) => void
+  it('saves core memory', async () => {
     const bondMock = setupBond()
-    bondMock.senseMemory.mockReturnValue(new Promise(r => { resolveFn = r }))
-
     const mem = useMemory()
-    const promise = mem.loadMemory()
-    expect(mem.loading.value).toBe(true)
-    resolveFn({ debriefs: [] })
-    await promise
-    expect(mem.loading.value).toBe(false)
+    await mem.saveCore({ ...core(), facts: ['new fact'] })
+
+    expect(bondMock.memoryUpdateCore).toHaveBeenCalledWith(expect.objectContaining({ facts: ['new fact'] }))
+    expect(mem.core.value.facts).toEqual(['new fact'])
   })
 
-  it('deletes a debrief optimistically', async () => {
+  it('deletes an item optimistically', async () => {
     const bondMock = setupBond()
     const mem = useMemory()
-    mem.debriefs.value = [makeDebrief({ id: 'd1' }), makeDebrief({ id: 'd2' })]
+    mem.results.value = [{ item: item({ id: 'm1' }), score: 0 }, { item: item({ id: 'm2' }), score: 0 }]
 
-    await mem.deleteDebrief('d1')
+    await mem.remove('m1')
 
-    expect(mem.debriefs.value.map(d => d.id)).toEqual(['d2'])
-    expect(bondMock.senseDeleteDebrief).toHaveBeenCalledWith('d1')
-  })
-
-  it('restores debriefs if delete fails', async () => {
-    const bondMock = setupBond()
-    bondMock.senseDeleteDebrief.mockRejectedValue(new Error('fail'))
-    const mem = useMemory()
-    mem.debriefs.value = [makeDebrief({ id: 'd1' })]
-
-    await mem.deleteDebrief('d1')
-
-    expect(mem.debriefs.value.map(d => d.id)).toEqual(['d1'])
+    expect(mem.results.value.map(r => r.item.id)).toEqual(['m2'])
+    expect(bondMock.memoryDelete).toHaveBeenCalledWith('m1')
   })
 })

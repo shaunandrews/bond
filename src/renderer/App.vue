@@ -3,19 +3,17 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import QuickChat from './components/QuickChat.vue'
 import { useChat } from './composables/useChat'
 import { useAutoScroll } from './composables/useAutoScroll'
-import { useSessions } from './composables/useSessions'
 import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId, AttachedImage } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
+import { PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import MissionBriefing from './components/MissionBriefing.vue'
 import ChatInput from './components/ChatInput.vue'
 import ApprovalPrompt from './components/ApprovalPrompt.vue'
-import SessionSidebar from './components/SessionSidebar.vue'
 import MediaView from './components/MediaView.vue'
 import CollectionsView from './components/CollectionsView.vue'
 import SensePanelView from './components/SensePanelView.vue'
@@ -29,7 +27,6 @@ import FieldManual from './components/FieldManual.vue'
 const isQuickChatMode = new URLSearchParams(window.location.search).get('mode') === 'quick-chat'
 
 const chat = useChat()
-const sessions = useSessions()
 const collections = useCollections()
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
 
@@ -56,22 +53,7 @@ async function refreshMediaCount() {
 
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
-const sidebarPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
-
-function getInitialSidebarWidth(): number {
-  try {
-    const raw = localStorage.getItem('bond:panels:app-layout')
-    if (raw) {
-      const layout = JSON.parse(raw)
-      if (layout.sizes?.sidebar != null) return layout.sizes.sidebar
-    }
-  } catch {}
-  return 260
-}
-
-const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === '1')
 const isFullScreen = ref(false)
-const sidebarWidth = ref(getInitialSidebarWidth())
 
 type RightPanelContent = 'collections' | 'sense' | 'media' | 'memory'
 const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'media', 'memory']
@@ -125,62 +107,23 @@ function toggleRightPanel(panel?: RightPanelContent) {
   localStorage.setItem('bond:right-panel-content', rightPanelContent.value)
 }
 
-async function handleOpenDebriefSession(sessionId: string) {
-  const session = sessions.sessions.value.find(s => s.id === sessionId)
-  if (!session) return
-  if (session.archived) await sessions.unarchive(sessionId)
-  sessions.select(sessionId)
-  await chat.loadSession(sessionId)
-  toggleRightPanel()
-  nextTick(() => chatInputRef.value?.focus())
-}
-
 function syncRightPanelWidth() {
   const actual = rightPanelRef.value?.getSize()
   if (actual != null) rightPanelWidth.value = actual
 }
 
-const sidebarStyle = computed(() => ({
-  marginLeft: sidebarCollapsed.value ? `-${sidebarWidth.value}px` : '0',
-  transition: `margin-left var(--transition-base)`,
-}))
-
-function handleToggleSidebar() {
-  // Sync width to actual panel size before collapsing so the negative margin fully covers it
-  if (!sidebarCollapsed.value) {
-    const actual = sidebarPanelRef.value?.getSize()
-    if (actual != null) sidebarWidth.value = actual
-  }
-  sidebarCollapsed.value = !sidebarCollapsed.value
-  localStorage.setItem('bond:sidebar-collapsed', sidebarCollapsed.value ? '1' : '0')
-}
-
 function handleLayoutChange(layout: Record<string, number>) {
-  if (layout.sidebar != null) sidebarWidth.value = layout.sidebar
   if (layout['right-panel'] != null) rightPanelWidth.value = layout['right-panel']
 }
 
 function handleLayoutChanged(layout: Record<string, number>) {
-  if (layout.sidebar != null) sidebarWidth.value = layout.sidebar
   if (layout['right-panel'] != null) rightPanelWidth.value = layout['right-panel']
 }
 const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
 const { isAtBottom, scrollToBottom } = useAutoScroll(scrollEl)
 
-let titleGenPending = false
-
-chat.onQueryEnd((sessionId) => {
+chat.onQueryEnd(() => {
   refreshMediaCount()
-  if (
-    sessionId === sessions.activeSessionId.value &&
-    sessions.activeSession.value?.title === 'New chat' &&
-    !titleGenPending
-  ) {
-    titleGenPending = true
-    sessions.refreshTitle(sessionId).finally(() => {
-      titleGenPending = false
-    })
-  }
 })
 
 async function handleSubmit(text: string, images: AttachedImage[]) {
@@ -188,13 +131,10 @@ async function handleSubmit(text: string, images: AttachedImage[]) {
   await chat.submit(text, images?.length ? images : undefined)
 }
 
-const currentEditMode = computed<EditMode>(() =>
-  sessions.activeSession.value?.editMode ?? { type: 'full' }
-)
+const currentEditMode = ref<EditMode>({ type: 'full' })
 
-function approvalContext(sessionId: string): string | undefined {
-  if (sessionId === sessions.activeSessionId.value) return undefined
-  return sessions.sessions.value.find(session => session.id === sessionId)?.title ?? 'Background chat'
+function approvalContext(): string | undefined {
+  return undefined
 }
 
 function handleModelChange(model: ModelId) {
@@ -202,24 +142,13 @@ function handleModelChange(model: ModelId) {
   window.bond.setModel(model)
 }
 
-async function handleEditModeChange(mode: EditMode) {
-  const id = sessions.activeSessionId.value
-  if (!id) return
-  await window.bond.updateSession(id, { editMode: mode })
-  sessions.updateLocal(id, { editMode: mode })
-}
-
-async function handleNewSession() {
-  const session = await sessions.create()
-  await chat.loadSession(session.id)
-  const model = await window.bond.getModel() as ModelId
-  selectedModel.value = model
-  nextTick(() => chatInputRef.value?.focus())
+function handleEditModeChange(mode: EditMode) {
+  currentEditMode.value = mode
+  chat.setEditMode(mode)
 }
 
 async function handleCreateSkill(description: string) {
-  const session = await sessions.create()
-  await chat.loadSession(session.id)
+  await chat.init()
   nextTick(() => {
     const prompt = `Create a new Bond skill based on this description:\n\n${description}\n\nWrite the SKILL.md file to ~/.bond/skills/ with a good name, clear description, and useful instructions. After creating it, tell me the skill name so I know how to use it.`
     chat.submit(prompt)
@@ -236,55 +165,15 @@ let removeConnectionLostListener: (() => void) | null = null
 let removeConnectionRestoredListener: (() => void) | null = null
 let removeFullscreenListener: (() => void) | null = null
 
-async function handleSessionRemoved() {
-  const next = sessions.activeSessionId.value
-  if (next) {
-    await chat.loadSession(next)
-    nextTick(scrollToBottom)
-  } else {
-    await handleNewSession()
-  }
-}
-
-async function handleArchiveSession(id: string) {
-  await sessions.archive(id)
-  await handleSessionRemoved()
-}
-
-async function handleRemoveSession(id: string) {
-  await sessions.remove(id)
-  await handleSessionRemoved()
-}
-
-async function handleSelectSession(id: string) {
-  if (id === sessions.activeSessionId.value) return
-  sessions.select(id)
-  await chat.loadSession(id)
-  nextTick(scrollToBottom)
-}
-
-async function handleRenameSession(id: string, title: string) {
-  const updated = await window.bond.updateSession(id, { title })
-  if (updated) sessions.updateLocal(id, { title })
-}
-
 function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape' && chat.busy.value) {
     e.preventDefault()
     chat.cancel()
     return
   }
-  if (e.metaKey && !e.shiftKey && e.key === 'b') {
-    e.preventDefault()
-    handleToggleSidebar()
-  }
   if (e.metaKey && e.key === ',') {
     e.preventDefault()
     window.bond.openSettings()
-  }
-  if (e.metaKey && e.key === 'n') {
-    e.preventDefault()
-    handleNewSession()
   }
   if (e.metaKey && e.shiftKey && e.key === 'b') {
     e.preventDefault()
@@ -319,55 +208,25 @@ onMounted(async () => {
     isFullScreen.value = fs
   })
   removeConnectionRestoredListener = window.bond.onConnectionRestored(async () => {
-    // Re-persist all in-memory messages that survived the disconnect
     await chat.repersistAll()
-    // Check if backup has messages the DB lost
-    const sid = sessions.activeSessionId.value
-    if (sid) {
-      const restored = await chat.restoreFromBackupIfNeeded(sid)
-      if (restored) await chat.loadSession(sid)
-    }
+    const restored = await chat.restoreFromBackupIfNeeded()
+    if (restored) await chat.loadTranscript()
   })
   chat.subscribe()
   loadAccent()
   loadWindowOpacity()
   refreshMediaCount()
   collections.load()
-  const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
+  const model = await window.bond.getModel()
   selectedModel.value = model as ModelId
-
-  const savedId = sessions.activeSessionId.value
-  const savedSession = savedId
-    ? sessions.activeSessions.value.find((s) => s.id === savedId)
-    : null
-
-  // Skip DB reload if chat state survived HMR (prevents clobbering in-flight streaming)
-  const hasHmrState = chat.messages.value.length > 0 && chat.currentSessionId.value
-
-  if (savedSession) {
-    sessions.select(savedSession.id)
-    if (!hasHmrState) {
-      await chat.loadSession(savedSession.id)
-      // Restore any messages from localStorage backup (e.g. after crash/rebuild)
-      const restored = await chat.restoreFromBackupIfNeeded(savedSession.id)
-      if (restored) await chat.loadSession(savedSession.id)
-    }
-    nextTick(scrollToBottom)
-  } else if (sessions.activeSessions.value.length > 0) {
-    const first = sessions.activeSessions.value[0]
-    sessions.select(first.id)
-    if (!hasHmrState) {
-      await chat.loadSession(first.id)
-      const restored = await chat.restoreFromBackupIfNeeded(first.id)
-      if (restored) await chat.loadSession(first.id)
-    }
-    nextTick(scrollToBottom)
-  } else if (sessions.sessions.value.length === 0) {
-    // True first run — no sessions at all
-    await handleNewSession()
+  if (chat.messages.value.length === 0) {
+    await chat.init()
+    const restored = await chat.restoreFromBackupIfNeeded()
+    if (restored) await chat.loadTranscript()
   } else {
-    // All sessions archived — show empty chat without auto-creating
+    await chat.init()
   }
+  nextTick(scrollToBottom)
 })
 
 onUnmounted(() => {
@@ -390,42 +249,13 @@ onUnmounted(() => {
 <template>
   <QuickChat v-if="isQuickChatMode" />
   <BondPanelGroup v-else direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
-    <BondPanel ref="sidebarPanelRef" id="sidebar" unit="px" :defaultSize="260" :minSize="220" :maxSize="400" :style="sidebarStyle">
-      <SessionSidebar
-        :sessions="sessions.activeSessions.value"
-        :archivedSessions="sessions.archivedSessions.value"
-        :activeSessionId="sessions.activeSessionId.value"
-        :generatingTitleId="sessions.generatingTitleId.value"
-        :busySessionIds="chat.busySessionIds.value"
-        @select="handleSelectSession"
-        @create="handleNewSession"
-        @archive="handleArchiveSession"
-        @unarchive="sessions.unarchive"
-        @favorite="sessions.favorite"
-        @unfavorite="sessions.unfavorite"
-        @remove="handleRemoveSession"
-        @removeArchived="sessions.removeArchived"
-        @rename="handleRenameSession"
-        @setIconSeed="sessions.setIconSeed"
-      />
-    </BondPanel>
-
-    <BondPanelHandle v-show="!sidebarCollapsed" id="handle-0" />
-
     <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="420">
-      <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
+      <div class="main-panel-wrap">
       <ViewShell
         ref="chatShellRef"
-        :title="sessions.generatingTitleId.value === sessions.activeSessionId.value ? 'Naming...' : (sessions.activeSession.value?.title ?? 'New chat')"
-        :insetStart="sidebarCollapsed && !isFullScreen"
-        :titleEditable="!!sessions.activeSessionId.value && sessions.generatingTitleId.value !== sessions.activeSessionId.value"
-        @rename="sessions.activeSessionId.value && handleRenameSession(sessions.activeSessionId.value, $event)"
+        title="Bond"
+        :insetStart="!isFullScreen"
       >
-        <template #header-start>
-          <BondButton variant="ghost" size="sm" icon @click.stop="handleToggleSidebar" v-tooltip="(sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + ' ⌘B'">
-            <PhSidebarSimple :size="16" weight="bold" />
-          </BondButton>
-        </template>
         <template #header-end>
           <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'collections' }" @click.stop="toggleRightPanel('collections')" v-tooltip="'Collections'">
             <PhListBullets :size="16" weight="bold" />
@@ -504,7 +334,7 @@ onUnmounted(() => {
         @back="collections.select(null)"
       />
       <SensePanelView v-else-if="rightPanelContent === 'sense'" />
-      <MemoryView v-else-if="rightPanelContent === 'memory'" :editMode="currentEditMode" @openSession="handleOpenDebriefSession" />
+      <MemoryView v-else-if="rightPanelContent === 'memory'" :editMode="currentEditMode" />
       <MediaView v-else-if="rightPanelContent === 'media'" />
     </BondPanel>
   </BondPanelGroup>

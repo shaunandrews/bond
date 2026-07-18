@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createApp, defineComponent, nextTick } from 'vue'
 import { useChat, type ChatDeps } from './useChat'
+import type { TaggedChunk } from '../../shared/stream'
 
 function mockDeps(): ChatDeps {
   return {
@@ -8,9 +9,12 @@ function mockDeps(): ChatDeps {
     cancel: vi.fn().mockResolvedValue({ ok: true }),
     onChunk: vi.fn().mockReturnValue(vi.fn()),
     respondToApproval: vi.fn().mockResolvedValue({ ok: true }),
-    getMessages: vi.fn().mockResolvedValue([]),
-    saveMessages: vi.fn().mockResolvedValue(true),
     getImages: vi.fn().mockResolvedValue([]),
+    listTranscript: vi.fn().mockResolvedValue({ messages: [], nextBeforeSeq: null }),
+    upsertTranscript: vi.fn().mockResolvedValue({ ok: true }),
+    createSession: vi.fn().mockResolvedValue({ id: 'transport-1' }),
+    subscribe: vi.fn().mockResolvedValue({ ok: true }),
+    unsubscribe: vi.fn().mockResolvedValue({ ok: true }),
   }
 }
 
@@ -18,764 +22,96 @@ type UseChatReturn = ReturnType<typeof useChat>
 
 function withSetup(deps: ChatDeps): UseChatReturn {
   let result!: UseChatReturn
-  const app = createApp(
-    defineComponent({
-      setup() {
-        result = useChat(deps)
-        return () => null
-      },
-    })
-  )
+  const app = createApp(defineComponent({ setup() { result = useChat(deps); return () => null } }))
   app.mount(document.createElement('div'))
   return result
 }
 
-describe('useChat', () => {
+describe('useChat continuous transcript', () => {
   let deps: ChatDeps
   let chat: UseChatReturn
+  let handler: (chunk: TaggedChunk) => void
 
   beforeEach(() => {
+    localStorage.clear()
     deps = mockDeps()
     chat = withSetup(deps)
+    chat.subscribe()
+    handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
   })
 
-  describe('submit', () => {
-    it('adds a user message and thinking placeholder, then calls send', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      await chat.submit('hello')
-
-      expect(chat.messages.value[0]).toMatchObject({ role: 'user', text: 'hello' })
-      expect(deps.send).toHaveBeenCalledWith('hello', 'sess-1', undefined)
+  it('loads the global transcript page and resolves image IDs', async () => {
+    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      messages: [{ id: 'u1', role: 'user', text: 'hello', imageIds: ['img-1'], seq: 1 }],
+      nextBeforeSeq: null,
     })
+    ;(deps.getImages as ReturnType<typeof vi.fn>).mockResolvedValue([{ data: 'abc', mediaType: 'image/png' }])
 
-    it('sets busy on submit and clears on query_end chunk', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    await chat.loadTranscript()
 
-      expect(chat.busy.value).toBe(false)
-
-      await chat.submit('hello')
-      expect(chat.busy.value).toBe(true)
-
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-      expect(chat.busy.value).toBe(false)
-    })
-
-    it('adds an activity message during send and finalizes it on query_end', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      await chat.submit('hello')
-      expect(chat.messages.value).toHaveLength(2)
-      expect(chat.messages.value[1]).toMatchObject({ role: 'meta', kind: 'activity' })
-
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-      expect(chat.messages.value[1]).toMatchObject({ role: 'meta', kind: 'activity', data: expect.objectContaining({ status: 'done' }) })
-    })
-
-    it('adds error message when send fails', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      ;(deps.send as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: 'boom' })
-
-      await chat.submit('hello')
-
-      expect(chat.messages.value.find(m => m.role === 'meta' && 'kind' in m && m.kind === 'error')).toMatchObject({ text: 'boom' })
-    })
-
-    it('ignores empty text', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      await chat.submit('')
-      await chat.submit('   ')
-
-      expect(chat.messages.value).toHaveLength(0)
-      expect(deps.send).not.toHaveBeenCalled()
-    })
-
-    it('queues submit while session is busy instead of sending', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-
-      await chat.submit('first')
-      await chat.submit('second')
-
-      expect(deps.send).toHaveBeenCalledTimes(1)
-      expect(chat.currentQueue.value).toHaveLength(1)
-      expect(chat.currentQueue.value[0]).toMatchObject({ text: 'second', sessionId: 'sess-1' })
-    })
-
-    it('ignores submit without a session', async () => {
-      await chat.submit('hello')
-
-      expect(chat.messages.value).toHaveLength(0)
-      expect(deps.send).not.toHaveBeenCalled()
-    })
-
-    it('swaps images for imageIds after send returns', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      const images = [{ data: 'abc123', mediaType: 'image/png' as const }]
-      ;(deps.send as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, imageIds: ['img-1'] })
-
-      await chat.submit('look at this', images)
-
-      const userMsg = chat.messages.value[0]
-      expect(userMsg.role).toBe('user')
-      if (userMsg.role === 'user') {
-        expect(userMsg.imageIds).toEqual(['img-1'])
-      }
-    })
+    expect(deps.listTranscript).toHaveBeenCalledWith({ beforeSeq: undefined, limit: 80 })
+    expect(deps.getImages).toHaveBeenCalledWith(['img-1'])
+    expect(chat.messages.value[0]).toMatchObject({ id: 'u1', role: 'user', text: 'hello' })
   })
 
-  describe('concurrent sessions', () => {
-    it('tracks busy state per session', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
+  it('submits with stable turn/message IDs and upserts instead of session saves', async () => {
+    await chat.submit('hello')
 
-      await chat.submit('hello')
-      expect(chat.busy.value).toBe(true)
-
-      // Switch to a different session
-      chat.currentSessionId.value = 'sess-2'
-      await nextTick()
-      expect(chat.busy.value).toBe(false)
-
-      // Switch back — sess-1 is still busy
-      chat.currentSessionId.value = 'sess-1'
-      await nextTick()
-      expect(chat.busy.value).toBe(true)
-
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-      expect(chat.busy.value).toBe(false)
-    })
-
-    it('query_end for non-current session still clears its busy state', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      await chat.submit('hello')
-      expect(chat.busy.value).toBe(true)
-
-      chat.currentSessionId.value = 'sess-2'
-      await nextTick()
-
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-
-      chat.currentSessionId.value = 'sess-1'
-      await nextTick()
-      expect(chat.busy.value).toBe(false)
-    })
-
-    it('query_start chunk marks session busy', () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      expect(chat.busy.value).toBe(false)
-      handler({ kind: 'query_start', sessionId: 'sess-1' })
-      expect(chat.busy.value).toBe(true)
-    })
-
-    it('buffers chunks for non-current sessions in background', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      // Submit in sess-1 and switch away
-      await chat.submit('hello')
-
-      // Switch to sess-2 — stashes sess-1 messages in background
-      await chat.loadSession('sess-2')
-      expect(chat.messages.value).toHaveLength(0) // new session, empty
-
-      // Chunks arrive for sess-1 in background
-      handler({ kind: 'assistant_text', text: 'response from sess-1', sessionId: 'sess-1' })
-      handler({ kind: 'result', subtype: 'success', sessionId: 'sess-1' })
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-
-      // sess-2 messages unchanged (still empty)
-      expect(chat.messages.value).toHaveLength(0)
-
-      // Verify sess-1 response was persisted — check the LAST save call for sess-1
-      const sess1Calls = (deps.saveMessages as ReturnType<typeof vi.fn>).mock.calls
-        .filter((call: unknown[]) => call[0] === 'sess-1')
-      const lastSave = sess1Calls[sess1Calls.length - 1]
-      expect(lastSave).toBeTruthy()
-      const savedMsgs = lastSave![1] as Array<{ role: string; text?: string }>
-      expect(savedMsgs.some(m => m.role === 'bond' && m.text === 'response from sess-1')).toBe(true)
-    })
-
-    it('restores background messages when switching back to a busy session', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      // Submit in sess-1
-      await chat.submit('hello')
-
-      // Switch to sess-2
-      await chat.loadSession('sess-2')
-
-      // Partial response arrives for sess-1
-      handler({ kind: 'assistant_text', text: 'partial...', sessionId: 'sess-1' })
-
-      // Switch back to sess-1 — should restore from background with partial response
-      await chat.loadSession('sess-1')
-      const bondMsg = chat.messages.value.find(m => m.role === 'bond')
-      expect(bondMsg).toMatchObject({ text: 'partial...', streaming: true })
-    })
-
-    it('preserves background buffer when query_end fires for non-current session', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      // Submit in sess-1
-      await chat.submit('hello')
-
-      // Switch to sess-2
-      await chat.loadSession('sess-2')
-
-      // Response completes for sess-1 in background
-      handler({ kind: 'assistant_text', text: 'full response', sessionId: 'sess-1' })
-      handler({ kind: 'result', subtype: 'success', sessionId: 'sess-1' })
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-
-      // Wait for async flush to complete
-      await new Promise(r => setTimeout(r, 10))
-
-      // Switch back — should still get the buffer (not prematurely deleted)
-      await chat.loadSession('sess-1')
-      const bondMsg = chat.messages.value.find(m => m.role === 'bond')
-      expect(bondMsg).toMatchObject({ text: 'full response' })
-    })
-
-    it('query_end arriving after loadSession does not lose messages', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      // Submit in sess-1 and get a partial response
-      await chat.submit('hello')
-      handler({ kind: 'assistant_text', text: 'partial', sessionId: 'sess-1' })
-
-      // Switch to sess-2 (stashes sess-1 to background)
-      await chat.loadSession('sess-2')
-
-      // Now query_end arrives for sess-1 (persists to DB)
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-      await new Promise(r => setTimeout(r, 10))
-
-      // Switch back to sess-1 — should have the data
-      // Either from background buffer or from DB (both are valid)
-      await chat.loadSession('sess-1')
-      expect(chat.messages.value.length).toBeGreaterThanOrEqual(2) // user + bond at minimum
-    })
-
-    it('rapid session switching (A → B → A) preserves messages', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      // Submit in sess-1
-      await chat.submit('hello from sess-1')
-      handler({ kind: 'assistant_text', text: 'response 1', sessionId: 'sess-1' })
-
-      // Rapidly: switch to sess-2, then back to sess-1
-      await chat.loadSession('sess-2')
-      await chat.loadSession('sess-1')
-
-      // Should restore sess-1 messages from background buffer
-      const userMsg = chat.messages.value.find(m => m.role === 'user')
-      expect(userMsg).toMatchObject({ text: 'hello from sess-1' })
-      const bondMsg = chat.messages.value.find(m => m.role === 'bond')
-      expect(bondMsg).toMatchObject({ text: 'response 1' })
-    })
-
-    it('deep-copies messages when stashing to prevent mutation races', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      // Submit and get a streaming response
-      await chat.submit('hello')
-      handler({ kind: 'assistant_text', text: 'initial', sessionId: 'sess-1' })
-
-      // Get a reference to the current bond message
-      const bondMsgBefore = chat.messages.value.find(m => m.role === 'bond')
-
-      // Switch to sess-2 (stashes sess-1 with deep copy)
-      await chat.loadSession('sess-2')
-
-      // More chunks arrive for sess-1 in background — these mutate the background buffer
-      handler({ kind: 'assistant_text', text: ' more text', sessionId: 'sess-1' })
-
-      // The original object reference should NOT have been mutated by background chunks
-      // (because we deep-copied when stashing)
-      expect(bondMsgBefore!.text).toBe('initial')
-    })
-
-    it('stashes messages even when session is not busy (Fix 1)', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      // Submit, get a response, and let it finish (no longer busy)
-      await chat.submit('hello')
-      handler({ kind: 'assistant_text', text: 'done', sessionId: 'sess-1' })
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-      await new Promise(r => setTimeout(r, 10))
-      expect(chat.busy.value).toBe(false)
-
-      // Switch to sess-2 — messages should still be stashed even though not busy
-      await chat.loadSession('sess-2')
-
-      // Switch back — should restore from background buffer
-      await chat.loadSession('sess-1')
-      const bondMsg = chat.messages.value.find(m => m.role === 'bond')
-      expect(bondMsg).toMatchObject({ text: 'done' })
-    })
-
-    it('persistMessagesFor reads from backgroundMessages after session switch (Fix 2)', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      // Submit in sess-1, get a partial response
-      await chat.submit('hello')
-      handler({ kind: 'assistant_text', text: 'response text', sessionId: 'sess-1' })
-
-      // Switch to sess-2 (stashes sess-1 to background)
-      await chat.loadSession('sess-2')
-
-      // Submit in sess-2 so messages.value has different content
-      await chat.submit('different message')
-
-      // query_end arrives for sess-1 — this triggers flushPersistFor(sess-1)
-      // which should read from backgroundMessages, not messages.value
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-      await new Promise(r => setTimeout(r, 10))
-
-      // Check that saveMessages was called for sess-1 with sess-1's data (not sess-2's)
-      const sess1Saves = (deps.saveMessages as ReturnType<typeof vi.fn>).mock.calls
-        .filter((call: unknown[]) => call[0] === 'sess-1')
-      const lastSave = sess1Saves[sess1Saves.length - 1]
-      expect(lastSave).toBeTruthy()
-      const savedMsgs = lastSave![1] as Array<{ role: string; text?: string }>
-      expect(savedMsgs.some(m => m.role === 'bond' && m.text === 'response text')).toBe(true)
-      // Should NOT contain sess-2 data
-      expect(savedMsgs.some(m => m.text === 'different message')).toBe(false)
-    })
-
-    it('exposes approvals requested by a background session', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-      await chat.submit('hello')
-      await chat.loadSession('sess-2')
-
-      handler({ kind: 'tool_approval', requestId: 'req-bg', toolName: 'Bash', input: { command: 'npm test' }, sessionId: 'sess-1' })
-
-      expect(chat.pendingApprovals.value).toMatchObject([{ requestId: 'req-bg', sessionId: 'sess-1' }])
-    })
-
-    it('loadSession serializes overlapping calls (Fix 4)', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-
-      await chat.submit('hello from 1')
-
-      // Fire three loadSession calls without awaiting — simulates rapid clicking
-      const p1 = chat.loadSession('sess-2')
-      const p2 = chat.loadSession('sess-3')
-      const p3 = chat.loadSession('sess-4')
-
-      await Promise.all([p1, p2, p3])
-
-      // Should settle on the last requested session
-      expect(chat.currentSessionId.value).toBe('sess-4')
-    })
+    expect(deps.createSession).not.toHaveBeenCalled()
+    expect(deps.subscribe).toHaveBeenCalledWith()
+    expect(deps.send).toHaveBeenCalledTimes(1)
+    const input = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(input).toMatchObject({ text: 'hello', editMode: { type: 'full' } })
+    expect(input.turnId).toEqual(expect.any(String))
+    expect(input.userMessageId).toEqual(chat.messages.value[0].id)
+    expect(input.activityMessageId).toEqual(chat.messages.value[1].id)
+    expect(deps.upsertTranscript).toHaveBeenCalled()
   })
 
-  describe('onQueryEnd', () => {
-    it('fires callback with sessionId when query ends', () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-      const cb = vi.fn()
-      chat.onQueryEnd(cb)
+  it('streams assistant text into the stable assistant message ID', async () => {
+    await chat.submit('hello')
+    const input = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]
 
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-      expect(cb).toHaveBeenCalledWith('sess-1')
-    })
+    handler({ kind: 'assistant_text', text: 'hi', assistantMessageId: input.assistantMessageId })
+    handler({ kind: 'assistant_text', text: ' there', assistantMessageId: input.assistantMessageId })
+    handler({ kind: 'query_end', succeeded: true })
 
-    it('fires callback even for non-current session', () => {
-      chat.currentSessionId.value = 'sess-2'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-      const cb = vi.fn()
-      chat.onQueryEnd(cb)
-
-      handler({ kind: 'query_end', succeeded: false, sessionId: 'sess-1' })
-      expect(cb).toHaveBeenCalledWith('sess-1')
-    })
+    const assistant = chat.messages.value.find(m => m.role === 'bond')
+    expect(assistant).toMatchObject({ id: input.assistantMessageId, text: 'hi there', streaming: false })
+    const activity = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
+    expect(activity).toMatchObject({ data: expect.objectContaining({ status: 'done' }) })
   })
 
-  describe('handleChunk (via subscribe)', () => {
-    const TEST_SESSION = 'test-session-1'
+  it('preserves TurnActivity approvals and responds through the approval API', async () => {
+    await chat.submit('needs tool')
+    handler({ kind: 'tool_approval', requestId: 'req-1', toolName: 'Bash', input: { command: 'pwd' } })
 
-    function getChunkHandler() {
-      chat.currentSessionId.value = TEST_SESSION
-      chat.subscribe()
-      const rawHandler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-      return (chunk: Record<string, unknown>) => rawHandler({ ...chunk, sessionId: TEST_SESSION })
-    }
+    expect(chat.pendingApprovals.value).toMatchObject([{ requestId: 'req-1', toolName: 'Bash' }])
+    await chat.respondToApproval('req-1', true)
 
-    it('creates a bond message on assistant_text', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'assistant_text', text: 'hi' })
-
-      expect(chat.messages.value).toHaveLength(2)
-      expect(chat.messages.value.find(m => m.role === 'bond')).toMatchObject({ role: 'bond', text: 'hi', streaming: true })
-    })
-
-    it('appends to existing streaming bond message', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'assistant_text', text: 'hello' })
-      handler({ kind: 'assistant_text', text: ' world' })
-
-      expect(chat.messages.value).toHaveLength(2)
-      expect(chat.messages.value.find(m => m.role === 'bond')).toMatchObject({ role: 'bond', text: 'hello world' })
-    })
-
-    it('adds tool activity event', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'assistant_tool', name: 'Read', summary: 'file.ts', toolUseId: 'call-1' })
-
-      expect(chat.messages.value).toHaveLength(1)
-      const activity = chat.messages.value[0]
-      expect(activity).toMatchObject({ role: 'meta', kind: 'activity' })
-      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({ type: 'tool', toolName: 'Read', toolUseId: 'call-1' })
-    })
-
-    it('matches tool results by id and auto-expands failed tools', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'assistant_tool', name: 'Read', toolUseId: 'call-1' })
-      handler({ kind: 'assistant_tool', name: 'Bash', toolUseId: 'call-2' })
-      handler({ kind: 'tool_result', toolName: 'Read', toolUseId: 'call-1', output: 'missing', isError: true })
-
-      const activity = chat.messages.value[0]
-      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({
-        type: 'tool', toolUseId: 'call-1', output: 'missing', failed: true,
-      })
-      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.expanded).toBe(true)
-    })
-
-    it('exposes pending approvals and records the decision', async () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'tool_approval', requestId: 'req-1', toolName: 'Bash', input: { command: 'npm test' }, description: 'Run tests' })
-
-      expect(chat.pendingApprovals.value).toHaveLength(1)
-      await chat.respondToApproval('req-1', true)
-      expect(chat.pendingApprovals.value).toHaveLength(0)
-      expect(deps.respondToApproval).toHaveBeenCalledWith('req-1', true)
-    })
-
-    it('clears pending approvals when the turn ends', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'tool_approval', requestId: 'req-1', toolName: 'Bash', input: {} })
-      handler({ kind: 'query_end', succeeded: false })
-
-      expect(chat.pendingApprovals.value).toHaveLength(0)
-      const activity = chat.messages.value[0]
-      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({ status: 'cancelled' })
-    })
-
-    it('deduplicates replayed approval requests', () => {
-      const handler = getChunkHandler()
-      const approval = { kind: 'tool_approval', requestId: 'req-1', toolName: 'Bash', input: { command: 'npm test' } }
-      handler(approval)
-      handler(approval)
-
-      expect(chat.pendingApprovals.value).toHaveLength(1)
-      const activity = chat.messages.value[0]
-      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events).toHaveLength(1)
-    })
-
-    it('keeps approval pending when the response fails', async () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'tool_approval', requestId: 'req-1', toolName: 'Bash', input: {} })
-      ;(deps.respondToApproval as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false })
-
-      await chat.respondToApproval('req-1', true)
-      expect(chat.pendingApprovals.value).toHaveLength(1)
-    })
-
-    it('adds error on result with errors', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'result', subtype: 'done', errors: ['bad', 'worse'] })
-
-      expect(chat.messages.value).toHaveLength(2)
-      expect(chat.messages.value.find(m => m.role === 'meta' && m.kind === 'error')).toMatchObject({ role: 'meta', kind: 'error', text: 'bad; worse' })
-    })
-
-    it('finalizes assistant text when a result or raw error arrives', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'assistant_text', text: 'partial' })
-      const bond = chat.messages.value.find(m => m.role === 'bond')
-      handler({ kind: 'raw_error', message: 'oops' })
-
-      expect(bond).toMatchObject({ streaming: false })
-    })
-
-    it('marks streaming done on result', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'assistant_text', text: 'hi' })
-      const bond = chat.messages.value.find(m => m.role === 'bond')
-      expect(bond).toMatchObject({ streaming: true })
-
-      handler({ kind: 'result', subtype: 'done' })
-      expect(bond).toMatchObject({ streaming: false })
-    })
-
-    it('adds error on raw_error', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'raw_error', message: 'oops' })
-
-      expect(chat.messages.value).toHaveLength(2)
-      expect(chat.messages.value.find(m => m.role === 'meta' && m.kind === 'error')).toMatchObject({ role: 'meta', kind: 'error', text: 'oops' })
-    })
-
-    it('adds system message', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'system', subtype: 'init', text: 'started' })
-
-      expect(chat.messages.value).toHaveLength(1)
-      expect(chat.messages.value[0]).toMatchObject({ role: 'meta', kind: 'system', text: 'started' })
-    })
-
-    it('uses subtype when text is missing on system chunk', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'system', subtype: 'init' })
-
-      expect(chat.messages.value[0]).toMatchObject({ text: 'init' })
-    })
-
-    it('accumulates thinking text into an activity event', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'thinking_text', text: 'Let me ' })
-      handler({ kind: 'thinking_text', text: 'think...' })
-
-      const activity = chat.messages.value[0]
-      expect(activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({
-        type: 'thinking', text: 'Let me think...'
-      })
-    })
-
-    it('finalizes thinking event when assistant text arrives', () => {
-      const handler = getChunkHandler()
-      handler({ kind: 'thinking_text', text: 'reasoning' })
-      handler({ kind: 'assistant_text', text: 'hi' })
-
-      const activity = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
-      expect(activity && activity.role === 'meta' && activity.kind === 'activity' && activity.data.events[0]).toMatchObject({ type: 'thinking', text: 'reasoning', endTs: expect.any(Number) })
-      expect(chat.messages.value[chat.messages.value.length - 1]).toMatchObject({ role: 'bond', text: 'hi' })
-    })
+    expect(deps.respondToApproval).toHaveBeenCalledWith('req-1', true)
+    expect(chat.pendingApprovals.value).toHaveLength(0)
   })
 
-  describe('session persistence', () => {
-    it('loadSession loads messages from deps', async () => {
-      ;(deps.getMessages as ReturnType<typeof vi.fn>).mockResolvedValue([
-        { id: '1', role: 'user', text: 'hi' },
-        { id: '2', role: 'bond', text: 'hello', streaming: false },
-      ])
+  it('queues while busy and auto-sends the next message after query_end', async () => {
+    await chat.submit('first')
+    await chat.submit('second')
 
-      await chat.loadSession('sess-1')
+    expect(deps.send).toHaveBeenCalledTimes(1)
+    expect(chat.currentQueue.value).toMatchObject([{ text: 'second' }])
 
-      expect(deps.getMessages).toHaveBeenCalledWith('sess-1')
-      expect(chat.messages.value).toHaveLength(2)
-      expect(chat.currentSessionId.value).toBe('sess-1')
-    })
+    handler({ kind: 'query_end', succeeded: true })
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
 
-    it('loadSession resolves imageIds to images', async () => {
-      const img = { data: 'abc123', mediaType: 'image/png' as const }
-      ;(deps.getMessages as ReturnType<typeof vi.fn>).mockResolvedValue([
-        { id: '1', role: 'user', text: 'hi', imageIds: ['img-1'] },
-      ])
-      ;(deps.getImages as ReturnType<typeof vi.fn>).mockResolvedValue([img])
-
-      await chat.loadSession('sess-1')
-
-      expect(deps.getImages).toHaveBeenCalledWith(['img-1'])
-      const userMsg = chat.messages.value[0]
-      expect(userMsg.role).toBe('user')
-      if (userMsg.role === 'user') {
-        expect(userMsg.images).toEqual([img])
-        expect(userMsg.imageIds).toEqual(['img-1'])
-      }
-    })
-
-    it('submit persists messages', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      await chat.submit('hello')
-
-      expect(deps.saveMessages).toHaveBeenCalled()
-      const [sessionId] = (deps.saveMessages as ReturnType<typeof vi.fn>).mock.calls[0]
-      expect(sessionId).toBe('sess-1')
-    })
-
-    it('clearMessages resets state', () => {
-      chat.messages.value = [{ id: '1', role: 'user', text: 'hi' }] as any
-      chat.currentSessionId.value = 'sess-1'
-
-      chat.clearMessages()
-
-      expect(chat.messages.value).toHaveLength(0)
-      expect(chat.currentSessionId.value).toBeNull()
-    })
+    expect(deps.send).toHaveBeenCalledTimes(2)
+    expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[1][0]).toMatchObject({ text: 'second' })
   })
 
-  describe('subscribe / unsubscribe', () => {
-    it('calls onChunk on subscribe', () => {
-      chat.subscribe()
-      expect(deps.onChunk).toHaveBeenCalledTimes(1)
-    })
+  it('sends the selected edit mode with continuous turns', async () => {
+    chat.setEditMode({ type: 'readonly' })
+    await chat.submit('read only')
 
-    it('calls unsub on unsubscribe', () => {
-      const unsub = vi.fn()
-      ;(deps.onChunk as ReturnType<typeof vi.fn>).mockReturnValue(unsub)
-
-      chat.subscribe()
-      chat.unsubscribe()
-      expect(unsub).toHaveBeenCalledTimes(1)
-    })
-  })
-
-  describe('message queue', () => {
-    it('queues messages when session is busy', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-
-      await chat.submit('first')
-      await chat.submit('second')
-      await chat.submit('third')
-
-      expect(deps.send).toHaveBeenCalledTimes(1)
-      expect(chat.currentQueue.value).toHaveLength(2)
-      expect(chat.currentQueue.value[0]).toMatchObject({ text: 'second' })
-      expect(chat.currentQueue.value[1]).toMatchObject({ text: 'third' })
-    })
-
-    it('queued messages include images', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-
-      await chat.submit('first')
-      const images = [{ data: 'abc', mediaType: 'image/png' as const }]
-      await chat.submit('with image', images)
-
-      expect(chat.currentQueue.value).toHaveLength(1)
-      expect(chat.currentQueue.value[0].images).toEqual(images)
-    })
-
-    it('auto-sends queued message on query_end', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      await chat.submit('first')
-      await chat.submit('second')
-      expect(chat.currentQueue.value).toHaveLength(1)
-
-      // Complete the first query — flush triggers auto-send
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-
-      // Wait for the flushPersist .then() to run
-      await new Promise(r => setTimeout(r, 10))
-
-      expect(deps.send).toHaveBeenCalledTimes(2)
-      expect(deps.send).toHaveBeenLastCalledWith('second', 'sess-1', undefined)
-      expect(chat.currentQueue.value).toHaveLength(0)
-    })
-
-    it('does not auto-send queued messages for non-current session', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      await chat.submit('first')
-      await chat.submit('second')
-
-      // Switch away
-      chat.currentSessionId.value = 'sess-2'
-      await nextTick()
-
-      handler({ kind: 'query_end', succeeded: true, sessionId: 'sess-1' })
-      await new Promise(r => setTimeout(r, 10))
-
-      // Should not have auto-sent — still in queue
-      expect(deps.send).toHaveBeenCalledTimes(1)
-      expect(chat.queuedMessages.value).toHaveLength(1)
-    })
-
-    it('removeQueuedMessage removes by id', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-
-      await chat.submit('first')
-      await chat.submit('second')
-      await chat.submit('third')
-
-      const id = chat.currentQueue.value[0].id
-      chat.removeQueuedMessage(id)
-
-      expect(chat.currentQueue.value).toHaveLength(1)
-      expect(chat.currentQueue.value[0]).toMatchObject({ text: 'third' })
-    })
-
-    it('cancel clears queued messages for the session', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      handler({ kind: 'query_start', sessionId: 'sess-1' })
-      await chat.submit('queued-1')
-      await chat.submit('queued-2')
-      expect(chat.currentQueue.value).toHaveLength(2)
-
-      chat.cancel()
-      expect(chat.currentQueue.value).toHaveLength(0)
-    })
-
-    it('currentQueue only shows messages for current session', async () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-
-      await chat.submit('first')
-      await chat.submit('queued for sess-1')
-
-      chat.currentSessionId.value = 'sess-2'
-      await nextTick()
-
-      expect(chat.currentQueue.value).toHaveLength(0)
-      expect(chat.queuedMessages.value).toHaveLength(1)
-    })
-  })
-
-  describe('cancel', () => {
-    it('calls deps.cancel and clears busy', () => {
-      chat.currentSessionId.value = 'sess-1'
-      chat.subscribe()
-      const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
-
-      handler({ kind: 'query_start', sessionId: 'sess-1' })
-      expect(chat.busy.value).toBe(true)
-
-      chat.cancel()
-      expect(deps.cancel).toHaveBeenCalledWith('sess-1')
-      expect(chat.busy.value).toBe(false)
-    })
+    expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ editMode: { type: 'readonly' } })
   })
 })

@@ -78,7 +78,6 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
 | `db.ts` | Database init, migrations, WAL mode |
 | `settings.ts` | Key-value settings storage (soul, model, accent color) |
-| `generate-title.ts` | Auto-generates session titles via the fast model tier |
 | `paths.ts` | Data directory resolution |
 | `index.ts` | Daemon library exports |
 | `skills.ts` | Skill scanning from ~/.bond/skills/ |
@@ -101,7 +100,7 @@ Electron main process. Spawns daemon if not running, creates window, proxies all
 
 ### Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, settings, images, skills, model, Sense/memory, collections, and shell utilities.
+Exposes `window.bond` via `contextBridge` — typed API for the continuous transcript, settings, images, skills, model, Sense/memory, collections, and shell utilities.
 
 ### Shared (`src/shared/`)
 
@@ -142,7 +141,6 @@ src/
     images.ts                        # Image file storage + images table
     db.ts                            # Database management + migrations
     settings.ts                      # Settings storage
-    generate-title.ts                # Auto title generation
     paths.ts                         # Data directory paths
     skills.ts                        # Skill scanning from ~/.bond/skills/
     sense/
@@ -177,11 +175,9 @@ src/
     types/message.ts                 # Message union type
     types/webview.d.ts               # Electron webview element types
     composables/
-      useChat.ts                     # Chat state, streaming, message persistence
-      useSessions.ts                 # Session CRUD, archive, title generation
+      useChat.ts                     # Continuous transcript state, streaming, message persistence
       useAutoScroll.ts               # Smart scroll-to-bottom
       useAccentColor.ts              # Dynamic accent color theming
-      useAppView.ts                  # View routing state (chat | media | collections | sense)
       useSense.ts                    # Sense timeline state, day loading, capture selection, search
     directives/
       tooltip.ts                     # v-tooltip directive (singleton, positioned tooltips)
@@ -205,11 +201,9 @@ src/
       TurnActivity.vue               # Unified in-chat turn activity timeline
       MarkdownMessage.vue            # Markdown with syntax highlighting + copy
       ThinkingIndicator.vue          # Standalone "Bond is working..." dots (unused, kept for reference)
-      SessionItem.vue                # Single session row
-      SessionSidebar.vue             # Sidebar with session lists + nav
       MediaView.vue                  # Image gallery view
       CopyButton.vue                 # Inline copy-to-clipboard button
-      MissionBriefing.vue            # Empty chat welcome screen
+      MissionBriefing.vue            # Empty transcript welcome screen
       SettingsView.vue               # Accent color, model, personality settings
       AboutView.vue                  # Architecture, tools, data paths, CLI reference
       DesignSystemView.vue           # Live design token browser
@@ -219,9 +213,7 @@ src/
       SenseDetail.vue                # Screenshot viewer with metadata and extracted text
       SenseAppLegend.vue             # App color legend with filter chips
       SenseSearch.vue                # Inline search with results flyout
-      MemoryView.vue                 # Session debriefs + exact prompt preview
-      MemoryDebriefCard.vue          # Debrief list card
-      MemoryDebriefDetail.vue        # Debrief summary/topics/session detail
+      MemoryView.vue                 # Core/working/search/source memory panel
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
 electron.vite.config.ts                  # Build config (main, preload, renderer)
@@ -267,7 +259,7 @@ Dropdown select with custom chevron.
 - **Events:** `update:modelValue(value: string)`
 
 ### BondFlyoutMenu
-Teleported flyout menu primitive. Renders via `<Teleport to="body">` with fixed positioning relative to an anchor element. Auto-flips when the menu would overflow the viewport, clamps horizontally, and repositions on scroll/resize. Used by BondSelect and SessionSidebar's archive flyout.
+Teleported flyout menu primitive. Renders via `<Teleport to="body">` with fixed positioning relative to an anchor element. Auto-flips when the menu would overflow the viewport, clamps horizontally, and repositions on scroll/resize. Used by BondSelect and similar anchored menus.
 - **Props:** `open: boolean`, `anchor: HTMLElement | null`, `placement?: 'bottom-start' | 'bottom-end' | 'top-start' | 'top-end'`, `width?: number`, `padding?: boolean`
 - **Events:** `close()`
 - **Slot:** default — menu content
@@ -307,14 +299,14 @@ View wrapper with sticky header (using BondToolbar), scrollable content area, an
 - **Expose:** `scrollAreaEl` (the scrollable container element)
 
 ### ChatInput
-Unified chat box combining textarea, model selector, edit mode selector, attach button, and a single contextual action button. Auto-focuses after response completes.
+Unified composer combining textarea, model selector, edit mode selector, attach button, and a single contextual action button. Auto-focuses after response completes.
 - **Props:** `busy: boolean` — swaps action button between send/stop, `model: ModelId`, `editMode: EditMode`
 - **Events:** `submit(text: string, images: AttachedImage[])`, `cancel()`, `update:model(value: ModelId)`, `update:editMode(value: EditMode)`
-- Single bordered container with textarea on top and a toolbar row below (model select, edit mode select, attach, action button). Action button shows send (arrow-up, accent) when idle, stop (stop icon) when busy. Attach button opens native file picker for jpeg/png/gif/webp. Image thumbnails appear above textarea inside the box. Edit mode selector switches between readonly, scoped (with paths input), and full.
+- Single bordered container with textarea on top and a toolbar row below (model select, edit mode select, attach, action button). Action button shows send (arrow-up, accent) when idle, stop (stop icon) when busy. Attach button opens native file picker for jpeg/png/gif/webp. Image thumbnails appear above textarea inside the box. Edit mode selector switches the current composer between readonly, scoped (with paths input), and full.
 
 ### ApprovalPrompt
 Focused tool approval request stacked above ChatInput while leaving the normal composer usable. Shows the tool, description, and a formatted command/path/input preview.
-- **Props:** `requestId: string`, `toolName: string`, `input: Record<string, unknown>`, `description?: string`, `context?: string` (background session title)
+- **Props:** `requestId: string`, `toolName: string`, `input: Record<string, unknown>`, `description?: string`, `context?: string` (background context)
 - **Events:** `respond(requestId: string, approved: boolean)`
 
 ### MessageBubble
@@ -323,7 +315,7 @@ Renders all message variants based on the `Message` union type. Delegates markdo
 - **Events:** `approve(requestId: string, approved: boolean)` — emitted from approval controls inside turn activity
 
 ### TurnActivity
-Unified in-chat activity row persisted as one `meta/activity` message per user turn. Compact row streams current status; expansion shows chronological thinking text, tool input/output previews, timings, approvals, and errors. Completed rows collapse to a small summary. Failures and approval requests set `expanded: true` automatically. Full details live in `SessionMessage.data` and the `messages.data` JSON column.
+Unified turn activity row persisted as one `meta/activity` message per user turn. Compact row streams current status; expansion shows chronological thinking text, tool input/output previews, timings, approvals, and errors. Completed rows collapse to a small summary. Failures and approval requests set `expanded: true` automatically. Full details live in `SessionMessage.data` and the `messages.data` JSON column.
 - **Props:** `data: TurnActivityData`
 - **Events:** `approve(requestId: string, approved: boolean)`
 
@@ -335,16 +327,6 @@ Renders markdown with syntax highlighting and copy-to-clipboard code blocks. Use
 ### ThinkingIndicator
 Standalone animated "Bond is working..." with blinking dots. No longer used in the main app — live turn status is handled by TurnActivity. Kept as a standalone component file.
 
-### SessionItem
-Single session row used in both active and archived lists inside SessionSidebar. Action button floats over content on hover (no reserved space).
-- **Props:** `session: Session`, `active?: boolean`, `archived?: boolean`, `generating?: boolean`, `actionTitle: string`
-- **Slot:** default — action button content (icon)
-- **Events:** `select()`, `action()`
-
-### SessionSidebar
-Left sidebar with session list, archive flyout, and bottom nav. Chats section is always open (non-collapsible) with archive and new-chat buttons in the header.
-- **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`, `busySessionIds: Set<string>`, `mediaCount: number`, `projectCount: number`
-- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `removeArchived()`, `media()`, `rename(id, title)`
 
 ### CopyButton
 Inline copy-to-clipboard button with checkmark confirmation feedback.
@@ -390,11 +372,12 @@ Inline search input in the header bar. Debounced 300ms text search with results 
 - **Expose:** `focus()`
 
 ### MemoryView
-Right-panel memory view. Session Debriefs are the active memory concept: list/select/delete debriefs, inspect summaries/topics/session metadata, and preview the exact prompt used for agent queries.
-- **Tabs:** Debriefs, Prompt
-- **Debriefs:** list/select/delete session debriefs; detail shows summary, topics, metadata, and a session link
-- **Prompt:** exact full system prompt returned by `sense.systemPromptPreview`, built by the same daemon `buildSystemPrompt()` used for real agent queries
-- **Events:** `openSession(sessionId)`
+Right-panel memory view for inspecting and editing Bond memory.
+- **Tabs:** Core, Working, Search, Source
+- **Core:** stable facts, preferences, and decisions persisted to `memory/core.json`
+- **Working:** current scratchpad goal, facts, preferences, decisions, and open threads
+- **Search:** memory item search with inline edit/delete controls
+- **Source:** source messages attached to a selected memory item
 
 ### DevComponents
 Dev-only component catalog with live previews and prop/event documentation. Accessible from the Settings window Components tab. Not rendered in production flows.
@@ -402,14 +385,10 @@ Dev-only component catalog with live previews and prop/event documentation. Acce
 ## Composables
 
 ### useChat(deps)
-All chat state and logic. Handles message streaming, persistence, tool approvals, turn activity, and HMR-safe state preservation. On submit, creates one `meta/activity` message for the turn. Thinking/tool/result/approval chunks update that activity message's `data.events`; assistant text still streams into normal bond messages. Pending approvals are exposed separately so App can stack approval prompts above the composer while normal input remains usable.
+All continuous transcript state and logic. Handles message streaming, persistence, tool approvals, turn activity, and HMR-safe state preservation. On submit, creates one `meta/activity` message for the turn. Thinking/tool/result/approval chunks update that activity message's `data.events`; assistant text still streams into normal Bond messages. Pending approvals are exposed separately so App can stack approval prompts above the composer while normal input remains usable.
 - **State:** `messages`, `busy`, `currentSessionId`, `pendingApprovals`
 - **Methods:** `submit()`, `cancel()`, `respondToApproval()`, `subscribe()`, `unsubscribe()`, `loadSession()`, `clearMessages()`, `persistMessages()`
 
-### useSessions(deps)
-Session CRUD, archive/unarchive, title generation. Persists active session ID to localStorage.
-- **State:** `sessions`, `activeSessionId`, `activeSession`, `activeSessions`, `archivedSessions`, `generatingTitleId`
-- **Methods:** `load()`, `create()`, `select()`, `archive()`, `unarchive()`, `remove()`, `refreshTitle()`, `updateLocal()`
 
 ### useAutoScroll(containerRef)
 Smart scroll-to-bottom for streaming content. Uses MutationObserver and ResizeObserver.
@@ -421,9 +400,6 @@ Dynamic accent color theming. Derives a full palette from a single hex color (HS
 - **State:** `accent`, `defaultAccent`
 - **Methods:** `load()`, `setAccent()`, `reset()`
 
-### useAppView()
-View routing state. Persists to localStorage.
-- **State:** `activeView` (`'chat' | 'media' | 'collections' | 'sense'`)
 
 ### useSense()
 Singleton Sense timeline state. Loads a day's captures and sessions, selects individual captures with image fetching, text search, and app filtering. Normalizes snake_case DB rows to camelCase.
@@ -484,7 +460,7 @@ type Message =
 
 ## Edit Modes
 
-Sessions support three edit modes that control which Pi tools are available:
+Bond supports three edit modes that control which Pi tools are available for the current turn:
 
 ```typescript
 type EditMode =
@@ -493,7 +469,7 @@ type EditMode =
   | { type: 'scoped', allowedPaths: string[] }     // Read/write restricted to specific paths
 ```
 
-The edit mode selector appears in ChatInput's toolbar. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
+The edit mode selector appears in ChatInput's toolbar as current composer state. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
 
 ## Image Storage
 

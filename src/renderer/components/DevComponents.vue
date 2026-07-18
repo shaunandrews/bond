@@ -45,7 +45,7 @@ const sampleMessages: Record<string, Message> = {
     { id: 'e2', type: 'tool', label: 'Read app.css', ts: Date.now() - 2400, endTs: Date.now() - 1000, toolName: 'Read', toolUseId: 'tool-1', input: { path: 'src/renderer/app.css' }, output: '.parent { display: flex; }' },
   ] } },
   error: { id: '5', role: 'meta', kind: 'error', text: 'Connection lost. Please try again.' },
-  system: { id: '6', role: 'meta', kind: 'system', text: 'Session started' },
+  system: { id: '6', role: 'meta', kind: 'system', text: 'Transcript resumed' },
 }
 
 const components = [
@@ -244,13 +244,13 @@ const components = [
     name: 'ApprovalPrompt',
     file: 'components/ApprovalPrompt.vue',
     category: 'Composed',
-    description: 'Focused tool approval request stacked above the chat composer.',
+    description: 'Focused tool approval request stacked above the composer.',
     props: [
       { name: 'requestId', type: 'string', description: 'Approval request identifier' },
       { name: 'toolName', type: 'string', description: 'Tool awaiting approval' },
       { name: 'input', type: 'Record<string, unknown>', description: 'Command, path, or other tool input' },
       { name: 'description', type: 'string', description: 'Optional explanation of the requested action' },
-      { name: 'context', type: 'string', description: 'Optional background session title' },
+      { name: 'context', type: 'string', description: 'Optional background context' },
     ],
     events: [
       { name: 'respond', payload: '(requestId: string, approved: boolean)', description: 'Allow or deny the request' },
@@ -292,33 +292,12 @@ const components = [
     events: [],
   },
   {
-    name: 'SessionSidebar',
-    file: 'components/SessionSidebar.vue',
-    category: 'Composed',
-    description: 'Left sidebar with chat list and archive flyout. Pure chat list — no nav sections.',
-    props: [
-      { name: 'sessions', type: 'Session[]', description: 'Active sessions to display' },
-      { name: 'archivedSessions', type: 'Session[]', description: 'Archived sessions (shown in flyout)' },
-      { name: 'activeSessionId', type: 'string | null', description: 'Currently selected session ID' },
-      { name: 'generatingTitleId', type: 'string | null', description: 'Session ID currently generating title' },
-      { name: 'busySessionIds', type: 'Set<string>', description: 'Session IDs with active queries' },
-    ],
-    events: [
-      { name: 'select', payload: 'id: string', description: 'Session clicked' },
-      { name: 'create', payload: '(none)', description: 'New chat button clicked' },
-      { name: 'archive', payload: 'id: string', description: 'Archive a session' },
-      { name: 'unarchive', payload: 'id: string', description: 'Unarchive a session' },
-      { name: 'remove', payload: 'id: string', description: 'Delete a session' },
-    ],
-  },
-  {
     name: 'MemoryView',
     file: 'components/MemoryView.vue',
     category: 'Composed',
-    description: 'Right-panel memory view with Debriefs and Prompt tabs. Lists/selects/deletes session debriefs and shows the exact system prompt preview.',
+    description: 'Right-panel memory view with Core, Working, Search, and Source tabs for inspecting and editing memory.',
     props: [],
     events: [
-      { name: 'openSession', payload: 'sessionId: string', description: 'User clicked the session link in a debrief detail' },
     ],
   },
 ]
@@ -597,11 +576,11 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
                 <template v-if="comp.name === 'ChatInput'">
                   <div class="dev-preview-row">
                     <span class="dev-preview-label">idle</span>
-                    <ChatInput :busy="false" model="sonnet" :editMode="{ type: 'full' }" @submit="() => {}" @cancel="() => {}" />
+                    <ChatInput :busy="false" model="balanced" :editMode="{ type: 'full' }" @submit="() => {}" @cancel="() => {}" />
                   </div>
                   <div class="dev-preview-row">
                     <span class="dev-preview-label">busy</span>
-                    <ChatInput :busy="true" model="sonnet" :editMode="{ type: 'full' }" @submit="() => {}" @cancel="() => {}" />
+                    <ChatInput :busy="true" model="balanced" :editMode="{ type: 'full' }" @submit="() => {}" @cancel="() => {}" />
                   </div>
                 </template>
 
@@ -705,10 +684,6 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
                   See BondPanelGroup preview above for live demos.
                 </p>
 
-                <!-- SessionSidebar -->
-                <p v-if="comp.name === 'SessionSidebar'" class="text-sm text-muted italic">
-                  Visible in the main app layout — see sidebar on the left.
-                </p>
               </div>
             </div>
           </div>

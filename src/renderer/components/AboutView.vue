@@ -5,7 +5,7 @@ const layers = [
   {
     name: 'Renderer',
     tech: 'Vue 3 + Tailwind CSS v4',
-    description: 'Chat UI, session management, settings, and design system catalog. Composition API throughout.',
+    description: 'Continuous transcript UI, side panels, settings, and design system catalog. Composition API throughout.',
     files: 'src/renderer/',
   },
   {
@@ -17,7 +17,7 @@ const layers = [
   {
     name: 'Daemon',
     tech: 'Node.js + WebSocket + SQLite',
-    description: 'Standalone process on a Unix socket. Runs Pi agent sessions, streams responses, persists Pi JSONL transcripts, and runs the Sense ambient awareness pipeline (screen capture, OCR, indexing).',
+    description: 'Standalone process on a Unix socket. Runs Pi agent epochs, streams responses, persists Bond transcript data, and runs the Sense ambient awareness pipeline (screen capture, OCR, indexing).',
     files: 'src/daemon/',
   },
   {
@@ -46,9 +46,9 @@ const dataPaths = [
   { path: '~/.bond/bond.sock', purpose: 'Unix domain socket for daemon communication' },
   { path: '~/.bond/daemon.pid', purpose: 'Process ID of the running daemon' },
   { path: '~/.bond/daemon.log', purpose: 'Daemon output log' },
-  { path: '~/Library/Application Support/bond/bond.db', purpose: 'SQLite database (sessions, messages, settings, sense captures)' },
+  { path: '~/Library/Application Support/bond/bond.db', purpose: 'SQLite database (continuous transcript, settings, sense captures)' },
   { path: '~/Library/Application Support/bond/sense/stills/', purpose: 'Sense screenshot JPEGs organized by date' },
-  { path: '~/Library/Application Support/bond/pi/sessions/', purpose: 'Pi JSONL agent transcripts' },
+  { path: '~/Library/Application Support/bond/pi/sessions/', purpose: 'Pi JSONL agent epoch transcripts' },
 ]
 </script>
 
@@ -89,7 +89,7 @@ const dataPaths = [
     <section class="about-section">
       <h2 class="section-title">Agent Tools</h2>
       <p class="section-intro">
-        The tools available to Bond depend on the edit mode selected for each session.
+        The tools available to Bond depend on the current edit mode.
       </p>
 
       <div class="tool-grid">

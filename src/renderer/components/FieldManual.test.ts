@@ -48,14 +48,14 @@ describe('FieldManual', () => {
     const text = wrapper.text()
     expect(text).toContain('⌘B')
     expect(text).toContain('Toggle sidebar')
-    expect(text).toContain('⌘N')
-    expect(text).toContain('New chat')
+    expect(text).toContain('⌘⇧B')
+    expect(text).toContain('Toggle right panel')
   })
 
   it('displays all capability names', () => {
     const wrapper = mount(FieldManual, { props: { open: true } })
     const text = wrapper.text()
-    const capabilities = ['Chat', 'Collections', 'Media Library', 'Sense', 'Skills']
+    const capabilities = ['Conversation', 'Collections', 'Media Library', 'Sense', 'Skills']
     for (const cap of capabilities) {
       expect(text).toContain(cap)
     }

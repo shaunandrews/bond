@@ -41,7 +41,7 @@ afterEach(() => {
 })
 
 describe('transcript store', () => {
-  it('transactionally inserts a turn, user message, and activity message', () => {
+  it('transactionally inserts a turn, user message, activity message, and stable assistant placeholder', () => {
     insertTurnStart({
       epochId: 'epoch-1',
       turnId: 'turn-1',
@@ -62,6 +62,7 @@ describe('transcript store', () => {
     expect(page.messages.map(m => [m.id, m.seq, m.role, m.kind])).toEqual([
       ['user-1', 1, 'user', null],
       ['activity-1', 2, 'meta', 'activity'],
+      ['bond-1', 3, 'bond', null],
     ])
     expect(page.messages[0].imageIds).toEqual(['img-1'])
   })

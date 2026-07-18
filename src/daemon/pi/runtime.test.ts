@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { piEventToChunks } from './runtime'
+import { composePromptWithContext, contextUsageFromSession, piEventToChunks } from './runtime'
 
 describe('piEventToChunks', () => {
   it('preserves renderer text and thinking chunks', () => {
@@ -20,5 +20,23 @@ describe('piEventToChunks', () => {
     expect(piEventToChunks({ type: 'auto_retry_start', errorMessage: 'rate limited' }))
       .toEqual([{ kind: 'system', subtype: 'api_retry', text: 'rate limited' }])
     expect(piEventToChunks({ type: 'agent_start' })).toEqual([])
+  })
+})
+
+describe('composePromptWithContext', () => {
+  it('places the bounded context envelope before each user request', () => {
+    expect(composePromptWithContext('Do work', '  <bond-context-envelope>ctx</bond-context-envelope>  '))
+      .toBe('<bond-context-envelope>ctx</bond-context-envelope>\n\n<current-user-request>\nDo work\n</current-user-request>')
+    expect(composePromptWithContext('Do work')).toBe('Do work')
+  })
+})
+
+describe('contextUsageFromSession', () => {
+  it('normalizes Pi context usage for turn completion', () => {
+    expect(contextUsageFromSession({ getContextUsage: () => ({ tokens: 42, contextWindow: 1000 }) }))
+      .toEqual({ contextTokens: 42, contextWindow: 1000 })
+    expect(contextUsageFromSession({ getContextUsage: () => ({ tokens: null, contextWindow: 1000 }) }))
+      .toEqual({ contextTokens: null, contextWindow: 1000 })
+    expect(contextUsageFromSession({})).toEqual({ contextTokens: null, contextWindow: null })
   })
 })

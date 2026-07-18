@@ -1,21 +1,19 @@
 declare global {
   interface Window {
     bond: {
-      send: (text: string, sessionId?: string, images?: import('../../shared/session').AttachedImage[]) => Promise<{ ok: boolean; error?: string; imageIds?: string[] }>
+      send: {
+        (input: import('../../shared/stream').BondSendInput): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>
+        (text: string, sessionId?: string, images?: import('../../shared/session').AttachedImage[]): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>
+      }
       cancel: (sessionId?: string) => Promise<{ ok: boolean }>
       respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
-      subscribe: (sessionId: string) => Promise<{ ok: boolean }>
-      unsubscribe: (sessionId: string) => Promise<{ ok: boolean }>
+      subscribe: (sessionId?: string) => Promise<{ ok: boolean }>
+      unsubscribe: (sessionId?: string) => Promise<{ ok: boolean }>
       onChunk: (fn: (chunk: import('../../shared/stream').TaggedChunk) => void) => () => void
-      listSessions: () => Promise<import('../../shared/session').Session[]>
+      listTranscript: (options?: { beforeSeq?: number; limit?: number }) => Promise<import('../../shared/transcript').TranscriptPage>
+      upsertTranscript: (messages: import('../../shared/transcript').TranscriptMessage[]) => Promise<{ ok: boolean }>
+      searchTranscript: (query: string, limit?: number) => Promise<{ messages: import('../../shared/transcript').TranscriptMessage[] }>
       createSession: (options?: { title?: string }) => Promise<import('../../shared/session').Session>
-      getSession: (id: string) => Promise<import('../../shared/session').Session | null>
-      updateSession: (id: string, updates: Partial<Pick<import('../../shared/session').Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode'>>) => Promise<import('../../shared/session').Session | null>
-      deleteSession: (id: string) => Promise<boolean>
-      deleteArchivedSessions: () => Promise<{ ok: boolean; count: number }>
-      getMessages: (sessionId: string) => Promise<import('../../shared/session').SessionMessage[]>
-      saveMessages: (sessionId: string, messages: import('../../shared/session').SessionMessage[]) => Promise<boolean>
-      generateTitle: (sessionId: string) => Promise<{ title: string; summary: string }>
       listImages: () => Promise<import('../../shared/session').ImageRecord[]>
       getImage: (imageId: string) => Promise<import('../../shared/session').AttachedImage | null>
       getImages: (ids: string[]) => Promise<(import('../../shared/session').AttachedImage | null)[]>
@@ -37,6 +35,8 @@ declare global {
       onCreateSkill: (fn: (description: string) => void) => () => void
       setModel: (model: string) => Promise<{ ok: boolean }>
       getModel: () => Promise<string>
+      getEditMode: () => Promise<import('../../shared/session').EditMode>
+      setEditMode: (editMode: import('../../shared/session').EditMode) => Promise<{ ok: boolean }>
       getPiStatus: () => Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }>
       startPiOAuth: (provider: 'anthropic' | 'openai-codex') => Promise<{ url: string; instructions?: string; deviceCode?: string }>
       onModelChanged: (fn: (model: string) => void) => () => void
@@ -82,13 +82,22 @@ declare global {
       senseClear: (range?: { from?: string; to?: string }) => Promise<unknown>
       senseStats: () => Promise<unknown>
       hasScreenRecordingPermission: () => Promise<boolean>
-      // Sense Debriefs
+      // Memory
+      memoryCore: () => Promise<import('../../shared/memory').CoreMemory>
+      memoryUpdateCore: (core: import('../../shared/memory').CoreMemory) => Promise<import('../../shared/memory').CoreMemory>
+      memoryWorking: () => Promise<import('../../shared/memory').WorkingState>
+      memoryUpdateWorking: (working: import('../../shared/memory').WorkingState) => Promise<import('../../shared/memory').WorkingState>
+      memoryClearWorking: () => Promise<import('../../shared/memory').WorkingState>
+      memorySearch: (query: string, limit?: number) => Promise<{ results: import('../../shared/memory').RetrievedMemory[] }>
+      memoryUpsert: (item: import('../../shared/memory').MemoryItemInput) => Promise<import('../../shared/memory').MemoryItem>
+      memoryDelete: (id: string) => Promise<{ ok: boolean }>
+      memorySources: (id: string) => Promise<import('../../shared/memory').MemorySourcesResult>
       senseMemory: (limit?: number) => Promise<{ debriefs: import('../../shared/sense').SessionDebrief[] }>
       senseDebrief: (id?: string, sessionId?: string) => Promise<import('../../shared/sense').SessionDebrief | null>
       senseDeleteDebrief: (id: string) => Promise<{ ok: boolean }>
       senseSystemPromptPreview: (editMode?: import('../../shared/session').EditMode) => Promise<{ prompt: string }>
       // Quick Chat
-      onQuickChatInit: (fn: (data: { sessionId: string; senseApps: string[] }) => void) => () => void
+      onQuickChatInit: (fn: (data: { senseApps: string[] }) => void) => () => void
       onQuickChatDismiss: (fn: () => void) => () => void
       quickChatDismissed: () => Promise<void>
       // Connection status

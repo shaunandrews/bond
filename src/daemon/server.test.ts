@@ -1,10 +1,27 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { startServer, type BondServer } from './server'
 import { BondClient } from '../shared/client'
 import { setDataDir } from './paths'
+import { getDb } from './db'
+import { listMessages as listTranscriptMessages } from './transcript'
+
+const { runBondQueryMock, clearSessionApprovalsMock } = vi.hoisted(() => ({
+  runBondQueryMock: vi.fn(),
+  clearSessionApprovalsMock: vi.fn(),
+}))
+
+vi.mock('./agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./agent')>()
+  return {
+    ...actual,
+    runBondQuery: runBondQueryMock,
+    clearSessionApprovals: clearSessionApprovalsMock,
+    resolvePendingApproval: vi.fn(),
+  }
+})
 
 let server: BondServer
 let client: BondClient
@@ -12,6 +29,9 @@ let tempDir: string
 let socketPath: string
 
 beforeEach(async () => {
+  runBondQueryMock.mockReset()
+  clearSessionApprovalsMock.mockReset()
+  runBondQueryMock.mockResolvedValue({ succeeded: true, piSessionId: 'pi-test', contextTokens: 100, contextWindow: 1000 })
   tempDir = mkdtempSync(join(tmpdir(), 'bond-test-'))
   socketPath = join(tempDir, 'bond.sock')
   setDataDir(tempDir)
@@ -127,6 +147,60 @@ describe('subscriptions and chunks', () => {
     // but we verify the subscribe/unsubscribe mechanics)
     await client.unsubscribe(session.id)
     client2.close()
+  })
+})
+
+describe('daemon runtime integration', () => {
+  it('creates an epoch turn, tags chunks, and completes context usage', async () => {
+    const session = await client.createSession()
+    await client.subscribe(session.id)
+    const chunks: unknown[] = []
+    client.onChunk((chunk) => chunks.push(chunk))
+
+    runBondQueryMock.mockImplementation(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'hello back' })
+      return { succeeded: true, piSessionId: options.piSessionId, contextTokens: 321, contextWindow: 1000 }
+    })
+
+    const result = await client.send('hello', session.id)
+    expect(result.ok).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    const rows = listTranscriptMessages({ limit: 10 }).messages
+    const user = rows.find(m => m.role === 'user')
+    const assistant = rows.find(m => m.role === 'bond')
+    expect(user?.text).toBe('hello')
+    expect(assistant?.text).toBe('hello back')
+    expect(user?.epochId).toBeTruthy()
+    expect(user?.turnId).toBeTruthy()
+
+    const turn = getDb().prepare('SELECT status, context_tokens, context_window FROM turns WHERE id = ?').get(user!.turnId) as Record<string, unknown>
+    expect(turn).toMatchObject({ status: 'done', context_tokens: 321, context_window: 1000 })
+    expect(chunks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'query_start', epochId: user!.epochId, turnId: user!.turnId }),
+      expect.objectContaining({ kind: 'assistant_text', epochId: user!.epochId, turnId: user!.turnId, text: 'hello back' }),
+      expect.objectContaining({ kind: 'query_end', epochId: user!.epochId, turnId: user!.turnId, succeeded: true }),
+    ]))
+  })
+
+  it('keeps one global active query and aborts the previous session', async () => {
+    const first = await client.createSession()
+    const second = await client.createSession()
+    let firstAbort: (() => void) | undefined
+    runBondQueryMock.mockImplementationOnce((_prompt, options) => new Promise(resolve => {
+      firstAbort = () => resolve({ succeeded: false, piSessionId: options.piSessionId })
+      options.abortSignal.addEventListener('abort', firstAbort, { once: true })
+    }))
+    runBondQueryMock.mockResolvedValueOnce({ succeeded: true, piSessionId: 'pi-next', contextTokens: 5, contextWindow: 10 })
+
+    await client.send('first', first.id)
+    await client.send('second', second.id)
+    firstAbort?.()
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    expect(clearSessionApprovalsMock).toHaveBeenCalledWith(first.id)
+    const turns = getDb().prepare('SELECT status FROM turns ORDER BY started_at ASC').all() as Array<{ status: string }>
+    expect(turns.map(t => t.status)).toEqual(['cancelled', 'done'])
   })
 })
 

@@ -9,8 +9,8 @@ import { initSense, destroySense } from './sense'
 import { initTray, destroyTray } from './tray'
 import { initQuickChat, destroyQuickChat } from './quick-chat'
 import { registerWindow, registerSessionWindow, routeChunk, broadcast } from './window-router'
-import type { TaggedChunk } from '../shared/stream'
-import type { AttachedImage } from '../shared/session'
+import type { BondSendInput, TaggedChunk } from '../shared/stream'
+import type { AttachedImage, EditMode } from '../shared/session'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -524,15 +524,15 @@ app.whenReady().then(async () => {
   })
 
   // --- Chat (proxied to daemon) ---
-  ipcMain.handle('bond:send', async (_event, text: string, sessionId?: string, images?: AttachedImage[]) => {
-    // Register the session with the window router so chunks go to the right window
+  ipcMain.handle('bond:send', async (_event, inputOrText: BondSendInput | string, sessionId?: string, images?: AttachedImage[]) => {
+    // Legacy session windows still register for the old renderer until the UI cutover lands.
     if (sessionId) {
       const senderWindow = BrowserWindow.fromWebContents(_event.sender)
-      if (senderWindow) {
-        registerSessionWindow(sessionId, senderWindow)
-      }
+      if (senderWindow) registerSessionWindow(sessionId, senderWindow)
     }
-    return client.send(text, sessionId, images)
+    return typeof inputOrText === 'string'
+      ? client.send(inputOrText, sessionId, images)
+      : client.send(inputOrText)
   })
 
   ipcMain.handle('bond:cancel', async (_e, sessionId?: string) => {
@@ -543,11 +543,11 @@ app.whenReady().then(async () => {
     return client.respondToApproval(requestId, approved)
   })
 
-  ipcMain.handle('bond:subscribe', (_e, sessionId: string) => {
+  ipcMain.handle('bond:subscribe', (_e, sessionId?: string) => {
     return client.subscribe(sessionId)
   })
 
-  ipcMain.handle('bond:unsubscribe', (_e, sessionId: string) => {
+  ipcMain.handle('bond:unsubscribe', (_e, sessionId?: string) => {
     return client.unsubscribe(sessionId)
   })
 
@@ -561,6 +561,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('bond:getModel', () => {
     return client.getModel()
   })
+  ipcMain.handle('settings:getEditMode', () => client.getEditMode())
+  ipcMain.handle('settings:setEditMode', (_e, editMode: EditMode) => client.setEditMode(editMode))
 
   ipcMain.handle('pi:status', () => client.getPiStatus())
   ipcMain.handle('pi:startOAuth', (_e, provider: 'anthropic' | 'openai-codex') => client.startPiOAuth(provider))
@@ -579,6 +581,11 @@ app.whenReady().then(async () => {
     })
   })
 
+  // --- Continuous transcript ---
+  ipcMain.handle('transcript:list', (_e, options?: { beforeSeq?: number; limit?: number }) => client.listTranscript(options))
+  ipcMain.handle('transcript:upsert', (_e, messages: unknown[]) => client.upsertTranscript(messages as any))
+  ipcMain.handle('transcript:search', (_e, query: string, limit?: number) => client.searchTranscript(query, limit))
+
   // --- Sessions ---
   ipcMain.handle('session:list', () => client.listSessions())
   ipcMain.handle('session:create', (_e, options?: { title?: string }) => client.createSession(options))
@@ -591,7 +598,6 @@ app.whenReady().then(async () => {
     if (isQuitting) return true
     return client.saveMessages(sessionId, messages as any)
   })
-  ipcMain.handle('session:generateTitle', (_e, sessionId: string) => client.generateTitle(sessionId))
 
   // --- Skills ---
   ipcMain.handle('skills:list', () => client.listSkills())
@@ -667,7 +673,17 @@ app.whenReady().then(async () => {
   ipcMain.handle('sense:clear', (_e, range?: { from?: string; to?: string }) => client.senseClear(range))
   ipcMain.handle('sense:stats', () => client.senseStats())
 
-  // Sense Debrief IPC handlers
+  // Memory IPC handlers
+  ipcMain.handle('memory:core', () => client.memoryCore())
+  ipcMain.handle('memory:updateCore', (_e, core: import('../shared/memory').CoreMemory) => client.memoryUpdateCore(core))
+  ipcMain.handle('memory:working', () => client.memoryWorking())
+  ipcMain.handle('memory:updateWorking', (_e, working: import('../shared/memory').WorkingState) => client.memoryUpdateWorking(working))
+  ipcMain.handle('memory:clearWorking', () => client.memoryClearWorking())
+  ipcMain.handle('memory:search', (_e, query: string, limit?: number) => client.memorySearch(query, limit))
+  ipcMain.handle('memory:upsert', (_e, item: import('../shared/memory').MemoryItemInput) => client.memoryUpsert(item))
+  ipcMain.handle('memory:delete', (_e, id: string) => client.memoryDelete(id))
+  ipcMain.handle('memory:sources', (_e, id: string) => client.memorySources(id))
+
   ipcMain.handle('sense:memory', (_e, limit?: number) => client.senseMemory(limit))
   ipcMain.handle('sense:debrief', (_e, id?: string, sessionId?: string) => client.senseDebrief(id, sessionId))
   ipcMain.handle('sense:deleteDebrief', (_e, id: string) => client.senseDeleteDebrief(id))

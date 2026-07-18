@@ -21,7 +21,7 @@ export function unregisterSession(sessionId: string): void {
 }
 
 export function routeChunk(chunk: TaggedChunk): void {
-  const win = sessionWindows.get(chunk.sessionId)
+  const win = chunk.sessionId ? sessionWindows.get(chunk.sessionId) : undefined
   if (win && !win.isDestroyed()) {
     win.webContents.send('bond:chunk', chunk)
     return

@@ -1,7 +1,7 @@
 import type { AttachedImage } from './session'
 
 export type TranscriptRole = 'user' | 'bond' | 'meta'
-export type TurnStatus = 'running' | 'done' | 'failed' | 'cancelled'
+export type TurnStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
 export interface TranscriptMessage {
   id: string
@@ -19,7 +19,7 @@ export interface TranscriptMessage {
 }
 
 export interface InsertTurnStartInput {
-  epochId: string
+  epochId?: string | null
   turnId: string
   userMessageId: string
   assistantMessageId: string

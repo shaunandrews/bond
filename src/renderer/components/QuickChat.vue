@@ -8,7 +8,6 @@ import MessageBubble from './MessageBubble.vue'
 import ChatInput from './ChatInput.vue'
 
 const chat = useChat()
-const sessionId = ref<string | null>(null)
 const senseApps = ref<string[]>([])
 const selectedModel = ref<ModelId>('balanced')
 const editMode = ref<EditMode>({ type: 'full' })
@@ -34,11 +33,10 @@ let cleanupDismiss: (() => void) | undefined
 onMounted(() => {
   chat.subscribe()
 
-  cleanupInit = window.bond.onQuickChatInit(async (data: { sessionId: string; senseApps: string[] }) => {
-    sessionId.value = data.sessionId
+  cleanupInit = window.bond.onQuickChatInit(async (data: { senseApps: string[] }) => {
     senseApps.value = data.senseApps
     chat.clearMessages()
-    await chat.loadSession(data.sessionId)
+    await chat.init()
     ready.value = true
 
     // Trigger entry animation

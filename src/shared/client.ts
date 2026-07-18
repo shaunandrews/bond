@@ -1,8 +1,9 @@
 import WebSocket from 'ws'
-import type { TaggedChunk } from './stream'
+import type { BondSendInput, TaggedChunk } from './stream'
 import type { Session, SessionMessage, AttachedImage, ImageRecord, Collection, CollectionItem, FieldDef, ItemComment, EditMode } from './session'
 import type { TranscriptMessage, TranscriptPage } from './transcript'
 import type { SenseStatus, SenseSettings, SenseCapture, SessionDebrief } from './sense'
+import type { CoreMemory, MemoryItem, MemoryItemInput, MemorySourcesResult, RetrievedMemory, WorkingState } from './memory'
 import {
   makeRequest,
   isResponse,
@@ -189,12 +190,19 @@ export class BondClient {
 
   // --- Chat ---
 
-  async send(text: string, sessionId?: string, images?: AttachedImage[]): Promise<{ ok: boolean; error?: string; imageIds?: string[] }> {
-    return await this.call('bond.send', { text, sessionId, images }) as { ok: boolean; error?: string; imageIds?: string[] }
+  async send(input: BondSendInput): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>
+  async send(text: string, sessionId?: string, images?: AttachedImage[]): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>
+  async send(inputOrText: BondSendInput | string, sessionId?: string, images?: AttachedImage[]): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }> {
+    const params = typeof inputOrText === 'string'
+      ? { text: inputOrText, sessionId, images }
+      : inputOrText
+    return await this.call('bond.send', params) as { ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }
   }
 
+  async cancel(): Promise<{ ok: boolean }>
+  async cancel(sessionId?: string): Promise<{ ok: boolean }>
   async cancel(sessionId?: string): Promise<{ ok: boolean }> {
-    return await this.call('bond.cancel', { sessionId }) as { ok: boolean }
+    return await this.call('bond.cancel', sessionId ? { sessionId } : undefined) as { ok: boolean }
   }
 
   async respondToApproval(requestId: string, approved: boolean): Promise<{ ok: boolean }> {
@@ -208,12 +216,12 @@ export class BondClient {
 
   // --- Subscriptions ---
 
-  async subscribe(sessionId: string): Promise<{ ok: boolean }> {
-    return await this.call('bond.subscribe', { sessionId }) as { ok: boolean }
+  async subscribe(sessionId?: string): Promise<{ ok: boolean }> {
+    return await this.call('bond.subscribe', sessionId ? { sessionId } : undefined) as { ok: boolean }
   }
 
-  async unsubscribe(sessionId: string): Promise<{ ok: boolean }> {
-    return await this.call('bond.unsubscribe', { sessionId }) as { ok: boolean }
+  async unsubscribe(sessionId?: string): Promise<{ ok: boolean }> {
+    return await this.call('bond.unsubscribe', sessionId ? { sessionId } : undefined) as { ok: boolean }
   }
 
   // --- Model ---
@@ -224,6 +232,14 @@ export class BondClient {
 
   async getModel(): Promise<string> {
     return await this.call('bond.getModel') as string
+  }
+
+  async getEditMode(): Promise<EditMode> {
+    return await this.call('settings.getEditMode') as EditMode
+  }
+
+  async setEditMode(editMode: EditMode): Promise<{ ok: boolean }> {
+    return await this.call('settings.setEditMode', { editMode }) as { ok: boolean }
   }
 
   async getPiStatus(): Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }> {
@@ -280,10 +296,6 @@ export class BondClient {
 
   async saveMessages(sessionId: string, messages: SessionMessage[]): Promise<boolean> {
     return await this.call('session.saveMessages', { sessionId, messages }) as boolean
-  }
-
-  async generateTitle(sessionId: string): Promise<{ title: string; summary: string }> {
-    return await this.call('session.generateTitle', { sessionId }) as { title: string; summary: string }
   }
 
   // --- Images ---
@@ -478,7 +490,43 @@ export class BondClient {
     return await this.call('sense.stats') as { storageBytes: number; captureCount: number; sessionCount: number; oldestCapture: string | null }
   }
 
-  // --- Sense Memory ---
+  // --- Memory ---
+
+  async memoryCore(): Promise<CoreMemory> {
+    return await this.call('memory.core') as CoreMemory
+  }
+
+  async memoryUpdateCore(core: CoreMemory): Promise<CoreMemory> {
+    return await this.call('memory.updateCore', { core }) as CoreMemory
+  }
+
+  async memoryWorking(): Promise<WorkingState> {
+    return await this.call('memory.working') as WorkingState
+  }
+
+  async memoryUpdateWorking(working: WorkingState): Promise<WorkingState> {
+    return await this.call('memory.updateWorking', { working }) as WorkingState
+  }
+
+  async memoryClearWorking(): Promise<WorkingState> {
+    return await this.call('memory.clearWorking') as WorkingState
+  }
+
+  async memorySearch(query: string, limit?: number): Promise<{ results: RetrievedMemory[] }> {
+    return await this.call('memory.search', { query, limit }) as { results: RetrievedMemory[] }
+  }
+
+  async memoryUpsert(item: MemoryItemInput): Promise<MemoryItem> {
+    return await this.call('memory.upsert', { item }) as MemoryItem
+  }
+
+  async memoryDelete(id: string): Promise<{ ok: boolean }> {
+    return await this.call('memory.delete', { id }) as { ok: boolean }
+  }
+
+  async memorySources(id: string): Promise<MemorySourcesResult> {
+    return await this.call('memory.sources', { id }) as MemorySourcesResult
+  }
 
   async senseMemory(limit?: number): Promise<{ debriefs: SessionDebrief[] }> {
     return await this.call('sense.memory', { limit }) as { debriefs: SessionDebrief[] }

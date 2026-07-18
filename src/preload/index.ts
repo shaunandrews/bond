@@ -1,15 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { TaggedChunk } from '../shared/stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, Collection, CollectionItem, FieldDef, ItemComment } from '../shared/session'
+import type { BondSendInput, TaggedChunk } from '../shared/stream'
+import type { Session, AttachedImage, ImageRecord, Collection, CollectionItem, FieldDef, ItemComment } from '../shared/session'
+import type { TranscriptMessage, TranscriptPage } from '../shared/transcript'
+import type { CoreMemory, MemoryItemInput, WorkingState } from '../shared/memory'
 
 contextBridge.exposeInMainWorld('bond', {
-  send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
+  send: (inputOrText: BondSendInput | string, sessionId?: string, images?: AttachedImage[]) =>
+    ipcRenderer.invoke('bond:send', inputOrText, sessionId, images) as Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>,
   cancel: (sessionId?: string) => ipcRenderer.invoke('bond:cancel', sessionId) as Promise<{ ok: boolean }>,
   respondToApproval: (requestId: string, approved: boolean) =>
     ipcRenderer.invoke('bond:approvalResponse', requestId, approved) as Promise<{ ok: boolean }>,
-  subscribe: (sessionId: string) =>
+  subscribe: (sessionId?: string) =>
     ipcRenderer.invoke('bond:subscribe', sessionId) as Promise<{ ok: boolean }>,
-  unsubscribe: (sessionId: string) =>
+  unsubscribe: (sessionId?: string) =>
     ipcRenderer.invoke('bond:unsubscribe', sessionId) as Promise<{ ok: boolean }>,
   onChunk: (fn: (chunk: TaggedChunk) => void) => {
     const listener = (_: Electron.IpcRendererEvent, chunk: TaggedChunk) => fn(chunk)
@@ -20,6 +23,8 @@ contextBridge.exposeInMainWorld('bond', {
   // Model
   setModel: (model: string) => ipcRenderer.invoke('bond:setModel', model) as Promise<{ ok: boolean }>,
   getModel: () => ipcRenderer.invoke('bond:getModel') as Promise<string>,
+  getEditMode: () => ipcRenderer.invoke('settings:getEditMode') as Promise<import('../shared/session').EditMode>,
+  setEditMode: (editMode: import('../shared/session').EditMode) => ipcRenderer.invoke('settings:setEditMode', editMode) as Promise<{ ok: boolean }>,
   getPiStatus: () => ipcRenderer.invoke('pi:status') as Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }>,
   startPiOAuth: (provider: 'anthropic' | 'openai-codex') => ipcRenderer.invoke('pi:startOAuth', provider) as Promise<{ url: string; instructions?: string; deviceCode?: string }>,
 
@@ -33,18 +38,16 @@ contextBridge.exposeInMainWorld('bond', {
   showContextMenu: (items: { id: string; label: string; type?: string }[]) =>
     ipcRenderer.invoke('context-menu:show', items) as Promise<string | null>,
 
-  // Sessions
-  listSessions: () => ipcRenderer.invoke('session:list') as Promise<Session[]>,
+  // Continuous transcript
+  listTranscript: (options?: { beforeSeq?: number; limit?: number }) =>
+    ipcRenderer.invoke('transcript:list', options) as Promise<TranscriptPage>,
+  upsertTranscript: (messages: TranscriptMessage[]) =>
+    ipcRenderer.invoke('transcript:upsert', messages) as Promise<{ ok: boolean }>,
+  searchTranscript: (query: string, limit?: number) =>
+    ipcRenderer.invoke('transcript:search', query, limit) as Promise<{ messages: TranscriptMessage[] }>,
+
+  // Legacy transport session used internally by the continuous transcript runtime.
   createSession: (options?: { title?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
-  getSession: (id: string) => ipcRenderer.invoke('session:get', id) as Promise<Session | null>,
-  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode'>>) => ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
-  deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id) as Promise<boolean>,
-  deleteArchivedSessions: () => ipcRenderer.invoke('session:deleteArchived') as Promise<{ ok: boolean; count: number }>,
-  getMessages: (sessionId: string) => ipcRenderer.invoke('session:getMessages', sessionId) as Promise<SessionMessage[]>,
-  saveMessages: (sessionId: string, messages: SessionMessage[]) =>
-    ipcRenderer.invoke('session:saveMessages', sessionId, messages) as Promise<boolean>,
-  generateTitle: (sessionId: string, userMessage?: string) =>
-    ipcRenderer.invoke('session:generateTitle', sessionId, userMessage) as Promise<{ title: string; summary: string }>,
 
   // Collections
   listCollections: () => ipcRenderer.invoke('collection:list') as Promise<Collection[]>,
@@ -151,8 +154,8 @@ contextBridge.exposeInMainWorld('bond', {
   },
 
   // Quick Chat
-  onQuickChatInit: (fn: (data: { sessionId: string; senseApps: string[] }) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, data: { sessionId: string; senseApps: string[] }) => fn(data)
+  onQuickChatInit: (fn: (data: { senseApps: string[] }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: { senseApps: string[] }) => fn(data)
     ipcRenderer.on('bond:quickChatInit', listener)
     return () => ipcRenderer.removeListener('bond:quickChatInit', listener)
   },
@@ -182,7 +185,17 @@ contextBridge.exposeInMainWorld('bond', {
   senseStats: () => ipcRenderer.invoke('sense:stats'),
   hasScreenRecordingPermission: () => ipcRenderer.invoke('sense:hasPermission'),
 
-  // Sense Debriefs
+  // Memory
+  memoryCore: () => ipcRenderer.invoke('memory:core'),
+  memoryUpdateCore: (core: CoreMemory) => ipcRenderer.invoke('memory:updateCore', core),
+  memoryWorking: () => ipcRenderer.invoke('memory:working'),
+  memoryUpdateWorking: (working: WorkingState) => ipcRenderer.invoke('memory:updateWorking', working),
+  memoryClearWorking: () => ipcRenderer.invoke('memory:clearWorking'),
+  memorySearch: (query: string, limit?: number) => ipcRenderer.invoke('memory:search', query, limit),
+  memoryUpsert: (item: MemoryItemInput) => ipcRenderer.invoke('memory:upsert', item),
+  memoryDelete: (id: string) => ipcRenderer.invoke('memory:delete', id),
+  memorySources: (id: string) => ipcRenderer.invoke('memory:sources', id),
+
   senseMemory: (limit?: number) =>
     ipcRenderer.invoke('sense:memory', limit),
   senseDebrief: (id?: string, sessionId?: string) =>

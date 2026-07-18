@@ -36,6 +36,7 @@ export function ensureTranscriptSchema(db = getDb()): void {
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
       observed_through_seq INTEGER NOT NULL DEFAULT 0,
+      observed_at_context_tokens INTEGER NOT NULL DEFAULT 0,
       reflected_through_seq INTEGER NOT NULL DEFAULT 0
     );
     CREATE UNIQUE INDEX IF NOT EXISTS one_active_epoch ON epochs(status) WHERE status = 'active';
@@ -44,11 +45,11 @@ export function ensureTranscriptSchema(db = getDb()): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS turns (
       id TEXT PRIMARY KEY,
-      epoch_id TEXT NOT NULL REFERENCES epochs(id),
+      epoch_id TEXT REFERENCES epochs(id),
       user_message_id TEXT NOT NULL,
       assistant_message_id TEXT NOT NULL,
       activity_message_id TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('running','done','failed','cancelled')),
+      status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')),
       model TEXT,
       started_at TEXT NOT NULL,
       completed_at TEXT,
@@ -214,7 +215,7 @@ export function insertTurnStart(input: InsertTurnStartInput): void {
   const db = getDb()
   ensureTranscriptSchema(db)
   const now = input.now ?? nowIso()
-  const activityData = input.activityData ?? { turnId: input.turnId, userMessageId: input.userMessageId, status: 'working', startedAt: Date.now(), events: [] }
+  const activityData = input.activityData ?? { turnId: input.turnId, userMessageId: input.userMessageId, assistantMessageId: input.assistantMessageId, status: 'working', startedAt: Date.now(), events: [] }
 
   db.transaction(() => {
     db.prepare(`
@@ -253,6 +254,19 @@ export function insertTurnStart(input: InsertTurnStartInput): void {
     }
     insert.run(activity.id, input.epochId, input.turnId, activity.seq, activity.role, activity.kind, null, encodeJson(activityData), null, now, now)
     updateMessageFts(db, activity)
+
+    const assistant: TranscriptMessage = {
+      id: input.assistantMessageId,
+      epochId: input.epochId,
+      turnId: input.turnId,
+      seq: nextSeq(db),
+      role: 'bond',
+      text: '',
+      createdAt: now,
+      updatedAt: now,
+    }
+    insert.run(assistant.id, input.epochId, input.turnId, assistant.seq, assistant.role, null, '', null, null, now, now)
+    updateMessageFts(db, assistant)
   })()
 }
 
@@ -270,7 +284,7 @@ export function upsertMessages(messages: TranscriptMessage[]): void {
     `)
     const update = db.prepare(`
       UPDATE messages SET
-        epoch_id = ?, turn_id = ?, role = ?, kind = ?, text = ?, data = ?, image_ids = ?, updated_at = ?
+        kind = ?, text = ?, data = ?, image_ids = ?, updated_at = ?
       WHERE id = ?
     `)
 
@@ -278,20 +292,31 @@ export function upsertMessages(messages: TranscriptMessage[]): void {
       const existing = existingStmt.get(m.id) as MessageRow | undefined
       const seq = existing?.seq ?? m.seq ?? nextSeq(db)
       const createdAt = existing?.created_at ?? m.createdAt ?? now
-      const epochId = m.epochId ?? existing?.epoch_id ?? null
-      const turnId = m.turnId ?? existing?.turn_id ?? null
+      const epochId = existing?.epoch_id ?? m.epochId ?? null
+      const turnId = existing?.turn_id ?? m.turnId ?? null
+      const role = existing?.role ?? m.role
       const kind = m.kind ?? existing?.kind ?? null
       const text = m.text ?? null
       const data = m.data ?? null
       const imageIds = m.imageIds ?? parseStringArray(existing?.image_ids ?? existing?.images)
 
       if (existing) {
-        update.run(epochId, turnId, m.role, kind, text, encodeJson(data), encodeJson(imageIds), now, m.id)
+        update.run(kind, text, encodeJson(data), encodeJson(imageIds), now, m.id)
       } else {
-        insert.run(m.id, epochId, turnId, seq, m.role, kind, text, encodeJson(data), encodeJson(imageIds), createdAt, now)
+        insert.run(m.id, epochId, turnId, seq, role, kind, text, encodeJson(data), encodeJson(imageIds), createdAt, now)
       }
-      updateMessageFts(db, { id: m.id, role: m.role, kind, text, data })
+      updateMessageFts(db, { id: m.id, role, kind, text, data })
     }
+  })()
+}
+
+export function startTurn(turnId: string, epochId: string): void {
+  const db = getDb()
+  ensureTranscriptSchema(db)
+  const now = nowIso()
+  db.transaction(() => {
+    db.prepare("UPDATE turns SET epoch_id = ?, status = 'running' WHERE id = ?").run(epochId, turnId)
+    db.prepare('UPDATE messages SET epoch_id = ?, updated_at = ? WHERE turn_id = ?').run(epochId, now, turnId)
   })()
 }
 

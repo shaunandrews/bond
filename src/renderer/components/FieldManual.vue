@@ -42,7 +42,6 @@ onUnmounted(() => {
 const shortcuts = [
   { key: '⌘B', action: 'Toggle sidebar' },
   { key: '⌘⇧B', action: 'Toggle right panel' },
-  { key: '⌘N', action: 'New chat' },
   { key: '⌘,', action: 'Settings' },
   { key: 'Escape', action: 'Cancel response' },
   { key: '⌘/', action: 'Open this Field Manual' },
@@ -51,8 +50,8 @@ const shortcuts = [
 const capabilities = [
   {
     icon: PhChatCircle,
-    name: 'Chat',
-    description: 'Talk naturally. Attach images (⌘V paste or drag). Ask Bond to read, write, and edit files, run shell commands, or search the web. Use edit modes (full/readonly/scoped) to control file access.',
+    name: 'Conversation',
+    description: 'Talk naturally in one continuous transcript. Attach images (⌘V paste or drag). Ask Bond to read, write, and edit files, run shell commands, or search the web. Use edit modes (full/readonly/scoped) to control file access.',
   },
   {
     icon: PhSquaresFour,
@@ -77,10 +76,10 @@ const capabilities = [
 ]
 
 const tips = [
-  'Drag files into chat for context (not just images — code, PDFs, text)',
-  'Bond remembers context within a session — refer back freely',
+  'Drag files into the conversation for context (not just images — code, PDFs, text)',
+  'Bond keeps a continuous transcript — refer back freely',
   'Use /skill-name to invoke custom skills',
-  'Use session debriefs and Sense to recall past work',
+  'Use memory and Sense to recall past work',
 ]
 </script>
 

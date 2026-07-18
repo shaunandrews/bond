@@ -1,12 +1,14 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import { createServer, type Server as HttpServer } from 'node:http'
+import { randomUUID } from 'node:crypto'
 import { existsSync, unlinkSync, readFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
-import type { TaggedChunk } from '../shared/stream'
+import type { BondSendInput, TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
-import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages } from './transcript'
+import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, insertTurnStart, startTurn, completeTurn, getSourceMessages } from './transcript'
+import { ensureActiveEpoch } from './epochs'
 import type { ModelId } from '../shared/models'
 import {
   makeResponse,
@@ -27,6 +29,7 @@ import {
   getCachedSkills,
   refreshSkillsCache,
   buildSystemPromptPreview,
+  buildAgentContextEnvelope,
 } from './agent'
 import { getPiAuthStatus, startPiOAuth } from './pi/runtime'
 import { getDownloadsDir, ensureDownloadsDir } from './paths'
@@ -69,6 +72,7 @@ import { createSenseController, type SenseController } from './sense/controller'
 import { getStats as getSenseStats, clearData as clearSenseData } from './sense/storage'
 import { getSetting, setSetting } from './settings'
 import type { SenseSettings } from '../shared/sense'
+import type { CoreMemory, MemoryItemInput, WorkingState } from '../shared/memory'
 import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
 import { generateTitleAndSummary } from './generate-title'
 import { generateDebrief } from './generate-debrief'
@@ -98,20 +102,36 @@ import {
   deleteImage,
   importImage
 } from './images'
+import { readCoreMemory, writeCoreMemoryAtomic } from './memory/core-memory'
+import { getMemoryItem, listRecentMemory, searchMemory, upsertMemoryItem } from './memory/store'
+import { createWorkingState } from './memory/working-state'
 
 // --- State ---
 
-const activeQueries = new Map<string, { ac: AbortController; promise: Promise<boolean> }>()
+type ActiveQuery = {
+  sessionId: string
+  turnId: string
+  epochId: string
+  ac: AbortController
+  promise: Promise<boolean>
+}
+
+let activeQuery: ActiveQuery | null = null
 let currentModel: string = 'balanced'
 let serverWss: WebSocketServer | null = null
 
-// Track which clients are subscribed to which sessions
+// Track which clients are subscribed to which sessions; global subscribers receive all tagged chunks.
 const sessionSubscribers = new Map<string, Set<WebSocket>>()
+const globalSubscribers = new Set<WebSocket>()
 
 // Track pending approvals per session for replay on reconnect
 const pendingApprovalChunks = new Map<string, TaggedChunk[]>()
 
-function subscribeTo(sessionId: string, ws: WebSocket): void {
+function subscribeTo(sessionId: string | undefined, ws: WebSocket): void {
+  if (!sessionId) {
+    globalSubscribers.add(ws)
+    return
+  }
   let subs = sessionSubscribers.get(sessionId)
   if (!subs) {
     subs = new Set()
@@ -120,7 +140,11 @@ function subscribeTo(sessionId: string, ws: WebSocket): void {
   subs.add(ws)
 }
 
-function unsubscribeFrom(sessionId: string, ws: WebSocket): void {
+function unsubscribeFrom(sessionId: string | undefined, ws: WebSocket): void {
+  if (!sessionId) {
+    globalSubscribers.delete(ws)
+    return
+  }
   const subs = sessionSubscribers.get(sessionId)
   if (subs) {
     subs.delete(ws)
@@ -132,21 +156,25 @@ function unsubscribeAll(ws: WebSocket): void {
   for (const subs of sessionSubscribers.values()) {
     subs.delete(ws)
   }
+  globalSubscribers.delete(ws)
 }
 
-function broadcastChunk(sessionId: string, chunk: BondStreamChunk): void {
-  const tagged: TaggedChunk = { ...chunk, sessionId }
+function broadcastChunk(sessionId: string | undefined, chunk: BondStreamChunk, tags?: { epochId?: string; turnId?: string; assistantMessageId?: string }): void {
+  const tagged: TaggedChunk = { ...chunk, ...(sessionId ? { sessionId } : {}), ...tags }
   const msg = JSON.stringify(makeNotification('bond.chunk', tagged))
-  const subs = sessionSubscribers.get(sessionId)
-  if (!subs) return
-  for (const ws of subs) {
+  const recipients = new Set<WebSocket>(globalSubscribers)
+  const subs = sessionId ? sessionSubscribers.get(sessionId) : undefined
+  if (subs) {
+    for (const ws of subs) recipients.add(ws)
+  }
+  for (const ws of recipients) {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(msg)
     }
   }
 
   // Track pending approval chunks for replay (in-memory + SQLite)
-  if (chunk.kind === 'tool_approval') {
+  if (chunk.kind === 'tool_approval' && sessionId) {
     let pending = pendingApprovalChunks.get(sessionId)
     if (!pending) {
       pending = []
@@ -267,6 +295,31 @@ function guessExt(contentType: string): string {
   return map[contentType] || ''
 }
 
+const WORKING_MEMORY_SETTING = 'memory.working'
+
+function readWorkingMemory(): WorkingState {
+  const raw = getSetting(WORKING_MEMORY_SETTING)
+  if (!raw) return createWorkingState()
+  try {
+    return createWorkingState(JSON.parse(raw) as Partial<WorkingState>)
+  } catch {
+    return createWorkingState()
+  }
+}
+
+function writeWorkingMemory(working: WorkingState): WorkingState {
+  const next = createWorkingState({ ...working, updatedAt: new Date().toISOString() })
+  setSetting(WORKING_MEMORY_SETTING, JSON.stringify(next))
+  return next
+}
+
+function sourceIdsForMemoryTags(tags: string[]): string[] {
+  return tags
+    .filter(tag => tag.startsWith('source:'))
+    .map(tag => tag.slice('source:'.length).trim())
+    .filter(Boolean)
+}
+
 async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string> {
   const { id, method, params } = req
   const p = params as RpcParams
@@ -275,83 +328,122 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
     switch (method) {
       // --- Chat ---
       case 'bond.send': {
-        const text = getStringParam(p, 'text')?.trim()
-        const sessionId = getStringParam(p, 'sessionId')
-        const images = getParam(p, 'images') as AttachedImage[] | undefined
+        const input = p as Partial<BondSendInput> & { sessionId?: string }
+        const text = typeof input.text === 'string' ? input.text.trim() : ''
+        const sessionId = typeof input.sessionId === 'string' ? input.sessionId : undefined
+        const images = Array.isArray(input.images) ? input.images as AttachedImage[] : undefined
         if (!text && !images?.length) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'text or images required'))
-        if (!sessionId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'sessionId is required'))
 
-        const session = getSession(sessionId)
-        if (!session) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'session not found'))
+        const session = sessionId ? getSession(sessionId) : null
+        if (sessionId && !session) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'session not found'))
 
-        // Auto-subscribe this client to the session
         subscribeTo(sessionId, ws)
 
-        // Abort existing query for this session and wait for it to finish
-        const existing = activeQueries.get(sessionId)
-        if (existing) {
+        if (activeQuery) {
+          const existing = activeQuery
           existing.ac.abort()
-          clearSessionApprovals(sessionId)
+          if (existing.sessionId) {
+            clearSessionApprovals(existing.sessionId)
+            pendingApprovalChunks.delete(existing.sessionId)
+            try { clearSessionPendingApprovals(existing.sessionId) } catch { /* best effort */ }
+          }
           try { await existing.promise } catch { /* already handled */ }
-          activeQueries.delete(sessionId)
+          if (activeQuery?.turnId === existing.turnId) activeQuery = null
         }
 
-        // Save images to permanent storage before running the query
         let imageIds: string[] | undefined
         if (images?.length) {
-          imageIds = saveImages(sessionId, images)
+          imageIds = saveImages(sessionId ?? 'global-transcript', images)
         }
 
-        const cleanText = text ? text.replace(/@\[([^\]]+)\]\(project:[a-f0-9-]+\)/g, '@$1') : text
+        const cleanText = text.replace(/@\[([^\]]+)\]\(project:[a-f0-9-]+\)/g, '@$1')
+        const epochResult = await ensureActiveEpoch()
+        const epoch = epochResult.epoch
+        const turnId = typeof input.turnId === 'string' ? input.turnId : randomUUID()
+        const userMessageId = typeof input.userMessageId === 'string' ? input.userMessageId : randomUUID()
+        const assistantMessageId = typeof input.assistantMessageId === 'string' ? input.assistantMessageId : randomUUID()
+        const activityMessageId = typeof input.activityMessageId === 'string' ? input.activityMessageId : randomUUID()
+        const tags = { epochId: epoch.id, turnId, assistantMessageId }
+
+        insertTurnStart({
+          epochId: epoch.id,
+          turnId,
+          userMessageId,
+          assistantMessageId,
+          activityMessageId,
+          text: cleanText,
+          model: currentModel,
+          imageIds,
+          activityData: { turnId, userMessageId, assistantMessageId, status: 'working', startedAt: Date.now(), events: [] },
+        })
+        startTurn(turnId, epoch.id)
+
+        const contextEnvelope = buildAgentContextEnvelope({
+          query: cleanText,
+          sessionId: sessionId ?? epoch.piSessionId,
+          excludeMessageIds: [userMessageId, assistantMessageId, activityMessageId],
+          previousEpoch: epochResult.previousEpoch,
+        })
 
         const ac = new AbortController()
-        // Pi JSONL files are opened deterministically by session ID. There is no
-        // subprocess collision/retry dance: one active query per Bond session.
-        const queryPromise = runBondQuery(cleanText ?? '', {
+        let assistantText = ''
+        const queryPromise = runBondQuery(cleanText, {
           abortSignal: ac.signal,
-          onChunk: (chunk) => broadcastChunk(sessionId, chunk),
+          onChunk: (chunk) => {
+            if (chunk.kind === 'assistant_text') assistantText += chunk.text
+            broadcastChunk(sessionId, chunk.kind === 'assistant_text' ? { ...chunk, assistantMessageId } : chunk, tags)
+          },
           model: currentModel,
-          sessionId,
+          sessionId: sessionId ?? epoch.piSessionId,
+          piSessionId: epoch.piSessionId,
           imageIds,
-          editMode: session.editMode,
+          editMode: input.editMode ?? session?.editMode,
+          contextEnvelope,
+        }).then((result) => {
+          const succeeded = result.succeeded
+          if (assistantText.trim()) {
+            upsertTranscriptMessages([{ id: assistantMessageId, epochId: epoch.id, turnId, role: 'bond', text: assistantText }])
+          }
+          completeTurn({
+            turnId,
+            status: ac.signal.aborted ? 'cancelled' : succeeded ? 'done' : 'failed',
+            contextTokens: result.contextTokens,
+            contextWindow: result.contextWindow,
+          })
+          return succeeded
+        }).catch((error) => {
+          completeTurn({ turnId, status: ac.signal.aborted ? 'cancelled' : 'failed' })
+          broadcastChunk(sessionId, { kind: 'raw_error', message: error instanceof Error ? error.message : String(error) }, tags)
+          return false
         })
 
-        activeQueries.set(sessionId, { ac, promise: queryPromise })
-        broadcastChunk(sessionId, { kind: 'query_start' })
+        activeQuery = { sessionId: sessionId ?? '', turnId, epochId: epoch.id, ac, promise: queryPromise }
+        broadcastChunk(sessionId, { kind: 'query_start' }, tags)
 
-        // Fire-and-forget: clean up when the query finishes, don't block the RPC response
         queryPromise.then((succeeded) => {
-          activeQueries.delete(sessionId)
-          // Clear pending approvals — they're no longer actionable after query ends
-          pendingApprovalChunks.delete(sessionId)
-          try { clearSessionPendingApprovals(sessionId) } catch { /* best effort */ }
-          broadcastChunk(sessionId, { kind: 'query_end', succeeded })
+          if (activeQuery?.turnId === turnId) activeQuery = null
+          if (sessionId) {
+            pendingApprovalChunks.delete(sessionId)
+            try { clearSessionPendingApprovals(sessionId) } catch { /* best effort */ }
+          }
+          broadcastChunk(sessionId, { kind: 'query_end', succeeded }, tags)
         })
 
-        return JSON.stringify(makeResponse(id, { ok: true, imageIds }))
+        return JSON.stringify(makeResponse(id, { ok: true, queued: false, imageIds, turnId, epochId: epoch.id }))
       }
 
       case 'bond.cancel': {
         const sessionId = getStringParam(p, 'sessionId')
-        if (sessionId) {
-          const entry = activeQueries.get(sessionId)
-          if (entry) {
-            entry.ac.abort()
-            clearSessionApprovals(sessionId)
-            pendingApprovalChunks.delete(sessionId)
-            try { clearSessionPendingApprovals(sessionId) } catch { /* best effort */ }
-            try { await entry.promise } catch { /* already handled */ }
-            activeQueries.delete(sessionId)
+        const entry = activeQuery
+        if (entry && (!sessionId || entry.sessionId === sessionId)) {
+          entry.ac.abort()
+          if (entry.sessionId) {
+            clearSessionApprovals(entry.sessionId)
+            pendingApprovalChunks.delete(entry.sessionId)
+            try { clearSessionPendingApprovals(entry.sessionId) } catch { /* best effort */ }
           }
-        } else {
-          for (const [sid, entry] of activeQueries) {
-            entry.ac.abort()
-            clearSessionApprovals(sid)
-            pendingApprovalChunks.delete(sid)
-            try { clearSessionPendingApprovals(sid) } catch { /* best effort */ }
-          }
-          await Promise.allSettled([...activeQueries.values()].map(e => e.promise))
-          activeQueries.clear()
+          try { await entry.promise } catch { /* already handled */ }
+          if (activeQuery?.turnId === entry.turnId) activeQuery = null
         }
         return JSON.stringify(makeResponse(id, { ok: true }))
       }
@@ -369,12 +461,11 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       // --- Subscriptions ---
       case 'bond.subscribe': {
         const sessionId = getStringParam(p, 'sessionId')
-        if (!sessionId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'sessionId is required'))
         subscribeTo(sessionId, ws)
 
         // Replay pending approval chunks — prefer in-memory, fall back to SQLite
-        let pending = pendingApprovalChunks.get(sessionId)
-        if (!pending || pending.length === 0) {
+        let pending = sessionId ? pendingApprovalChunks.get(sessionId) : undefined
+        if (sessionId && (!pending || pending.length === 0)) {
           try {
             const dbApprovals = getPendingApprovals(sessionId)
             if (dbApprovals.length > 0) {
@@ -396,7 +487,6 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
       case 'bond.unsubscribe': {
         const sessionId = getStringParam(p, 'sessionId')
-        if (!sessionId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'sessionId is required'))
         unsubscribeFrom(sessionId, ws)
         return JSON.stringify(makeResponse(id, { ok: true }))
       }
@@ -514,6 +604,25 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       }
 
       // --- Settings ---
+      case 'settings.getEditMode': {
+        const raw = getSetting('edit_mode')
+        if (!raw) return JSON.stringify(makeResponse(id, { type: 'full' }))
+        try {
+          return JSON.stringify(makeResponse(id, JSON.parse(raw)))
+        } catch {
+          return JSON.stringify(makeResponse(id, { type: 'full' }))
+        }
+      }
+
+      case 'settings.setEditMode': {
+        const editMode = getParam(p, 'editMode') as EditMode | undefined
+        if (!editMode || typeof editMode !== 'object' || !('type' in editMode)) {
+          return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'editMode is required'))
+        }
+        setSetting('edit_mode', JSON.stringify(editMode))
+        return JSON.stringify(makeResponse(id, { ok: true }))
+      }
+
       case 'settings.getSoul':
         return JSON.stringify(makeResponse(id, getSoul()))
 
@@ -908,6 +1017,56 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, stats))
       }
 
+      // --- Memory ---
+      case 'memory.core': {
+        return JSON.stringify(makeResponse(id, readCoreMemory() as CoreMemory))
+      }
+      case 'memory.updateCore': {
+        const core = getParam(p, 'core') as CoreMemory | undefined
+        if (!core) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'core is required'))
+        return JSON.stringify(makeResponse(id, writeCoreMemoryAtomic({ ...core, updatedAt: new Date().toISOString() })))
+      }
+      case 'memory.working': {
+        return JSON.stringify(makeResponse(id, readWorkingMemory()))
+      }
+      case 'memory.updateWorking': {
+        const working = getParam(p, 'working') as WorkingState | undefined
+        if (!working) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'working is required'))
+        return JSON.stringify(makeResponse(id, writeWorkingMemory(working)))
+      }
+      case 'memory.clearWorking': {
+        const empty = writeWorkingMemory(createWorkingState())
+        return JSON.stringify(makeResponse(id, empty))
+      }
+      case 'memory.search': {
+        const query = getStringParam(p, 'query') ?? ''
+        const limit = getNumberParam(p, 'limit') ?? 20
+        const results = query.trim()
+          ? searchMemory(query, { limit })
+          : listRecentMemory({ limit }).map(item => ({ item, score: 0 }))
+        return JSON.stringify(makeResponse(id, { results }))
+      }
+      case 'memory.upsert': {
+        const item = getParam(p, 'item') as MemoryItemInput | undefined
+        if (!item || typeof item.text !== 'string') return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'item.text is required'))
+        return JSON.stringify(makeResponse(id, upsertMemoryItem(item)))
+      }
+      case 'memory.delete': {
+        const memoryId = getStringParam(p, 'id')
+        if (!memoryId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const current = getMemoryItem(memoryId)
+        if (!current) return JSON.stringify(makeResponse(id, { ok: false }))
+        upsertMemoryItem({ ...current, active: false, updatedAt: new Date().toISOString() })
+        return JSON.stringify(makeResponse(id, { ok: true }))
+      }
+      case 'memory.sources': {
+        const memoryId = getStringParam(p, 'id')
+        if (!memoryId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
+        const item = getMemoryItem(memoryId)
+        const sourceIds = item ? sourceIdsForMemoryTags(item.tags) : []
+        return JSON.stringify(makeResponse(id, { sourceIds, messages: getSourceMessages(sourceIds) }))
+      }
+
       // --- Sense Debriefs ---
       case 'sense.memory': {
         const limit = getNumberParam(p, 'limit') ?? 20
@@ -1033,12 +1192,13 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
   return {
     wss,
     close: () => new Promise<void>((resolve) => {
-      // Abort all active queries
-      for (const [sid, entry] of activeQueries) {
-        entry.ac.abort()
-        clearSessionApprovals(sid)
+      // Abort the active query
+      if (activeQuery) {
+        activeQuery.ac.abort()
+        clearSessionApprovals(activeQuery.sessionId)
+        activeQuery = null
       }
-      activeQueries.clear()
+      globalSubscribers.clear()
 
       // Clean up sense controller
       if (senseController) {

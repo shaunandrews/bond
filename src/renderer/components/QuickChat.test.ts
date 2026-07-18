@@ -13,6 +13,9 @@ describe('QuickChat', () => {
       getMessages: vi.fn().mockResolvedValue([]),
       saveMessages: vi.fn().mockResolvedValue(true),
       getImages: vi.fn().mockResolvedValue([]),
+      listTranscript: vi.fn().mockResolvedValue({ messages: [], nextBeforeSeq: null }),
+      upsertTranscript: vi.fn().mockResolvedValue({ ok: true }),
+      createSession: vi.fn().mockResolvedValue({ id: 'transport-1' }),
       getModel: vi.fn().mockResolvedValue('balanced'),
       setModel: vi.fn().mockResolvedValue({ ok: true }),
       onQuickChatInit: vi.fn().mockReturnValue(() => {}),
@@ -55,7 +58,7 @@ describe('QuickChat', () => {
     const wrapper = shallowMount(QuickChat)
 
     // Simulate init from main process
-    await initCallback?.({ sessionId: 'test-session-1', senseApps: ['VS Code', 'Figma'] })
+    await initCallback?.({ senseApps: ['VS Code', 'Figma'] })
     // Allow multiple ticks for async loadSession + nextTick + requestAnimationFrame
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
@@ -77,7 +80,7 @@ describe('QuickChat', () => {
 
     const wrapper = shallowMount(QuickChat)
 
-    await initCallback?.({ sessionId: 'test-session-2', senseApps: [] })
+    await initCallback?.({ senseApps: [] })
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()

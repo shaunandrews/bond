@@ -1,39 +1,123 @@
 import { ref, computed } from 'vue'
-import type { SessionDebrief } from '../../shared/sense'
+import type { CoreMemory, MemoryItem, MemoryItemInput, MemorySourcesResult, RetrievedMemory, WorkingState } from '../../shared/memory'
 
-const debriefs = ref<SessionDebrief[]>([])
+const emptyCore = (): CoreMemory => ({ version: 1, facts: [], preferences: [], decisions: [], updatedAt: new Date().toISOString() })
+const emptyWorking = (): WorkingState => ({ sessionId: null, projectId: null, goal: '', facts: [], preferences: [], decisions: [], openThreads: [], updatedAt: new Date().toISOString() })
+
+const core = ref<CoreMemory>(emptyCore())
+const working = ref<WorkingState>(emptyWorking())
+const results = ref<RetrievedMemory[]>([])
+const sources = ref<MemorySourcesResult>({ sourceIds: [], messages: [] })
 const loading = ref(false)
+const saving = ref(false)
+const error = ref<string | null>(null)
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
 
 async function loadMemory() {
   loading.value = true
+  error.value = null
   try {
-    const data = await window.bond.senseMemory()
-    debriefs.value = data.debriefs
+    const [coreValue, workingValue, searchValue] = await Promise.all([
+      window.bond.memoryCore(),
+      window.bond.memoryWorking(),
+      window.bond.memorySearch('', 20),
+    ])
+    core.value = coreValue
+    working.value = workingValue
+    results.value = searchValue.results
   } catch (err) {
-    console.error('Failed to load memory:', err)
+    error.value = message(err)
   } finally {
     loading.value = false
   }
 }
 
-async function deleteDebrief(id: string) {
-  const backup = [...debriefs.value]
-  debriefs.value = debriefs.value.filter(d => d.id !== id)
+async function saveCore(next: CoreMemory) {
+  saving.value = true
+  error.value = null
   try {
-    await window.bond.senseDeleteDebrief(id)
-  } catch {
-    debriefs.value = backup
+    core.value = await window.bond.memoryUpdateCore(next)
+  } catch (err) {
+    error.value = message(err)
+    throw err
+  } finally {
+    saving.value = false
   }
 }
 
-const isEmpty = computed(() => debriefs.value.length === 0)
+async function saveWorking(next: WorkingState) {
+  saving.value = true
+  error.value = null
+  try {
+    working.value = await window.bond.memoryUpdateWorking(next)
+  } catch (err) {
+    error.value = message(err)
+    throw err
+  } finally {
+    saving.value = false
+  }
+}
+
+async function clearWorking() {
+  working.value = await window.bond.memoryClearWorking()
+}
+
+async function search(query: string, limit = 20) {
+  loading.value = true
+  error.value = null
+  try {
+    const value = await window.bond.memorySearch(query, limit)
+    results.value = value.results
+  } catch (err) {
+    error.value = message(err)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function upsert(item: MemoryItemInput): Promise<MemoryItem> {
+  const saved = await window.bond.memoryUpsert(item)
+  await search('', 20)
+  return saved
+}
+
+async function remove(id: string) {
+  const backup = [...results.value]
+  results.value = results.value.filter(result => result.item.id !== id)
+  try {
+    await window.bond.memoryDelete(id)
+  } catch (err) {
+    results.value = backup
+    error.value = message(err)
+  }
+}
+
+async function loadSources(id: string) {
+  sources.value = await window.bond.memorySources(id)
+}
+
+const isEmpty = computed(() => results.value.length === 0)
 
 export function useMemory() {
   return {
-    debriefs,
+    core,
+    working,
+    results,
+    sources,
     loading,
+    saving,
+    error,
     isEmpty,
     loadMemory,
-    deleteDebrief,
+    saveCore,
+    saveWorking,
+    clearWorking,
+    search,
+    upsert,
+    remove,
+    loadSources,
   }
 }

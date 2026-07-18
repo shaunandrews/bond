@@ -1,289 +1,219 @@
 /// <reference types="vite/client" />
 import { ref, computed } from 'vue'
-import type { BondStreamChunk, TaggedChunk } from '../../shared/stream'
-import type { SessionMessage, AttachedImage } from '../../shared/session'
+import type { BondSendInput, TaggedChunk } from '../../shared/stream'
+import type { AttachedImage, EditMode, SessionMessage } from '../../shared/session'
+import type { TranscriptMessage, TranscriptPage } from '../../shared/transcript'
 import type { Message } from '../types/message'
 import type { TurnActivityData, TurnActivityEvent } from '../types/activity'
 
+const TRANSCRIPT_PAGE_SIZE = 80
+
 export interface QueuedMessage {
   id: string
-  sessionId: string
   text: string
   images?: AttachedImage[]
 }
 
 export interface ChatDeps {
-  send: (text: string, sessionId?: string, images?: AttachedImage[]) => Promise<{ ok: boolean; error?: string; imageIds?: string[] }>
+  send: ((input: BondSendInput) => Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>) & ((text: string, sessionId?: string, images?: AttachedImage[]) => Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>)
   cancel: (sessionId?: string) => Promise<{ ok: boolean }>
   onChunk: (fn: (chunk: TaggedChunk) => void) => () => void
   respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
-  getMessages: (sessionId: string) => Promise<SessionMessage[]>
-  saveMessages: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
   getImages: (ids: string[]) => Promise<(AttachedImage | null)[]>
-  subscribe?: (sessionId: string) => Promise<{ ok: boolean }>
-  unsubscribe?: (sessionId: string) => Promise<{ ok: boolean }>
+  listTranscript: (options?: { beforeSeq?: number; limit?: number }) => Promise<TranscriptPage>
+  upsertTranscript: (messages: TranscriptMessage[]) => Promise<{ ok: boolean }>
+  createSession?: (options?: { title?: string }) => Promise<{ id: string }>
+  subscribe?: (sessionId?: string) => Promise<{ ok: boolean }>
+  unsubscribe?: (sessionId?: string) => Promise<{ ok: boolean }>
+  // Legacy deps retained so older component tests can supply partial window.bond mocks.
+  getMessages?: (sessionId: string) => Promise<SessionMessage[]>
+  saveMessages?: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
 }
 
 function uid(): string {
   return crypto.randomUUID()
 }
 
-function toSessionMessages(msgs: Message[]): SessionMessage[] {
-  return msgs.map((m) => {
-    if (m.role === 'user') {
-      const sm: SessionMessage = { id: m.id, role: 'user', text: m.text }
-      if (m.imageIds?.length) sm.imageIds = m.imageIds
-      else if (m.images?.length) sm.images = m.images.map(i => ({ data: i.data, mediaType: i.mediaType }))
-      return sm
-    }
-    if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text, streaming: false }
-    if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: m.name, summary: m.summary }
-    if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: m.name, summary: m.args }
-    if (m.kind === 'thinking') return { id: m.id, role: 'meta', kind: 'thinking', text: m.text, summary: m.durationSec != null ? String(m.durationSec) : undefined }
-    if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', name: m.toolName, summary: m.description, status: m.status }
-    if (m.kind === 'activity') return { id: m.id, role: 'meta', kind: 'activity', data: m.data as unknown as Record<string, unknown> }
-    if (m.kind === 'error') return { id: m.id, role: 'meta', kind: 'error', text: m.text }
-    return { id: m.id, role: 'meta', kind: 'system', text: m.text }
-  })
+function nowIso(): string {
+  return new Date().toISOString()
 }
 
-function fromSessionMessages(msgs: SessionMessage[]): Message[] {
-  return msgs.map((m): Message | null => {
-    if (m.role === 'user') return { id: m.id, role: 'user', text: m.text ?? '', images: m.images, imageIds: m.imageIds }
-    if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text ?? '', streaming: false }
-    if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: m.name ?? '', summary: m.summary }
-    if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: m.name ?? '', args: m.summary }
-    if (m.kind === 'thinking') {
-      // Drop empty thinking messages (stale DB records from interrupted queries)
-      if (!m.text?.trim()) return null
-      return { id: m.id, role: 'meta', kind: 'thinking', text: m.text ?? '', durationSec: m.summary ? parseInt(m.summary, 10) : undefined, streaming: false }
-    }
-    if (m.kind === 'approval') return { id: m.id, role: 'meta', kind: 'approval', requestId: '', toolName: m.name ?? '', input: {}, description: m.summary, status: (m.status as 'approved' | 'denied') ?? 'denied' }
-    if (m.kind === 'activity' && m.data) return { id: m.id, role: 'meta', kind: 'activity', data: m.data as unknown as TurnActivityData }
-    if (m.kind === 'error') return { id: m.id, role: 'meta', kind: 'error', text: m.text ?? '' }
-    return { id: m.id, role: 'meta', kind: 'system', text: m.text ?? '' }
-  }).filter((m): m is Message => m !== null)
+function toTranscriptMessage(m: Message): TranscriptMessage {
+  const base = { id: m.id, role: m.role === 'bond' ? 'bond' as const : m.role, createdAt: m.ts ? new Date(m.ts).toISOString() : undefined, updatedAt: nowIso() }
+  if (m.role === 'user') return { ...base, role: 'user', text: m.text, images: m.images, imageIds: m.imageIds }
+  if (m.role === 'bond') return { ...base, role: 'bond', text: m.text }
+  if (m.kind === 'activity') return { ...base, role: 'meta', kind: 'activity', data: m.data as unknown as Record<string, unknown> }
+  if (m.kind === 'tool') return { ...base, role: 'meta', kind: 'tool', text: m.summary ?? null, data: { name: m.name, summary: m.summary } }
+  if (m.kind === 'skill') return { ...base, role: 'meta', kind: 'skill', text: m.args ?? null, data: { name: m.name, args: m.args } }
+  if (m.kind === 'thinking') return { ...base, role: 'meta', kind: 'thinking', text: m.text, data: { durationSec: m.durationSec } }
+  if (m.kind === 'approval') return { ...base, role: 'meta', kind: 'approval', text: m.description ?? null, data: m as unknown as Record<string, unknown> }
+  if (m.kind === 'error') return { ...base, role: 'meta', kind: 'error', text: m.text }
+  return { ...base, role: 'meta', kind: 'system', text: m.text }
 }
 
-// Preserve chat state across HMR reloads so in-flight streaming
-// isn't lost when Vite hot-updates a module during a response.
+function fromTranscriptMessage(m: TranscriptMessage): Message | null {
+  const ts = m.createdAt ? Date.parse(m.createdAt) : undefined
+  if (m.role === 'user') return { id: m.id, role: 'user', text: m.text ?? '', images: m.images, imageIds: m.imageIds, ts }
+  if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text ?? '', streaming: false, ts }
+  if (m.kind === 'activity' && m.data) return { id: m.id, role: 'meta', kind: 'activity', data: m.data as unknown as TurnActivityData, ts }
+  if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: String(m.data?.name ?? ''), summary: m.text ?? String(m.data?.summary ?? ''), ts }
+  if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: String(m.data?.name ?? ''), args: m.text ?? String(m.data?.args ?? ''), ts }
+  if (m.kind === 'thinking') {
+    if (!m.text?.trim()) return null
+    return { id: m.id, role: 'meta', kind: 'thinking', text: m.text, durationSec: typeof m.data?.durationSec === 'number' ? m.data.durationSec : undefined, streaming: false, ts }
+  }
+  if (m.kind === 'approval' && m.data) return { ...(m.data as unknown as Extract<Message, { role: 'meta'; kind: 'approval' }>), id: m.id, ts }
+  if (m.kind === 'error') return { id: m.id, role: 'meta', kind: 'error', text: m.text ?? '', ts }
+  return { id: m.id, role: 'meta', kind: 'system', text: m.text ?? '', ts }
+}
+
 const _hmr = import.meta.hot?.data as
-  | { messages?: Message[]; busySessions?: string[]; sessionId?: string | null; backgroundMessages?: [string, Message[]][]; queuedMessages?: QueuedMessage[] }
+  | { messages?: Message[]; busy?: boolean; queuedMessages?: QueuedMessage[]; transportSessionId?: string | null; nextBeforeSeq?: number | null; hasLoaded?: boolean }
   | undefined
-const _hmrNeedsPersist = !!(_hmr?.messages?.length || _hmr?.backgroundMessages?.length)
 
 export function useChat(deps: ChatDeps = window.bond) {
-  /** Per-session context usage tracking */
-  const _contextUsageMap = new Map<string, { inputTokens: number; contextWindow: number; costUsd: number }>()
-  const contextUsage = ref<{ inputTokens: number; contextWindow: number; costUsd: number }>({ inputTokens: 0, contextWindow: 0, costUsd: 0 })
-
-  /** Messages for the current session (reactive, rendered by template) */
   const messages = ref<Message[]>(_hmr?.messages ?? [])
-  const busySessions = ref<Set<string>>(new Set(_hmr?.busySessions ?? []))
+  const busy = ref(!!_hmr?.busy)
   const queuedMessages = ref<QueuedMessage[]>(_hmr?.queuedMessages ?? [])
-  const currentSessionId = ref<string | null>(_hmr?.sessionId ?? null)
+  const currentSessionId = ref<string | null>(_hmr?.transportSessionId ?? null)
+  const nextBeforeSeq = ref<number | null>(_hmr?.nextBeforeSeq ?? null)
+  const hasLoadedTranscript = ref(!!_hmr?.hasLoaded)
+  const contextUsage = ref<{ inputTokens: number; contextWindow: number; costUsd: number }>({ inputTokens: 0, contextWindow: 0, costUsd: 0 })
+  const editMode = ref<EditMode>({ type: 'full' })
 
-  /** Messages for non-current sessions that are still receiving chunks */
-  const backgroundMessages = new Map<string, Message[]>(_hmr?.backgroundMessages ?? [])
-
-  const activeActivityIds = new Map<string, string>()
+  const activeActivityId = ref<string | null>(null)
   const activityRevision = ref(0)
+  const currentQueue = computed(() => queuedMessages.value)
+  const busySessionIds = computed(() => currentSessionId.value && busy.value ? new Set([currentSessionId.value]) : new Set<string>())
+  const queryEndCallbacks: Array<(sessionId: string) => void> = []
+
+  let unsub: (() => void) | undefined
+  let globalSubscribed = false
+  let persistTimer: ReturnType<typeof setTimeout> | null = null
+  let lastPersistPromise: Promise<void> = Promise.resolve()
 
   function _formatToolLabel(name: string, summary?: string): string {
     const filename = summary?.split('/').pop() || summary
-    const verbs: Record<string, string> = {
-      Read: 'Read', Edit: 'Edited', Write: 'Wrote',
-      Bash: 'Ran command', Glob: 'Searched files', Grep: 'Searched code',
-      WebSearch: 'Searched the web', WebFetch: 'Fetched page',
-    }
+    const verbs: Record<string, string> = { Read: 'Read', Edit: 'Edited', Write: 'Wrote', Bash: 'Ran command', Glob: 'Searched files', Grep: 'Searched code', WebSearch: 'Searched the web', WebFetch: 'Fetched page' }
     const verb = verbs[name] ?? name
     return filename && !['Bash', 'Glob', 'WebSearch'].includes(name) ? `${verb} ${filename}` : verb
   }
 
-  const busy = computed(() => {
-    const sid = currentSessionId.value
-    return sid ? busySessions.value.has(sid) : false
-  })
-
-  const currentQueue = computed(() =>
-    queuedMessages.value.filter(m => m.sessionId === currentSessionId.value)
-  )
-
   const pendingApprovals = computed(() => {
     activityRevision.value
     const found = new Map<string, Extract<TurnActivityEvent, { type: 'approval' }> & { activityMessageId: string; sessionId: string }>()
-    const sources: Array<[string, Message[]]> = [
-      ...(currentSessionId.value ? [[currentSessionId.value, messages.value] as [string, Message[]]] : []),
-      ...backgroundMessages.entries(),
-    ]
-    for (const [sessionId, sessionMessages] of sources) {
-      for (const m of sessionMessages) {
-        if (m.role !== 'meta' || m.kind !== 'activity') continue
-        for (const evt of m.data.events) {
-          if (evt.type === 'approval' && evt.status === 'pending') {
-            found.set(evt.requestId, { ...evt, activityMessageId: m.id, sessionId })
-          }
-        }
+    const sid = currentSessionId.value ?? 'continuous'
+    for (const m of messages.value) {
+      if (m.role !== 'meta' || m.kind !== 'activity') continue
+      for (const evt of m.data.events) {
+        if (evt.type === 'approval' && evt.status === 'pending') found.set(evt.requestId, { ...evt, activityMessageId: m.id, sessionId: sid })
       }
     }
     return [...found.values()]
   })
 
-  function markBusy(sessionId: string) {
-    busySessions.value = new Set([...busySessions.value, sessionId])
+  function addMessage(msg: Message) {
+    if (!msg.ts) msg.ts = Date.now()
+    messages.value.push(msg)
   }
 
-  function markIdle(sessionId: string) {
-    const next = new Set(busySessions.value)
-    next.delete(sessionId)
-    busySessions.value = next
+  function upsertMessage(msg: Message): Promise<void> {
+    return upsertMessages([msg])
   }
 
-  let unsub: (() => void) | undefined
-  const persistTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  const streamingStashTimers = new Map<string, ReturnType<typeof setInterval>>()
-  const queryEndCallbacks: Array<(sessionId: string) => void> = []
-
-  /** Tracks the latest persist promise per session so loadSession can await it */
-  const lastPersistPromise = new Map<string, Promise<void>>()
-
-  /** Periodically stash messages to localStorage during streaming.
-   *  Survives hard renderer crashes (OOM, GPU crash) where beforeunload never fires. */
-  function startStreamingStash(sessionId: string) {
-    stopStreamingStash(sessionId)
-    streamingStashTimers.set(sessionId, setInterval(() => {
-      const msgs = backgroundMessages.get(sessionId)
-        ?? (sessionId === currentSessionId.value ? messages.value : undefined)
-      if (!msgs?.length) return
+  function upsertMessages(msgs: Message[]): Promise<void> {
+    const payload = msgs.map(m => toTranscriptMessage({ ...m }))
+    const promise = (async () => {
       try {
-        const key = `bond:msg-backup:${sessionId}`
-        localStorage.setItem(key, JSON.stringify(toSessionMessages(msgs)))
-        localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
-      } catch { /* quota — best effort */ }
-    }, 15_000))
-  }
-
-  function stopStreamingStash(sessionId: string) {
-    const timer = streamingStashTimers.get(sessionId)
-    if (timer) {
-      clearInterval(timer)
-      streamingStashTimers.delete(sessionId)
-    }
-  }
-
-  function onQueryEnd(fn: (sessionId: string) => void) {
-    queryEndCallbacks.push(fn)
-  }
-
-  /** Get the message array for a session — current session uses the reactive ref, others use the background buffer */
-  function getMessagesFor(sessionId: string): Message[] {
-    if (sessionId === currentSessionId.value) return messages.value
-    let msgs = backgroundMessages.get(sessionId)
-    if (!msgs) {
-      msgs = []
-      backgroundMessages.set(sessionId, msgs)
-    }
-    return msgs
-  }
-
-  // Per-session throttled persist: saves at most every 2s during streaming
-  function schedulePersistFor(sessionId: string) {
-    if (persistTimers.has(sessionId)) return
-    persistTimers.set(sessionId, setTimeout(() => {
-      persistTimers.delete(sessionId)
-      persistMessagesFor(sessionId)
-    }, 2000))
-  }
-
-  function flushPersistFor(sessionId: string): Promise<void> {
-    const timer = persistTimers.get(sessionId)
-    if (timer) {
-      clearTimeout(timer)
-      persistTimers.delete(sessionId)
-    }
-    const promise = persistMessagesFor(sessionId)
-    lastPersistPromise.set(sessionId, promise)
+        const res = await deps.upsertTranscript(payload)
+        if (!res.ok) throw new Error('transcript.upsert failed')
+      } catch (err) {
+        console.warn('[bond] transcript upsert failed — data is in renderer memory only', err)
+        stashToLocalStorage()
+      }
+    })()
+    lastPersistPromise = promise
     return promise
   }
 
-  function addMessageTo(msgs: Message[], msg: Message) {
-    if (!msg.ts) msg.ts = Date.now()
-    msgs.push(msg)
+  function schedulePersist() {
+    if (persistTimer) return
+    persistTimer = setTimeout(() => {
+      persistTimer = null
+      persistMessages()
+    }, 2000)
   }
 
-  function existingActivityFor(sessionId: string, msgs = getMessagesFor(sessionId)): (Message & { role: 'meta'; kind: 'activity' }) | undefined {
-    const activeId = activeActivityIds.get(sessionId)
-    const byId = activeId ? msgs.find(m => m.id === activeId && m.role === 'meta' && m.kind === 'activity') : undefined
-    if (byId && byId.role === 'meta' && byId.kind === 'activity') return byId
+  async function persistMessages() {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    if (!messages.value.length) return
+    await upsertMessages(messages.value)
+  }
 
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i]
+  function existingActivity(): (Message & { role: 'meta'; kind: 'activity' }) | undefined {
+    const byId = activeActivityId.value ? messages.value.find(m => m.id === activeActivityId.value && m.role === 'meta' && m.kind === 'activity') : undefined
+    if (byId && byId.role === 'meta' && byId.kind === 'activity') return byId
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const m = messages.value[i]
       if (m.role === 'meta' && m.kind === 'activity' && ['working', 'responding', 'awaiting_approval'].includes(m.data.status)) {
-        activeActivityIds.set(sessionId, m.id)
+        activeActivityId.value = m.id
         return m
       }
     }
   }
 
-  function activityFor(sessionId: string, msgs = getMessagesFor(sessionId)): Message & { role: 'meta'; kind: 'activity' } {
-    const existing = existingActivityFor(sessionId, msgs)
+  function activityFor(): Message & { role: 'meta'; kind: 'activity' } {
+    const existing = existingActivity()
     if (existing) return existing
-
     const data: TurnActivityData = { turnId: uid(), status: 'working', startedAt: Date.now(), events: [] }
     const msg: Message & { role: 'meta'; kind: 'activity' } = { id: uid(), role: 'meta', kind: 'activity', data, ts: data.startedAt }
-    addMessageTo(msgs, msg)
-    activeActivityIds.set(sessionId, msg.id)
+    addMessage(msg)
+    activeActivityId.value = msg.id
     return msg
   }
 
-  function updateActivity(sessionId: string, updater: (data: TurnActivityData) => void) {
-    const msg = activityFor(sessionId)
+  function updateActivity(updater: (data: TurnActivityData) => void) {
+    const msg = activityFor()
     updater(msg.data)
     activityRevision.value++
+    schedulePersist()
   }
 
   function finalizeOpenActivityEvents(data: TurnActivityData, end = Date.now()) {
-    for (const evt of data.events) {
-      if ((evt.type === 'thinking' || evt.type === 'tool' || evt.type === 'responding') && evt.endTs == null) evt.endTs = end
-    }
+    for (const evt of data.events) if ((evt.type === 'thinking' || evt.type === 'tool' || evt.type === 'responding') && evt.endTs == null) evt.endTs = end
   }
 
   function cancelPendingApprovals(data: TurnActivityData, end = Date.now()) {
-    for (const evt of data.events) {
-      if (evt.type === 'approval' && evt.status === 'pending') {
-        evt.status = 'cancelled'
-        evt.endTs = end
-      }
-    }
+    for (const evt of data.events) if (evt.type === 'approval' && evt.status === 'pending') { evt.status = 'cancelled'; evt.endTs = end }
   }
 
   function lastActivityEvent(data: TurnActivityData): TurnActivityEvent | undefined {
     return data.events[data.events.length - 1]
   }
 
-  function endStreamingOn(msgs: Message[]) {
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const msg = msgs[i]
-      if (msg.role === 'bond' && msg.streaming) {
-        msg.streaming = false
-        return
-      }
+  function endStreaming() {
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const msg = messages.value[i]
+      if (msg.role === 'bond' && msg.streaming) { msg.streaming = false; return }
     }
   }
 
   function handleChunk(chunk: TaggedChunk) {
-    // Per-session busy tracking — always processed regardless of active session
+    if (currentSessionId.value && chunk.sessionId && chunk.sessionId !== currentSessionId.value) return
+
     if (chunk.kind === 'query_start') {
-      markBusy(chunk.sessionId)
-      updateActivity(chunk.sessionId, data => { data.status = 'working'; data.startedAt ||= Date.now() })
-      startStreamingStash(chunk.sessionId)
+      busy.value = true
+      updateActivity(data => { data.status = 'working'; data.startedAt ||= Date.now() })
       return
     }
+
     if (chunk.kind === 'query_end') {
-      markIdle(chunk.sessionId)
-      stopStreamingStash(chunk.sessionId)
+      busy.value = false
       const endedAt = Date.now()
-      const activityMsg = existingActivityFor(chunk.sessionId)
+      const activityMsg = existingActivity()
       if (activityMsg) {
         finalizeOpenActivityEvents(activityMsg.data, endedAt)
         cancelPendingApprovals(activityMsg.data, endedAt)
@@ -292,57 +222,38 @@ export function useChat(deps: ChatDeps = window.bond) {
         if (activityMsg.data.status === 'failed') activityMsg.data.expanded = true
         activityRevision.value++
       }
-      activeActivityIds.delete(chunk.sessionId)
-      queryEndCallbacks.forEach(fn => fn(chunk.sessionId))
-      const msgs = getMessagesFor(chunk.sessionId)
-      endStreamingOn(msgs)
-      // Persist then handle queue. The promise is tracked in lastPersistPromise
-      // so loadSession can await it before reading from DB.
-      // Background buffer is NOT deleted here — loadSession is the sole consumer.
+      activeActivityId.value = null
+      endStreaming()
+      const sid = currentSessionId.value || chunk.sessionId || 'continuous'
       const endPromise = (async () => {
-        await flushPersistFor(chunk.sessionId)
-        // Auto-send next queued message for this session
-        if (chunk.sessionId === currentSessionId.value) {
-          const nextIdx = queuedMessages.value.findIndex(m => m.sessionId === chunk.sessionId)
-          if (nextIdx !== -1) {
-            const next = queuedMessages.value[nextIdx]
-            queuedMessages.value = queuedMessages.value.filter((_, i) => i !== nextIdx)
-            submit(next.text, next.images)
-          }
+        await persistMessages()
+        const next = queuedMessages.value[0]
+        if (next) {
+          queuedMessages.value = queuedMessages.value.slice(1)
+          submit(next.text, next.images)
         }
       })()
-      lastPersistPromise.set(chunk.sessionId, endPromise)
+      lastPersistPromise = endPromise
+      queryEndCallbacks.forEach(fn => fn(sid))
       return
     }
 
-    // Route to the correct session's message array
-    const sid = chunk.sessionId
-    const msgs = getMessagesFor(sid)
-
-    // Thinking deltas accumulate into the activity timeline, not a separate transcript message.
     if (chunk.kind === 'thinking_text') {
-      updateActivity(sid, data => {
+      updateActivity(data => {
         const last = lastActivityEvent(data)
-        if (last?.type === 'thinking' && last.endTs == null) {
-          last.text += chunk.text
-        } else {
-          data.events.push({ id: uid(), type: 'thinking', label: 'Thinking', ts: Date.now(), text: chunk.text })
-        }
+        if (last?.type === 'thinking' && last.endTs == null) last.text += chunk.text
+        else data.events.push({ id: uid(), type: 'thinking', label: 'Thinking', ts: Date.now(), text: chunk.text })
         data.status = 'working'
       })
       return
     }
 
     switch (chunk.kind) {
-      case 'usage_update': {
-        const usage = { inputTokens: chunk.inputTokens, contextWindow: chunk.contextWindow, costUsd: chunk.costUsd }
-        _contextUsageMap.set(sid, usage)
-        if (sid === currentSessionId.value) contextUsage.value = usage
+      case 'usage_update':
+        contextUsage.value = { inputTokens: chunk.inputTokens, contextWindow: chunk.contextWindow, costUsd: chunk.costUsd }
         return
-      }
-
       case 'assistant_text': {
-        updateActivity(sid, data => {
+        updateActivity(data => {
           const last = lastActivityEvent(data)
           if (last?.type !== 'responding' || last.endTs != null) {
             finalizeOpenActivityEvents(data)
@@ -350,345 +261,175 @@ export function useChat(deps: ChatDeps = window.bond) {
           }
           data.status = 'responding'
         })
-        const last = msgs[msgs.length - 1]
-        if (last?.role === 'bond' && last.streaming) {
-          last.text += chunk.text
-        } else {
-          msgs.push({ id: uid(), role: 'bond', text: chunk.text, streaming: true } as Message)
-        }
-        schedulePersistFor(sid)
+        const last = messages.value[messages.value.length - 1]
+        if (last?.role === 'bond' && last.streaming) last.text += chunk.text
+        else addMessage({ id: chunk.assistantMessageId ?? uid(), role: 'bond', text: chunk.text, streaming: true })
+        schedulePersist()
         break
       }
-
       case 'assistant_tool':
-        updateActivity(sid, data => {
-          finalizeOpenActivityEvents(data)
-          data.status = 'working'
-          data.events.push({ id: uid(), type: 'tool', label: _formatToolLabel(chunk.name, chunk.summary), ts: Date.now(), toolUseId: chunk.toolUseId, toolName: chunk.name, input: chunk.input })
-        })
-        schedulePersistFor(sid)
+        updateActivity(data => { finalizeOpenActivityEvents(data); data.status = 'working'; data.events.push({ id: uid(), type: 'tool', label: _formatToolLabel(chunk.name, chunk.summary), ts: Date.now(), toolUseId: chunk.toolUseId, toolName: chunk.name, input: chunk.input }) })
         break
-
-      case 'tool_result': {
-        updateActivity(sid, data => {
+      case 'tool_result':
+        updateActivity(data => {
           const now = Date.now()
-          const ev = chunk.toolUseId
-            ? [...data.events].reverse().find(evt => evt.type === 'tool' && evt.toolUseId === chunk.toolUseId)
-            : [...data.events].reverse().find(evt => evt.type === 'tool' && !evt.output)
-          if (ev?.type === 'tool') {
-            ev.output = chunk.output
-            ev.endTs = now
-            ev.failed = chunk.isError
-            if (chunk.isError) data.expanded = true
-          }
+          const ev = chunk.toolUseId ? [...data.events].reverse().find(evt => evt.type === 'tool' && evt.toolUseId === chunk.toolUseId) : [...data.events].reverse().find(evt => evt.type === 'tool' && !evt.output)
+          if (ev?.type === 'tool') { ev.output = chunk.output; ev.endTs = now; ev.failed = chunk.isError; if (chunk.isError) data.expanded = true }
         })
-        schedulePersistFor(sid)
         break
-      }
-
       case 'tool_approval':
-        updateActivity(sid, data => {
-          const existing = data.events.find(evt => evt.type === 'approval' && evt.requestId === chunk.requestId)
-          if (existing) return
+        updateActivity(data => {
+          if (data.events.some(evt => evt.type === 'approval' && evt.requestId === chunk.requestId)) return
           finalizeOpenActivityEvents(data)
           data.status = 'awaiting_approval'
           data.expanded = true
           data.events.push({ id: uid(), type: 'approval', label: `Approval requested: ${chunk.toolName}`, ts: Date.now(), requestId: chunk.requestId, toolName: chunk.toolName, input: chunk.input, title: chunk.title, description: chunk.description, status: 'pending' })
         })
-        schedulePersistFor(sid)
         break
-
-      case 'result':
-        endStreamingOn(msgs)
+      case 'result': {
+        endStreaming()
         if (chunk.errors?.length) {
           const text = chunk.errors.join('; ')
-          updateActivity(sid, data => {
-            data.status = 'failed'
-            data.expanded = true
-            data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text })
-          })
-          addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text })
+          updateActivity(data => { data.status = 'failed'; data.expanded = true; data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text }) })
+          addMessage({ id: uid(), role: 'meta', kind: 'error', text })
+        } else if (chunk.result) {
+          const last = messages.value[messages.value.length - 1]
+          if (!last || last.role !== 'bond') addMessage({ id: uid(), role: 'bond', text: chunk.result, streaming: false })
         }
-        {
-          const last = msgs[msgs.length - 1]
-          if (last?.role === 'bond' && last.streaming) {
-            last.streaming = false
-          } else if (chunk.result && (!last || last.role !== 'bond')) {
-            // Fallback: if no streaming message was created, use the result text
-            addMessageTo(msgs, { id: uid(), role: 'bond', text: chunk.result, streaming: false })
-          }
-        }
-        // Auto-save after each completed turn
-        flushPersistFor(sid)
+        persistMessages()
         break
-
+      }
       case 'raw_error':
-        endStreamingOn(msgs)
-        updateActivity(sid, data => {
-          data.status = 'failed'
-          data.expanded = true
-          data.endedAt = Date.now()
-          cancelPendingApprovals(data, data.endedAt)
-          data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: chunk.message })
-        })
-        addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text: chunk.message })
-        flushPersistFor(sid)
+        endStreaming()
+        updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); cancelPendingApprovals(data, data.endedAt); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: chunk.message }) })
+        addMessage({ id: uid(), role: 'meta', kind: 'error', text: chunk.message })
+        persistMessages()
         break
-
       case 'system':
-        addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'system', text: chunk.text ?? chunk.subtype })
+        addMessage({ id: uid(), role: 'meta', kind: 'system', text: chunk.text ?? chunk.subtype })
+        schedulePersist()
         break
     }
   }
 
-  function persistMessagesFor(sessionId: string): Promise<void> {
-    // Check backgroundMessages first — if a session was stashed during a switch,
-    // its data lives there even if currentSessionId has already changed.
-    const msgs = backgroundMessages.get(sessionId)
-      ?? (sessionId === currentSessionId.value ? messages.value : undefined)
-    if (!msgs || !msgs.length) return Promise.resolve()
-
-    // Snapshot messages immediately to avoid mutation races with ongoing streaming
-    const data = toSessionMessages(msgs.map(m => ({ ...m })))
-
-    const promise = (async () => {
-      let saved = false
-      try {
-        saved = await deps.saveMessages(sessionId, data)
-      } catch { /* network/IPC failure */ }
-
-      // Retry once on failure
-      if (!saved) {
-        try {
-          saved = await deps.saveMessages(sessionId, data)
-        } catch { /* still failing */ }
-      }
-
-      if (!saved) {
-        console.warn(`[bond] persistMessagesFor failed for session ${sessionId} — data is in memory only`)
-        // Stash to localStorage as a safety net
-        try {
-          const key = `bond:msg-backup:${sessionId}`
-          localStorage.setItem(key, JSON.stringify(data))
-          localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
-        } catch { /* quota exceeded — best effort */ }
-      }
-    })()
-
-    lastPersistPromise.set(sessionId, promise)
-    return promise
+  async function loadTranscript(options: { beforeSeq?: number; limit?: number; append?: boolean } = {}) {
+    await lastPersistPromise.catch(() => {})
+    const page = await deps.listTranscript({ beforeSeq: options.beforeSeq, limit: options.limit ?? TRANSCRIPT_PAGE_SIZE })
+    const loaded = page.messages.map(fromTranscriptMessage).filter((m): m is Message => m !== null)
+    await resolveImages(loaded)
+    messages.value = options.append ? [...loaded, ...messages.value] : loaded
+    nextBeforeSeq.value = page.nextBeforeSeq
+    hasLoadedTranscript.value = true
+    return page
   }
 
-  async function persistMessages() {
-    if (currentSessionId.value) {
-      await persistMessagesFor(currentSessionId.value)
-    }
+  async function loadOlder() {
+    if (nextBeforeSeq.value == null) return null
+    return loadTranscript({ beforeSeq: nextBeforeSeq.value, append: true })
   }
 
-  // Serialization gate for loadSession — prevents overlapping async calls from
-  // racing and losing intermediate session data (e.g. rapid A→B→C clicks).
-  let _loadLock: Promise<void> | null = null
-  let _pendingLoadId: string | null = null
+  async function resolveImages(target: Message[]) {
+    const allIds = target.flatMap(m => m.role === 'user' ? (m.imageIds ?? []) : [])
+    if (!allIds.length) return
+    const loaded = await deps.getImages(allIds)
+    const map = new Map<string, AttachedImage>()
+    allIds.forEach((id, i) => { if (loaded[i]) map.set(id, loaded[i]!) })
+    for (const msg of target) if (msg.role === 'user' && msg.imageIds?.length) msg.images = msg.imageIds.map(id => map.get(id)!).filter(Boolean)
+  }
+
+  async function ensureGlobalSubscription() {
+    if (globalSubscribed) return
+    await deps.subscribe?.()
+    globalSubscribed = true
+  }
+
+  async function init() {
+    await ensureGlobalSubscription()
+    if (!hasLoadedTranscript.value) await loadTranscript()
+  }
 
   async function loadSession(sessionId: string) {
-    if (_loadLock) {
-      // Another loadSession is in flight. Record what we actually want and wait.
-      _pendingLoadId = sessionId
-      await _loadLock
-      // If something newer came in while we waited, bail — that one will run.
-      if (_pendingLoadId !== sessionId) return
-    }
-
-    let unlock!: () => void
-    _loadLock = new Promise(r => { unlock = r })
-    _pendingLoadId = null
-
-    try {
-      await _loadSessionCore(sessionId)
-    } finally {
-      _loadLock = null
-      unlock()
-
-      // If a newer session was requested while we ran, load it now.
-      if (_pendingLoadId) {
-        const next = _pendingLoadId
-        _pendingLoadId = null
-        loadSession(next)
-      }
-    }
-  }
-
-  async function _loadSessionCore(sessionId: string) {
-    const oldSid = currentSessionId.value
-    if (oldSid) {
-      await flushPersistFor(oldSid)
-      // Always stash current messages when switching away — not just for busy sessions.
-      // Previously this was gated on busySessions.has(oldSid), but query_end can clear
-      // the busy flag during the flushPersistFor await above, causing messages to be
-      // silently dropped when messages.value is overwritten with the new session's data.
-      // Deep-copy message objects to prevent mutation races with ongoing streaming.
-      if (messages.value.length > 0) {
-        backgroundMessages.set(oldSid, messages.value.map(m => ({ ...m })))
-      }
-      // Unsubscribe from the old session if it's no longer busy
-      if (!busySessions.value.has(oldSid)) {
-        deps.unsubscribe?.(oldSid).catch(() => {})
-      }
-    }
-
     currentSessionId.value = sessionId
     deps.subscribe?.(sessionId).catch(() => {})
-    contextUsage.value = _contextUsageMap.get(sessionId) ?? { inputTokens: 0, contextWindow: 0, costUsd: 0 }
-
-    // Restore from background buffer if available (preserves in-flight responses)
-    const bg = backgroundMessages.get(sessionId)
-    if (bg) {
-      messages.value = bg
-      backgroundMessages.delete(sessionId)
-      return
-    }
-
-    // Await any pending persist for this session before reading from DB.
-    // This prevents the race where query_end's flush hasn't completed yet,
-    // causing us to read stale/partial data from the database.
-    const pending = lastPersistPromise.get(sessionId)
-    if (pending) {
-      await pending
-      lastPersistPromise.delete(sessionId)
-    }
-
-    // Re-check background buffer — it may have been populated while we awaited the persist
-    // (e.g. chunks arrived between our first check and the persist completing)
-    const bgAfterAwait = backgroundMessages.get(sessionId)
-    if (bgAfterAwait) {
-      messages.value = bgAfterAwait
-      backgroundMessages.delete(sessionId)
-      return
-    }
-
-    // Load from DB
-    const saved = await deps.getMessages(sessionId)
-    const msgs = fromSessionMessages(saved)
-
-    // Resolve image IDs to displayable data
-    const allIds = saved.flatMap(m => m.imageIds ?? [])
-    if (allIds.length) {
-      const loaded = await deps.getImages(allIds)
-      const map = new Map<string, AttachedImage>()
-      allIds.forEach((id, i) => { if (loaded[i]) map.set(id, loaded[i]!) })
-      for (const msg of msgs) {
-        if (msg.role === 'user' && msg.imageIds?.length) {
-          msg.images = msg.imageIds.map(id => map.get(id)!).filter(Boolean)
-        }
-      }
-    }
-
-    messages.value = msgs
-
-    // Clean up stale localStorage backup after successful DB load
-    try { localStorage.removeItem(`bond:msg-backup:${sessionId}`) } catch {}
+    if (!hasLoadedTranscript.value) await loadTranscript()
   }
 
   function clearMessages() {
     messages.value = []
-    currentSessionId.value = null
+    nextBeforeSeq.value = null
+    hasLoadedTranscript.value = false
   }
 
   async function submit(text: string, images?: AttachedImage[]) {
     const trimmed = text.trim()
-    const sid = currentSessionId.value
-    if ((!trimmed && !images?.length) || !sid) return
+    if (!trimmed && !images?.length) return
+    await ensureGlobalSubscription()
 
-    // If busy, queue the message for later
-    if (busySessions.value.has(sid)) {
-      queuedMessages.value = [...queuedMessages.value, {
-        id: uid(),
-        sessionId: sid,
-        text: trimmed,
-        images: images?.length ? images : undefined
-      }]
+    if (busy.value) {
+      queuedMessages.value = [...queuedMessages.value, { id: uid(), text: trimmed, images: images?.length ? images : undefined }]
       return
     }
 
+    const turnId = uid()
     const userMessageId = uid()
-    addMessageTo(messages.value, { id: userMessageId, role: 'user', text: trimmed, images: images?.length ? images : undefined })
-    const activityData: TurnActivityData = { turnId: uid(), userMessageId, status: 'working', startedAt: Date.now(), events: [] }
-    const activityMsg: Message & { role: 'meta'; kind: 'activity' } = { id: uid(), role: 'meta', kind: 'activity', data: activityData, ts: activityData.startedAt }
-    addMessageTo(messages.value, activityMsg)
-    activeActivityIds.set(sid, activityMsg.id)
+    const assistantMessageId = uid()
+    const activityMessageId = uid()
+    addMessage({ id: userMessageId, role: 'user', text: trimmed, images: images?.length ? images : undefined })
+    const activityData: TurnActivityData = { turnId, userMessageId, assistantMessageId, status: 'working', startedAt: Date.now(), events: [] }
+    const activityMsg: Message & { role: 'meta'; kind: 'activity' } = { id: activityMessageId, role: 'meta', kind: 'activity', data: activityData, ts: activityData.startedAt }
+    addMessage(activityMsg)
+    activeActivityId.value = activityMsg.id
 
-    // Detect skill invocation: /skill-name [args]
     const skillMatch = trimmed.match(/^\/([a-z0-9-]+)(?:\s+(.*))?$/s)
-    if (skillMatch) {
-      addMessageTo(messages.value, { id: uid(), role: 'meta', kind: 'skill', name: skillMatch[1], args: skillMatch[2] })
-    }
-    markBusy(sid)
+    if (skillMatch) addMessage({ id: uid(), role: 'meta', kind: 'skill', name: skillMatch[1], args: skillMatch[2] })
+    busy.value = true
+    await persistMessages()
 
-    // Persist user message immediately — ensures it lands in DB before any crash
-    await persistMessagesFor(sid)
-
-    // Send returns immediately now (fire-and-forget). Busy state is cleared
-    // by the query_end chunk from the daemon, not here.
     try {
-      const res = await deps.send(trimmed, sid, images)
+      const input: BondSendInput = { text: trimmed, images, turnId, userMessageId, assistantMessageId, activityMessageId, editMode: editMode.value }
+      const res = await deps.send(input)
       if (res.ok && res.imageIds?.length) {
-        // User might have switched sessions during send — target the right array
-        const msgs = getMessagesFor(sid)
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i]
-          if (m.role === 'user' && m.images?.length) {
-            m.imageIds = res.imageIds
-            break
-          }
+        for (let i = messages.value.length - 1; i >= 0; i--) {
+          const m = messages.value[i]
+          if (m.role === 'user' && m.id === userMessageId) { m.imageIds = res.imageIds; break }
         }
+        await upsertMessage(messages.value.find(m => m.id === userMessageId)!)
       }
       if (!res.ok && res.error) {
-        const msgs = getMessagesFor(sid)
-        addMessageTo(msgs, { id: uid(), role: 'meta', kind: 'error', text: res.error })
-        markIdle(sid)
-        updateActivity(sid, data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: res.error! }) })
-        activeActivityIds.delete(sid)
-        endStreamingOn(msgs)
-        await persistMessagesFor(sid)
+        addMessage({ id: uid(), role: 'meta', kind: 'error', text: res.error })
+        busy.value = false
+        updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: res.error! }) })
+        activeActivityId.value = null
+        endStreaming()
+        await persistMessages()
       }
     } catch {
-      const msgs = getMessagesFor(sid)
-      markIdle(sid)
-      updateActivity(sid, data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: 'Send failed' }) })
-      activeActivityIds.delete(sid)
-      endStreamingOn(msgs)
-      await persistMessagesFor(sid)
+      busy.value = false
+      updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: 'Send failed' }) })
+      activeActivityId.value = null
+      endStreaming()
+      await persistMessages()
     }
   }
 
   async function respondToApproval(requestId: string, approved: boolean) {
-    let match: { sessionId: string; message: Message & { role: 'meta'; kind: 'activity' }; event: Extract<TurnActivityEvent, { type: 'approval' }> } | undefined
-    const sources: Array<[string, Message[]]> = [
-      ...(currentSessionId.value ? [[currentSessionId.value, messages.value] as [string, Message[]]] : []),
-      ...backgroundMessages.entries(),
-    ]
-    for (const [sessionId, sessionMessages] of sources) {
-      for (const m of sessionMessages) {
-        if (m.role !== 'meta' || m.kind !== 'activity') continue
-        const evt = m.data.events.find((e): e is Extract<TurnActivityEvent, { type: 'approval' }> => e.type === 'approval' && e.requestId === requestId)
-        if (evt) match = { sessionId, message: m, event: evt }
-      }
+    let match: { message: Message & { role: 'meta'; kind: 'activity' }; event: Extract<TurnActivityEvent, { type: 'approval' }> } | undefined
+    for (const m of messages.value) {
+      if (m.role !== 'meta' || m.kind !== 'activity') continue
+      const evt = m.data.events.find((e): e is Extract<TurnActivityEvent, { type: 'approval' }> => e.type === 'approval' && e.requestId === requestId)
+      if (evt) match = { message: m, event: evt }
     }
     if (!match) return
-
     try {
       const result = await deps.respondToApproval(requestId, approved)
       if (!result.ok) return
-    } catch {
-      return
-    }
-
+    } catch { return }
     match.event.status = approved ? 'approved' : 'denied'
     match.event.endTs = Date.now()
     const stillPending = match.message.data.events.some(e => e.type === 'approval' && e.status === 'pending')
     if (match.message.data.status === 'awaiting_approval' && !stillPending) match.message.data.status = 'working'
     activityRevision.value++
-    persistMessagesFor(match.sessionId)
+    upsertMessage(match.message)
   }
 
   function removeQueuedMessage(id: string) {
@@ -696,165 +437,84 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   function cancel() {
-    const sid = currentSessionId.value
-    if (sid) {
-      // Clear queued messages for this session
-      queuedMessages.value = queuedMessages.value.filter(m => m.sessionId !== sid)
-      markIdle(sid)
-      updateActivity(sid, data => {
-        const endedAt = Date.now()
-        finalizeOpenActivityEvents(data, endedAt)
-        cancelPendingApprovals(data, endedAt)
-        data.status = 'cancelled'
-        data.endedAt = endedAt
-      })
-      activeActivityIds.delete(sid)
+    queuedMessages.value = []
+    if (busy.value) {
+      busy.value = false
+      updateActivity(data => { const endedAt = Date.now(); finalizeOpenActivityEvents(data, endedAt); cancelPendingApprovals(data, endedAt); data.status = 'cancelled'; data.endedAt = endedAt })
+      activeActivityId.value = null
+      endStreaming()
+      persistMessages()
     }
-    deps.cancel(sid ?? undefined).catch(() => {})
-    if (sid) {
-      endStreamingOn(messages.value)
-      flushPersistFor(sid)
-    }
+    deps.cancel(currentSessionId.value ?? undefined).catch(() => {})
   }
 
-  /** Re-persist all in-memory messages after daemon reconnection.
-   *  Covers the gap where streaming data was in memory but couldn't be saved
-   *  because the daemon was down. */
-  async function repersistAll() {
-    if (currentSessionId.value && messages.value.length) {
-      await persistMessagesFor(currentSessionId.value).catch(() => {})
-    }
-    for (const [sessionId, msgs] of backgroundMessages) {
-      if (msgs.length) {
-        await deps.saveMessages(sessionId, toSessionMessages(msgs)).catch(() => {})
-      }
-    }
-  }
+  function onQueryEnd(fn: (sessionId: string) => void) { queryEndCallbacks.push(fn) }
 
-  /** Stash all in-memory messages to localStorage as an emergency backup.
-   *  Called on beforeunload and connection loss. */
+  async function repersistAll() { await persistMessages() }
+
   function stashToLocalStorage() {
-    const ts = String(Date.now())
-    // Stash current session
-    const sid = currentSessionId.value
-    if (sid && messages.value.length) {
-      try {
-        const key = `bond:msg-backup:${sid}`
-        localStorage.setItem(key, JSON.stringify(toSessionMessages(messages.value)))
-        localStorage.setItem('bond:msg-backup-ts', ts)
-      } catch { /* quota exceeded — best effort */ }
-    }
-    // Stash background sessions too
-    for (const [bgSid, msgs] of backgroundMessages) {
-      if (!msgs.length) continue
-      try {
-        const key = `bond:msg-backup:${bgSid}`
-        localStorage.setItem(key, JSON.stringify(toSessionMessages(msgs)))
-      } catch { /* quota exceeded — stop trying */ break }
-    }
+    if (!messages.value.length) return
+    try {
+      localStorage.setItem('bond:transcript-backup', JSON.stringify(messages.value.map(toTranscriptMessage)))
+      localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
+    } catch { /* best effort */ }
   }
 
-  /** Restore messages from localStorage backup if DB has fewer or less content.
-   *  Compares both message count and total text length to catch truncated responses.
-   *  Returns true if backup was applied. */
-  async function restoreFromBackupIfNeeded(sessionId: string): Promise<boolean> {
+  async function restoreFromBackupIfNeeded(): Promise<boolean> {
     try {
-      const key = `bond:msg-backup:${sessionId}`
-      const raw = localStorage.getItem(key)
+      const raw = localStorage.getItem('bond:transcript-backup')
       if (!raw) return false
-
-      const backed: SessionMessage[] = JSON.parse(raw)
-      const dbMsgs = await deps.getMessages(sessionId)
-
-      const textLen = (msgs: SessionMessage[]) =>
-        msgs.reduce((sum, m) => sum + (m.text?.length ?? 0), 0)
-
-      // Prefer backup if it has more messages OR significantly more text content
-      // (catches truncated responses where message count is the same)
-      if (backed.length > dbMsgs.length || textLen(backed) > textLen(dbMsgs) + 50) {
-        await deps.saveMessages(sessionId, backed)
-        localStorage.removeItem(key)
+      const backed = JSON.parse(raw) as TranscriptMessage[]
+      const dbPage = await deps.listTranscript({ limit: Math.max(backed.length, TRANSCRIPT_PAGE_SIZE) })
+      const textLen = (msgs: TranscriptMessage[]) => msgs.reduce((sum, m) => sum + (m.text?.length ?? 0), 0)
+      if (backed.length > dbPage.messages.length || textLen(backed) > textLen(dbPage.messages) + 50) {
+        await deps.upsertTranscript(backed)
+        localStorage.removeItem('bond:transcript-backup')
         return true
       }
-
-      localStorage.removeItem(key)
+      localStorage.removeItem('bond:transcript-backup')
     } catch { /* corrupt backup — ignore */ }
     return false
   }
 
-  function subscribe() {
-    unsub = deps.onChunk(handleChunk)
-  }
+  function setEditMode(mode: EditMode) { editMode.value = mode }
 
-  function unsubscribe() {
-    unsub?.()
-  }
+  function subscribe() { unsub = deps.onChunk(handleChunk) }
+  function unsubscribe() { unsub?.() }
 
-  // Stash reactive state before HMR disposes this module
   if (import.meta.hot) {
     import.meta.hot.dispose((data) => {
-      // Flush all pending throttled persists before stashing state
-      for (const [sessionId, timer] of persistTimers) {
-        clearTimeout(timer)
-        persistMessagesFor(sessionId) // fire-and-forget (dispose is sync)
-      }
-      persistTimers.clear()
-
-      // Stop all streaming stash intervals
-      for (const timer of streamingStashTimers.values()) clearInterval(timer)
-      streamingStashTimers.clear()
-
-      // Stash to localStorage as a synchronous safety net — the async persist
-      // above may not complete before the module unloads.
-      try {
-        const sid = currentSessionId.value
-        if (sid && messages.value.length) {
-          localStorage.setItem(`bond:msg-backup:${sid}`, JSON.stringify(toSessionMessages(messages.value)))
-          localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
-        }
-        for (const [sessionId, msgs] of backgroundMessages) {
-          if (msgs.length) {
-            localStorage.setItem(`bond:msg-backup:${sessionId}`, JSON.stringify(toSessionMessages(msgs)))
-          }
-        }
-      } catch { /* quota — best effort */ }
-
+      if (persistTimer) clearTimeout(persistTimer)
+      persistMessages()
+      stashToLocalStorage()
       data.messages = messages.value
-      data.busySessions = [...busySessions.value]
-      data.sessionId = currentSessionId.value
-      data.backgroundMessages = [...backgroundMessages.entries()]
+      data.busy = busy.value
       data.queuedMessages = queuedMessages.value
+      data.transportSessionId = currentSessionId.value
+      data.nextBeforeSeq = nextBeforeSeq.value
+      data.hasLoaded = hasLoadedTranscript.value
     })
-  }
-
-  // After HMR restore, persist all stashed sessions to ensure DB is in sync.
-  // These are awaited to ensure the DB is up to date before new operations.
-  if (_hmrNeedsPersist) {
-    ;(async () => {
-      if (currentSessionId.value && messages.value.length) {
-        await persistMessagesFor(currentSessionId.value)
-      }
-      for (const [sessionId, msgs] of backgroundMessages) {
-        if (msgs.length) {
-          await deps.saveMessages(sessionId, toSessionMessages(msgs))
-        }
-      }
-    })()
   }
 
   return {
     messages,
     busy,
-    busySessionIds: busySessions,
+    busySessionIds,
     pendingApprovals,
     contextUsage,
+    editMode,
     currentSessionId,
     queuedMessages,
     currentQueue,
+    nextBeforeSeq,
+    init,
+    loadTranscript,
+    loadOlder,
     submit,
     cancel,
     removeQueuedMessage,
     respondToApproval,
+    setEditMode,
     subscribe,
     unsubscribe,
     loadSession,

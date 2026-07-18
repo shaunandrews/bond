@@ -2,13 +2,12 @@ import { BrowserWindow, globalShortcut, ipcMain, screen, powerMonitor } from 'el
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { BondClient } from '../shared/client'
-import { registerWindow, registerSessionWindow, unregisterSession } from './window-router'
+import { registerWindow } from './window-router'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 let quickChatWindow: BrowserWindow | null = null
 let client: BondClient | null = null
-let currentSessionId: string | null = null
 let lastToggleTime = 0
 let dismissing = false
 
@@ -69,10 +68,6 @@ function createWindow(): BrowserWindow {
 
   win.on('closed', () => {
     quickChatWindow = null
-    if (currentSessionId) {
-      unregisterSession(currentSessionId)
-      currentSessionId = null
-    }
   })
 
   // Load the same index.html with ?mode=quick-chat
@@ -111,41 +106,36 @@ async function summon(): Promise<void> {
 
   repositionWindow(quickChatWindow)
 
-  // Create a new session
   try {
-    const session = await client.createSession()
-    currentSessionId = session.id
-    registerSessionWindow(session.id, quickChatWindow)
+    await client.subscribe()
+  } catch { /* best effort: renderer init will also subscribe globally */ }
 
-    // Fetch sense apps for the context indicator
-    let senseApps: string[] = []
-    try {
-      const senseData = await client.senseNow() as { apps?: string[] } | null
-      if (senseData && Array.isArray(senseData.apps)) {
-        senseApps = senseData.apps
-      }
-    } catch { /* sense may be disabled */ }
+  // Fetch sense apps for the context indicator
+  let senseApps: string[] = []
+  try {
+    const senseData = await client.senseNow() as { apps?: string[] } | null
+    if (senseData && Array.isArray(senseData.apps)) {
+      senseApps = senseData.apps
+    }
+  } catch { /* sense may be disabled */ }
 
-    // Wait for window to be ready, then send init data
-    const win = quickChatWindow
-    if (win && !win.isDestroyed()) {
-      // If the window is already loaded, send immediately. Otherwise wait for ready-to-show.
-      const sendInit = () => {
-        if (!win.isDestroyed()) {
-          win.webContents.send('bond:quickChatInit', { sessionId: session.id, senseApps })
-          win.show()
-          win.focus()
-        }
-      }
-
-      if (win.webContents.isLoading()) {
-        win.webContents.once('did-finish-load', sendInit)
-      } else {
-        sendInit()
+  // Wait for window to be ready, then send init data
+  const win = quickChatWindow
+  if (win && !win.isDestroyed()) {
+    // If the window is already loaded, send immediately. Otherwise wait for ready-to-show.
+    const sendInit = () => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('bond:quickChatInit', { senseApps })
+        win.show()
+        win.focus()
       }
     }
-  } catch (e) {
-    console.error('[quick-chat] Failed to create session:', e)
+
+    if (win.webContents.isLoading()) {
+      win.webContents.once('did-finish-load', sendInit)
+    } else {
+      sendInit()
+    }
   }
 }
 
@@ -154,18 +144,15 @@ async function dismiss(): Promise<void> {
   dismissing = true
 
   const win = quickChatWindow
-  const sid = currentSessionId
-
   if (!win || win.isDestroyed()) {
     dismissing = false
-    currentSessionId = null
     return
   }
 
-  // Cancel active response if streaming
-  if (sid && client) {
+  // Cancel active global response if streaming
+  if (client) {
     try {
-      await client.cancel(sid)
+      await client.cancel()
     } catch { /* ignore */ }
   }
 
@@ -175,34 +162,8 @@ async function dismiss(): Promise<void> {
 
 async function finalizeDismiss(): Promise<void> {
   const win = quickChatWindow
-  const sid = currentSessionId
-
   if (win && !win.isDestroyed()) {
     win.hide()
-  }
-
-  if (sid) {
-    unregisterSession(sid)
-    currentSessionId = null
-
-    if (client) {
-      try {
-        // Check if session has messages
-        const messages = await client.getMessages(sid)
-        if (messages.length === 0) {
-          // Empty session — delete it
-          await client.deleteSession(sid)
-        } else {
-          // Has messages — generate title and archive
-          try {
-            await client.generateTitle(sid)
-          } catch { /* title generation failed — that's OK */ }
-          await client.updateSession(sid, { archived: true, quick: true })
-        }
-      } catch (e) {
-        console.error('[quick-chat] Failed to finalize session:', e)
-      }
-    }
   }
 
   dismissing = false
@@ -242,11 +203,6 @@ export function destroyQuickChat(): void {
   if (quickChatWindow && !quickChatWindow.isDestroyed()) {
     quickChatWindow.destroy()
     quickChatWindow = null
-  }
-
-  if (currentSessionId) {
-    unregisterSession(currentSessionId)
-    currentSessionId = null
   }
 
   client = null

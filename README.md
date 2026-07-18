@@ -1,6 +1,6 @@
 # Bond
 
-Bond is a macOS desktop assistant powered by [Pi](https://github.com/badlogic/pi-mono). It runs a standalone daemon that manages agent sessions, tool use, and Pi JSONL transcript persistence — with a Vue 3 + Tailwind CSS interface wrapped in Electron.
+Bond is a macOS desktop assistant powered by [Pi](https://github.com/badlogic/pi-mono). It runs a standalone daemon that manages continuous agent epochs, tool use, and transcript persistence — with a Vue 3 + Tailwind CSS interface wrapped in Electron.
 
 ![Bond](screenshot.png)
 
@@ -10,11 +10,11 @@ Bond is a macOS desktop assistant powered by [Pi](https://github.com/badlogic/pi
 
 ## Features
 
-Bond is a desktop AI assistant for chat, coding, memory, skills, collections, Sense, and media attachments.
+Bond is a desktop AI assistant for continuous conversation, coding, memory, skills, collections, Sense, and media attachments.
 
-### AI Chat
+### Continuous Conversation
 
-Conversational AI powered through Pi (with the configured provider and model). Streams responses in real-time, renders rich Markdown, syntax-highlighted code, and interactive artifacts. Attach images, switch models mid-conversation, and pick up right where you left off — sessions persist across restarts.
+Conversational AI powered through Pi (with the configured provider and model). Streams responses in real time, renders rich Markdown, syntax-highlighted code, and interactive artifacts. Attach images, switch models mid-conversation, and pick up right where you left off in one continuous transcript.
 
 ### System Access Control
 
@@ -34,7 +34,7 @@ Connect Bond to external tool servers — Figma, GitHub, Slack, Linear, Chrome D
 
 ### Collections
 
-Track anything with custom schemas (movies, books, workouts) via collections. Session debriefs and Sense preserve searchable summaries across chats.
+Track anything with custom schemas (movies, books, workouts) via collections. Sense and memory keep local, searchable context alongside the continuous transcript.
 
 ### Sense (Screen Awareness)
 
@@ -114,7 +114,7 @@ Bond separates concerns across four layers. The renderer never touches the Agent
 
 ```
 ┌──────────────────┐
-│  Renderer (Vue)  │  Chat UI, sessions, settings
+│  Renderer (Vue)  │  Transcript UI, panels, settings
 └────────┬─────────┘
          │ Electron IPC
 ┌────────┴─────────┐
@@ -122,7 +122,7 @@ Bond separates concerns across four layers. The renderer never touches the Agent
 └────────┬─────────┘
          │ Unix socket (WebSocket + JSON-RPC 2.0)
 ┌────────┴─────────┐
-│     Daemon       │  Pi SDK, SQLite, session state
+│     Daemon       │  Pi SDK, SQLite, transcript state
 └────────┬─────────┘
          │ HTTPS
 ┌────────┴─────────┐
@@ -137,9 +137,8 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 **Responsibilities:**
 - Run agent queries via `@earendil-works/pi-coding-agent`
 - Stream response chunks to subscribed clients
-- Manage Bond metadata in SQLite and canonical agent transcripts in Pi JSONL
+- Manage Bond metadata and the continuous transcript in SQLite
 - Handle tool approvals (allow/deny flow)
-- Auto-generate session titles via Haiku
 - Persist settings (model, soul/personality, accent color)
 
 **Key RPC methods:**
@@ -147,11 +146,11 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `bond.subscribe` / `bond.unsubscribe` — chunk streaming
 - `bond.setModel` / `bond.getModel` — model selection
 - `bond.approvalResponse` — tool approval flow
-- `session.*` — CRUD, messages, title generation
+- `transcript.*` — continuous transcript pagination and upserts
 - `image.*` — list, get, import, delete
 - `settings.*` — soul, accent color, window opacity
 - `skills.*` — list, refresh, remove
-- `sense.*` — status, enable, disable, pause, resume, now, today, search, apps, timeline, capture, sessions, settings, clear, stats
+- `sense.*` — status, enable, disable, pause, resume, now, today, search, apps, timeline, capture, settings, clear, stats
 
 **Agent tools:** `read`, `grep`, `find`, `ls`, `edit`, `write`, and `bash` — scoped by edit mode (readonly, scoped, or full).
 
@@ -165,19 +164,19 @@ Manages the Electron window and proxies IPC calls to the daemon via `BondClient`
 - Resolves the full user PATH via login shell for packaged mode
 - Waits for the socket to appear before connecting
 - Creates a BrowserWindow with native macOS vibrancy
-- Proxies all `bond:*`, `session:*`, `settings:*`, and `sense:*` IPC to the daemon
+- Proxies `bond:*`, `transcript:*`, `settings:*`, and `sense:*` IPC to the daemon
 - Sense screenshot capture via `desktopCapturer` + `NativeImage.toJPEG()` (daemon requests, main process captures)
 - Sense tray indicator (menu bar icon with recording state)
 
 ### 3. Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` to the renderer via `contextBridge` — a typed API surface covering chat, sessions, settings, model selection, and shell utilities.
+Exposes `window.bond` to the renderer via `contextBridge` — a typed API surface covering the transcript, settings, model selection, media, collections, Sense, and shell utilities.
 
 ### 4. Renderer (`src/renderer/`)
 
-Vue 3 + Tailwind CSS v4 chat interface. Composition API throughout.
+Vue 3 + Tailwind CSS v4 continuous transcript interface. Composition API throughout.
 
-- **Chat** — message history, streaming responses, tool approvals
+- **Transcript** — continuous message history, streaming responses, tool approvals
 
 Settings, design system, components, and about views live in a separate settings window.
 
@@ -188,9 +187,9 @@ Types and utilities shared across all layers:
 - `protocol.ts` — JSON-RPC 2.0 request/response/notification types
 - `stream.ts` — `BondStreamChunk` union type (text, tool, approval, error, system)
 - `client.ts` — `BondClient` WebSocket client class
-- `session.ts` — Session, SessionMessage, EditMode, and AttachedImage types
+- `session.ts` — legacy session/media/collection types plus EditMode and AttachedImage
 - `sense.ts` — SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult, AccessibilityResult types
-- `models.ts` — `ModelId` type (`'opus' | 'sonnet' | 'haiku'`)
+- `models.ts` — provider-neutral model tier type (`'high' | 'balanced' | 'fast'`)
 
 ## Data & Runtime
 
@@ -202,10 +201,10 @@ Types and utilities shared across all layers:
   tmp-images/        # Temporary attached images
 
 ~/Library/Application Support/bond/
-  bond.db            # SQLite (sessions, messages, settings, sense captures)
-  images/            # Stored chat images
+  bond.db            # SQLite (continuous transcript, settings, sense captures)
+  images/            # Stored attached images
   pi/
-    sessions/           # Pi JSONL agent transcripts
+    sessions/           # Pi JSONL agent epoch transcripts
   sense/
     stills/          # Screenshot JPEGs organized by date
       2026-04-05/
@@ -239,9 +238,9 @@ src/
     sense/               # Sense ambient awareness (controller, capture pipeline, OCR, storage)
   main/                  # Electron main process (window, IPC proxy, daemon lifecycle, Sense capture)
   preload/               # contextBridge → window.bond API
-  renderer/              # Vue 3 chat UI + Tailwind
-    composables/         # State and logic (useChat, useSessions, useCollections, useMemory, useAutoScroll, useAccentColor, useAppView, useSense)
-    components/          # Vue components (primitives, layout, chat, views)
+  renderer/              # Vue 3 continuous transcript UI + Tailwind
+    composables/         # State and logic (useChat, useCollections, useMemory, useAutoScroll, useAccentColor, useSense)
+    components/          # Vue components (primitives, layout, composer, views)
     types/               # Message types
     lib/                 # Utilities (highlight.js setup)
   shared/                # Protocol, stream chunks, client, session/sense types, models

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSyn
 import { join } from 'node:path'
 import { getDataDir, getDbPath } from './paths'
 import { ensureTranscriptSchema } from './transcript'
+import { ensureMemorySchema } from './memory/store'
 
 /** Increment when the persisted Bond product schema is intentionally replaced. */
 export const APP_SCHEMA_VERSION = 2
@@ -54,6 +55,7 @@ export function getDb(): Database.Database {
   migrateAddOperativeContextWindow(_db)
   migrateCreateSenseMemoryTables(_db)
   ensureTranscriptSchema(_db)
+  ensureMemorySchema(_db)
 
   return _db
 }

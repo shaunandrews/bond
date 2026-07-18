@@ -1,5 +1,17 @@
+import type { AttachedImage, EditMode } from './session'
+
+export interface BondSendInput {
+  text: string
+  images?: AttachedImage[]
+  turnId: string
+  userMessageId: string
+  assistantMessageId: string
+  activityMessageId: string
+  editMode?: EditMode
+}
+
 export type BondStreamChunk =
-  | { kind: 'assistant_text'; text: string }
+  | { kind: 'assistant_text'; text: string; assistantMessageId?: string }
   | { kind: 'thinking_text'; text: string }
   | { kind: 'assistant_tool'; name: string; summary?: string; input?: Record<string, unknown>; toolUseId?: string }
   | { kind: 'tool_result'; toolName: string; toolUseId: string; output?: string; isError?: boolean }
@@ -11,6 +23,12 @@ export type BondStreamChunk =
   | { kind: 'usage_update'; inputTokens: number; contextWindow: number; costUsd: number }
   | { kind: 'query_start' }
   | { kind: 'query_end'; succeeded: boolean }
+  | { kind: 'queue_update'; queuedTurnIds: string[]; turns: Array<{ turnId: string; text: string; imageIds?: string[] }> }
 
-/** Chunk tagged with a sessionId for routing to the correct chat in the renderer */
-export type TaggedChunk = BondStreamChunk & { sessionId: string }
+/** Chunk tagged with global turn/epoch metadata for renderer routing. */
+export type TaggedChunk = BondStreamChunk & {
+  epochId?: string
+  turnId?: string
+  /** @deprecated Legacy per-chat routing field. Continuous transcript clients should ignore it. */
+  sessionId?: string
+}
