@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { resolve, normalize } from 'node:path'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { BondStreamChunk } from '../shared/stream'
-import type { EditMode, Project } from '../shared/session'
+import type { EditMode } from '../shared/session'
 import { getSoul, getSetting } from './settings'
 import { getImagePaths } from './images'
 import { getSkillsDir } from './paths'
@@ -332,8 +332,6 @@ export async function runBondQuery(
     resumeSession?: boolean
     imageIds?: string[]
     editMode?: EditMode
-    project?: Project | null
-    mentionedProjects?: Project[]
   }
 ): Promise<boolean> {
   const cwd = homedir()
@@ -358,34 +356,6 @@ export async function runBondQuery(
     'You can create, edit, list, and remove skills by reading/writing files in ~/.bond/skills/. ' +
     'To create a skill: mkdir the directory, write a SKILL.md with frontmatter and instructions. ' +
     'After creating or modifying skills, tell the user to restart the daemon for changes to take effect.\n\n' +
-    'Projects organize work into named collections with context. Each project has:\n' +
-    '- **Name**: what the project is called\n' +
-    '- **Goal**: a description of the project\'s purpose — use this to stay focused and understand intent\n' +
-    '- **Type**: web, presentation, or generic — may affect what tools or approaches are relevant\n' +
-    '- **Deadline**: optional date (YYYY-MM-DD) — be mindful of urgency when one is set\n' +
-    '- **Resources**: paths (folders), files, and links attached to the project — read these for context when working on the project\n' +
-    'To SHOW projects to the user in chat, use: <bond-embed type="project" /> (all) or <bond-embed type="project" name="Name" /> (specific).\n' +
-    'This renders live, interactive project cards with progress and todos.\n\n' +
-    'Chats and todos can be linked to a project via a projectId. When this chat is linked to a project:\n' +
-    '- Treat the project\'s goal as the overarching objective for your work in this session\n' +
-    '- Read the project\'s resource files/folders for context before making changes\n' +
-    '- If the project has a deadline, factor it into prioritization and scope decisions\n' +
-    '- When you create todos for the user, associate them with the project by including the projectId\n\n' +
-    'To look up project details, use the `bond project show <name>` CLI command or read the project\'s resource files directly. ' +
-    'If the user mentions a project by name and this chat isn\'t already linked to one, offer to look it up. ' +
-    'Projects are managed via the Bond UI or the `bond project` CLI (list, add, show, edit, archive, rm, resource add/rm).\n' +
-    'To add a resource: `bond project resource add <project> <kind> <value> [label]` where kind is path, file, or link.\n\n' +
-    'Todos can optionally belong to a project. To create a todo linked to a project:\n' +
-    '  `bond todo add <text> --project <project-name>`\n' +
-    'To link an existing todo to a project:\n' +
-    '  `bond todo link <todo> <project-name>`\n' +
-    'To remove a project link:\n' +
-    '  `bond todo unlink <todo>`\n' +
-    'To list todos for a specific project:\n' +
-    '  `bond todo ls --project <project-name>`\n' +
-    'The user can also manage these links through the Bond UI.\n' +
-    'To SHOW todos to the user in chat, use: <bond-embed type="todos" /> (all todos) or <bond-embed type="todos" project="Name" /> (project-filtered).\n' +
-    'This renders a live, interactive todo list the user can check/uncheck directly.\n\n' +
     'MEDIA LIBRARY:\n' +
     'Bond has a built-in media library for storing images. You can manage it via the `bond media` CLI:\n' +
     '- `bond media` or `bond media list` — list all images in the library\n' +
@@ -398,9 +368,9 @@ export async function runBondQuery(
     'You can combine this with WebSearch to find images and then download them. ' +
     'Images are stored permanently in ~/Library/Application Support/bond/images/.\n\n' +
     'ARTIFACTS — RICH VISUAL CONTENT IN CHAT:\n' +
-    'For visual content that is NOT Bond data (not todos, projects, or media), use <bond-artifact> blocks to render rich HTML+Tailwind. ' +
+    'For visual content that is not already covered by Bond data embeds (collections, journal, or media), use <bond-artifact> blocks to render rich HTML+Tailwind. ' +
     'Good uses: recommendations, comparisons, data visualizations, styled tables, dashboards, step-by-step guides, image grids. ' +
-    'Do NOT use artifacts to display Bond\'s own entities (todos, projects, media) — use <bond-embed> for those instead.\n\n' +
+    'Do NOT use artifacts to display Bond\'s own entities (collections, journal, or media) — use <bond-embed> for those instead.\n\n' +
     'Syntax (the tag MUST start on its own line, not inline with other text):\n' +
     '<bond-artifact title="Optional Title" chrome="none">\n' +
     '  HTML content with Tailwind utility classes\n' +
@@ -416,7 +386,6 @@ export async function runBondQuery(
     '- Links are auto-intercepted and opened in the user\'s browser\n' +
     '- postMessage bridge:\n' +
     '  window.parent.postMessage({ type: "bond:openExternal", url: "..." }, "*")\n' +
-    '  window.parent.postMessage({ type: "bond:createTodo", text: "..." }, "*")\n' +
     '  window.parent.postMessage({ type: "bond:copyText", text: "..." }, "*")\n\n' +
     'Design guidelines:\n' +
     '- Use Bond color tokens (var(--color-*)) so artifacts match the theme in light and dark mode. Never hardcode colors.\n' +
@@ -430,24 +399,11 @@ export async function runBondQuery(
     '- Broken images are hidden automatically, but the layout should never depend on images being present.\n\n' +
     'Do NOT mention or reference the artifact system to the user — just use it naturally.\n\n' +
     'ENTITY EMBEDS — COMPLETE REFERENCE:\n' +
-    '<bond-embed type="todos" />                          — all todos\n' +
-    '<bond-embed type="todos" project="Bond" />           — project-filtered\n' +
-    '<bond-embed type="todos" group="Shopping" />          — group-filtered\n' +
-    '<bond-embed type="todos" filter="pending" />          — pending only\n' +
-    '<bond-embed type="todos" ids="id1,id2,id3" />        — specific todos by ID\n' +
-    '<bond-embed type="todos" search="keyword" />          — text search\n' +
-    '<bond-embed type="todos" add="true" />                — include an add-todo input\n' +
-    '<bond-embed type="project" />                          — all active projects\n' +
-    '<bond-embed type="project" name="Bond" />             — single project card\n' +
-    '<bond-embed type="project" name="Bond,Workshop" />    — specific projects\n' +
     '<bond-embed type="media" />                            — all images (default limit 12)\n' +
     '<bond-embed type="media" ids="id1,id2" />             — specific images by ID\n' +
     '<bond-embed type="media" search="screenshot" />       — filter by filename\n' +
     '<bond-embed type="media" limit="6" />                 — cap the count\n' +
     'Tag MUST be on its own line. Self-closing. Mix freely with markdown commentary.\n' +
-    'Embeds are live and interactive — the user can check todos, open resources, add items directly in chat.\n' +
-    'Use ids="" to show specific todos you want to highlight (get IDs from `bond todo ls` output). ' +
-    'Use search="" to show todos matching a keyword. These let you curate which todos to show rather than dumping all of them.\n' +
     'ALWAYS use embeds (not artifacts, not markdown, not CLI output) when showing Bond data to the user.\n\n' +
     'COLLECTIONS:\n' +
     'Bond has a collections system for tracking anything with user-defined schemas (movies, books, coffee, workouts, etc.). ' +
@@ -477,18 +433,16 @@ export async function runBondQuery(
     'It\'s a space for reflections, decision logs, project summaries, and freeform notes that persist across sessions.\n' +
     '- `bond journal` — list recent entries\n' +
     '- `bond journal add "your entry text"` — write an entry (title + tags auto-generated)\n' +
-    '- `bond journal add --body "longer text here" --project <name>` — write with project link\n' +
     '- `bond journal show <id|number|title>` — read full entry\n' +
     '- `bond journal search <query>` — search entries\n' +
     '- `bond journal pin <id|number|title>` — pin/unpin\n' +
     '- `bond journal rm <id|number|title>` — delete\n' +
     'Write journal entries when the user asks, or when a chat produces a meaningful summary, decision, or milestone worth preserving. ' +
-    'Always use author "user" — the CLI defaults to this. Link entries to projects with --project when relevant. ' +
+    'Always use author "user" — the CLI defaults to this. ' +
     'Use tags to categorize entries.\n' +
     'To SHOW journal entries in chat, use:\n' +
     '<bond-embed type="journal" />                              — recent entries\n' +
     '<bond-embed type="journal" ids="id1,id2" />                — specific entries\n' +
-    '<bond-embed type="journal" project="Bond" />               — entries linked to a project\n' +
     '<bond-embed type="journal" author="bond" />                — only Bond\'s entries\n' +
     '<bond-embed type="journal" search="connectors" />          — search results\n' +
     '<bond-embed type="journal" limit="5" />                    — cap results\n\n'
@@ -541,47 +495,7 @@ export async function runBondQuery(
     'When the user says "remember this" or "keep in mind that...", use `bond sense remember` to pin the fact. ' +
     'You can also pin facts proactively when the user states a clear preference or convention.\n'
 
-  basePrompt +=
-    '\nIN-APP BROWSER:\n' +
-    'Bond has a built-in browser in the right panel. You can control it:\n' +
-    '- `bond browser open <url>` — open URL in new tab, returns tab id\n' +
-    '- `bond browser tabs` — list open tabs\n' +
-    '- `bond browser read [tab]` — get page text (active tab if omitted)\n' +
-    '- `bond browser screenshot [tab]` — capture page as PNG, returns file path\n' +
-    '- `bond browser exec [tab] "<js>"` — run JavaScript in page, return result\n' +
-    '- `bond browser console [tab]` — get console output\n' +
-    '- `bond browser dom [tab] [selector]` — read page HTML or query elements\n' +
-    '- `bond browser network [tab]` — recent network requests\n' +
-    '- `bond browser navigate <tab> <url>` — navigate existing tab\n' +
-    '- `bond browser close <tab>` — close tab\n' +
-    'The browser panel opens automatically when you open a tab.\n' +
-    'When the user says "look at this page" or "check what I have open", ' +
-    'use `bond browser read` and/or `bond browser screenshot` on the active tab.\n'
 
-  basePrompt +=
-    '\nOPERATIVES — BACKGROUND AGENTS:\n' +
-    'Bond can dispatch operatives — autonomous Claude agents that work on coding tasks in the background.\n' +
-    'Each operative gets its own context window and works independently while Bond monitors progress.\n\n' +
-    'Spawn via CLI:\n' +
-    '- `bond operative spawn "<prompt>" --name "<name>" --dir <working-dir>` — spawn an operative\n' +
-    '- `bond operative spawn "<prompt>" -w` — spawn with git worktree isolation\n' +
-    '- `bond operative spawn "<prompt>" --budget 5` — set a $5 spend cap\n' +
-    '- `bond operative ls` — list all operatives\n' +
-    '- `bond operative ls --running` — list running operatives\n' +
-    '- `bond operative show <id|number>` — show details + recent events\n' +
-    '- `bond operative logs <id|number>` — stream live events\n' +
-    '- `bond operative cancel <id|number>` — cancel a running operative\n\n' +
-    'When to spawn operatives:\n' +
-    '- User explicitly asks ("spin up an operative to refactor the auth module")\n' +
-    '- Task is substantial (multi-file changes, test writing, full feature build)\n' +
-    '- Parallelism is beneficial ("I\'ll spawn two operatives — one for frontend, one for API")\n\n' +
-    'When spawning, provide rich context in the prompt:\n' +
-    '- Project conventions, relevant CLAUDE.md rules\n' +
-    '- Specific file paths and structure\n' +
-    '- Requirements, constraints, and what NOT to touch\n' +
-    '- If other operatives are running, warn about file conflicts\n\n' +
-    'For git repos, use -w (worktree) to isolate changes when multiple operatives work on the same repo.\n' +
-    'Operatives run autonomously — they don\'t ask for permission. Be specific in prompts to avoid unwanted changes.\n'
 
   // Sense auto-context injection
   try {
@@ -642,7 +556,7 @@ export async function runBondQuery(
     } catch { /* defaults */ }
 
     if (memSenseSettings.chatMemoryInject) {
-      const sessionProjectId = options.project?.id ?? null
+      const sessionProjectId = null
 
       // Pinned facts — always loaded, highest priority
       const facts = getActiveFacts({ projectId: sessionProjectId ?? undefined, limit: 10 })
@@ -704,41 +618,6 @@ export async function runBondQuery(
       }
     }
   } catch { /* non-fatal */ }
-
-  // Project context injection
-  function formatProjectContext(p: Project): string {
-    const lines = [
-      `Project: "${p.name}"`,
-      p.goal ? `Goal: ${p.goal}` : null,
-      p.type !== 'generic' ? `Type: ${p.type}` : null,
-      p.deadline ? `Deadline: ${p.deadline}` : null,
-    ].filter(Boolean)
-
-    if (p.resources.length) {
-      lines.push('Resources:')
-      for (const r of p.resources) {
-        const label = r.label ? `${r.label} — ` : ''
-        lines.push(`  - [${r.kind}] ${label}${r.value}`)
-      }
-    }
-    return lines.join('\n')
-  }
-
-  if (options.project) {
-    basePrompt += `\nThis chat is linked to the following project:\n${formatProjectContext(options.project)}\n`
-  }
-
-  if (options.mentionedProjects?.length) {
-    // Filter out the session-linked project to avoid double-injection
-    const linkedId = options.project?.id
-    const mentions = options.mentionedProjects.filter(p => p.id !== linkedId)
-    if (mentions.length) {
-      basePrompt += `\nThe user referenced the following project${mentions.length > 1 ? 's' : ''} in this message:\n`
-      for (const p of mentions) {
-        basePrompt += formatProjectContext(p) + '\n'
-      }
-    }
-  }
 
   // Current date and time with day of week
   const now = new Date()

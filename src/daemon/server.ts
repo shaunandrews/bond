@@ -26,18 +26,6 @@ import {
   refreshSkillsCache,
   buildSystemPromptPreview,
 } from './agent'
-import {
-  listOperatives,
-  getOperative,
-  getOperativeEvents,
-  spawnOperative,
-  cancelOperative,
-  removeOperative,
-  clearOperatives,
-  recoverOrphanedOperatives,
-  abortAllOperatives
-} from './operatives'
-import type { SpawnOperativeOptions } from '../shared/operative'
 import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
@@ -55,16 +43,6 @@ import {
   clearSessionPendingApprovals,
   getPendingApprovals
 } from './sessions'
-import { listTodos, createTodo, updateTodo, deleteTodo, reorderTodos } from './todos'
-import {
-  listProjects,
-  getProject,
-  createProject,
-  updateProject,
-  deleteProject,
-  addResource,
-  removeResource
-} from './projects'
 import {
   listCollections,
   getCollection,
@@ -93,8 +71,6 @@ import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
 import { generateJournalMeta } from './generate-journal-meta'
 import { generateBondComment } from './generate-journal-comment'
 import type { ItemComment } from '../shared/session'
-import { parseTodoInput } from './parse-todo'
-import { parseTodosFromPrompt } from './parse-todos-from-prompt'
 import { generateTitleAndSummary } from './generate-title'
 import { generateDebrief } from './generate-debrief'
 import {
@@ -194,26 +170,6 @@ function broadcastChunk(sessionId: string, chunk: BondStreamChunk): void {
   }
 }
 
-function broadcastTodoChanged(): void {
-  if (!serverWss) return
-  const msg = JSON.stringify(makeNotification('todo.changed', {}))
-  for (const client of serverWss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg)
-    }
-  }
-}
-
-function broadcastProjectsChanged(): void {
-  if (!serverWss) return
-  const msg = JSON.stringify(makeNotification('project.changed', {}))
-  for (const client of serverWss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg)
-    }
-  }
-}
-
 function broadcastCollectionsChanged(): void {
   if (!serverWss) return
   const msg = JSON.stringify(makeNotification('collection.changed', {}))
@@ -224,63 +180,6 @@ function broadcastCollectionsChanged(): void {
   }
 }
 
-
-function broadcastOperativeChanged(): void {
-  if (!serverWss) return
-  const msg = JSON.stringify(makeNotification('operative.changed', {}))
-  for (const client of serverWss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg)
-    }
-  }
-}
-
-function broadcastOperativeEvent(payload: { operativeId: string; event: unknown }): void {
-  if (!serverWss) return
-  const msg = JSON.stringify(makeNotification('operative.event', payload))
-  for (const client of serverWss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg)
-    }
-  }
-}
-
-// --- Browser command proxy ---
-
-import { randomUUID } from 'node:crypto'
-import type { BrowserCommand } from '../shared/browser'
-
-const pendingBrowserCommands = new Map<string, { resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout> }>()
-
-function sendBrowserCommand(cmd: BrowserCommand): Promise<unknown> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      pendingBrowserCommands.delete(cmd.requestId)
-      resolve({ error: 'Browser command timed out' })
-    }, 30000)
-
-    pendingBrowserCommands.set(cmd.requestId, { resolve, timer })
-
-    // Send as notification to all connected clients (the Electron main process)
-    if (serverWss) {
-      const msg = JSON.stringify(makeNotification('browser.command', cmd))
-      for (const client of serverWss.clients) {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(msg)
-        }
-      }
-    }
-  })
-}
-
-function resolveBrowserCommand(requestId: string, result: unknown): void {
-  const pending = pendingBrowserCommands.get(requestId)
-  if (pending) {
-    clearTimeout(pending.timer)
-    pendingBrowserCommands.delete(requestId)
-    pending.resolve(result)
-  }
-}
 
 // --- Sense ---
 
@@ -408,24 +307,6 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           imageIds = saveImages(sessionId, images)
         }
 
-        // Look up project context (session-linked + @mentions)
-        let projectContext: import('../shared/session').Project | null = null
-        if (session.projectId) {
-          projectContext = getProject(session.projectId) ?? null
-        }
-
-        // Extract @mentioned project IDs from the raw message text
-        const mentionedProjects: import('../shared/session').Project[] = []
-        if (text) {
-          const mentionRe = /@\[.*?\]\(project:([a-f0-9-]+)\)/g
-          let match
-          while ((match = mentionRe.exec(text)) !== null) {
-            const mp = getProject(match[1])
-            if (mp) mentionedProjects.push(mp)
-          }
-        }
-
-        // Strip mention tokens from the prompt text (keep display name only)
         const cleanText = text ? text.replace(/@\[([^\]]+)\]\(project:[a-f0-9-]+\)/g, '@$1') : text
 
         const ac = new AbortController()
@@ -446,8 +327,6 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
                 resumeSession: shouldResume,
                 imageIds,
                 editMode: session.editMode,
-                project: projectContext,
-                mentionedProjects: mentionedProjects.length ? mentionedProjects : undefined,
               })
               break // Query ran (success or graceful failure) — stop retrying
             } catch (e) {
@@ -721,122 +600,6 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const imageId = getStringParam(p, 'id')
         if (!imageId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
         return JSON.stringify(makeResponse(id, deleteImage(imageId)))
-      }
-
-      // --- Todos ---
-      case 'todo.list':
-        return JSON.stringify(makeResponse(id, listTodos()))
-
-      case 'todo.create': {
-        const text = getStringParam(p, 'text')
-        if (!text) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'text is required'))
-        const notes = getStringParam(p, 'notes') ?? ''
-        const group = getStringParam(p, 'group') ?? ''
-        const projectId = getStringParam(p, 'projectId')
-        const newTodo = createTodo(text, notes, group, projectId)
-        broadcastTodoChanged()
-        return JSON.stringify(makeResponse(id, newTodo))
-      }
-
-      case 'todo.update': {
-        const todoId = getStringParam(p, 'id')
-        if (!todoId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const updates = getParam(p, 'updates') as Partial<{ text: string; done: boolean }> | undefined
-        const updated = updateTodo(todoId, updates ?? {})
-        broadcastTodoChanged()
-        return JSON.stringify(makeResponse(id, updated))
-      }
-
-      case 'todo.delete': {
-        const todoId = getStringParam(p, 'id')
-        if (!todoId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const deleted = deleteTodo(todoId)
-        broadcastTodoChanged()
-        return JSON.stringify(makeResponse(id, deleted))
-      }
-
-      // Used by CLI (bond todo add). Renderer uses todo.parseFromPrompt instead.
-      case 'todo.parse': {
-        const raw = getStringParam(p, 'raw')
-        if (!raw) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'raw is required'))
-        const parsed = await parseTodoInput(raw)
-        return JSON.stringify(makeResponse(id, parsed))
-      }
-
-      case 'todo.reorder': {
-        const ids = getParam(p, 'ids') as string[] | undefined
-        if (!ids || !Array.isArray(ids)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'ids array is required'))
-        reorderTodos(ids)
-        broadcastTodoChanged()
-        return JSON.stringify(makeResponse(id, true))
-      }
-
-      case 'todo.parseFromPrompt': {
-        const prompt = getStringParam(p, 'prompt')
-        if (!prompt) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'prompt is required'))
-        const existingGroups = getParam(p, 'existingGroups') as string[] | undefined
-        if (existingGroups && !Array.isArray(existingGroups)) {
-          return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'existingGroups must be an array'))
-        }
-        const todos = await parseTodosFromPrompt(prompt, existingGroups ?? [])
-        return JSON.stringify(makeResponse(id, { todos }))
-      }
-
-      // --- Projects ---
-      case 'project.list':
-        return JSON.stringify(makeResponse(id, listProjects()))
-
-      case 'project.get': {
-        const pid = getStringParam(p, 'id')
-        if (!pid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, getProject(pid)))
-      }
-
-      case 'project.create': {
-        const name = getStringParam(p, 'name')
-        if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
-        const goal = getStringParam(p, 'goal') ?? ''
-        const type = getStringParam(p, 'type') ?? 'generic'
-        const deadline = getStringParam(p, 'deadline')
-        const project = createProject(name, goal, type as any, deadline)
-        broadcastProjectsChanged()
-        return JSON.stringify(makeResponse(id, project))
-      }
-
-      case 'project.update': {
-        const pid = getStringParam(p, 'id')
-        if (!pid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
-        const updated = updateProject(pid, updates ?? {})
-        broadcastProjectsChanged()
-        return JSON.stringify(makeResponse(id, updated))
-      }
-
-      case 'project.delete': {
-        const pid = getStringParam(p, 'id')
-        if (!pid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const deleted = deleteProject(pid)
-        broadcastProjectsChanged()
-        return JSON.stringify(makeResponse(id, deleted))
-      }
-
-      case 'project.addResource': {
-        const pid = getStringParam(p, 'projectId')
-        const kind = getStringParam(p, 'kind')
-        const value = getStringParam(p, 'value')
-        if (!pid || !kind || !value) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'projectId, kind, and value are required'))
-        const label = getStringParam(p, 'label')
-        const resource = addResource(pid, kind as any, value, label)
-        broadcastProjectsChanged()
-        return JSON.stringify(makeResponse(id, resource))
-      }
-
-      case 'project.removeResource': {
-        const rid = getStringParam(p, 'id')
-        if (!rid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const removed = removeResource(rid)
-        broadcastProjectsChanged()
-        return JSON.stringify(makeResponse(id, removed))
       }
 
       // --- Collections ---
@@ -1390,161 +1153,6 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, { ok: true, message: 'Backfill started in background' }))
       }
 
-      // --- Operatives ---
-      case 'operative.list': {
-        const status = getStringParam(p, 'status')
-        const sessionId = getStringParam(p, 'sessionId')
-        return JSON.stringify(makeResponse(id, listOperatives({ status, sessionId })))
-      }
-
-      case 'operative.get': {
-        const oid = getStringParam(p, 'id')
-        if (!oid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, getOperative(oid)))
-      }
-
-      case 'operative.events': {
-        const oid = getStringParam(p, 'id')
-        if (!oid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const afterId = getNumberParam(p, 'afterId')
-        const limit = getNumberParam(p, 'limit')
-        return JSON.stringify(makeResponse(id, getOperativeEvents(oid, afterId, limit)))
-      }
-
-      case 'operative.spawn': {
-        const opts = p as unknown as SpawnOperativeOptions
-        if (!opts?.name || !opts?.prompt || !opts?.workingDir) {
-          return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name, prompt, and workingDir are required'))
-        }
-        const op = spawnOperative(
-          opts,
-          currentModel,
-          () => broadcastOperativeChanged(),
-          (operativeId, event) => broadcastOperativeEvent({ operativeId, event }),
-          (sessionId, text) => broadcastChunk(sessionId, { kind: 'system', subtype: 'operative_completed', text })
-        )
-        broadcastOperativeChanged()
-        return JSON.stringify(makeResponse(id, op))
-      }
-
-      case 'operative.cancel': {
-        const oid = getStringParam(p, 'id')
-        if (!oid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const cancelled = cancelOperative(oid)
-        broadcastOperativeChanged()
-        return JSON.stringify(makeResponse(id, { ok: cancelled }))
-      }
-
-      case 'operative.remove': {
-        const oid = getStringParam(p, 'id')
-        if (!oid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const removed = removeOperative(oid)
-        broadcastOperativeChanged()
-        return JSON.stringify(makeResponse(id, { ok: removed }))
-      }
-
-      case 'operative.clear': {
-        const status = getStringParam(p, 'status')
-        const deleted = clearOperatives(status)
-        broadcastOperativeChanged()
-        return JSON.stringify(makeResponse(id, { deleted }))
-      }
-
-      // --- Browser ---
-
-      case 'browser.open': {
-        const url = getParam(p, 'url') as string
-        const hidden = getBoolParam(p, 'hidden') === true
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'open', requestId, url, hidden })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.navigate': {
-        const tabId = getParam(p, 'tabId') as string
-        const url = getParam(p, 'url') as string
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'navigate', requestId, tabId, url })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.close': {
-        const tabId = getParam(p, 'tabId') as string
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'close', requestId, tabId })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.tabs': {
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'tabs', requestId })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.read': {
-        const tabId = getParam(p, 'tabId') as string | undefined
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'read', requestId, tabId })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.screenshot': {
-        const tabId = getParam(p, 'tabId') as string | undefined
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'screenshot', requestId, tabId })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.exec': {
-        const tabId = getParam(p, 'tabId') as string | undefined
-        const js = getParam(p, 'js') as string
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'exec', requestId, tabId, js })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.console': {
-        const tabId = getParam(p, 'tabId') as string | undefined
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'console', requestId, tabId })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.dom': {
-        const tabId = getParam(p, 'tabId') as string | undefined
-        const selector = getParam(p, 'selector') as string | undefined
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'dom', requestId, tabId, selector })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.network': {
-        const tabId = getParam(p, 'tabId') as string | undefined
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'network', requestId, tabId })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.download': {
-        const tabId = getParam(p, 'tabId') as string | undefined
-        const url = getParam(p, 'url') as string
-        const requestId = randomUUID()
-        // Always write to Bond's managed downloads directory, never to arbitrary paths
-        const result = await sendBrowserCommand({ type: 'download', requestId, tabId, url }) as any
-        if (result?.error) return JSON.stringify(makeResponse(id, result))
-        if (result?.data) {
-          const buf = Buffer.from(result.data, 'base64')
-          ensureDownloadsDir()
-          const dest = join(getDownloadsDir(), `${randomUUID().slice(0, 8)}${guessExt(result.contentType)}`)
-          const { writeFileSync } = await import('node:fs')
-          writeFileSync(dest, buf)
-          return JSON.stringify(makeResponse(id, { path: dest, size: buf.length, contentType: result.contentType }))
-        }
-        return JSON.stringify(makeResponse(id, { error: 'No data received' }))
-      }
-      case 'browser.cookies': {
-        const tabId = getParam(p, 'tabId') as string | undefined
-        const requestId = randomUUID()
-        const result = await sendBrowserCommand({ type: 'cookies', requestId, tabId })
-        return JSON.stringify(makeResponse(id, result))
-      }
-      case 'browser.commandResult': {
-        const requestId = getParam(p, 'requestId') as string
-        const result = getParam(p, 'result')
-        resolveBrowserCommand(requestId, result)
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-
       default:
         return JSON.stringify(makeErrorResponse(id, RPC_METHOD_NOT_FOUND, `Unknown method: ${method}`))
     }
@@ -1572,9 +1180,6 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
 
   // Eagerly initialize Sense controller so it auto-enables on daemon startup
   getSenseController()
-
-  // Recover orphaned operatives from previous daemon process
-  recoverOrphanedOperatives()
 
   // Track authenticated connections
   const authenticatedClients = new WeakSet<WebSocket>()
@@ -1645,9 +1250,6 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
       }
       activeQueries.clear()
       knownSdkSessions.clear()
-
-      // Abort all running operatives
-      abortAllOperatives()
 
       // Clean up sense controller
       if (senseController) {

@@ -5,14 +5,10 @@ import {
   PhLightning,
   PhLightbulb,
   PhChatCircle,
-  PhFolders,
-  PhCheckSquare,
   PhBookOpen,
   PhSquaresFour,
   PhImages,
   PhEye,
-  PhGlobe,
-  PhRobot,
   PhWrench,
 } from '@phosphor-icons/vue'
 
@@ -49,9 +45,6 @@ const shortcuts = [
   { key: '⌘⇧B', action: 'Toggle right panel' },
   { key: '⌘N', action: 'New chat' },
   { key: '⌘,', action: 'Settings' },
-  { key: '⌘⇧K', action: 'Browser panel' },
-  { key: '⌘T', action: 'New browser tab (when browser panel open)' },
-  { key: '⌘L', action: 'Focus browser URL bar' },
   { key: 'Escape', action: 'Cancel response' },
   { key: '⌘/', action: 'Open this Field Manual' },
 ]
@@ -63,19 +56,9 @@ const capabilities = [
     description: 'Talk naturally. Attach images (⌘V paste or drag). Ask Bond to read, write, and edit files, run shell commands, or search the web. Use edit modes (full/readonly/scoped) to control file access.',
   },
   {
-    icon: PhFolders,
-    name: 'Projects',
-    description: 'Organize work with goals, deadlines, and resources (files, folders, links). Link chats and todos to projects so Bond has the right context. Create from the sidebar or ask Bond.',
-  },
-  {
-    icon: PhCheckSquare,
-    name: 'Todos',
-    description: 'Task tracking with groups, notes, and project links. Bond can create and complete todos during conversations. Manage in the sidebar panel or conversationally.',
-  },
-  {
     icon: PhBookOpen,
     name: 'Journal',
-    description: 'Persistent entries for reflections, decisions, and notes. Both you and Bond can write. Link entries to projects. Search across all entries.',
+    description: 'Persistent entries for reflections, decisions, and notes. Both you and Bond can write. Search across all entries.',
   },
   {
     icon: PhSquaresFour,
@@ -93,16 +76,6 @@ const capabilities = [
     description: 'Ambient screen awareness. Bond can see what you\'re working on, summarize your day, recall something you saw earlier, or break down app usage.',
   },
   {
-    icon: PhGlobe,
-    name: 'Browser',
-    description: 'Built-in browser in the right panel. Bond can open URLs, read page content, take screenshots, and execute JavaScript.',
-  },
-  {
-    icon: PhRobot,
-    name: 'Operatives',
-    description: 'Autonomous coding agents that work in the background. Each gets its own context window. Use worktrees for git isolation when running multiple operatives.',
-  },
-  {
     icon: PhWrench,
     name: 'Skills',
     description: 'Custom commands invoked with /skill-name. Extend Bond\'s behavior for your specific workflows. Create via settings or ask Bond to build one.',
@@ -112,10 +85,8 @@ const capabilities = [
 const tips = [
   'Drag files into chat for context (not just images — code, PDFs, text)',
   'Bond remembers context within a session — refer back freely',
-  'Link chats to projects for focused, goal-oriented work',
   'Use /skill-name to invoke custom skills',
   'Use the journal to preserve decisions and summaries across sessions',
-  'Operatives can work in parallel — spin up multiple for different tasks',
 ]
 </script>
 

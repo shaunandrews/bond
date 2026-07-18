@@ -42,18 +42,17 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | File | Purpose |
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `project.*`, `image.*`, `todo.*`, `settings.*`, `skills.*`, `sense.*`, `browser.*`, `operative.*`) |
+| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`, `journal.*`) |
 | `agent.ts` | Runs `query()` from Claude Agent SDK, streams chunks, handles tool approvals |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
-| `projects.ts` | Project CRUD + resource management (SQLite) |
-| `todos.ts` | Todo CRUD (SQLite) |
+| `projects.ts` | Legacy project data access (SQLite; not exposed in the product) |
+| `todos.ts` | Legacy todo data access (SQLite; not exposed in the product) |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
 | `db.ts` | Database init, migrations, WAL mode |
 | `settings.ts` | Key-value settings storage (soul, model, accent color) |
 | `generate-title.ts` | Auto-generates session titles via Haiku |
 | `paths.ts` | Data directory resolution |
 | `skills.ts` | Skill scanning from ~/.bond/skills/ |
-| `operatives.ts` | Operative CRUD, spawn, cancel, event storage, concurrency queue |
 | `sense/controller.ts` | Sense state machine (disabled/armed/recording/idle/paused/suspended) |
 | `sense/presence.ts` | Idle detection via `ioreg -c IOHIDSystem` polling |
 | `sense/window-detector.ts` | App/window polling via `bond-window-helper` native binary |
@@ -69,11 +68,11 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 
 ### Main Process (`src/main/`)
 
-Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), tray indicator (`src/main/tray.ts`), and browser webContents management (`src/main/browser.ts` — tab registry, screenshot capture, JS execution, command proxying between daemon and renderer).
+Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), tray indicator (`src/main/tray.ts`).
 
 ### Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, projects, todos, settings, images, skills, model, sense, browser, and shell utilities.
+Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, settings, images, skills, model, Sense/memory, collections, journal, and shell utilities.
 
 ### Shared (`src/shared/`)
 
@@ -82,15 +81,12 @@ Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, proj
 | `protocol.ts` | JSON-RPC 2.0 types and helpers |
 | `stream.ts` | `BondStreamChunk` union type (text, thinking, tool, approval, error, system) |
 | `client.ts` | `BondClient` WebSocket client class |
-| `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Project, ProjectResource, TodoItem types |
+| `session.ts` | Session, SessionMessage, EditMode, AttachedImage, and legacy project/todo compatibility types |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
-| `browser.ts` | BrowserTab, BrowserCommand, ConsoleEntry, NetworkEntry types |
-| `operative.ts` | Operative, OperativeEvent, SpawnOperativeOptions types |
 | `models.ts` | `ModelId` type (`'opus' | 'sonnet' | 'haiku'`) |
 
 ### CLI (`bin/bond`)
 
-Bash CLI for daemon management and data: `bond status`, `bond start`, `bond stop`, `bond restart`, `bond dev`, `bond build`, `bond rebuild`, `bond log`, `bond todo`, `bond project`, `bond media`, `bond screenshot`, `bond sense`, `bond browser`, `bond operative`, `bond test`.
 
 ## Project Structure
 
@@ -100,13 +96,9 @@ scripts/
   build-native-helpers.sh            # Compiles Obj-C native helpers → out/daemon/bin/sense/
 src/
   cli/
-    todo.ts                          # bond todo — CLI for todo management
-    project.ts                       # bond project — CLI for project management
     media.ts                         # bond media — CLI for media management
     screenshot.ts                    # bond screenshot — capture Bond window
     sense.ts                         # bond sense — CLI for Sense ambient awareness
-    browser.ts                       # bond browser — CLI for in-app browser control
-    operative.ts                     # bond operative — CLI for operative management
   native/
     window-helper.m                  # CGWindowList native helper (Obj-C)
     ocr-helper.m                     # Apple Vision OCR native helper (Obj-C)
@@ -122,10 +114,8 @@ src/
     db.ts                            # Database management + migrations
     settings.ts                      # Settings storage
     generate-title.ts                # Auto title generation
-    parse-todo.ts                    # AI-powered todo input parsing
     paths.ts                         # Data directory paths
     skills.ts                        # Skill scanning from ~/.bond/skills/
-    operatives.ts                    # Operative CRUD, spawn, cancel, events
     sense/
       controller.ts                  # State machine (disabled/armed/recording/idle/paused/suspended)
       presence.ts                    # Idle detection via ioreg
@@ -143,7 +133,6 @@ src/
     index.ts                         # Electron main process
     sense.ts                         # Sense capture coordinator (desktopCapturer)
     tray.ts                          # Menu bar tray icon for Sense state
-    browser.ts                       # Browser IPC handlers, webContents registry, command proxy
   preload/index.ts                   # contextBridge API
   shared/
     protocol.ts                      # JSON-RPC 2.0 types
@@ -151,8 +140,6 @@ src/
     client.ts                        # BondClient WebSocket client
     session.ts                       # Session, SessionMessage, Project, ProjectResource, TodoItem, EditMode, AttachedImage types
     sense.ts                         # SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult types
-    browser.ts                       # BrowserTab, BrowserCommand, ConsoleEntry, NetworkEntry types
-    operative.ts                     # Operative, OperativeEvent, SpawnOperativeOptions types
     models.ts                        # ModelId type
   renderer/
     App.vue                          # Root shell — panel layout + view routing
@@ -163,14 +150,10 @@ src/
     composables/
       useChat.ts                     # Chat state, streaming, message persistence
       useSessions.ts                 # Session CRUD, archive, title generation
-      useProjects.ts                 # Project CRUD, archive, resources
       useAutoScroll.ts               # Smart scroll-to-bottom
       useAccentColor.ts              # Dynamic accent color theming
-      useAppView.ts                  # View routing state (chat | projects | media | sense)
-      useBrowser.ts                  # Browser tab state, favorites, console/network logs
+      useAppView.ts                  # View routing state (chat | media | collections | sense)
       useSense.ts                    # Sense timeline state, day loading, capture selection, search
-      useOperatives.ts               # Operative list state, spawn, cancel, live updates
-      useOperativeEvents.ts          # Operative event streaming for detail view
     directives/
       tooltip.ts                     # v-tooltip directive (singleton, positioned tooltips)
     components/
@@ -193,28 +176,19 @@ src/
       ThinkingIndicator.vue          # Standalone "Bond is working..." dots (unused, kept for reference)
       SessionItem.vue                # Single session row
       SessionSidebar.vue             # Sidebar with session lists + nav
-      ProjectDetail.vue              # Shared project detail (todos, resources, deadline, goal)
-      ProjectsView.vue               # Project list + detail view (main content area)
-      ProjectPanelView.vue           # Project list/detail panel (right side of chat)
-      ProjectWizard.vue              # Multi-step project creation wizard
       MediaView.vue                  # Image gallery view
-      TodoView.vue                   # Todo panel with groups and notes
       CopyButton.vue                 # Inline copy-to-clipboard button
       ActivityBar.vue                # Expandable activity/event log bar
       MissionBriefing.vue            # Empty chat welcome screen
       SettingsView.vue               # Accent color, model, personality settings
       AboutView.vue                  # Architecture, tools, data paths, CLI reference
       DesignSystemView.vue           # Live design token browser
-      BrowserView.vue                # Tabbed in-app browser with nav, favorites, webviews
-      BrowserDevTools.vue            # Console + Network panel for browser
       SenseView.vue                  # Sense timeline main view (day nav + detail + timeline dock)
       SenseDayNav.vue                # Date navigation (prev/next/picker)
       SenseTimeline.vue              # Density bar scrubber with playhead and hover preview
       SenseDetail.vue                # Screenshot viewer with metadata and extracted text
       SenseAppLegend.vue             # App color legend with filter chips
       SenseSearch.vue                # Inline search with results flyout
-      OperativesView.vue             # Operative list with status, filters, actions
-      OperativeDetail.vue            # Operative detail with streaming event feed
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
 electron.vite.config.ts                  # Build config (main, preload, renderer)
@@ -325,29 +299,9 @@ Single session row used in both active and archived lists inside SessionSidebar.
 - **Events:** `select()`, `action()`
 
 ### SessionSidebar
-Left sidebar with session list, archive flyout, and bottom nav (Projects, Media). Chats section is always open (non-collapsible) with archive and new-chat buttons in the header.
+Left sidebar with session list, archive flyout, and bottom nav. Chats section is always open (non-collapsible) with archive and new-chat buttons in the header.
 - **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`, `busySessionIds: Set<string>`, `mediaCount: number`, `projectCount: number`
 - **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `removeArchived()`, `projects()`, `media()`, `rename(id, title)`
-
-### ProjectDetail
-Shared project detail component used by both ProjectsView and ProjectPanelView. Displays type badge, deadline badge, goal, interactive resource management (add form, click-to-open, remove), and interactive todo management (inline add, checkboxes, delete). Owns its own todo state via `window.bond`.
-- **Props:** `project: Project`, `compact?: boolean` (tighter spacing for panel use)
-- **Events:** `addResource(projectId, kind, value, label?)`, `removeResource(projectId, resourceId)`, `updateDeadline(projectId, deadline)`
-
-### ProjectsView
-Main content area view for projects. Shows a project list (cards) or a `ProjectDetail` for the selected project. Includes archive flyout, creation wizard, and project menu (archive/delete).
-- **Props:** `projects: Project[]`, `archivedProjects: Project[]`, `activeProjectId: string | null`, `insetStart?: boolean`
-- **Events:** `select(id)`, `create(name, goal, type, deadline)`, `archive(id)`, `unarchive(id)`, `remove(id)`, `addResource(projectId, kind, value, label?)`, `removeResource(projectId, resourceId)`, `updateDeadline(projectId, deadline)`, `startChat(projectId)`, `back()`
-- **Slots:** `header-start`, `header-end`
-
-### ProjectPanelView
-Project list/detail panel for the right side of chat. Shows project list or `ProjectDetail` (compact) for the selected project. Full feature parity with the main view.
-- **Props:** `projects: Project[]`, `activeProjectId: string | null`
-- **Events:** `select(id | null)`, `startChat(projectId)`, `addResource(projectId, kind, value, label?)`, `removeResource(projectId, resourceId)`
-
-### ProjectWizard
-Multi-step project creation wizard (name → goal → type + deadline). Full-screen overlay.
-- **Events:** `submit(name, goal, type, deadline)`, `cancel()`
 
 ### CopyButton
 Inline copy-to-clipboard button with checkmark confirmation feedback.
@@ -361,15 +315,6 @@ Interactive design token showcase. Displays color swatches, typography, radius, 
 
 ### AboutView
 In-app reference screen showing Bond's architecture (layered stack diagram), agent tools, edit modes, data paths, and CLI commands. Accessible from the sidebar gear menu.
-
-### BrowserView
-Tabbed in-app browser embedded in the right panel. Includes tab bar, navigation bar (back/forward/reload/URL/star/external), webview-per-tab rendering, new-tab page with favorites grid, and integrated DevTools panel. Links in chat open here by default (Cmd+Click for system browser). Agent controls it via `bond browser` CLI.
-- **Emits:** `openExternal(url: string)`
-- **Expose:** `openUrl(url: string)` — opens a URL in the browser panel
-- **Keyboard:** `⌘T` opens new tab (when browser panel is active), `⇧⌘K` toggles panel
-
-### BrowserDevTools
-Console and Network inspection panel, shown in a vertical split below the webview. Console tab shows log entries with level filtering and a JS evaluation input. Network tab shows requests in a table (method, URL, status, type, size, time).
 
 ### SenseView
 Main Sense timeline view. Two-zone vertical layout: header with day nav + search, detail viewer in the body, and a bottom dock with app legend + density bar timeline. Loads the current day's captures on mount.
@@ -401,17 +346,6 @@ Inline search input in the header bar. Debounced 300ms text search with results 
 - **Events:** `search(query: string)`, `select(capture: SenseCapture)`, `clear()`
 - **Expose:** `focus()`
 
-### OperativesView
-Main view for listing operatives with status indicators, filter tabs, and action buttons.
-- **Props:** `operatives: Operative[]`, `activeOperativeId: string | null`, `insetStart?: boolean`
-- **Events:** `select(id)`, `cancel(id)`, `remove(id)`, `clear()`, `back()`
-- **Slots:** `header-start`
-
-### OperativeDetail
-Detail panel for a selected operative. Shows status header, prompt, and streaming activity feed (tool calls, text, errors, results).
-- **Props:** `operative: Operative`, `events: OperativeEvent[]`
-- **Events:** `cancel(id)`, `remove(id)`, `back()`
-
 ### DevComponents
 Dev-only component catalog with live previews and prop/event documentation. Accessible from the Settings window Components tab. Not rendered in production flows.
 
@@ -437,50 +371,15 @@ Dynamic accent color theming. Derives a full palette from a single hex color (HS
 - **State:** `accent`, `defaultAccent`
 - **Methods:** `load()`, `setAccent()`, `reset()`
 
-### useProjects(deps?)
-Project CRUD, archive/unarchive, resources. Persists active project ID to localStorage.
-- **State:** `projects`, `activeProjectId`, `activeProject`, `activeProjects`, `archivedProjects`, `loading`
-- **Methods:** `load()`, `create(name, goal?, type?, deadline?)`, `select(id)`, `archive(id)`, `unarchive(id)`, `update(id, updates)`, `remove(id)`, `addResource(projectId, kind, value, label?)`, `removeResource(projectId, resourceId)`, `updateLocal(id, updates)`
-
 ### useAppView()
 View routing state. Persists to localStorage.
-- **State:** `activeView` (`'chat' | 'projects' | 'media'`)
-
-### useBrowser()
-Singleton browser tab state. Manages tabs, favorites, console/network logs. Persists tabs and favorites to localStorage. Handles agent commands from the IPC bridge.
-- **State:** `tabs`, `activeTabId`, `activeTab`, `favorites`, `consoleLogs`, `networkLogs`
-- **Methods:** `createTab(url?)`, `closeTab(id)`, `closeAllTabs()`, `switchTab(id)`, `navigate(id, url)`, `updateTab(id, updates)`, `addFavorite(url, title, favicon)`, `removeFavorite(url)`, `isFavorite(url)`, `addConsoleEntry()`, `addNetworkEntry()`, `getConsoleLog()`, `getNetworkLog()`
+- **State:** `activeView` (`'chat' | 'media' | 'collections' | 'sense'`)
 
 ### useSense()
 Singleton Sense timeline state. Loads a day's captures and sessions, selects individual captures with image fetching, text search, and app filtering. Normalizes snake_case DB rows to camelCase.
 - **State:** `date`, `captures`, `sessions`, `activeCapture`, `activeCaptureImage`, `searchQuery`, `searchResults`, `appFilter`, `apps`, `loading`, `loadingImage`, `filteredCaptures`, `isToday`
 - **Methods:** `loadDay(dateStr)`, `selectCapture(id)`, `search(query)`, `setAppFilter(bundleId?)`, `nextDay()`, `prevDay()`, `jumpToCapture(capture)`
 - **Exports:** `appHue(identifier)`, `appColor(identifier, isDark?)` — deterministic HSL color from bundle ID
-
-### useOperatives()
-Singleton operative list state. Loads on mount, subscribes to operative.changed for live updates.
-- **State:** `operatives`, `activeOperativeId`, `activeOperative`, `runningOperatives`, `queuedOperatives`, `runningCount`, `loading`
-- **Methods:** `load()`, `spawn(opts)`, `cancel(id)`, `remove(id)`, `clear()`, `select(id)`
-
-### useOperativeEvents(operativeId: Ref<string | null>)
-Streams events for a specific operative. Loads initial events and appends from operative.event notifications.
-- **State:** `events`, `loading`
-
-## Icons
-
-Bond uses [Phosphor Icons](https://phosphoricons.com) via `@phosphor-icons/vue`. Import individual icons by name — they are tree-shaken automatically.
-
-```vue
-<script lang="ts" setup>
-import { PhHouse, PhGear, PhTrash } from '@phosphor-icons/vue'
-</script>
-
-<template>
-  <PhHouse :size="20" weight="regular" />
-  <PhGear :size="20" weight="bold" />
-  <PhTrash :size="20" color="var(--color-err)" />
-</template>
-```
 
 ### Props (all optional)
 - **size**: `number | string` — width & height (default: `24`)

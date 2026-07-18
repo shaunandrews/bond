@@ -1,7 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { TaggedChunk } from '../shared/stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, ItemComment } from '../shared/session'
-import type { Operative, OperativeEvent, SpawnOperativeOptions } from '../shared/operative'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, Collection, CollectionItem, FieldDef, ItemComment } from '../shared/session'
 
 contextBridge.exposeInMainWorld('bond', {
   send: (text: string, sessionId?: string, images?: AttachedImage[]) => ipcRenderer.invoke('bond:send', text, sessionId, images) as Promise<{ ok: boolean; error?: string; imageIds?: string[] }>,
@@ -44,35 +43,6 @@ contextBridge.exposeInMainWorld('bond', {
     ipcRenderer.invoke('session:saveMessages', sessionId, messages) as Promise<boolean>,
   generateTitle: (sessionId: string, userMessage?: string) =>
     ipcRenderer.invoke('session:generateTitle', sessionId, userMessage) as Promise<{ title: string; summary: string }>,
-
-  // Todos
-  listTodos: () => ipcRenderer.invoke('todo:list') as Promise<TodoItem[]>,
-  onTodoChanged: (fn: () => void) => {
-    const listener = () => fn()
-    ipcRenderer.on('bond:todoChanged', listener)
-    return () => ipcRenderer.removeListener('bond:todoChanged', listener)
-  },
-  createTodo: (text: string, notes?: string, group?: string, projectId?: string) => ipcRenderer.invoke('todo:create', text, notes, group, projectId) as Promise<TodoItem>,
-  updateTodo: (id: string, updates: Partial<Pick<TodoItem, 'text' | 'notes' | 'group' | 'done' | 'projectId'>>) => ipcRenderer.invoke('todo:update', id, updates) as Promise<TodoItem | null>,
-  deleteTodo: (id: string) => ipcRenderer.invoke('todo:delete', id) as Promise<boolean>,
-  parseTodo: (raw: string) => ipcRenderer.invoke('todo:parse', raw) as Promise<{ title: string; notes: string; group: string }>,
-  reorderTodos: (ids: string[]) => ipcRenderer.invoke('todo:reorder', ids) as Promise<boolean>,
-  parseFromPrompt: (prompt: string, existingGroups?: string[]) =>
-    ipcRenderer.invoke('todo:parseFromPrompt', prompt, existingGroups) as Promise<{ todos: Array<{ title: string; notes: string; group: string }> }>,
-
-  // Projects
-  listProjects: () => ipcRenderer.invoke('project:list') as Promise<Project[]>,
-  getProject: (id: string) => ipcRenderer.invoke('project:get', id) as Promise<Project | null>,
-  createProject: (name: string, goal?: string, type?: ProjectType, deadline?: string) => ipcRenderer.invoke('project:create', name, goal, type, deadline) as Promise<Project>,
-  updateProject: (id: string, updates: Partial<Pick<Project, 'name' | 'goal' | 'type' | 'archived' | 'deadline'>>) => ipcRenderer.invoke('project:update', id, updates) as Promise<Project | null>,
-  deleteProject: (id: string) => ipcRenderer.invoke('project:delete', id) as Promise<boolean>,
-  addProjectResource: (projectId: string, kind: ProjectResource['kind'], value: string, label?: string) => ipcRenderer.invoke('project:addResource', projectId, kind, value, label) as Promise<ProjectResource>,
-  removeProjectResource: (id: string) => ipcRenderer.invoke('project:removeResource', id) as Promise<boolean>,
-  onProjectsChanged: (fn: () => void) => {
-    const listener = () => fn()
-    ipcRenderer.on('bond:projectsChanged', listener)
-    return () => ipcRenderer.removeListener('bond:projectsChanged', listener)
-  },
 
   // Collections
   listCollections: () => ipcRenderer.invoke('collection:list') as Promise<Collection[]>,
@@ -192,51 +162,6 @@ contextBridge.exposeInMainWorld('bond', {
     const listener = (_: Electron.IpcRendererEvent, opacity: number) => fn(opacity)
     ipcRenderer.on('bond:windowOpacity', listener)
     return () => ipcRenderer.removeListener('bond:windowOpacity', listener)
-  },
-
-  // Browser
-  browser: {
-    onCommand: (fn: (cmd: import('../shared/browser').BrowserCommand) => void) => {
-      const handler = (_: Electron.IpcRendererEvent, cmd: import('../shared/browser').BrowserCommand) => fn(cmd)
-      ipcRenderer.on('bond:browserCommand', handler)
-      return () => ipcRenderer.removeListener('bond:browserCommand', handler)
-    },
-    commandResult: (requestId: string, result: unknown) =>
-      ipcRenderer.invoke('browser:commandResult', requestId, result) as Promise<void>,
-    registerWebContents: (tabId: string, webContentsId: number) =>
-      ipcRenderer.invoke('browser:registerWebContents', tabId, webContentsId) as Promise<void>,
-    unregisterWebContents: (tabId: string) =>
-      ipcRenderer.invoke('browser:unregisterWebContents', tabId) as Promise<void>,
-    captureTab: (tabId: string) =>
-      ipcRenderer.invoke('browser:captureTab', tabId) as Promise<string>,
-    execInTab: (tabId: string, js: string) =>
-      ipcRenderer.invoke('browser:execInTab', tabId, js) as Promise<unknown>,
-  },
-
-  // Operatives
-  listOperatives: (filters?: { status?: string; sessionId?: string }) =>
-    ipcRenderer.invoke('operative:list', filters) as Promise<Operative[]>,
-  getOperative: (id: string) =>
-    ipcRenderer.invoke('operative:get', id) as Promise<Operative | null>,
-  spawnOperative: (opts: SpawnOperativeOptions) =>
-    ipcRenderer.invoke('operative:spawn', opts) as Promise<Operative>,
-  getOperativeEvents: (id: string, afterId?: number, limit?: number) =>
-    ipcRenderer.invoke('operative:events', id, afterId, limit) as Promise<OperativeEvent[]>,
-  cancelOperative: (id: string) =>
-    ipcRenderer.invoke('operative:cancel', id) as Promise<{ ok: boolean }>,
-  removeOperative: (id: string) =>
-    ipcRenderer.invoke('operative:remove', id) as Promise<{ ok: boolean }>,
-  clearOperatives: (status?: string) =>
-    ipcRenderer.invoke('operative:clear', status) as Promise<{ deleted: number }>,
-  onOperativeChanged: (fn: () => void) => {
-    const listener = () => fn()
-    ipcRenderer.on('bond:operativeChanged', listener)
-    return () => ipcRenderer.removeListener('bond:operativeChanged', listener)
-  },
-  onOperativeEvent: (fn: (payload: { operativeId: string; event: OperativeEvent }) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, payload: { operativeId: string; event: OperativeEvent }) => fn(payload)
-    ipcRenderer.on('bond:operativeEvent', listener)
-    return () => ipcRenderer.removeListener('bond:operativeEvent', listener)
   },
 
   // Quick Chat

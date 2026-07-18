@@ -4,17 +4,13 @@ Bond is a macOS desktop assistant powered by the [Claude Agent SDK](https://plat
 
 ![Bond](screenshot.png)
 
-![Operatives and git workflow](screenshot-operatives.png)
-
-![In-app browser and visual identity exploration](screenshot-browser.png)
-
 ![Sense screen awareness](screenshot-sense.png)
 
 <img src="screenshot-mobile.png" alt="Bond on the go" width="300" />
 
 ## Features
 
-Bond is a full-spectrum desktop AI assistant. It can talk, think, code, browse, and run background agents — all from one app.
+Bond is a desktop AI assistant for chat, coding, memory, skills, collections, journaling, Sense, and media attachments.
 
 ### AI Chat
 
@@ -23,22 +19,6 @@ Conversational AI powered by Claude (Opus, Sonnet, or Haiku). Streams responses 
 ### System Access Control
 
 Three permission tiers — **readonly**, **scoped**, and **full access** — so you control exactly how much Bond can touch. It can read files, search codebases, edit code, run shell commands, and fetch the web. All write operations require explicit approval.
-
-### Projects
-
-Organize work into named projects with goals, deadlines, types, and attached resources (folders, files, links). Projects keep Bond focused — when a chat is linked to a project, Bond reads the resources and works toward the goal.
-
-### Todos
-
-A built-in task manager. Create, complete, group, and link todos to projects. Todos render as live, interactive checklists right in the chat. Bond can create them conversationally or you can manage them through the sidebar.
-
-### Operatives (Subagents)
-
-Spawn autonomous background agents that work on coding tasks independently. Each operative gets its own context window and can be isolated in a git worktree. Run multiple in parallel — one refactoring the backend while another writes tests. Monitor progress, read logs, or cancel from the chat.
-
-### In-App Browser
-
-A built-in browser panel for viewing websites, inspecting pages, and working with web content without leaving Bond. Open URLs, read page text, execute JavaScript, capture screenshots, and inspect the DOM — all from the chat.
 
 ### Bond on the Go
 
@@ -54,7 +34,7 @@ Connect Bond to external tool servers — Figma, GitHub, Slack, Linear, Chrome D
 
 ### Collections & Journal
 
-Track anything with custom schemas (movies, books, workouts) via collections. Keep a persistent journal for reflections, decision logs, and project summaries that carry context across sessions.
+Track anything with custom schemas (movies, books, workouts) via collections. Keep a persistent journal for reflections, decision logs, and summaries that carry context across sessions.
 
 ### Sense (Screen Awareness)
 
@@ -72,15 +52,12 @@ Store, browse, and manage images. Download from URLs, search by filename, and re
 
 - "What's in this screenshot?" — attach an image and get an instant analysis
 - "/joke" — get a bad programmer joke on demand
-- "Add a todo to pick up groceries" — task created, done
 - "What was I working on yesterday?" — Sense summarizes your screen activity
 
 **Involved things:**
 
 - "Refactor the auth module to use JWT, write tests, and open a PR" — Bond edits the code, runs the test suite, creates the branch, and opens the pull request
-- "Spin up two operatives — one to build the API endpoints, one to build the React frontend" — parallel background agents working in isolated worktrees
 - "Here's a Figma link — implement this design in our app" — Bond fetches the design context, maps it to your component library, and writes the code
-- "Research competitors in the project management space, summarize findings, and create a feature plan" — web search, synthesis, structured output saved to the project
 
 ## Requirements
 
@@ -109,12 +86,8 @@ bond dev                 # Full dev server (stops daemon, runs electron-vite dev
 bond build [daemon|all]  # Build targets (default: all)
 bond rebuild [target]    # Stop, build, start
 bond log                 # Tail daemon log
-bond todo                # Manage todos (list, add, done, undo, rm)
-bond project             # Manage projects (list, add, show, edit, archive, rm, resource)
 bond media               # Manage media (list, info, open, rm, purge)
 bond sense               # Ambient screen awareness (status, on, off, search, apps, timeline)
-bond browser             # In-app browser (open, tabs, read, screenshot, exec, console, dom, network)
-bond operative           # Manage operatives (ls, spawn, show, logs, cancel, rm, clear)
 bond screenshot          # Capture Bond window to /tmp/bond-screenshot.png
 bond test                # Run tests
 bond help                # Show all commands
@@ -175,14 +148,10 @@ A standalone Node.js process that runs independently of the Electron app. Commun
 - `bond.setModel` / `bond.getModel` — model selection
 - `bond.approvalResponse` — tool approval flow
 - `session.*` — CRUD, messages, title generation
-- `project.*` — CRUD, resources
-- `todo.*` — CRUD, parsing
 - `image.*` — list, get, import, delete
 - `settings.*` — soul, accent color, window opacity
 - `skills.*` — list, refresh, remove
 - `sense.*` — status, enable, disable, pause, resume, now, today, search, apps, timeline, capture, sessions, settings, clear, stats
-- `browser.*` — open, navigate, close, tabs, read, screenshot, exec, console, dom, network
-- `operative.*` — spawn, list, show, logs, cancel, remove, clear
 
 **Agent tools:** Read, Glob, Grep, WebSearch, WebFetch, Edit, Write, Bash — scoped by edit mode (readonly, scoped, or full).
 
@@ -196,14 +165,13 @@ Manages the Electron window and proxies IPC calls to the daemon via `BondClient`
 - Resolves the full user PATH via login shell for packaged mode
 - Waits for the socket to appear before connecting
 - Creates a BrowserWindow with native macOS vibrancy
-- Proxies all `bond:*`, `session:*`, `settings:*`, `sense:*`, and `browser:*` IPC to the daemon
+- Proxies all `bond:*`, `session:*`, `settings:*`, and `sense:*` IPC to the daemon
 - Sense screenshot capture via `desktopCapturer` + `NativeImage.toJPEG()` (daemon requests, main process captures)
 - Sense tray indicator (menu bar icon with recording state)
-- Browser webContents management — tab registry, screenshot capture, JS execution, command proxying between daemon and renderer
 
 ### 3. Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` to the renderer via `contextBridge` — a typed API surface covering chat, sessions, settings, model selection, browser control, and shell utilities.
+Exposes `window.bond` to the renderer via `contextBridge` — a typed API surface covering chat, sessions, settings, model selection, and shell utilities.
 
 ### 4. Renderer (`src/renderer/`)
 
@@ -220,9 +188,8 @@ Types and utilities shared across all layers:
 - `protocol.ts` — JSON-RPC 2.0 request/response/notification types
 - `stream.ts` — `BondStreamChunk` union type (text, tool, approval, error, system)
 - `client.ts` — `BondClient` WebSocket client class
-- `session.ts` — Session, SessionMessage, EditMode, AttachedImage, Project, ProjectResource, TodoItem types
+- `session.ts` — Session, SessionMessage, EditMode, and AttachedImage types
 - `sense.ts` — SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult, AccessibilityResult types
-- `browser.ts` — BrowserTab, BrowserCommand, ConsoleEntry, NetworkEntry types
 - `models.ts` — `ModelId` type (`'opus' | 'sonnet' | 'haiku'`)
 
 ## Data & Runtime
@@ -264,14 +231,14 @@ bin/bond                 # CLI for daemon management
 scripts/
   build-native-helpers.sh  # Compiles Obj-C native helpers
 src/
-  cli/                   # CLI modules (todo, project, media, sense, etc.)
+  cli/                   # CLI modules (media, journal, collections, sense, etc.)
   native/                # Objective-C native helpers (window, OCR, accessibility)
   daemon/                # Standalone daemon (Agent SDK, SQLite, WebSocket server)
     sense/               # Sense ambient awareness (controller, capture pipeline, OCR, storage)
   main/                  # Electron main process (window, IPC proxy, daemon lifecycle, Sense capture)
   preload/               # contextBridge → window.bond API
   renderer/              # Vue 3 chat UI + Tailwind
-    composables/         # State and logic (useChat, useSessions, useProjects, useAutoScroll, useAccentColor, useAppView, useSense)
+    composables/         # State and logic (useChat, useSessions, useCollections, useJournal, useMemory, useAutoScroll, useAccentColor, useAppView, useSense)
     components/          # Vue components (primitives, layout, chat, views)
     types/               # Message types
     lib/                 # Utilities (highlight.js setup)

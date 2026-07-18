@@ -4,15 +4,11 @@ import QuickChat from './components/QuickChat.vue'
 import { useChat } from './composables/useChat'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useSessions } from './composables/useSessions'
-import { useProjects } from './composables/useProjects'
 import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
-import { useBrowser } from './composables/useBrowser'
-import { useOperatives } from './composables/useOperatives'
-import { useOperativeEvents } from './composables/useOperativeEvents'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhSidebarSimple, PhArrowDown, PhChecks, PhCube, PhGlobe, PhX, PhRobot, PhDotsThree, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
+import { PhSidebarSimple, PhArrowDown, PhX, PhDotsThree, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import BondFlyoutMenu from './components/BondFlyoutMenu.vue'
@@ -22,13 +18,9 @@ import ChatInput from './components/ChatInput.vue'
 import ActivityBar from './components/ActivityBar.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import MediaView from './components/MediaView.vue'
-import ProjectPanelView from './components/ProjectPanelView.vue'
 import CollectionsView from './components/CollectionsView.vue'
-import TodoView from './components/TodoView.vue'
-import BrowserView from './components/BrowserView.vue'
 import SensePanelView from './components/SensePanelView.vue'
 import MemoryView from './components/MemoryView.vue'
-import OperativePanelView from './components/OperativePanelView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
@@ -39,11 +31,7 @@ const isQuickChatMode = new URLSearchParams(window.location.search).get('mode') 
 
 const chat = useChat()
 const sessions = useSessions()
-const projects = useProjects()
 const collections = useCollections()
-const browserComposable = useBrowser()
-const operativesComposable = useOperatives()
-const operativeEvents = useOperativeEvents(computed(() => operativesComposable.activeOperativeId.value))
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
 
 function applyWindowOpacity(val: number) {
@@ -111,7 +99,6 @@ const displayItems = computed<DisplayItem[]>(() => {
   return result
 })
 
-const browserViewRef = ref<InstanceType<typeof BrowserView> | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
 const sidebarPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
@@ -131,11 +118,14 @@ const sidebarCollapsed = ref(localStorage.getItem('bond:sidebar-collapsed') === 
 const isFullScreen = ref(false)
 const sidebarWidth = ref(getInitialSidebarWidth())
 
-type RightPanelContent = 'todos' | 'projects' | 'browser' | 'operatives' | 'collections' | 'sense' | 'media' | 'memory'
+type RightPanelContent = 'collections' | 'sense' | 'media' | 'memory'
+const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'media', 'memory']
+function savedRightPanelContent(): RightPanelContent {
+  const saved = localStorage.getItem('bond:right-panel-content') as RightPanelContent | null
+  return saved && validRightPanels.includes(saved) ? saved : 'collections'
+}
 const rightPanelCollapsed = ref(localStorage.getItem('bond:right-panel') === 'none' || !localStorage.getItem('bond:right-panel'))
-const rightPanelContent = ref<RightPanelContent>(
-  (localStorage.getItem('bond:right-panel-content') as RightPanelContent) || 'todos'
-)
+const rightPanelContent = ref<RightPanelContent>(savedRightPanelContent())
 const rightPanelOpen = computed(() => !rightPanelCollapsed.value)
 const rightPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
 
@@ -178,15 +168,6 @@ function toggleRightPanel(panel?: RightPanelContent) {
   }
   localStorage.setItem('bond:right-panel', rightPanelCollapsed.value ? 'none' : rightPanelContent.value)
   localStorage.setItem('bond:right-panel-content', rightPanelContent.value)
-}
-
-function ensureBrowserPanel() {
-  if (rightPanelCollapsed.value || rightPanelContent.value !== 'browser') {
-    rightPanelContent.value = 'browser'
-    rightPanelCollapsed.value = false
-    localStorage.setItem('bond:right-panel', 'browser')
-    localStorage.setItem('bond:right-panel-content', 'browser')
-  }
 }
 
 function syncRightPanelWidth() {
@@ -284,44 +265,11 @@ async function handleCreateSkill(description: string) {
   })
 }
 
-async function handleTodoChat(text: string) {
-  const session = await sessions.create()
-  await chat.loadSession(session.id)
-  nextTick(() => {
-    chat.submit(text)
-  })
-}
-
-async function handleProjectCreate(name: string, goal: string, type: import('../shared/session').ProjectType, deadline: string) {
-  await projects.create(name, goal, type, deadline || undefined)
-}
-
-async function handleProjectStartChat(projectId: string) {
-  const project = projects.projects.value.find(p => p.id === projectId)
-  const session = await sessions.create({ projectId })
-  await chat.loadSession(session.id)
-  if (project?.goal) {
-    nextTick(() => {
-      chat.submit(`I'm working on the "${project.name}" project. Goal: ${project.goal}`)
-    })
-  } else {
-    nextTick(() => chatInputRef.value?.focus())
-  }
-}
-
-function handleOpenInBrowser(url: string) {
-  rightPanelContent.value = 'browser'
-  rightPanelCollapsed.value = false
-  localStorage.setItem('bond:right-panel', 'browser')
-  localStorage.setItem('bond:right-panel-content', 'browser')
-  nextTick(() => browserViewRef.value?.openUrl(url))
-}
 
 let removeCreateSkillListener: (() => void) | null = null
 let removeOpacityListener: (() => void) | null = null
 let removeAccentListener: (() => void) | null = null
 let removeModelListener: (() => void) | null = null
-let removeProjectsListener: (() => void) | null = null
 let removeCollectionsListener: (() => void) | null = null
 let removeConnectionLostListener: (() => void) | null = null
 let removeConnectionRestoredListener: (() => void) | null = null
@@ -381,31 +329,6 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault()
     toggleRightPanel()
   }
-  if (e.metaKey && e.shiftKey && e.key === 'k') {
-    e.preventDefault()
-    toggleRightPanel('browser')
-  }
-  if (e.metaKey && e.shiftKey && e.key === 'p') {
-    e.preventDefault()
-    toggleRightPanel('projects')
-  }
-  if (e.metaKey && e.shiftKey && e.key === 'o') {
-    e.preventDefault()
-    toggleRightPanel('operatives')
-  }
-  if (e.metaKey && !e.shiftKey && e.key === 't') {
-    // Only intercept Cmd+T when browser panel is open
-    if (rightPanelContent.value === 'browser' && !rightPanelCollapsed.value) {
-      e.preventDefault()
-      browserComposable.createTab()
-    }
-  }
-  if (e.metaKey && !e.shiftKey && e.key === 'l') {
-    if (rightPanelContent.value === 'browser' && !rightPanelCollapsed.value) {
-      e.preventDefault()
-      browserViewRef.value?.focusUrlBar()
-    }
-  }
   if (e.metaKey && e.key === '/') {
     e.preventDefault()
     fieldManualOpen.value = !fieldManualOpen.value
@@ -417,22 +340,16 @@ function handleBeforeUnload() {
   chat.persistMessages()
 }
 
-function handleBrowserLinkEvent(e: Event) {
-  const url = (e as CustomEvent).detail
-  if (typeof url === 'string') handleOpenInBrowser(url)
-}
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('beforeunload', handleBeforeUnload)
-  window.addEventListener('bond:openInBrowser', handleBrowserLinkEvent)
   removeCreateSkillListener = window.bond.onCreateSkill(handleCreateSkill)
   removeOpacityListener = window.bond.onWindowOpacity(applyWindowOpacity)
   removeAccentListener = window.bond.onAccentColor(applyExternalAccent)
   removeModelListener = window.bond.onModelChanged((model: string) => {
     selectedModel.value = model as ModelId
   })
-  removeProjectsListener = window.bond.onProjectsChanged(() => projects.load())
   removeCollectionsListener = window.bond.onCollectionsChanged(() => collections.load())
   removeConnectionLostListener = window.bond.onConnectionLost(() => {
     chat.stashToLocalStorage()
@@ -454,7 +371,6 @@ onMounted(async () => {
   loadAccent()
   loadWindowOpacity()
   refreshMediaCount()
-  projects.load()
   collections.load()
   const [model] = await Promise.all([window.bond.getModel(), sessions.load()])
   selectedModel.value = model as ModelId
@@ -496,12 +412,10 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('beforeunload', handleBeforeUnload)
-  window.removeEventListener('bond:openInBrowser', handleBrowserLinkEvent)
   removeCreateSkillListener?.()
   removeOpacityListener?.()
   removeAccentListener?.()
   removeModelListener?.()
-  removeProjectsListener?.()
   removeCollectionsListener?.()
   removeConnectionLostListener?.()
   removeConnectionRestoredListener?.()
@@ -537,7 +451,7 @@ onUnmounted(() => {
 
     <BondPanelHandle v-show="!sidebarCollapsed" id="handle-0" />
 
-    <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="rightPanelContent === 'browser' && !rightPanelCollapsed ? 300 : 420">
+    <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="420">
       <div :class="['main-panel-wrap', { 'sidebar-collapsed': sidebarCollapsed }]">
       <ViewShell
         ref="chatShellRef"
@@ -552,18 +466,6 @@ onUnmounted(() => {
           </BondButton>
         </template>
         <template #header-end>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'projects' }" @click.stop="toggleRightPanel('projects')" v-tooltip="'Projects ⇧⌘P'">
-            <PhCube :size="16" weight="bold" />
-          </BondButton>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'todos' }" @click.stop="toggleRightPanel('todos')" v-tooltip="'Todos ⇧⌘B'">
-            <PhChecks :size="16" weight="bold" />
-          </BondButton>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'operatives' }" @click.stop="toggleRightPanel('operatives')" v-tooltip="'Operatives ⇧⌘O'">
-            <PhRobot :size="16" weight="bold" />
-          </BondButton>
-          <BondButton variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'browser' }" @click.stop="toggleRightPanel('browser')" v-tooltip="'Browser ⇧⌘K'">
-            <PhGlobe :size="16" weight="bold" />
-          </BondButton>
           <BondButton ref="overflowBtnRef" variant="ghost" size="sm" icon :class="{ 'panel-toggle-active': rightPanelOpen && ['collections', 'sense', 'media', 'memory'].includes(rightPanelContent) }" @click.stop="overflowMenuOpen = !overflowMenuOpen" v-tooltip="'More panels'">
             <PhDotsThree :size="16" weight="bold" />
           </BondButton>
@@ -638,32 +540,8 @@ onUnmounted(() => {
 
     <BondPanelHandle v-show="!rightPanelHidden" id="handle-1" />
 
-    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="rightPanelContent === 'browser' ? 360 : ['sense', 'memory'].includes(rightPanelContent) ? 300 : 260" :maxSize="99999" :style="rightPanelStyle">
-      <TodoView v-if="rightPanelContent === 'todos'" @startChat="handleTodoChat" />
-      <ProjectPanelView v-else-if="rightPanelContent === 'projects'"
-        :projects="projects.activeProjects.value"
-        :archivedProjects="projects.archivedProjects.value"
-        :activeProjectId="projects.activeProjectId.value"
-        @select="projects.select"
-        @create="handleProjectCreate"
-        @archive="projects.archive"
-        @unarchive="projects.unarchive"
-        @remove="projects.remove"
-        @startChat="handleProjectStartChat"
-        @addResource="projects.addResource"
-        @removeResource="projects.removeResource"
-        @updateDeadline="(id: string, d: string) => projects.update(id, { deadline: d })"
-      />
-      <OperativePanelView v-else-if="rightPanelContent === 'operatives'"
-        :operatives="operativesComposable.operatives.value"
-        :activeOperativeId="operativesComposable.activeOperativeId.value"
-        :events="operativeEvents.events.value"
-        @select="operativesComposable.select"
-        @cancel="operativesComposable.cancel"
-        @remove="operativesComposable.remove"
-        @clear="operativesComposable.clear"
-      />
-      <CollectionsView v-else-if="rightPanelContent === 'collections'"
+    <BondPanel ref="rightPanelRef" id="right-panel" unit="px" :defaultSize="320" :minSize="['sense', 'memory'].includes(rightPanelContent) ? 300 : 260" :maxSize="99999" :style="rightPanelStyle">
+      <CollectionsView v-if="rightPanelContent === 'collections'"
         :collections="collections.activeCollections.value"
         :archivedCollections="collections.archivedCollections.value"
         :activeCollectionId="collections.activeCollectionId.value"
@@ -676,8 +554,6 @@ onUnmounted(() => {
       <SensePanelView v-else-if="rightPanelContent === 'sense'" />
       <MemoryView v-else-if="rightPanelContent === 'memory'" />
       <MediaView v-else-if="rightPanelContent === 'media'" />
-      <!-- BrowserView uses v-show so webview tabs stay alive when panel switches -->
-      <BrowserView v-show="rightPanelContent === 'browser'" ref="browserViewRef" @ensureVisible="ensureBrowserPanel" />
     </BondPanel>
   </BondPanelGroup>
 

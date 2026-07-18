@@ -83,26 +83,26 @@ describe('parseArtifacts — artifacts', () => {
 
 describe('parseArtifacts — embeds', () => {
   it('parses a self-closing embed tag', () => {
-    const input = '<bond-embed type="todos" />'
+    const input = '<bond-embed type="media" />'
     const result = parseArtifacts(input)
     expect(result).toEqual([
-      { type: 'embed', embedType: 'todos', attrs: {} },
+      { type: 'embed', embedType: 'media', attrs: {} },
     ])
   })
 
   it('parses embed with attributes', () => {
-    const input = '<bond-embed type="todos" project="Bond" filter="pending" />'
+    const input = '<bond-embed type="media" search="screenshot" limit="6" />'
     const result = parseArtifacts(input)
     expect(result).toEqual([
-      { type: 'embed', embedType: 'todos', attrs: { project: 'Bond', filter: 'pending' } },
+      { type: 'embed', embedType: 'media', attrs: { search: 'screenshot', limit: '6' } },
     ])
   })
 
-  it('parses project embed', () => {
-    const input = '<bond-embed type="project" name="Bond" />'
+  it('parses collection embed', () => {
+    const input = '<bond-embed type="collection" name="Movies" />'
     const result = parseArtifacts(input)
     expect(result).toEqual([
-      { type: 'embed', embedType: 'project', attrs: { name: 'Bond' } },
+      { type: 'embed', embedType: 'collection', attrs: { name: 'Movies' } },
     ])
   })
 
@@ -115,40 +115,40 @@ describe('parseArtifacts — embeds', () => {
   })
 
   it('parses embed without self-closing slash', () => {
-    const input = '<bond-embed type="todos">'
+    const input = '<bond-embed type="media">'
     const result = parseArtifacts(input)
     expect(result).toEqual([
-      { type: 'embed', embedType: 'todos', attrs: {} },
+      { type: 'embed', embedType: 'media', attrs: {} },
     ])
   })
 
   it('parses text around embeds', () => {
-    const input = 'Here are your todos:\n\n<bond-embed type="todos" project="Bond" />\n\nLet me know!'
+    const input = 'Here is your media:\n\n<bond-embed type="media" limit="4" />\n\nLet me know!'
     const result = parseArtifacts(input)
     expect(result).toEqual([
-      { type: 'text', content: 'Here are your todos:\n\n' },
-      { type: 'embed', embedType: 'todos', attrs: { project: 'Bond' } },
+      { type: 'text', content: 'Here is your media:\n\n' },
+      { type: 'embed', embedType: 'media', attrs: { limit: '4' } },
       { type: 'text', content: '\n\nLet me know!' },
     ])
   })
 
   it('ignores inline embed mentions', () => {
-    const input = 'Use <bond-embed type="todos" /> to show todos.\n\n<bond-embed type="todos" />'
+    const input = 'Use <bond-embed type="media" /> to show media.\n\n<bond-embed type="media" />'
     const result = parseArtifacts(input)
     expect(result[0]).toMatchObject({ type: 'text' })
-    expect(result[1]).toMatchObject({ type: 'embed', embedType: 'todos' })
+    expect(result[1]).toMatchObject({ type: 'embed', embedType: 'media' })
   })
 })
 
 describe('parseArtifacts — mixed', () => {
   it('parses artifacts and embeds together', () => {
     const input =
-      'Summary:\n\n<bond-embed type="project" name="Bond" />\n\n' +
+      'Summary:\n\n<bond-embed type="collection" name="Movies" />\n\n' +
       'And a visual:\n\n<bond-artifact title="Chart" chrome="none"><div>chart</div></bond-artifact>\n\nDone!'
     const result = parseArtifacts(input)
     expect(result).toEqual([
       { type: 'text', content: 'Summary:\n\n' },
-      { type: 'embed', embedType: 'project', attrs: { name: 'Bond' } },
+      { type: 'embed', embedType: 'collection', attrs: { name: 'Movies' } },
       { type: 'text', content: '\n\nAnd a visual:\n\n' },
       { type: 'artifact', title: 'Chart', chrome: 'none', layout: undefined, content: '<div>chart</div>' },
       { type: 'text', content: '\n\nDone!' },
@@ -167,7 +167,7 @@ describe('hasRichContent / hasArtifacts', () => {
   })
 
   it('returns true for embeds', () => {
-    expect(hasRichContent('text\n<bond-embed type="todos" />')).toBe(true)
+    expect(hasRichContent('text\n<bond-embed type="media" />')).toBe(true)
   })
 
   it('returns false for inline mentions', () => {

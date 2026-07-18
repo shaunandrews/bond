@@ -9,7 +9,6 @@ import MarkdownMessage from '../MarkdownMessage.vue'
 const props = defineProps<{
   ids?: string        // comma-separated entry IDs
   author?: string     // filter by author ('user' or 'bond')
-  project?: string    // filter by project name
   search?: string     // search query
   limit?: string
 }>()
@@ -39,12 +38,6 @@ onMounted(async () => {
     } else {
       const opts: Record<string, unknown> = { limit: maxItems.value }
       if (props.author) opts.author = props.author
-      // Resolve project name to ID if provided
-      if (props.project) {
-        const projects = await window.bond.listProjects()
-        const match = projects.find(p => p.name.toLowerCase() === props.project!.toLowerCase())
-        if (match) opts.projectId = match.id
-      }
       entries.value = await window.bond.listJournalEntries(opts as any)
     }
   } finally {

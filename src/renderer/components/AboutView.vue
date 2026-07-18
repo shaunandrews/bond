@@ -5,13 +5,13 @@ const layers = [
   {
     name: 'Renderer',
     tech: 'Vue 3 + Tailwind CSS v4',
-    description: 'Chat UI, session management, settings, and design system browser. Composition API throughout.',
+    description: 'Chat UI, session management, settings, and design system catalog. Composition API throughout.',
     files: 'src/renderer/',
   },
   {
     name: 'Main Process',
     tech: 'Electron',
-    description: 'Window management, daemon lifecycle, IPC proxy, Sense screenshot capture, and browser webContents management. Spawns the daemon on launch and bridges renderer calls to it.',
+    description: 'Window management, daemon lifecycle, IPC proxy, and Sense screenshot capture. Spawns the daemon on launch and bridges renderer calls to it.',
     files: 'src/main/',
   },
   {
@@ -140,12 +140,12 @@ const dataPaths = [
         <div class="cli-row"><code>bond dev</code><span>Full dev server with hot reload</span></div>
         <div class="cli-row"><code>bond log</code><span>Tail the daemon log</span></div>
         <div class="cli-row"><code>bond build</code><span>Production build</span></div>
-        <div class="cli-row"><code>bond todo</code><span>Manage todos (list, add, done, undo, rm)</span></div>
-        <div class="cli-row"><code>bond project</code><span>Manage projects (list, add, show, edit, archive, rm)</span></div>
+
+
         <div class="cli-row"><code>bond media</code><span>Manage media (list, info, open, rm, purge)</span></div>
         <div class="cli-row"><code>bond sense</code><span>Screen awareness (status, on, off, search, apps, timeline)</span></div>
-        <div class="cli-row"><code>bond browser</code><span>In-app browser (open, tabs, read, screenshot, exec, console, dom, network)</span></div>
-        <div class="cli-row"><code>bond operative</code><span>Manage operatives (ls, spawn, show, logs, cancel, rm, clear)</span></div>
+
+
       </div>
     </section>
 

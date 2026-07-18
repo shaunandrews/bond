@@ -121,11 +121,6 @@ function handleMessage(e: MessageEvent) {
         window.bond.openExternal(data.url)
       }
       break
-    case 'bond:createTodo':
-      if (typeof data.text === 'string') {
-        window.bond.createTodo(data.text, data.notes, data.group)
-      }
-      break
     case 'bond:copyText':
       if (typeof data.text === 'string') {
         navigator.clipboard.writeText(data.text)

@@ -10,20 +10,12 @@ declare global {
       listSessions: () => Promise<import('../../shared/session').Session[]>
       createSession: (options?: { title?: string; projectId?: string }) => Promise<import('../../shared/session').Session>
       getSession: (id: string) => Promise<import('../../shared/session').Session | null>
-      updateSession: (id: string, updates: Partial<Pick<import('../../shared/session').Session, 'title' | 'summary' | 'archived' | 'editMode' | 'projectId'>>) => Promise<import('../../shared/session').Session | null>
+      updateSession: (id: string, updates: Partial<Pick<import('../../shared/session').Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode' | 'projectId'>>) => Promise<import('../../shared/session').Session | null>
       deleteSession: (id: string) => Promise<boolean>
       deleteArchivedSessions: () => Promise<{ ok: boolean; count: number }>
       getMessages: (sessionId: string) => Promise<import('../../shared/session').SessionMessage[]>
       saveMessages: (sessionId: string, messages: import('../../shared/session').SessionMessage[]) => Promise<boolean>
       generateTitle: (sessionId: string) => Promise<{ title: string; summary: string }>
-      onTodoChanged: (fn: () => void) => () => void
-      listTodos: () => Promise<import('../../shared/session').TodoItem[]>
-      createTodo: (text: string, notes?: string, group?: string, projectId?: string) => Promise<import('../../shared/session').TodoItem>
-      updateTodo: (id: string, updates: Partial<Pick<import('../../shared/session').TodoItem, 'text' | 'notes' | 'group' | 'done' | 'projectId'>>) => Promise<import('../../shared/session').TodoItem | null>
-      deleteTodo: (id: string) => Promise<boolean>
-      parseTodo: (raw: string) => Promise<{ title: string; notes: string; group: string }>
-      reorderTodos: (ids: string[]) => Promise<boolean>
-      parseFromPrompt: (prompt: string, existingGroups?: string[]) => Promise<{ todos: Array<{ title: string; notes: string; group: string }> }>
       listImages: () => Promise<import('../../shared/session').ImageRecord[]>
       getImage: (imageId: string) => Promise<import('../../shared/session').AttachedImage | null>
       getImages: (ids: string[]) => Promise<(import('../../shared/session').AttachedImage | null)[]>
@@ -52,15 +44,6 @@ declare global {
       getWindowOpacity: () => Promise<number>
       saveWindowOpacity: (opacity: number) => Promise<boolean>
       onWindowOpacity: (fn: (opacity: number) => void) => () => void
-      // Projects
-      listProjects: () => Promise<import('../../shared/session').Project[]>
-      getProject: (id: string) => Promise<import('../../shared/session').Project | null>
-      createProject: (name: string, goal?: string, type?: import('../../shared/session').ProjectType, deadline?: string) => Promise<import('../../shared/session').Project>
-      updateProject: (id: string, updates: Partial<Pick<import('../../shared/session').Project, 'name' | 'goal' | 'type' | 'archived' | 'deadline'>>) => Promise<import('../../shared/session').Project | null>
-      deleteProject: (id: string) => Promise<boolean>
-      addProjectResource: (projectId: string, kind: import('../../shared/session').ProjectResource['kind'], value: string, label?: string) => Promise<import('../../shared/session').ProjectResource>
-      removeProjectResource: (id: string) => Promise<boolean>
-      onProjectsChanged: (fn: () => void) => () => void
       // Collections
       listCollections: () => Promise<import('../../shared/session').Collection[]>
       getCollection: (id: string) => Promise<import('../../shared/session').Collection | null>
@@ -89,15 +72,6 @@ declare global {
       deleteJournalComment: (id: string) => Promise<boolean>
       generateBondComment: (entryId: string) => Promise<import('../../shared/session').ItemComment>
       onJournalChanged: (fn: () => void) => () => void
-      // Browser
-      browser: {
-        onCommand: (fn: (cmd: import('../../shared/browser').BrowserCommand) => void) => () => void
-        commandResult: (requestId: string, result: unknown) => Promise<void>
-        registerWebContents: (tabId: string, webContentsId: number) => Promise<void>
-        unregisterWebContents: (tabId: string) => Promise<void>
-        captureTab: (tabId: string) => Promise<string>
-        execInTab: (tabId: string, js: string) => Promise<unknown>
-      }
       // Sense
       senseStatus: () => Promise<unknown>
       senseEnable: () => Promise<unknown>
@@ -129,16 +103,6 @@ declare global {
       senseDismissThread: (debriefId: string, thread: string) => Promise<{ ok: boolean }>
       senseRemoveDecision: (debriefId: string, decision: string) => Promise<{ ok: boolean }>
       senseSystemPromptPreview: (projectId?: string) => Promise<{ prompt: string }>
-      // Operatives
-      listOperatives: (filters?: { status?: string; sessionId?: string }) => Promise<import('../../shared/operative').Operative[]>
-      getOperative: (id: string) => Promise<import('../../shared/operative').Operative | null>
-      spawnOperative: (opts: import('../../shared/operative').SpawnOperativeOptions) => Promise<import('../../shared/operative').Operative>
-      getOperativeEvents: (id: string, afterId?: number, limit?: number) => Promise<import('../../shared/operative').OperativeEvent[]>
-      cancelOperative: (id: string) => Promise<{ ok: boolean }>
-      removeOperative: (id: string) => Promise<{ ok: boolean }>
-      clearOperatives: (status?: string) => Promise<{ deleted: number }>
-      onOperativeChanged: (fn: () => void) => () => void
-      onOperativeEvent: (fn: (payload: { operativeId: string; event: import('../../shared/operative').OperativeEvent }) => void) => () => void
       // Connection status
       onConnectionLost: (fn: () => void) => () => void
       onConnectionRestored: (fn: () => void) => () => void

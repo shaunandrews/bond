@@ -8,7 +8,6 @@
  *   bond journal                                       List recent entries (last 20)
  *   bond journal ls                                    Same as above
  *   bond journal ls --author bond                      Filter by author
- *   bond journal ls --project <name>                   Filter by project
  *   bond journal ls --tag <tag>                        Filter by tag
  *   bond journal show <id|number|title>                Show full entry
  *   bond journal add "body text"                       Create entry (title + tags auto-generated)
@@ -51,11 +50,6 @@ function getPinned(item: CollectionItem): boolean {
   return (item.data.pinned as boolean) || false
 }
 
-interface Project {
-  id: string
-  name: string
-}
-
 function findEntry(entries: CollectionItem[], query: string): CollectionItem | undefined {
   // Try exact ID prefix match
   const byId = entries.find(e => e.id.toLowerCase().startsWith(query.toLowerCase()))
@@ -76,20 +70,18 @@ const D = '\x1b[0;90m'
 const B = '\x1b[1m'
 const N = '\x1b[0m'
 
-const FLAG_NAMES = new Set(['--body', '--author', '--project', '--tag', '--tags', '--session'])
+const FLAG_NAMES = new Set(['--body', '--author', '--tag', '--tags', '--session'])
 
 function extractFlags(args: string[]): {
   textArgs: string[]
   body?: string
   author?: string
-  project?: string
   tag?: string
   tags?: string
   session?: string
 } {
   let body: string | undefined
   let author: string | undefined
-  let project: string | undefined
   let tag: string | undefined
   let tags: string | undefined
   let session: string | undefined
@@ -106,11 +98,6 @@ function extractFlags(args: string[]): {
       const parts: string[] = []
       while (i < args.length && !FLAG_NAMES.has(args[i])) { parts.push(args[i]); i++ }
       author = parts.join(' ')
-    } else if (args[i] === '--project') {
-      i++
-      const parts: string[] = []
-      while (i < args.length && !FLAG_NAMES.has(args[i])) { parts.push(args[i]); i++ }
-      project = parts.join(' ')
     } else if (args[i] === '--tag') {
       i++
       const parts: string[] = []
@@ -131,26 +118,9 @@ function extractFlags(args: string[]): {
       i++
     }
   }
-  return { textArgs, body, author, project, tag, tags, session }
+  return { textArgs, body, author, tag, tags, session }
 }
 
-async function resolveProjectId(ws: WebSocket, query: string): Promise<string> {
-  const projects = await call(ws, 'project.list') as Project[]
-  const byId = projects.find(p => p.id.toLowerCase().startsWith(query.toLowerCase()))
-  if (byId) return byId.id
-  const idx = parseInt(query, 10)
-  if (!isNaN(idx) && idx >= 1 && idx <= projects.length) return projects[idx - 1].id
-  const lower = query.toLowerCase()
-  const byName = projects.find(p => p.name.toLowerCase().includes(lower))
-  if (byName) return byName.id
-  console.error(`${R}No matching project:${N} ${query}`)
-  process.exit(1)
-}
-
-async function getProjectName(ws: WebSocket, projectId: string): Promise<string> {
-  const project = await call(ws, 'project.get', { id: projectId }) as Project | null
-  return project?.name ?? projectId.slice(0, 8)
-}
 
 function formatDate(iso: string): string {
   const d = new Date(iso)
@@ -183,20 +153,12 @@ async function main() {
     switch (sub) {
       case 'list':
       case 'ls': {
-        const { author, project, tag } = extractFlags(args.slice(1))
-        let projectId: string | undefined
-        if (project) projectId = await resolveProjectId(ws, project)
-        const entries = await call(ws, 'journal.list', { author, projectId, tag, limit: 20 }) as CollectionItem[]
+        const { author, tag } = extractFlags(args.slice(1))
+        const entries = await call(ws, 'journal.list', { author, tag, limit: 20 }) as CollectionItem[]
         if (entries.length === 0) {
-          const filterDesc = author ? ` by ${author}` : project ? ` in project "${project}"` : tag ? ` tagged "${tag}"` : ''
+          const filterDesc = author ? ` by ${author}` : tag ? ` tagged "${tag}"` : ''
           console.log(`${D}No journal entries${filterDesc}${N}`)
           break
-        }
-        // Build project name cache
-        const projectIds = new Set(entries.map(e => e.projectId).filter(Boolean) as string[])
-        const projectNames = new Map<string, string>()
-        for (const pid of projectIds) {
-          projectNames.set(pid, await getProjectName(ws, pid))
         }
         entries.forEach((e, i) => {
           const pin = getPinned(e) ? `${Y}*${N} ` : '  '
@@ -204,8 +166,7 @@ async function main() {
           const date = `${D}${formatDate(e.createdAt)}${N}`
           const tags = getTags(e)
           const tagsStr = tags.length > 0 ? ` ${D}[${tags.join(', ')}]${N}` : ''
-          const projTag = e.projectId ? ` ${Y}← ${projectNames.get(e.projectId) ?? '?'}${N}` : ''
-          console.log(`${pin}${D}${i + 1}.${N} ${B}${getTitle(e)}${N}  ${authorTag}  ${date}${tagsStr}${projTag}`)
+          console.log(`${pin}${D}${i + 1}.${N} ${B}${getTitle(e)}${N}  ${authorTag}  ${date}${tagsStr}`)
           // Show first line of body as preview
           const firstLine = getBody(e).split('\n')[0]
           if (firstLine) {
@@ -230,10 +191,7 @@ async function main() {
         console.log(`${authorTag}  ${D}${date}${N}`)
         const tags = getTags(entry)
         if (tags.length > 0) console.log(`${D}Tags: ${tags.join(', ')}${N}`)
-        if (entry.projectId) {
-          const projName = await getProjectName(ws, entry.projectId)
-          console.log(`${Y}Project: ${projName}${N}`)
-        }
+        if (entry.projectId) console.log(`${Y}Project ID: ${entry.projectId}${N}`)
         console.log()
         console.log(getBody(entry))
         console.log()
@@ -243,25 +201,23 @@ async function main() {
       case 'add':
       case 'new':
       case 'create': {
-        const { textArgs, body, project, tags, session } = extractFlags(args.slice(1))
+        const { textArgs, body, tags, session } = extractFlags(args.slice(1))
         // Body comes from --body flag, positional args, or stdin
         let entryBody = body ?? ''
         if (!entryBody && textArgs.length > 0) entryBody = textArgs.join(' ')
         if (!entryBody) entryBody = await readStdin()
         if (!entryBody) {
-          console.error(`${R}Usage:${N} bond journal add "your entry text" [--project <p>]`)
-          console.error(`       bond journal add --body "..." [--project <p>]`)
+          console.error(`${R}Usage:${N} bond journal add "your entry text"`)
+          console.error(`       bond journal add --body "..."`)
           console.error(`       echo "..." | bond journal add`)
           process.exit(1)
         }
-        let projectId: string | undefined
-        if (project) projectId = await resolveProjectId(ws, project)
         const parsedTags = tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : undefined
         // Use first line as placeholder title
         const firstLine = entryBody.split('\n')[0].trim()
         const title = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine || 'Untitled'
         const entry = await call(ws, 'journal.create', {
-          author: 'user', title, body: entryBody, tags: parsedTags, projectId, sessionId: session
+          author: 'user', title, body: entryBody, tags: parsedTags, sessionId: session
         }) as CollectionItem
         // Auto-generate title + tags in the background
         console.log(`${G}Created${N}  ${D}generating title...${N}`)

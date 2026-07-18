@@ -1,8 +1,7 @@
 import WebSocket from 'ws'
 import type { TaggedChunk } from './stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, TodoItem, Project, ProjectResource, ProjectType, Collection, CollectionItem, FieldDef, ItemComment } from './session'
+import type { Session, SessionMessage, AttachedImage, ImageRecord, Collection, CollectionItem, FieldDef, ItemComment } from './session'
 import type { SenseStatus, SenseSettings, SenseCapture, SessionDebrief, SenseFact, OpenThread, DecisionWithContext } from './sense'
-import type { Operative, OperativeEvent, SpawnOperativeOptions } from './operative'
 import {
   makeRequest,
   isResponse,
@@ -12,14 +11,9 @@ import {
 } from './protocol'
 
 type ChunkListener = (chunk: TaggedChunk) => void
-type TodoChangeListener = () => void
-type ProjectChangeListener = () => void
 type CollectionChangeListener = () => void
-type BrowserCommandListener = (cmd: import('./browser').BrowserCommand) => void
 type SenseRequestCaptureListener = (payload: { captureDir: string; captureId: string }) => void
 type SenseStateChangedListener = (payload: { state: string }) => void
-type OperativeChangeListener = () => void
-type OperativeEventListener = (payload: { operativeId: string; event: OperativeEvent }) => void
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -31,14 +25,9 @@ export class BondClient {
   private nextId = 1
   private pending = new Map<string | number, PendingRequest>()
   private chunkListeners = new Set<ChunkListener>()
-  private todoChangeListeners = new Set<TodoChangeListener>()
-  private projectChangeListeners = new Set<ProjectChangeListener>()
   private collectionChangeListeners = new Set<CollectionChangeListener>()
-  private browserCommandListeners = new Set<BrowserCommandListener>()
   private senseRequestCaptureListeners = new Set<SenseRequestCaptureListener>()
   private senseStateChangedListeners = new Set<SenseStateChangedListener>()
-  private operativeChangeListeners = new Set<OperativeChangeListener>()
-  private operativeEventListeners = new Set<OperativeEventListener>()
   private disconnectListeners = new Set<() => void>()
   private socketPath: string
   private authToken?: string
@@ -137,22 +126,9 @@ export class BondClient {
           for (const fn of this.chunkListeners) {
             fn(chunk)
           }
-        } else if (msg.method === 'todo.changed') {
-          for (const fn of this.todoChangeListeners) {
-            fn()
-          }
-        } else if (msg.method === 'project.changed') {
-          for (const fn of this.projectChangeListeners) {
-            fn()
-          }
         } else if (msg.method === 'collection.changed') {
           for (const fn of this.collectionChangeListeners) {
             fn()
-          }
-        } else if (msg.method === 'browser.command' && msg.params) {
-          const cmd = msg.params as import('./browser').BrowserCommand
-          for (const fn of this.browserCommandListeners) {
-            fn(cmd)
           }
         } else if (msg.method === 'sense.requestCapture' && msg.params) {
           const payload = msg.params as { captureDir: string; captureId: string }
@@ -162,15 +138,6 @@ export class BondClient {
         } else if (msg.method === 'sense.stateChanged' && msg.params) {
           const payload = msg.params as { state: string }
           for (const fn of this.senseStateChangedListeners) {
-            fn(payload)
-          }
-        } else if (msg.method === 'operative.changed') {
-          for (const fn of this.operativeChangeListeners) {
-            fn()
-          }
-        } else if (msg.method === 'operative.event' && msg.params) {
-          const payload = msg.params as { operativeId: string; event: OperativeEvent }
-          for (const fn of this.operativeEventListeners) {
             fn(payload)
           }
         }
@@ -230,11 +197,6 @@ export class BondClient {
   onChunk(fn: ChunkListener): () => void {
     this.chunkListeners.add(fn)
     return () => this.chunkListeners.delete(fn)
-  }
-
-  onTodoChanged(fn: TodoChangeListener): () => void {
-    this.todoChangeListeners.add(fn)
-    return () => this.todoChangeListeners.delete(fn)
   }
 
   // --- Subscriptions ---
@@ -317,36 +279,6 @@ export class BondClient {
     return await this.call('image.delete', { id: imageId }) as boolean
   }
 
-  // --- Todos ---
-
-  async listTodos(): Promise<TodoItem[]> {
-    return await this.call('todo.list') as TodoItem[]
-  }
-
-  async createTodo(text: string, notes = '', group = '', projectId?: string): Promise<TodoItem> {
-    return await this.call('todo.create', { text, notes, group, projectId }) as TodoItem
-  }
-
-  async updateTodo(id: string, updates: Partial<Pick<TodoItem, 'text' | 'notes' | 'group' | 'done' | 'projectId'>>): Promise<TodoItem | null> {
-    return await this.call('todo.update', { id, updates }) as TodoItem | null
-  }
-
-  async deleteTodo(id: string): Promise<boolean> {
-    return await this.call('todo.delete', { id }) as boolean
-  }
-
-  async parseTodo(raw: string): Promise<{ title: string; notes: string; group: string }> {
-    return await this.call('todo.parse', { raw }) as { title: string; notes: string; group: string }
-  }
-
-  async reorderTodos(ids: string[]): Promise<boolean> {
-    return await this.call('todo.reorder', { ids }) as boolean
-  }
-
-  async parseFromPrompt(prompt: string, existingGroups?: string[]): Promise<{ todos: Array<{ title: string; notes: string; group: string }> }> {
-    return await this.call('todo.parseFromPrompt', { prompt, existingGroups }) as { todos: Array<{ title: string; notes: string; group: string }> }
-  }
-
   // --- Skills ---
 
   async listSkills(): Promise<{ name: string; description: string; argumentHint: string }[]> {
@@ -359,41 +291,6 @@ export class BondClient {
 
   async removeSkill(name: string): Promise<{ ok: boolean }> {
     return await this.call('skills.remove', { name }) as { ok: boolean }
-  }
-
-  // --- Projects ---
-
-  async listProjects(): Promise<Project[]> {
-    return await this.call('project.list') as Project[]
-  }
-
-  async getProject(id: string): Promise<Project | null> {
-    return await this.call('project.get', { id }) as Project | null
-  }
-
-  async createProject(name: string, goal?: string, type?: ProjectType, deadline?: string): Promise<Project> {
-    return await this.call('project.create', { name, goal, type, deadline }) as Project
-  }
-
-  async updateProject(id: string, updates: Partial<Pick<Project, 'name' | 'goal' | 'type' | 'archived' | 'deadline'>>): Promise<Project | null> {
-    return await this.call('project.update', { id, updates }) as Project | null
-  }
-
-  async deleteProject(id: string): Promise<boolean> {
-    return await this.call('project.delete', { id }) as boolean
-  }
-
-  async addProjectResource(projectId: string, kind: ProjectResource['kind'], value: string, label?: string): Promise<ProjectResource> {
-    return await this.call('project.addResource', { projectId, kind, value, label }) as ProjectResource
-  }
-
-  async removeProjectResource(id: string): Promise<boolean> {
-    return await this.call('project.removeResource', { id }) as boolean
-  }
-
-  onProjectsChanged(fn: ProjectChangeListener): () => void {
-    this.projectChangeListeners.add(fn)
-    return () => this.projectChangeListeners.delete(fn)
   }
 
   // --- Collections ---
@@ -513,57 +410,6 @@ export class BondClient {
 
   async generateBondComment(entryId: string): Promise<ItemComment> {
     return await this.call('journal.generateBondComment', { entryId }) as ItemComment
-  }
-
-  // --- Browser ---
-
-  async browserOpen(url: string): Promise<unknown> {
-    return await this.call('browser.open', { url })
-  }
-
-  async browserNavigate(tabId: string, url: string): Promise<unknown> {
-    return await this.call('browser.navigate', { tabId, url })
-  }
-
-  async browserClose(tabId: string): Promise<unknown> {
-    return await this.call('browser.close', { tabId })
-  }
-
-  async browserTabs(): Promise<unknown> {
-    return await this.call('browser.tabs')
-  }
-
-  async browserRead(tabId?: string): Promise<unknown> {
-    return await this.call('browser.read', { tabId })
-  }
-
-  async browserScreenshot(tabId?: string): Promise<unknown> {
-    return await this.call('browser.screenshot', { tabId })
-  }
-
-  async browserExec(tabId: string | undefined, js: string): Promise<unknown> {
-    return await this.call('browser.exec', { tabId, js })
-  }
-
-  async browserConsole(tabId?: string): Promise<unknown> {
-    return await this.call('browser.console', { tabId })
-  }
-
-  async browserDom(tabId?: string, selector?: string): Promise<unknown> {
-    return await this.call('browser.dom', { tabId, selector })
-  }
-
-  async browserNetwork(tabId?: string): Promise<unknown> {
-    return await this.call('browser.network', { tabId })
-  }
-
-  async browserCommandResult(requestId: string, result: unknown): Promise<void> {
-    await this.call('browser.commandResult', { requestId, result })
-  }
-
-  onBrowserCommand(fn: BrowserCommandListener): () => void {
-    this.browserCommandListeners.add(fn)
-    return () => this.browserCommandListeners.delete(fn)
   }
 
   // --- Sense ---
@@ -698,46 +544,6 @@ export class BondClient {
   onSenseStateChanged(fn: SenseStateChangedListener): () => void {
     this.senseStateChangedListeners.add(fn)
     return () => this.senseStateChangedListeners.delete(fn)
-  }
-
-  // --- Operatives ---
-
-  async listOperatives(filters?: { status?: string; sessionId?: string }): Promise<Operative[]> {
-    return await this.call('operative.list', filters) as Operative[]
-  }
-
-  async getOperative(id: string): Promise<Operative | null> {
-    return await this.call('operative.get', { id }) as Operative | null
-  }
-
-  async getOperativeEvents(id: string, afterId?: number, limit?: number): Promise<OperativeEvent[]> {
-    return await this.call('operative.events', { id, afterId, limit }) as OperativeEvent[]
-  }
-
-  async spawnOperative(opts: SpawnOperativeOptions): Promise<Operative> {
-    return await this.call('operative.spawn', opts) as Operative
-  }
-
-  async cancelOperative(id: string): Promise<{ ok: boolean }> {
-    return await this.call('operative.cancel', { id }) as { ok: boolean }
-  }
-
-  async removeOperative(id: string): Promise<{ ok: boolean }> {
-    return await this.call('operative.remove', { id }) as { ok: boolean }
-  }
-
-  async clearOperatives(status?: string): Promise<{ deleted: number }> {
-    return await this.call('operative.clear', { status }) as { deleted: number }
-  }
-
-  onOperativeChanged(fn: OperativeChangeListener): () => void {
-    this.operativeChangeListeners.add(fn)
-    return () => this.operativeChangeListeners.delete(fn)
-  }
-
-  onOperativeEvent(fn: OperativeEventListener): () => void {
-    this.operativeEventListeners.add(fn)
-    return () => this.operativeEventListeners.delete(fn)
   }
 
   // --- Shell (client-side only, not proxied through daemon) ---

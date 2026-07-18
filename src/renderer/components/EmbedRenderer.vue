@@ -7,8 +7,6 @@ const props = defineProps<{
 }>()
 
 const components: Record<string, ReturnType<typeof defineAsyncComponent>> = {
-  todos: defineAsyncComponent(() => import('./embeds/TodoEmbed.vue')),
-  project: defineAsyncComponent(() => import('./embeds/ProjectEmbed.vue')),
   media: defineAsyncComponent(() => import('./embeds/MediaEmbed.vue')),
   collection: defineAsyncComponent(() => import('./embeds/CollectionEmbed.vue')),
   journal: defineAsyncComponent(() => import('./embeds/JournalEmbed.vue')),

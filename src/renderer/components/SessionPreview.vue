@@ -84,9 +84,6 @@ function formatRelative(iso: string): string {
           <BondText as="p" size="xs" color="muted">{{ session.summary }}</BondText>
         </div>
 
-        <div v-if="session.projectId" class="preview-badge">
-          <span class="badge">Project</span>
-        </div>
       </div>
     </Transition>
   </Teleport>

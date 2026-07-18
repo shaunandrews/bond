@@ -7,7 +7,6 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { BondClient } from '../shared/client'
 import { initSense, destroySense } from './sense'
 import { initTray, destroyTray } from './tray'
-import { initBrowser, destroyBrowser } from './browser'
 import { initQuickChat, destroyQuickChat } from './quick-chat'
 import { registerWindow, registerSessionWindow, routeChunk, broadcast } from './window-router'
 import type { TaggedChunk } from '../shared/stream'
@@ -252,12 +251,8 @@ function createWindow(): void {
   })
 
   // Broadcast entity change events to all windows
-  client.onTodoChanged(() => broadcast('bond:todoChanged'))
-  client.onProjectsChanged(() => broadcast('bond:projectsChanged'))
   client.onCollectionsChanged(() => broadcast('bond:collectionsChanged'))
   // Journal changes now flow through collections channel
-  client.onOperativeChanged(() => broadcast('bond:operativeChanged'))
-  client.onOperativeEvent((payload) => broadcast('bond:operativeEvent', payload))
 
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
@@ -458,7 +453,6 @@ app.whenReady().then(async () => {
   initQuickChat(client)
 
   createWindow()
-  initBrowser(mainWindow!, client)
 
   // --- Dev: capture screenshot via file trigger ---
   // Touch /tmp/bond-capture to trigger, result lands at /tmp/bond-screenshot.png
@@ -606,25 +600,6 @@ app.whenReady().then(async () => {
   ipcMain.handle('image:getMultiple', (_e, ids: string[]) => client.getImages(ids))
   ipcMain.handle('image:delete', (_e, imageId: string) => client.deleteImage(imageId))
 
-  // --- Todos ---
-  ipcMain.handle('todo:list', () => client.listTodos())
-  ipcMain.handle('todo:create', (_e, text: string, notes?: string, group?: string, projectId?: string) => client.createTodo(text, notes, group, projectId))
-  ipcMain.handle('todo:update', (_e, id: string, updates: Record<string, unknown>) => client.updateTodo(id, updates))
-  ipcMain.handle('todo:delete', (_e, id: string) => client.deleteTodo(id))
-  ipcMain.handle('todo:parse', (_e, raw: string) => client.parseTodo(raw))
-  ipcMain.handle('todo:reorder', (_e, ids: string[]) => client.reorderTodos(ids))
-  ipcMain.handle('todo:parseFromPrompt', (_e, prompt: string, existingGroups?: string[]) =>
-    client.parseFromPrompt(prompt, existingGroups))
-
-  // --- Projects ---
-  ipcMain.handle('project:list', () => client.listProjects())
-  ipcMain.handle('project:get', (_e, id: string) => client.getProject(id))
-  ipcMain.handle('project:create', (_e, name: string, goal?: string, type?: string, deadline?: string) => client.createProject(name, goal, type as any, deadline))
-  ipcMain.handle('project:update', (_e, id: string, updates: Record<string, unknown>) => client.updateProject(id, updates))
-  ipcMain.handle('project:delete', (_e, id: string) => client.deleteProject(id))
-  ipcMain.handle('project:addResource', (_e, projectId: string, kind: string, value: string, label?: string) => client.addProjectResource(projectId, kind as any, value, label))
-  ipcMain.handle('project:removeResource', (_e, id: string) => client.removeProjectResource(id))
-
   // --- Collections ---
   ipcMain.handle('collection:list', () => client.listCollections())
   ipcMain.handle('collection:get', (_e, id: string) => client.getCollection(id))
@@ -717,15 +692,6 @@ app.whenReady().then(async () => {
     return hasScreenRecordingPermission()
   })
 
-  // --- Operatives ---
-  ipcMain.handle('operative:list', (_e, filters?) => client.listOperatives(filters))
-  ipcMain.handle('operative:get', (_e, id: string) => client.getOperative(id))
-  ipcMain.handle('operative:spawn', (_e, opts) => client.spawnOperative(opts))
-  ipcMain.handle('operative:events', (_e, id: string, afterId?: number, limit?: number) => client.getOperativeEvents(id, afterId, limit))
-  ipcMain.handle('operative:cancel', (_e, id: string) => client.cancelOperative(id))
-  ipcMain.handle('operative:remove', (_e, id: string) => client.removeOperative(id))
-  ipcMain.handle('operative:clear', (_e, status?: string) => client.clearOperatives(status))
-
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -743,6 +709,5 @@ app.on('before-quit', () => {
   destroyQuickChat()
   destroyTray()
   destroySense()
-  destroyBrowser()
   client?.close()
 })
