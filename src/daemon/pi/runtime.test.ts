@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { composePromptWithContext, contextUsageFromSession, piEventToChunks } from './runtime'
+import { ONBOARDING_TOOL_NAME } from '../onboarding'
+import { activateRequestedTools, composePromptWithContext, contextUsageFromSession, piEventToChunks, toolsForEditMode } from './runtime'
+import { MEMORY_TOOL_NAMES } from '../memory/tools'
 
 describe('piEventToChunks', () => {
   it('preserves renderer text and thinking chunks', () => {
@@ -20,6 +22,40 @@ describe('piEventToChunks', () => {
     expect(piEventToChunks({ type: 'auto_retry_start', errorMessage: 'rate limited' }))
       .toEqual([{ kind: 'system', subtype: 'api_retry', text: 'rate limited' }])
     expect(piEventToChunks({ type: 'agent_start' })).toEqual([])
+  })
+})
+
+describe('activateRequestedTools', () => {
+  it('replaces a resumed session tool set after extensions register', () => {
+    let active = ['read', 'grep']
+    const session = {
+      getAllTools: () => [...['read', 'grep', ...MEMORY_TOOL_NAMES].map(name => ({ name }))],
+      setActiveToolsByName: (names: string[]) => { active = names },
+    }
+
+    const requested = ['read', ...MEMORY_TOOL_NAMES]
+    expect(activateRequestedTools(session, requested)).toEqual(requested)
+    expect(active).toEqual(requested)
+  })
+})
+
+describe('toolsForEditMode', () => {
+  it('keeps Bond memory tools active in every workspace permission mode', () => {
+    for (const mode of [{ type: 'full' as const }, { type: 'readonly' as const }, { type: 'scoped' as const, allowedPaths: ['/tmp'] }]) {
+      expect(toolsForEditMode(mode)).toEqual(expect.arrayContaining([...MEMORY_TOOL_NAMES]))
+    }
+  })
+
+  // Regression: the extension registered complete_onboarding, but the tool was
+  // missing from this allowlist, so activateRequestedTools() deactivated it —
+  // the agent could never mark the interview finished no matter what the
+  // prompt said.
+  it('allowlists complete_onboarding in every mode while first-run is pending', () => {
+    for (const mode of [{ type: 'full' as const }, { type: 'readonly' as const }, { type: 'scoped' as const, allowedPaths: ['/tmp'] }]) {
+      expect(toolsForEditMode(mode, true)).toContain(ONBOARDING_TOOL_NAME)
+      expect(toolsForEditMode(mode, false)).not.toContain(ONBOARDING_TOOL_NAME)
+      expect(toolsForEditMode(mode)).not.toContain(ONBOARDING_TOOL_NAME)
+    }
   })
 })
 

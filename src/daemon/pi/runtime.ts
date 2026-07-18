@@ -13,6 +13,8 @@ import {
 import type { BondStreamChunk } from '../../shared/stream'
 import type { EditMode } from '../../shared/session'
 import { getImagePaths } from '../images'
+import { createMemoryExtensionFactory, MEMORY_TOOL_NAMES } from '../memory/tools'
+import { createOnboardingExtensionFactory, getFirstRunStatus, ONBOARDING_TOOL_NAME } from '../onboarding'
 import { getDataDir } from '../paths'
 import { getMessages } from '../sessions'
 
@@ -239,6 +241,7 @@ export interface PiBondQueryOptions {
   editMode?: EditMode
   systemPrompt: string
   contextEnvelope?: string
+  memorySourceMessageId?: string
 }
 
 export interface PiBondQueryResult {
@@ -266,6 +269,29 @@ export function composePromptWithContext(prompt: string, contextEnvelope?: strin
   return context ? `${context}\n\n<current-user-request>\n${prompt}\n</current-user-request>` : prompt
 }
 
+export function activateRequestedTools(
+  session: { getAllTools(): Array<{ name: string }>; setActiveToolsByName(names: string[]): void },
+  requested: string[],
+): string[] {
+  const available = new Set(session.getAllTools().map(tool => tool.name))
+  const active = requested.filter(name => available.has(name))
+  session.setActiveToolsByName(active)
+  return active
+}
+
+export function toolsForEditMode(editMode: EditMode, firstRunPending = false): string[] {
+  const workspaceTools = editMode.type === 'readonly'
+    ? ['read', 'grep', 'find', 'ls']
+    : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash']
+  // Bond memory is application state, not workspace editing. Memory tools remain
+  // available in every edit mode so explicit remember/recall requests still work.
+  // complete_onboarding joins the allowlist only while first-run onboarding is
+  // open — without this, the registered tool is deactivated and the interview
+  // can never be marked finished.
+  const onboardingTools = firstRunPending ? [ONBOARDING_TOOL_NAME] : []
+  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...onboardingTools]
+}
+
 /** Run one Bond turn through Pi and persist it in Bond-owned Pi JSONL storage. */
 export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions): Promise<PiBondQueryResult> {
   const uiSessionId = options.sessionId ?? randomUUID()
@@ -278,9 +304,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     options.onChunk({ kind: 'raw_error', message: 'Pi is not connected. Open Settings → Pi connection and add an Anthropic API key.' })
     return failedPiResult(piSessionId)
   }
-  const tools = editMode.type === 'readonly'
-    ? ['read', 'grep', 'find', 'ls']
-    : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash']
+  const tools = toolsForEditMode(editMode, getFirstRunStatus().status === 'pending')
 
   const loader = new DefaultResourceLoader({
     cwd: homedir(),
@@ -291,6 +315,8 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     noContextFiles: true,
     systemPromptOverride: () => options.systemPrompt,
     extensionFactories: [
+      createMemoryExtensionFactory({ sourceMessageId: options.memorySourceMessageId }),
+      createOnboardingExtensionFactory(),
       (pi: any) => {
         pi.on('tool_call', async (event: any) => {
           const toolName = event.toolName as string
@@ -328,6 +354,20 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     sessionManager,
     settingsManager: SettingsManager.inMemory(),
   })
+  // Resumed Pi sessions restore their previously active tool names. Force the
+  // current Bond allowlist after extensions have registered so newly shipped
+  // Bond tools become active without requiring a new epoch/session.
+  const activeTools = activateRequestedTools(session, tools)
+  // Every requested Bond-owned tool must have actually registered — a name in
+  // the allowlist with no registered tool means an extension silently failed
+  // (or vice versa: a registered tool missing from the allowlist would have
+  // been deactivated by activateRequestedTools above).
+  const requiredBondTools = [...MEMORY_TOOL_NAMES, ONBOARDING_TOOL_NAME].filter(name => tools.includes(name))
+  const missingBondTools = requiredBondTools.filter(name => !activeTools.includes(name))
+  if (missingBondTools.length) {
+    session.dispose()
+    throw new Error(`Bond tools failed to register: ${missingBondTools.join(', ')}`)
+  }
 
   let hadError = false
   const unsubscribe = session.subscribe((event) => {
