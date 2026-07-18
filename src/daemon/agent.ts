@@ -49,9 +49,9 @@ const BOND_BASE_PROMPT =
   'You can combine this with WebSearch to find images and then download them. ' +
   'Images are stored permanently in ~/Library/Application Support/bond/images/.\n\n' +
   'ARTIFACTS — RICH VISUAL CONTENT IN CHAT:\n' +
-  'For visual content that is not already covered by Bond data embeds (collections, journal, or media), use <bond-artifact> blocks to render rich HTML+Tailwind. ' +
+  'For visual content that is not already covered by Bond data embeds (collections or media), use <bond-artifact> blocks to render rich HTML+Tailwind. ' +
   'Good uses: recommendations, comparisons, data visualizations, styled tables, dashboards, step-by-step guides, image grids. ' +
-  'Do NOT use artifacts to display Bond\'s own entities (collections, journal, or media) — use <bond-embed> for those instead.\n\n' +
+  'Do NOT use artifacts to display Bond\'s own entities (collections or media) — use <bond-embed> for those instead.\n\n' +
   'Syntax (the tag MUST start on its own line, not inline with other text):\n' +
   '<bond-artifact title="Optional Title" chrome="none">\n' +
   '  HTML content with Tailwind utility classes\n' +
@@ -84,13 +84,7 @@ const BOND_BASE_PROMPT =
   '- `bond collection` — list all collections\n' +
   '- `bond collection create <name> --icon 🎬 --schema \'<json>\'` — create a collection\n' +
   '- `bond collection show <name|id>` / `ls` / `add` / `update` / `done` / `info` / `rm` / `archive` — manage collections and items\n' +
-  'When the user talks about items conversationally, use the CLI to create/update items. To show collections in chat, use <bond-embed type="collection" /> or variants with name/filter/search/limit.\n\n' +
-  'JOURNAL:\n' +
-  'Bond has a shared journal where both you and the user can write entries. It persists reflections, decision logs, project summaries, and freeform notes across sessions.\n' +
-  '- `bond journal` — list recent entries\n' +
-  '- `bond journal add "your entry text"` — write an entry (title + tags auto-generated)\n' +
-  '- `bond journal show <id|number|title>` / `search` / `pin` / `rm` — manage entries\n' +
-  'Write journal entries when the user asks, or when a chat produces a meaningful summary, decision, or milestone worth preserving. Always use author "user". To show journal entries in chat, use <bond-embed type="journal" /> or variants with ids/author/search/limit.\n\n'
+  'When the user talks about items conversationally, use the CLI to create/update items. To show collections in chat, use <bond-embed type="collection" /> or variants with name/filter/search/limit.\n\n'
 
 function buildSkillsPrompt(): string {
   const skills = getCachedSkills()
@@ -179,11 +173,9 @@ function buildRecentScreenContext(): string {
   }
 }
 
-function buildRecentDebriefContext(projectId?: string): string {
+function buildRecentDebriefContext(): string {
   try {
-    const debriefs = projectId
-      ? listDebriefs({ limit: 3, projectId })
-      : listDebriefs({ limit: 3 })
+    const debriefs = listDebriefs({ limit: 3 })
     if (debriefs.length === 0) return ''
     let block = '\nRECENT SESSION DEBRIEFS:\n'
     for (const d of debriefs) {
@@ -206,14 +198,14 @@ function buildEditModeSuffix(editMode: EditMode): string {
   return ''
 }
 
-export function buildSystemPrompt(options?: { projectId?: string; editMode?: EditMode }): string {
+export function buildSystemPrompt(options?: { editMode?: EditMode }): string {
   const editMode = options?.editMode ?? { type: 'full' as const }
   let prompt = BOND_BASE_PROMPT
   prompt += buildSkillsPrompt()
   prompt += buildCollectionsPrompt()
   prompt += buildSenseInstructions()
   prompt += buildRecentScreenContext()
-  prompt += buildRecentDebriefContext(options?.projectId)
+  prompt += buildRecentDebriefContext()
 
   const now = new Date()
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
@@ -226,7 +218,7 @@ export function buildSystemPrompt(options?: { projectId?: string; editMode?: Edi
 }
 
 /** Build the exact full system prompt used for a new Bond query. */
-export function buildSystemPromptPreview(options?: { projectId?: string; editMode?: EditMode }): string {
+export function buildSystemPromptPreview(options?: { editMode?: EditMode }): string {
   return buildSystemPrompt(options)
 }
 

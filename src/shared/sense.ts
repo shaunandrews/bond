@@ -108,51 +108,16 @@ export interface AppTextQuality {
   updatedAt: string
 }
 
-// --- Sense Memory compatibility types ---
+// --- Session debriefs ---
 
 export interface SessionDebrief {
   id: string
   sessionId: string
   sessionTitle: string
-  projectId: string | null
-
   summary: string
   topics: string[]
-  /** Legacy fields retained for old debrief rows; active code writes empty arrays. */
-  decisions: string[]
-  openThreads: string[]
-  keyFacts: string[]
-
   messageCount: number
   durationSeconds: number
-  createdAt: string
-}
-
-export interface SenseFact {
-  id: string
-  fact: string
-  source: 'user' | 'debrief'
-  sourceDebriefId: string | null
-  projectId: string | null
-  active: boolean
-  createdAt: string
-  updatedAt: string
-}
-
-/** Legacy open thread shape retained for old data compatibility. */
-export interface OpenThread {
-  thread: string
-  debriefId: string
-  sessionId: string
-  sessionTitle: string
-  createdAt: string
-}
-
-/** Legacy decision shape retained for old data compatibility. */
-export interface DecisionWithContext {
-  decision: string
-  debriefId: string
-  sessionTitle: string
   createdAt: string
 }
 

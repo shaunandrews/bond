@@ -10,7 +10,7 @@ Bond is a macOS desktop assistant powered by the [Claude Agent SDK](https://plat
 
 ## Features
 
-Bond is a desktop AI assistant for chat, coding, memory, skills, collections, journaling, Sense, and media attachments.
+Bond is a desktop AI assistant for chat, coding, memory, skills, collections, Sense, and media attachments.
 
 ### AI Chat
 
@@ -32,9 +32,9 @@ Extensible slash commands that teach Bond new tricks. Skills are Markdown files 
 
 Connect Bond to external tool servers — Figma, GitHub, Slack, Linear, Chrome DevTools, and more. MCP servers extend Bond's capabilities without modifying its core.
 
-### Collections & Journal
+### Collections
 
-Track anything with custom schemas (movies, books, workouts) via collections. Keep a persistent journal for reflections, decision logs, and summaries that carry context across sessions.
+Track anything with custom schemas (movies, books, workouts) via collections. Session debriefs and Sense preserve searchable summaries across chats.
 
 ### Sense (Screen Awareness)
 
@@ -231,14 +231,14 @@ bin/bond                 # CLI for daemon management
 scripts/
   build-native-helpers.sh  # Compiles Obj-C native helpers
 src/
-  cli/                   # CLI modules (media, journal, collections, sense, etc.)
+  cli/                   # CLI modules (media, collections, sense, etc.)
   native/                # Objective-C native helpers (window, OCR, accessibility)
   daemon/                # Standalone daemon (Agent SDK, SQLite, WebSocket server)
     sense/               # Sense ambient awareness (controller, capture pipeline, OCR, storage)
   main/                  # Electron main process (window, IPC proxy, daemon lifecycle, Sense capture)
   preload/               # contextBridge → window.bond API
   renderer/              # Vue 3 chat UI + Tailwind
-    composables/         # State and logic (useChat, useSessions, useCollections, useJournal, useMemory, useAutoScroll, useAccentColor, useAppView, useSense)
+    composables/         # State and logic (useChat, useSessions, useCollections, useMemory, useAutoScroll, useAccentColor, useAppView, useSense)
     components/          # Vue components (primitives, layout, chat, views)
     types/               # Message types
     lib/                 # Utilities (highlight.js setup)

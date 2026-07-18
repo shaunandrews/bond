@@ -3,7 +3,8 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { setDataDir } from './paths'
+import Database from 'better-sqlite3'
+import { setDataDir, getDbPath } from './paths'
 import { getDb, closeDb } from './db'
 
 let testDir: string
@@ -65,7 +66,7 @@ describe('db module', () => {
       expect(tables).toHaveLength(1)
     })
 
-    it('creates todos table with all columns', () => {
+    it('keeps legacy todos table with all columns', () => {
       const db = getDb()
       const cols = db.pragma('table_info(todos)') as { name: string }[]
       const names = cols.map(c => c.name)
@@ -78,7 +79,7 @@ describe('db module', () => {
       expect(names).toContain('sort_order')
     })
 
-    it('creates projects table', () => {
+    it('keeps legacy projects table', () => {
       const db = getDb()
       const cols = db.pragma('table_info(projects)') as { name: string }[]
       const names = cols.map(c => c.name)
@@ -90,7 +91,7 @@ describe('db module', () => {
       expect(names).toContain('deadline')
     })
 
-    it('creates project_resources table', () => {
+    it('keeps legacy project_resources table', () => {
       const db = getDb()
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='project_resources'").all()
       expect(tables).toHaveLength(1)
@@ -114,8 +115,43 @@ describe('db module', () => {
       expect(names).toContain('id')
       expect(names).toContain('collection_id')
       expect(names).toContain('data')
-      expect(names).toContain('project_id')
+      expect(names).toContain('project_id') // legacy column retained for old data
       expect(names).toContain('sort_order')
+    })
+
+    it('does not create an empty Journal collection on fresh installs', () => {
+      const db = getDb()
+      const collection = db.prepare("SELECT id FROM collections WHERE name = 'Journal'").get()
+      expect(collection).toBeUndefined()
+    })
+
+    it('keeps legacy Journal entries out of Collections', () => {
+      const legacy = new Database(getDbPath())
+      legacy.exec(`
+        CREATE TABLE journal_entries (
+          id TEXT PRIMARY KEY,
+          author TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          tags TEXT NOT NULL DEFAULT '[]',
+          project_id TEXT,
+          session_id TEXT,
+          pinned INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      `)
+      const now = new Date().toISOString()
+      legacy.prepare('INSERT INTO journal_entries (id, author, title, body, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run('legacy-entry', 'user', 'Old Note', 'Body', '["old"]', now, now)
+      legacy.close()
+
+      const db = getDb()
+      const collection = db.prepare("SELECT id FROM collections WHERE name = 'Journal'").get()
+      expect(collection).toBeUndefined()
+      const entry = db.prepare('SELECT title, body FROM journal_entries WHERE id = ?').get('legacy-entry') as { title: string; body: string } | undefined
+      expect(entry).toEqual({ title: 'Old Note', body: 'Body' })
     })
 
     it('creates images table', () => {
@@ -124,7 +160,7 @@ describe('db module', () => {
       expect(tables).toHaveLength(1)
     })
 
-    it('creates operatives table', () => {
+    it('keeps legacy operatives table', () => {
       const db = getDb()
       const cols = db.pragma('table_info(operatives)') as { name: string }[]
       const names = cols.map(c => c.name)
@@ -135,7 +171,7 @@ describe('db module', () => {
       expect(names).toContain('context_window')
     })
 
-    it('creates operative_events table', () => {
+    it('keeps legacy operative_events table', () => {
       const db = getDb()
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='operative_events'").all()
       expect(tables).toHaveLength(1)
@@ -150,7 +186,7 @@ describe('db module', () => {
       expect(names).toContain('sense_app_text_quality')
     })
 
-    it('creates sessions with all migrated columns', () => {
+    it('keeps sessions with all migrated columns', () => {
       const db = getDb()
       const cols = db.pragma('table_info(sessions)') as { name: string }[]
       const names = cols.map(c => c.name)
@@ -162,7 +198,7 @@ describe('db module', () => {
       expect(names).toContain('quick')
     })
 
-    it('creates messages with all migrated columns', () => {
+    it('keeps messages with all migrated columns', () => {
       const db = getDb()
       const cols = db.pragma('table_info(messages)') as { name: string }[]
       const names = cols.map(c => c.name)

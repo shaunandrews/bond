@@ -231,7 +231,7 @@ export class BondClient {
     return await this.call('session.list') as Session[]
   }
 
-  async createSession(options?: { title?: string; projectId?: string }): Promise<Session> {
+  async createSession(options?: { title?: string }): Promise<Session> {
     return await this.call('session.create', options) as Session
   }
 
@@ -239,7 +239,7 @@ export class BondClient {
     return await this.call('session.get', { id }) as Session | null
   }
 
-  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode' | 'projectId'>>): Promise<Session | null> {
+  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode'>>): Promise<Session | null> {
     return await this.call('session.update', { id, updates }) as Session | null
   }
 
@@ -379,48 +379,6 @@ export class BondClient {
 
   async getCollectionByName(name: string): Promise<Collection | null> {
     return await this.call('collection.getByName', { name }) as Collection | null
-  }
-
-  // --- Journal (backed by Journal collection) ---
-
-  async listJournalEntries(opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }): Promise<CollectionItem[]> {
-    return await this.call('journal.list', opts) as CollectionItem[]
-  }
-
-  async getJournalEntry(id: string): Promise<CollectionItem | null> {
-    return await this.call('journal.get', { id }) as CollectionItem | null
-  }
-
-  async createJournalEntry(params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }): Promise<CollectionItem> {
-    return await this.call('journal.create', params) as CollectionItem
-  }
-
-  async updateJournalEntry(id: string, updates: Record<string, unknown>): Promise<CollectionItem | null> {
-    return await this.call('journal.update', { id, updates }) as CollectionItem | null
-  }
-
-  async deleteJournalEntry(id: string): Promise<boolean> {
-    return await this.call('journal.delete', { id }) as boolean
-  }
-
-  async searchJournalEntries(query: string): Promise<CollectionItem[]> {
-    return await this.call('journal.search', { query }) as CollectionItem[]
-  }
-
-  async generateJournalMeta(id: string): Promise<CollectionItem | null> {
-    return await this.call('journal.generateMeta', { id }) as CollectionItem | null
-  }
-
-  async addJournalComment(entryId: string, author: 'user' | 'bond', body: string): Promise<ItemComment> {
-    return await this.call('journal.addComment', { entryId, author, body }) as ItemComment
-  }
-
-  async deleteJournalComment(id: string): Promise<boolean> {
-    return await this.call('journal.deleteComment', { id }) as boolean
-  }
-
-  async generateBondComment(entryId: string): Promise<ItemComment> {
-    return await this.call('journal.generateBondComment', { entryId }) as ItemComment
   }
 
   // --- Sense ---

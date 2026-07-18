@@ -42,11 +42,9 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | File | Purpose |
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`, `journal.*`) |
+| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`) |
 | `agent.ts` | Runs `query()` from Claude Agent SDK, streams chunks, handles tool approvals |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
-| `projects.ts` | Legacy project data access (SQLite; not exposed in the product) |
-| `todos.ts` | Legacy todo data access (SQLite; not exposed in the product) |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
 | `db.ts` | Database init, migrations, WAL mode |
 | `settings.ts` | Key-value settings storage (soul, model, accent color) |
@@ -72,7 +70,7 @@ Electron main process. Spawns daemon if not running, creates window, proxies all
 
 ### Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, settings, images, skills, model, Sense/memory, collections, journal, and shell utilities.
+Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, settings, images, skills, model, Sense/memory, collections, and shell utilities.
 
 ### Shared (`src/shared/`)
 
@@ -81,7 +79,7 @@ Exposes `window.bond` via `contextBridge` — typed API for chat, sessions, sett
 | `protocol.ts` | JSON-RPC 2.0 types and helpers |
 | `stream.ts` | `BondStreamChunk` union type (text, thinking, tool, approval, error, system) |
 | `client.ts` | `BondClient` WebSocket client class |
-| `session.ts` | Session, SessionMessage, EditMode, AttachedImage, and legacy project/todo compatibility types |
+| `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Collection, and media/collection types |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
 | `models.ts` | `ModelId` type (`'opus' | 'sonnet' | 'haiku'`) |
 
@@ -108,8 +106,6 @@ src/
     server.ts                        # WebSocket JSON-RPC server
     agent.ts                         # Claude Agent SDK integration
     sessions.ts                      # Session CRUD (SQLite)
-    projects.ts                      # Project + resource CRUD (SQLite)
-    todos.ts                         # Todo CRUD (SQLite)
     images.ts                        # Image file storage + images table
     db.ts                            # Database management + migrations
     settings.ts                      # Settings storage
@@ -138,7 +134,7 @@ src/
     protocol.ts                      # JSON-RPC 2.0 types
     stream.ts                        # BondStreamChunk types (incl. thinking_text)
     client.ts                        # BondClient WebSocket client
-    session.ts                       # Session, SessionMessage, Project, ProjectResource, TodoItem, EditMode, AttachedImage types
+    session.ts                       # Session, SessionMessage, Collection, CollectionItem, EditMode, AttachedImage types
     sense.ts                         # SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult types
     models.ts                        # ModelId type
   renderer/
@@ -304,7 +300,7 @@ Single session row used in both active and archived lists inside SessionSidebar.
 ### SessionSidebar
 Left sidebar with session list, archive flyout, and bottom nav. Chats section is always open (non-collapsible) with archive and new-chat buttons in the header.
 - **Props:** `sessions: Session[]`, `archivedSessions: Session[]`, `activeSessionId: string | null`, `activeView: AppView`, `generatingTitleId: string | null`, `busySessionIds: Set<string>`, `mediaCount: number`, `projectCount: number`
-- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `removeArchived()`, `projects()`, `media()`, `rename(id, title)`
+- **Events:** `select(id)`, `create()`, `archive(id)`, `unarchive(id)`, `remove(id)`, `removeArchived()`, `media()`, `rename(id, title)`
 
 ### CopyButton
 Inline copy-to-clipboard button with checkmark confirmation feedback.
@@ -350,7 +346,7 @@ Inline search input in the header bar. Debounced 300ms text search with results 
 - **Expose:** `focus()`
 
 ### MemoryView
-Right-panel memory view. Session Debriefs are the only active memory concept; Facts, Threads, and Decisions are legacy database compatibility only and are not shown, edited, or injected into prompts.
+Right-panel memory view. Session Debriefs are the active memory concept: list/select/delete debriefs, inspect summaries/topics/session metadata, and preview the exact prompt used for agent queries.
 - **Tabs:** Debriefs, Prompt
 - **Debriefs:** list/select/delete session debriefs; detail shows summary, topics, metadata, and a session link
 - **Prompt:** exact full system prompt returned by `sense.systemPromptPreview`, built by the same daemon `buildSystemPrompt()` used for real agent queries

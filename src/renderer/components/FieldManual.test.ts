@@ -55,7 +55,7 @@ describe('FieldManual', () => {
   it('displays all capability names', () => {
     const wrapper = mount(FieldManual, { props: { open: true } })
     const text = wrapper.text()
-    const capabilities = ['Chat', 'Journal', 'Collections', 'Media Library', 'Sense', 'Skills']
+    const capabilities = ['Chat', 'Collections', 'Media Library', 'Sense', 'Skills']
     for (const cap of capabilities) {
       expect(text).toContain(cap)
     }

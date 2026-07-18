@@ -40,7 +40,7 @@ export function ensureSkillsDir(): void {
 
 /**
  * Downloads directory — ~/Library/Application Support/bond/downloads/
- * Browser downloads are always written here, never to arbitrary paths.
+ * Downloads are always written here, never to arbitrary paths.
  */
 export function getDownloadsDir(): string {
   return join(getDataDir(), 'downloads')

@@ -53,7 +53,6 @@ function rowToItem(r: ItemRow, comments?: ItemComment[]): CollectionItem {
     id: r.id,
     collectionId: r.collection_id,
     data: JSON.parse(r.data) as Record<string, unknown>,
-    projectId: r.project_id || undefined,
     sortOrder: r.sort_order,
     comments,
     createdAt: r.created_at,
@@ -160,22 +159,22 @@ export function getItem(id: string): CollectionItem | null {
   return rowToItem(row, comments)
 }
 
-export function addItem(collectionId: string, data: Record<string, unknown>, projectId?: string): CollectionItem {
+export function addItem(collectionId: string, data: Record<string, unknown>): CollectionItem {
   const db = getDb()
   const id = randomUUID()
   const now = new Date().toISOString()
   const maxOrder = (db.prepare('SELECT COALESCE(MAX(sort_order), -1) as m FROM collection_items WHERE collection_id = ?').get(collectionId) as { m: number }).m
   const sortOrder = maxOrder + 1
   db.prepare('INSERT INTO collection_items (id, collection_id, data, project_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(id, collectionId, JSON.stringify(data), projectId ?? null, sortOrder, now, now)
+    .run(id, collectionId, JSON.stringify(data), null, sortOrder, now, now)
 
   // Touch collection updated_at
   db.prepare('UPDATE collections SET updated_at = ? WHERE id = ?').run(now, collectionId)
 
-  return { id, collectionId, data, projectId, sortOrder, createdAt: now, updatedAt: now }
+  return { id, collectionId, data, sortOrder, createdAt: now, updatedAt: now }
 }
 
-export function updateItem(id: string, data: Record<string, unknown>, projectId?: string | null): CollectionItem | null {
+export function updateItem(id: string, data: Record<string, unknown>): CollectionItem | null {
   const db = getDb()
   const now = new Date().toISOString()
 
@@ -186,13 +185,8 @@ export function updateItem(id: string, data: Record<string, unknown>, projectId?
   const existingData = JSON.parse(existing.data) as Record<string, unknown>
   const merged = { ...existingData, ...data }
 
-  if (projectId !== undefined) {
-    db.prepare('UPDATE collection_items SET data = ?, project_id = ?, updated_at = ? WHERE id = ?')
-      .run(JSON.stringify(merged), projectId, now, id)
-  } else {
-    db.prepare('UPDATE collection_items SET data = ?, updated_at = ? WHERE id = ?')
-      .run(JSON.stringify(merged), now, id)
-  }
+  db.prepare('UPDATE collection_items SET data = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(merged), now, id)
 
   // Touch collection updated_at
   db.prepare('UPDATE collections SET updated_at = ? WHERE id = ?').run(now, existing.collection_id)
@@ -310,15 +304,5 @@ export function searchItems(collectionId: string, query: string): CollectionItem
   const rows = db.prepare(
     `SELECT ${ITEM_COLS} FROM collection_items WHERE collection_id = ? AND data LIKE ? ORDER BY sort_order ASC, created_at ASC`
   ).all(collectionId, pattern) as ItemRow[]
-  return rows.map(r => rowToItem(r))
-}
-
-// --- Items by project ---
-
-export function listItemsByProject(collectionId: string, projectId: string): CollectionItem[] {
-  const db = getDb()
-  const rows = db.prepare(
-    `SELECT ${ITEM_COLS} FROM collection_items WHERE collection_id = ? AND project_id = ? ORDER BY sort_order ASC, created_at ASC`
-  ).all(collectionId, projectId) as ItemRow[]
   return rows.map(r => rowToItem(r))
 }

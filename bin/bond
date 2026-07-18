@@ -144,18 +144,13 @@ cmd_sense() {
   node "$PROJECT_DIR/out/cli/sense.js" "$@"
 }
 
-cmd_journal() {
-  _ensure_cli
-  node "$PROJECT_DIR/out/cli/journal.js" "$@"
-}
-
 cmd_soul() {
   _ensure_cli
   node "$PROJECT_DIR/out/cli/soul.js" "$@"
 }
 
 _ensure_cli() {
-  local cli_files=(media screenshot journal soul collection sense)
+  local cli_files=(media screenshot soul collection sense)
   local needs_build=false
   for f in "${cli_files[@]}"; do
     local src="$PROJECT_DIR/src/cli/$f.ts"
@@ -188,7 +183,6 @@ cmd_help() {
   echo -e "  ${G}build${N} [daemon|all] Build (default: all)"
   echo -e "  ${G}rebuild${N} [target]   Stop, build, start"
   echo -e "  ${G}log${N}                Tail daemon log"
-  echo -e "  ${G}journal${N}            Manage journal (list, show, add, edit, rm, search, pin)"
   echo -e "  ${G}soul${N}               Read/write Bond's personality (show, set, append, clear)"
   echo -e "  ${G}media${N}              Manage media (list, add, info, open, rm, purge)"
   echo -e "  ${G}screenshot${N}         Capture Bond window to /tmp/bond-screenshot.png"
@@ -207,7 +201,6 @@ case "${1:-help}" in
   log)     cmd_log ;;
   media)   shift; cmd_media "$@" ;;
   collection) shift; cmd_collection "$@" ;;
-  journal) shift; cmd_journal "$@" ;;
   soul)    shift; cmd_soul "$@" ;;
   sense)   shift; cmd_sense "$@" ;;
   screenshot|ss) cmd_screenshot "${2:-/tmp/bond-screenshot.png}" ;;

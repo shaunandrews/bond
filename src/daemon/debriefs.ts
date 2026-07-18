@@ -16,14 +16,10 @@ function rowToDebrief(row: Record<string, unknown>): SessionDebrief {
     id: row.id as string,
     sessionId: row.session_id as string,
     sessionTitle: row.session_title as string,
-    projectId: (row.project_id as string) || null,
     summary: row.summary as string,
     topics: parseJsonArray(row.topics),
     // Legacy columns are preserved in SQLite and compatibility types, but no active
     // UI/API/prompt path uses these concepts anymore.
-    decisions: parseJsonArray(row.decisions),
-    openThreads: parseJsonArray(row.open_threads),
-    keyFacts: parseJsonArray(row.key_facts),
     messageCount: row.message_count as number,
     durationSeconds: row.duration_seconds as number,
     createdAt: row.created_at as string,
@@ -48,25 +44,10 @@ export function deleteDebrief(id: string): boolean {
   return result.changes > 0
 }
 
-export function listDebriefs(options?: {
-  projectId?: string
-  limit?: number
-  since?: string
-}): SessionDebrief[] {
+export function listDebriefs(options?: { limit?: number }): SessionDebrief[] {
   const db = getDb()
-  let sql = 'SELECT * FROM sense_debriefs WHERE 1=1'
-  const params: (string | number)[] = []
-
-  if (options?.projectId) {
-    sql += ' AND project_id = ?'
-    params.push(options.projectId)
-  }
-  if (options?.since) {
-    sql += ' AND created_at >= ?'
-    params.push(options.since)
-  }
-
-  sql += ' ORDER BY created_at DESC'
+  let sql = 'SELECT * FROM sense_debriefs ORDER BY created_at DESC'
+  const params: number[] = []
 
   if (options?.limit) {
     sql += ' LIMIT ?'

@@ -60,17 +60,13 @@ import {
   addItemComment,
   deleteItemComment,
   listItemComments,
-  searchItems,
-  listItemsByProject
+  searchItems
 } from './collections'
 import { createSenseController, type SenseController } from './sense/controller'
 import { getStats as getSenseStats, clearData as clearSenseData } from './sense/storage'
 import { getSetting, setSetting } from './settings'
 import type { SenseSettings } from '../shared/sense'
 import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
-import { generateJournalMeta } from './generate-journal-meta'
-import { generateBondComment } from './generate-journal-comment'
-import type { ItemComment } from '../shared/session'
 import { generateTitleAndSummary } from './generate-title'
 import { generateDebrief } from './generate-debrief'
 import {
@@ -467,8 +463,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
       case 'session.create': {
         const sessionTitle = getStringParam(p, 'title')
-        const projectId = getStringParam(p, 'projectId')
-        return JSON.stringify(makeResponse(id, createSession({ title: sessionTitle || undefined, projectId: projectId || undefined })))
+        return JSON.stringify(makeResponse(id, createSession({ title: sessionTitle || undefined })))
       }
 
       case 'session.get': {
@@ -732,148 +727,10 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, searchItems(collectionId, query)))
       }
 
-      case 'collection.listItemsByProject': {
-        const collectionId = getStringParam(p, 'collectionId')
-        const projectId = getStringParam(p, 'projectId')
-        if (!collectionId || !projectId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'collectionId and projectId are required'))
-        return JSON.stringify(makeResponse(id, listItemsByProject(collectionId, projectId)))
-      }
-
       case 'collection.getByName': {
         const name = getStringParam(p, 'name')
         if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
         return JSON.stringify(makeResponse(id, getCollectionByName(name)))
-      }
-
-      // --- Journal (backed by Journal collection) ---
-
-      case 'journal.list': {
-        const journal = getCollectionByName('Journal')
-        if (!journal) return JSON.stringify(makeResponse(id, []))
-        const author = getStringParam(p, 'author')
-        const projectId = getStringParam(p, 'projectId')
-        const tag = getStringParam(p, 'tag')
-        const limit = getParam(p, 'limit') as number | undefined
-        const offset = getParam(p, 'offset') as number | undefined
-        let items = projectId
-          ? listItemsByProject(journal.id, projectId)
-          : listItems(journal.id)
-        // Reverse to get newest first
-        items = items.slice().reverse()
-        // Filter by author
-        if (author) items = items.filter(i => i.data.author === author)
-        // Filter by tag
-        if (tag) items = items.filter(i => {
-          const tags = i.data.tags as string[] | undefined
-          return tags && tags.includes(tag)
-        })
-        // Pinned first
-        items.sort((a, b) => {
-          const aPin = a.data.pinned ? 1 : 0
-          const bPin = b.data.pinned ? 1 : 0
-          return bPin - aPin
-        })
-        if (offset) items = items.slice(offset)
-        if (limit) items = items.slice(0, limit)
-        return JSON.stringify(makeResponse(id, items))
-      }
-
-      case 'journal.get': {
-        const eid = getStringParam(p, 'id')
-        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, getItem(eid)))
-      }
-
-      case 'journal.create': {
-        const journal = getCollectionByName('Journal')
-        if (!journal) return JSON.stringify(makeErrorResponse(id, RPC_INTERNAL_ERROR, 'Journal collection not found'))
-        const author = getStringParam(p, 'author') as 'user' | 'bond' | undefined
-        const title = getStringParam(p, 'title')
-        const body = getStringParam(p, 'body')
-        if (!author || !title || !body) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'author, title, and body are required'))
-        const tags = getParam(p, 'tags') as string[] | undefined
-        const projectId = getStringParam(p, 'projectId')
-        const sessionId = getStringParam(p, 'sessionId')
-        const data: Record<string, unknown> = { title, body, author, tags: tags ?? [], pinned: false }
-        if (sessionId) data.sessionId = sessionId
-        const item = addItem(journal.id, data, projectId)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, item))
-      }
-
-      case 'journal.update': {
-        const eid = getStringParam(p, 'id')
-        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
-        if (!updates) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'updates is required'))
-        // Map projectId to the item's project_id column
-        let projectIdUpdate: string | null | undefined
-        if ('projectId' in updates) {
-          projectIdUpdate = (updates.projectId as string) || null
-          delete updates.projectId
-        }
-        const updated = updateItem(eid, updates, projectIdUpdate)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, updated))
-      }
-
-      case 'journal.delete': {
-        const eid = getStringParam(p, 'id')
-        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const deleted = deleteItem(eid)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, deleted))
-      }
-
-      case 'journal.search': {
-        const query = getStringParam(p, 'query')
-        if (!query) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'query is required'))
-        const journal = getCollectionByName('Journal')
-        if (!journal) return JSON.stringify(makeResponse(id, []))
-        return JSON.stringify(makeResponse(id, searchItems(journal.id, query)))
-      }
-
-      case 'journal.generateMeta': {
-        const eid = getStringParam(p, 'id')
-        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const item = getItem(eid)
-        if (!item) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'entry not found'))
-        const body = item.data.body as string || ''
-        const meta = await generateJournalMeta(body)
-        const updated = updateItem(eid, { title: meta.title, tags: meta.tags })
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, updated))
-      }
-
-      case 'journal.addComment': {
-        const itemId = getStringParam(p, 'entryId')
-        const author = getStringParam(p, 'author') as 'user' | 'bond' | undefined
-        const body = getStringParam(p, 'body')
-        if (!itemId || !author || !body) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'entryId, author, and body are required'))
-        const comment = addItemComment(itemId, author, body)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, comment))
-      }
-
-      case 'journal.deleteComment': {
-        const cid = getStringParam(p, 'id')
-        if (!cid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const deleted = deleteItemComment(cid)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, deleted))
-      }
-
-      case 'journal.generateBondComment': {
-        const eid = getStringParam(p, 'entryId')
-        if (!eid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'entryId is required'))
-        const item = getItem(eid)
-        if (!item) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'entry not found'))
-        const entryBody = item.data.body as string || ''
-        const entryTitle = item.data.title as string || ''
-        const commentBody = await generateBondComment(entryBody, entryTitle)
-        const comment = addItemComment(eid, 'bond', commentBody)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, comment))
       }
 
       // --- Sense ---

@@ -253,8 +253,6 @@ function createWindow(): void {
   // Broadcast entity change events to all windows
   client.onCollectionsChanged(() => broadcast('bond:collectionsChanged'))
   client.onImageChanged(() => broadcast('bond:imageChanged'))
-  // Journal changes now flow through collections channel
-
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
@@ -621,18 +619,6 @@ app.whenReady().then(async () => {
   // --- Collection item comments ---
   ipcMain.handle('collection:addItemComment', (_e, itemId: string, author: string, body: string) => client.addItemComment(itemId, author as any, body))
   ipcMain.handle('collection:deleteItemComment', (_e, id: string) => client.deleteItemComment(id))
-
-  // --- Journal (backed by Journal collection) ---
-  ipcMain.handle('journal:list', (_e, opts?: Record<string, unknown>) => client.listJournalEntries(opts as any))
-  ipcMain.handle('journal:get', (_e, id: string) => client.getJournalEntry(id))
-  ipcMain.handle('journal:create', (_e, params: Record<string, unknown>) => client.createJournalEntry(params as any))
-  ipcMain.handle('journal:update', (_e, id: string, updates: Record<string, unknown>) => client.updateJournalEntry(id, updates))
-  ipcMain.handle('journal:delete', (_e, id: string) => client.deleteJournalEntry(id))
-  ipcMain.handle('journal:search', (_e, query: string) => client.searchJournalEntries(query))
-  ipcMain.handle('journal:generateMeta', (_e, id: string) => client.generateJournalMeta(id))
-  ipcMain.handle('journal:addComment', (_e, entryId: string, author: string, body: string) => client.addJournalComment(entryId, author as any, body))
-  ipcMain.handle('journal:deleteComment', (_e, id: string) => client.deleteJournalComment(id))
-  ipcMain.handle('journal:generateBondComment', (_e, entryId: string) => client.generateBondComment(entryId))
 
   ipcMain.handle('image:readLocal', (_e, filePath: string): string | null => {
     if (!isAllowedPath(filePath)) return null

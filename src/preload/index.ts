@@ -33,9 +33,9 @@ contextBridge.exposeInMainWorld('bond', {
 
   // Sessions
   listSessions: () => ipcRenderer.invoke('session:list') as Promise<Session[]>,
-  createSession: (options?: { title?: string; projectId?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
+  createSession: (options?: { title?: string }) => ipcRenderer.invoke('session:create', options) as Promise<Session>,
   getSession: (id: string) => ipcRenderer.invoke('session:get', id) as Promise<Session | null>,
-  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode' | 'projectId'>>) => ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
+  updateSession: (id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode'>>) => ipcRenderer.invoke('session:update', id, updates) as Promise<Session | null>,
   deleteSession: (id: string) => ipcRenderer.invoke('session:delete', id) as Promise<boolean>,
   deleteArchivedSessions: () => ipcRenderer.invoke('session:deleteArchived') as Promise<{ ok: boolean; count: number }>,
   getMessages: (sessionId: string) => ipcRenderer.invoke('session:getMessages', sessionId) as Promise<SessionMessage[]>,
@@ -61,28 +61,6 @@ contextBridge.exposeInMainWorld('bond', {
     ipcRenderer.invoke('collection:addItemComment', itemId, author, body) as Promise<ItemComment>,
   deleteItemComment: (id: string) => ipcRenderer.invoke('collection:deleteItemComment', id) as Promise<boolean>,
   onCollectionsChanged: (fn: () => void) => {
-    const listener = () => fn()
-    ipcRenderer.on('bond:collectionsChanged', listener)
-    return () => ipcRenderer.removeListener('bond:collectionsChanged', listener)
-  },
-
-  // Journal (backed by Journal collection)
-  listJournalEntries: (opts?: { author?: string; projectId?: string; tag?: string; limit?: number; offset?: number }) =>
-    ipcRenderer.invoke('journal:list', opts) as Promise<CollectionItem[]>,
-  getJournalEntry: (id: string) => ipcRenderer.invoke('journal:get', id) as Promise<CollectionItem | null>,
-  createJournalEntry: (params: { author: 'user' | 'bond'; title: string; body: string; tags?: string[]; projectId?: string; sessionId?: string }) =>
-    ipcRenderer.invoke('journal:create', params) as Promise<CollectionItem>,
-  updateJournalEntry: (id: string, updates: Record<string, unknown>) =>
-    ipcRenderer.invoke('journal:update', id, updates) as Promise<CollectionItem | null>,
-  deleteJournalEntry: (id: string) => ipcRenderer.invoke('journal:delete', id) as Promise<boolean>,
-  searchJournalEntries: (query: string) => ipcRenderer.invoke('journal:search', query) as Promise<CollectionItem[]>,
-  generateJournalMeta: (id: string) => ipcRenderer.invoke('journal:generateMeta', id) as Promise<CollectionItem | null>,
-  addJournalComment: (entryId: string, author: 'user' | 'bond', body: string) =>
-    ipcRenderer.invoke('journal:addComment', entryId, author, body) as Promise<ItemComment>,
-  deleteJournalComment: (id: string) => ipcRenderer.invoke('journal:deleteComment', id) as Promise<boolean>,
-  generateBondComment: (entryId: string) => ipcRenderer.invoke('journal:generateBondComment', entryId) as Promise<ItemComment>,
-  onJournalChanged: (fn: () => void) => {
-    // Journal changes now come through collections channel
     const listener = () => fn()
     ipcRenderer.on('bond:collectionsChanged', listener)
     return () => ipcRenderer.removeListener('bond:collectionsChanged', listener)

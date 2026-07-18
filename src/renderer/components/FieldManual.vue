@@ -5,7 +5,6 @@ import {
   PhLightning,
   PhLightbulb,
   PhChatCircle,
-  PhBookOpen,
   PhSquaresFour,
   PhImages,
   PhEye,
@@ -56,11 +55,6 @@ const capabilities = [
     description: 'Talk naturally. Attach images (⌘V paste or drag). Ask Bond to read, write, and edit files, run shell commands, or search the web. Use edit modes (full/readonly/scoped) to control file access.',
   },
   {
-    icon: PhBookOpen,
-    name: 'Journal',
-    description: 'Persistent entries for reflections, decisions, and notes. Both you and Bond can write. Search across all entries.',
-  },
-  {
     icon: PhSquaresFour,
     name: 'Collections',
     description: 'Track anything with custom schemas — movies, books, coffee, workouts. Define your own fields. Add items conversationally.',
@@ -86,7 +80,7 @@ const tips = [
   'Drag files into chat for context (not just images — code, PDFs, text)',
   'Bond remembers context within a session — refer back freely',
   'Use /skill-name to invoke custom skills',
-  'Use the journal to preserve decisions and summaries across sessions',
+  'Use session debriefs and Sense to recall past work',
 ]
 </script>
 

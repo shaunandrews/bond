@@ -12,7 +12,7 @@ import {
   listItems, getItem, addItem, updateItem, deleteItem, reorderItems,
   renameField, countItems,
   addItemComment, deleteItemComment, listItemComments,
-  searchItems, listItemsByProject,
+  searchItems,
 } from './collections'
 
 let testDir: string
@@ -37,11 +37,8 @@ const testSchema: FieldDef[] = [
 
 describe('collections module', () => {
   describe('collection CRUD', () => {
-    it('starts with Journal collection from migration', () => {
-      const collections = listCollections()
-      // The journal-to-collection migration creates a "Journal" collection
-      const journal = collections.find(c => c.name === 'Journal')
-      expect(journal).toBeTruthy()
+    it('starts empty on a fresh database', () => {
+      expect(listCollections()).toEqual([])
     })
 
     it('creates a collection', () => {
@@ -124,17 +121,6 @@ describe('collections module', () => {
       expect(item.data).toEqual({ title: 'Inception', rating: 5 })
     })
 
-    it('adds item with projectId', () => {
-      const c = createCollection('Movies', testSchema)
-      // Create project first
-      const db = getDb()
-      const now = new Date().toISOString()
-      db.prepare('INSERT INTO projects (id, name, goal, type, archived, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)').run('p1', 'P', '', 'generic', now, now)
-
-      const item = addItem(c.id, { title: 'Test' }, 'p1')
-      expect(item.projectId).toBe('p1')
-    })
-
     it('assigns sequential sort order', () => {
       const c = createCollection('Movies', testSchema)
       const i1 = addItem(c.id, { title: 'First' })
@@ -157,28 +143,6 @@ describe('collections module', () => {
       const updated = updateItem(item.id, { title: 'New' })
       expect(updated?.data.title).toBe('New')
       expect(updated?.data.rating).toBe(3) // preserved
-    })
-
-    it('updates item projectId', () => {
-      const c = createCollection('Movies', testSchema)
-      const db = getDb()
-      const now = new Date().toISOString()
-      db.prepare('INSERT INTO projects (id, name, goal, type, archived, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)').run('p1', 'P', '', 'generic', now, now)
-
-      const item = addItem(c.id, { title: 'Test' })
-      const updated = updateItem(item.id, {}, 'p1')
-      expect(updated?.projectId).toBe('p1')
-    })
-
-    it('clears item projectId', () => {
-      const c = createCollection('Movies', testSchema)
-      const db = getDb()
-      const now = new Date().toISOString()
-      db.prepare('INSERT INTO projects (id, name, goal, type, archived, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)').run('p1', 'P', '', 'generic', now, now)
-
-      const item = addItem(c.id, { title: 'Test' }, 'p1')
-      const updated = updateItem(item.id, {}, null)
-      expect(updated?.projectId).toBeUndefined()
     })
 
     it('returns null updating nonexistent', () => {
@@ -313,24 +277,6 @@ describe('collections module', () => {
       const c = createCollection('Movies', testSchema)
       addItem(c.id, { title: 'Inception' })
       expect(searchItems(c.id, 'zzzzz')).toEqual([])
-    })
-  })
-
-  describe('listItemsByProject', () => {
-    it('filters by project', () => {
-      const c = createCollection('Movies', testSchema)
-      const db = getDb()
-      const now = new Date().toISOString()
-      db.prepare('INSERT INTO projects (id, name, goal, type, archived, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)').run('p1', 'P1', '', 'generic', now, now)
-      db.prepare('INSERT INTO projects (id, name, goal, type, archived, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)').run('p2', 'P2', '', 'generic', now, now)
-
-      addItem(c.id, { title: 'A' }, 'p1')
-      addItem(c.id, { title: 'B' }, 'p2')
-      addItem(c.id, { title: 'C' }, 'p1')
-
-      const items = listItemsByProject(c.id, 'p1')
-      expect(items).toHaveLength(2)
-      expect(items.map(i => i.data.title)).toEqual(['A', 'C'])
     })
   })
 })

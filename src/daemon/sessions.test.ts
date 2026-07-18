@@ -63,16 +63,6 @@ describe('sessions module', () => {
       const s = createSession({ title: 'My chat' })
       expect(s.title).toBe('My chat')
     })
-
-    it('creates with project ID', () => {
-      // Create a project first
-      const db = getDb()
-      const now = new Date().toISOString()
-      db.prepare('INSERT INTO projects (id, name, goal, type, archived, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)').run('p1', 'Proj', '', 'generic', now, now)
-
-      const s = createSession({ projectId: 'p1' })
-      expect(s.projectId).toBe('p1')
-    })
   })
 
   describe('getSession', () => {

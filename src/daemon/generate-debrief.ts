@@ -82,12 +82,8 @@ export async function generateDebrief(sessionId: string): Promise<SessionDebrief
     id: randomUUID(),
     sessionId,
     sessionTitle: session.title,
-    projectId: session.projectId ?? null,
     summary: parsed.summary,
     topics: parsed.topics,
-    decisions: [],
-    openThreads: [],
-    keyFacts: [],
     messageCount: substantive.length,
     durationSeconds,
     createdAt: now,
@@ -102,22 +98,22 @@ export async function generateDebrief(sessionId: string): Promise<SessionDebrief
   // Insert debrief with flattened _text fields
   db.prepare(`
     INSERT INTO sense_debriefs (
-      id, session_id, session_title, project_id,
+      id, session_id, session_title,
       summary, topics, decisions, open_threads, key_facts,
       topics_text, decisions_text, open_threads_text, key_facts_text,
       message_count, duration_seconds, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    debrief.id, debrief.sessionId, debrief.sessionTitle, debrief.projectId,
+    debrief.id, debrief.sessionId, debrief.sessionTitle,
     debrief.summary,
     JSON.stringify(debrief.topics),
-    JSON.stringify(debrief.decisions),
-    JSON.stringify(debrief.openThreads),
-    JSON.stringify(debrief.keyFacts),
+    '[]',
+    '[]',
+    '[]',
     debrief.topics.join(' '),
-    debrief.decisions.join(' '),
-    debrief.openThreads.join(' '),
-    debrief.keyFacts.join(' '),
+    '',
+    '',
+    '',
     debrief.messageCount, debrief.durationSeconds, debrief.createdAt
   )
 
@@ -131,7 +127,7 @@ export async function generateDebrief(sessionId: string): Promise<SessionDebrief
 export async function backfillDebriefs(limit = 50): Promise<{ generated: number; skipped: number; failed: number }> {
   const db = getDb()
   const sessions = db.prepare(`
-    SELECT s.id, s.title, s.project_id
+    SELECT s.id, s.title
     FROM sessions s
     WHERE s.archived = 1
     AND s.id NOT IN (SELECT session_id FROM sense_debriefs WHERE session_id IS NOT NULL)
@@ -141,7 +137,7 @@ export async function backfillDebriefs(limit = 50): Promise<{ generated: number;
     ) >= 3
     ORDER BY s.updated_at DESC
     LIMIT ?
-  `).all(limit) as { id: string; title: string; project_id: string | null }[]
+  `).all(limit) as { id: string; title: string }[]
 
   let generated = 0, failed = 0
 
