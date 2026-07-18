@@ -70,7 +70,13 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
 | `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`) |
 | `agent.ts` / `pi/runtime.ts` | Builds Bond context, runs Pi sessions, streams chunks, handles tool approvals |
-| `pi/runtime.ts` | Pi session lifecycle, event streaming, edit-mode → tool/permission mapping, tier resolution, Pi OAuth |
+| `pi/runtime.ts` | Pi session lifecycle, event streaming, edit-mode → tool/permission mapping, Bond memory tool registration, tier resolution, Pi OAuth |
+| `memory/service.ts` | Serialized automatic observer persistence + epoch observer/reflector hooks |
+| `memory/tools.ts` | Bond-owned Pi tools for memory status/search/recall/history and explicit remember/update/forget |
+| `memory/store.ts` | Searchable memory CRUD, FTS, and relational source-message provenance |
+| `memory/core-memory.ts` | Bounded persistent Core memory in `memory/core.json` |
+| `onboarding.ts` | First-run detection, transcript intro seeding, first-run system-prompt section, and the `complete_onboarding` Pi tool. The interview itself is the real agent — no scripted flow |
+| `sandbox.ts` | New-user sandbox: swaps the daemon's data dir to a fresh empty directory (and back) so the real app runs a genuine first-run without touching real data |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
 | `collections.ts` | Collections + items CRUD (SQLite) |
 | `debriefs.ts` | Session debrief storage (SQLite) |
@@ -96,7 +102,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 
 ### Main Process (`src/main/`)
 
-Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), tray indicator (`src/main/tray.ts`).
+Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. Builds the native application menu, including **Bond → Run/Exit New-User Simulation** (⌘⌥N) which toggles the daemon's sandbox data set and reloads the window — the real app then boots into a genuine first-run. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), tray indicator (`src/main/tray.ts`).
 
 ### Preload (`src/preload/index.ts`)
 
@@ -299,10 +305,10 @@ View wrapper with sticky header (using BondToolbar), scrollable content area, an
 - **Expose:** `scrollAreaEl` (the scrollable container element)
 
 ### ChatInput
-Unified composer combining textarea, model selector, edit mode selector, attach button, and a single contextual action button. Auto-focuses after response completes.
-- **Props:** `busy: boolean` — swaps action button between send/stop, `model: ModelId`, `editMode: EditMode`
+Unified composer combining textarea, attachments, context usage, reasoning and permissions settings, and send/stop actions. Auto-focuses after response completes.
+- **Props:** `busy: boolean`, `model: ModelId`, `editMode: EditMode`, `contextUsage?: { inputTokens, contextWindow, costUsd }`
 - **Events:** `submit(text: string, images: AttachedImage[])`, `cancel()`, `update:model(value: ModelId)`, `update:editMode(value: EditMode)`
-- Single bordered container with textarea on top and a toolbar row below (model select, edit mode select, attach, action button). Action button shows send (arrow-up, accent) when idle, stop (stop icon) when busy. Attach button opens native file picker for jpeg/png/gif/webp. Image thumbnails appear above textarea inside the box. Edit mode selector switches the current composer between readonly, scoped (with paths input), and full.
+- Single bordered container with textarea on top and a toolbar row below. A sliders icon immediately left of the send/stop actions opens one top-aligned menu with Reasoning (high/balanced/fast) and Permissions (readonly/scoped/full) sections. Attach opens the native jpeg/png/gif/webp picker. Image thumbnails appear above the textarea. Scoped permission mode shows a paths input.
 
 ### ApprovalPrompt
 Focused tool approval request stacked above ChatInput while leaving the normal composer usable. Shows the tool, description, and a formatted command/path/input preview.
