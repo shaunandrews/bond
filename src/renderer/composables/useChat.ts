@@ -97,6 +97,12 @@ const _hmr = import.meta.hot?.data as
   | { messages?: Message[]; busy?: boolean; queuedMessages?: QueuedMessage[]; transportSessionId?: string | null; nextBeforeSeq?: number | null; hasLoaded?: boolean }
   | undefined
 
+/** Chunk kinds owned by a single turn — anything here from a foreign turnId is a straggler. */
+const TURN_SCOPED_CHUNKS: ReadonlySet<string> = new Set([
+  'query_start', 'query_end', 'assistant_text', 'thinking_text', 'assistant_tool',
+  'tool_result', 'tool_approval', 'raw_error', 'result', 'generated_image', 'system',
+])
+
 export function useChat(deps: ChatDeps = window.bond) {
   const messages = ref<Message[]>(_hmr?.messages ?? [])
   const busy = ref(!!_hmr?.busy)
@@ -108,6 +114,7 @@ export function useChat(deps: ChatDeps = window.bond) {
   const editMode = ref<EditMode>({ type: 'full' })
 
   const activeActivityId = ref<string | null>(null)
+  const activeTurnId = ref<string | null>(null)
   const activityRevision = ref(0)
   const currentQueue = computed(() => queuedMessages.value)
   const busySessionIds = computed(() => currentSessionId.value && busy.value ? new Set([currentSessionId.value]) : new Set<string>())
@@ -232,6 +239,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     if (currentSessionId.value && chunk.sessionId && chunk.sessionId !== currentSessionId.value) return
 
     if (chunk.kind === 'turn_start') {
+      activeTurnId.value = chunk.turnId
       // A turn started on another client (desktop vs. phone). Mirror its user
       // message and activity row under the sender's ids so both transcripts
       // stay one set of rows; the sender itself already has them — dedupe.
@@ -271,6 +279,12 @@ export function useChat(deps: ChatDeps = window.bond) {
       return
     }
 
+    // Drop stragglers from a turn we no longer own — an in-flight chunk can
+    // race a cancel, and without this guard activityFor() mints an orphan
+    // "Working" row for the dead turn that then gets persisted. Untagged
+    // chunks pass for back-compat; cross-turn kinds are handled above.
+    if (chunk.turnId && chunk.turnId !== activeTurnId.value && TURN_SCOPED_CHUNKS.has(chunk.kind)) return
+
     if (chunk.kind === 'query_start') {
       busy.value = true
       updateActivity(data => { data.status = 'working'; data.startedAt ||= Date.now() })
@@ -279,6 +293,7 @@ export function useChat(deps: ChatDeps = window.bond) {
 
     if (chunk.kind === 'query_end') {
       busy.value = false
+      activeTurnId.value = null
       const endedAt = Date.now()
       const activityMsg = existingActivity()
       if (activityMsg) {
@@ -460,6 +475,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     }
 
     const turnId = uid()
+    activeTurnId.value = turnId
     const userMessageId = uid()
     const assistantMessageId = uid()
     const activityMessageId = uid()
@@ -486,6 +502,7 @@ export function useChat(deps: ChatDeps = window.bond) {
       if (!res.ok && res.error) {
         addMessage({ id: uid(), role: 'meta', kind: 'error', text: res.error })
         busy.value = false
+        activeTurnId.value = null
         updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: res.error! }) })
         activeActivityId.value = null
         endStreaming()
@@ -493,6 +510,7 @@ export function useChat(deps: ChatDeps = window.bond) {
       }
     } catch (error) {
       busy.value = false
+      activeTurnId.value = null
       const detail = error instanceof Error ? error.message : String(error)
       console.error('[bond] send failed:', error)
       updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: detail || 'Send failed' }) })
@@ -528,6 +546,7 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   function cancel() {
     queuedMessages.value = []
+    activeTurnId.value = null
     if (busy.value) {
       busy.value = false
       updateActivity(data => { const endedAt = Date.now(); finalizeOpenActivityEvents(data, endedAt); cancelPendingApprovals(data, endedAt); data.status = 'cancelled'; data.endedAt = endedAt })

@@ -40,6 +40,39 @@ describe('useChat continuous transcript', () => {
     handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
   })
 
+  it('drops turn-scoped chunks from a cancelled turn instead of minting an orphan activity row', async () => {
+    // Regression: a straggler chunk racing a cancel used to make activityFor()
+    // create a fresh "Working" activity row that then persisted forever.
+    await chat.submit('do something slow')
+    const sentTurnId = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0].turnId as string
+    chat.cancel()
+    const countAfterCancel = chat.messages.value.length
+
+    handler({ kind: 'assistant_text', text: 'too late', turnId: sentTurnId })
+    handler({ kind: 'thinking_text', text: 'straggler', turnId: sentTurnId })
+
+    expect(chat.messages.value).toHaveLength(countAfterCancel)
+    expect(chat.busy.value).toBe(false)
+    const working = chat.messages.value.filter(m => m.role === 'meta' && m.kind === 'activity' && m.data.status === 'working')
+    expect(working).toHaveLength(0)
+  })
+
+  it('accepts chunks for a turn mirrored from another client via turn_start', () => {
+    handler({ kind: 'turn_start', turnId: 'turn-remote', userMessageId: 'u-r', assistantMessageId: 'a-r', activityMessageId: 'm-r', text: 'from the phone' })
+    handler({ kind: 'assistant_text', text: 'streamed here too', turnId: 'turn-remote', assistantMessageId: 'a-r' })
+
+    const assistant = chat.messages.value.find(m => m.id === 'a-r')
+    expect(assistant && 'text' in assistant ? assistant.text : '').toContain('streamed here too')
+  })
+
+  it('still processes untagged chunks (legacy compatibility)', async () => {
+    await chat.submit('hello')
+    handler({ kind: 'assistant_text', text: 'no tags on me' })
+
+    const bond = chat.messages.value.find(m => m.role === 'bond')
+    expect(bond && 'text' in bond ? bond.text : '').toContain('no tags on me')
+  })
+
   it('mirrors edit_mode_changed into composer state and applies it to the next send', async () => {
     // Regression: the web client persisted the mode but the composable kept
     // sending its own stale 'full' ref — a permissions UI that did nothing.
