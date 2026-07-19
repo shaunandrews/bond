@@ -36,9 +36,23 @@ cmd_status() {
 }
 
 cmd_stop() {
-  local pid
+  local pid waited
   if pid=$(daemon_pid); then
-    kill "$pid" 2>/dev/null && echo -e "${Y}Stopped${N} daemon (pid $pid)" || echo -e "${R}Failed to stop${N} pid $pid"
+    kill "$pid" 2>/dev/null || echo -e "${R}Failed to signal${N} pid $pid"
+    # Wait for the process to actually exit before clearing its files — the
+    # daemon holds the remote TCP port, and a successor spawned while the old
+    # process is still shutting down inherits an EADDRINUSE race.
+    waited=0
+    while kill -0 "$pid" 2>/dev/null && [[ $waited -lt 50 ]]; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo -e "${R}Daemon didn't exit in 5s — force killing${N} (pid $pid)"
+      kill -9 "$pid" 2>/dev/null
+      sleep 0.2
+    fi
+    echo -e "${Y}Stopped${N} daemon (pid $pid)"
     rm -f "$PID_FILE" "$SOCK_FILE"
   else
     echo -e "${D}Daemon not running${N}"
