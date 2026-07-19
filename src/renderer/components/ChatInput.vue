@@ -351,8 +351,11 @@ function updateAutocomplete() {
   showSkillMenu.value = false
 
   const beforeCursor = text.slice(0, cursor)
-  const match = beforeCursor.match(/(?:^|\s)([A-Za-z]{1,4}(?:-\d*)?)$/)
-  if (match && issueReferences.value.some(issue => issue.key.startsWith(match[1].toUpperCase().split('-')[0]))) {
+  // Issue lookup is deliberately quiet until a complete four-letter, uppercase
+  // tracker prefix is present. Normal prose should never summon a ticket list.
+  const match = beforeCursor.match(/(?:^|\s)([A-Z]{4}(?:-\d*)?)$/)
+  const prefix = match?.[1].split('-', 1)[0]
+  if (match && issueReferences.value.some(issue => issue.key.split('-', 1)[0] === prefix)) {
     issueMatchStart.value = cursor - match[1].length
     issueMenuIndex.value = 0
     showIssueMenu.value = filteredIssueReferences.value.length > 0
