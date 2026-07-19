@@ -1,6 +1,11 @@
 export const ONBOARDING_FIRST_RUN_VERSION = 1
 
-export type OnboardingFirstRunStatus = 'pending' | 'completed' | 'skipped' | 'existing-user'
+/**
+ * pending → the get-to-know-you interview is running.
+ * education → the interview closed; Bond is touring the panels
+ *   (Collections, Sense, Media, Memory) before normal operation.
+ */
+export type OnboardingFirstRunStatus = 'pending' | 'education' | 'completed' | 'skipped' | 'existing-user'
 
 export interface OnboardingFirstRunState {
   version: typeof ONBOARDING_FIRST_RUN_VERSION

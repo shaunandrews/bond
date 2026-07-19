@@ -140,6 +140,8 @@ describe('buildFirstRunPromptSection', () => {
     // call rides in the same tool batch as the saves.
     expect(section).toContain('Saving memories does NOT finish onboarding')
     expect(section).toContain('never one without the other')
+    // The close flows straight into the tour — no "want a tour?" ask.
+    expect(section).toContain('flow STRAIGHT into the tour')
     // The section's own presence is the status — no bluffing "yep, onboarded".
     expect(section).toContain('only exists in your prompt while onboarding is unfinished')
     // Memory writes and the soul-seeding completion call.
@@ -179,41 +181,168 @@ describe('firstRunToolReminder', () => {
   })
 })
 
-describe('complete_onboarding tool', () => {
-  function registerTool() {
-    let registered: { name: string; execute: (...args: unknown[]) => Promise<unknown> } | null = null
-    const pi = { registerTool: vi.fn(tool => { registered = tool }) }
-    registerOnboardingTools(pi as never)
-    return registered!
-  }
+type RegisteredTool = {
+  name: string
+  execute: (id: string, params?: unknown) => Promise<{ content: { type: string; text: string }[] }>
+}
 
-  it('registers a tool that marks first-run completed', async () => {
+function registerTools(hooks?: Parameters<typeof registerOnboardingTools>[1]) {
+  const tools: Record<string, RegisteredTool> = {}
+  const pi = { registerTool: vi.fn((tool: RegisteredTool) => { tools[tool.name] = tool }) }
+  registerOnboardingTools(pi as never, hooks)
+  return tools
+}
+
+describe('complete_onboarding tool', () => {
+  it('moves onboarding into the tour and hands back the tour script', async () => {
     expect(getFirstRunStatus().status).toBe('pending')
 
-    const tool = registerTool()
+    const tools = registerTools()
+    expect(Object.keys(tools)).toEqual(['complete_onboarding', 'complete_tour', 'show_panel', 'enable_sense'])
 
-    expect(tool.name).toBe('complete_onboarding')
-    await tool.execute('call-1', {})
-    expect(getFirstRunStatus().status).toBe('completed')
+    const result = await tools.complete_onboarding.execute('call-1', {})
+    expect(getFirstRunStatus().status).toBe('education')
     expect(getSoul()).toBe('')
+    // The tour begins in the same turn, driven from the tool result.
+    expect(result.content[0].text).toContain('THE TOUR BEGINS NOW')
+    expect(result.content[0].text).toContain('show_panel')
   })
 
   it('seeds the initial soul from the interview', async () => {
-    const tool = registerTool()
+    const tools = registerTools()
 
-    await tool.execute('call-1', { soul: 'Be blunt and quick with Shaun.\nHe cares about craft.' })
+    await tools.complete_onboarding.execute('call-1', { soul: 'Be blunt and quick with Shaun.\nHe cares about craft.' })
 
-    expect(getFirstRunStatus().status).toBe('completed')
+    expect(getFirstRunStatus().status).toBe('education')
     expect(getSoul()).toBe('Be blunt and quick with Shaun.\nHe cares about craft.')
   })
 
   it('never clobbers a soul the user already wrote', async () => {
     saveSoul('User-authored soul.')
-    const tool = registerTool()
+    const tools = registerTools()
 
-    await tool.execute('call-1', { soul: 'Agent-drafted soul.' })
+    await tools.complete_onboarding.execute('call-1', { soul: 'Agent-drafted soul.' })
 
-    expect(getFirstRunStatus().status).toBe('completed')
+    expect(getFirstRunStatus().status).toBe('education')
     expect(getSoul()).toBe('User-authored soul.')
+  })
+})
+
+describe('tour tools', () => {
+  it('complete_tour finishes onboarding from the education stage', async () => {
+    const tools = registerTools()
+    await tools.complete_onboarding.execute('c1', {})
+    expect(getFirstRunStatus().status).toBe('education')
+
+    await tools.complete_tour.execute('c2', {})
+    expect(getFirstRunStatus().status).toBe('completed')
+  })
+
+  it('show_panel forwards the panel to the renderer hook', async () => {
+    const shown: string[] = []
+    const tools = registerTools({ showPanel: (panel) => { shown.push(panel) } })
+
+    await tools.show_panel.execute('c1', { panel: 'memory' })
+    expect(shown).toEqual(['memory'])
+  })
+
+  // Regression, round two: models front-load their tool batch, so the panel
+  // opened seconds before the first word of the beat streamed. A blocking
+  // "call again" result failed — the model introduced the panel and never
+  // retried, so nothing opened. The runtime now defers the open and performs
+  // it itself; the tool result must tell the model the open is handled.
+  it('show_panel relays a deferred open and forbids retrying', async () => {
+    const showPanel = vi.fn(() => 'deferred' as const)
+    const tools = registerTools({ showPanel })
+
+    const result = await tools.show_panel.execute('c1', { panel: 'sense' })
+    expect(showPanel).toHaveBeenCalledWith('sense')
+    expect(result.content[0].text).toContain('QUEUED')
+    expect(result.content[0].text).toContain('will open by itself')
+    expect(result.content[0].text).toContain('Do NOT call show_panel again')
+  })
+
+  it('show_panel reports an immediate open once narration has streamed', async () => {
+    const showPanel = vi.fn(() => 'opened' as const)
+    const tools = registerTools({ showPanel })
+
+    const result = await tools.show_panel.execute('c1', { panel: 'sense' })
+    expect(showPanel).toHaveBeenCalledWith('sense')
+    expect(result.content[0].text).toBe('Opened the sense panel.')
+  })
+
+  it('show_panel degrades gracefully without a hook', async () => {
+    const tools = registerTools()
+    const result = await tools.show_panel.execute('c1', { panel: 'sense' })
+    expect(result.content[0].text).toContain('unavailable')
+  })
+
+  it('enable_sense reports the armed state with the permission caveat', async () => {
+    let enabled = false
+    const tools = registerTools({ enableSense: () => { enabled = true; return { enabled: true, state: 'armed' } } })
+
+    const result = await tools.enable_sense.execute('c1', {})
+    expect(enabled).toBe(true)
+    expect(result.content[0].text).toContain('Screen Recording')
+    expect(result.content[0].text).toContain('permission was already granted')
+  })
+
+  // Regression: the suspended-state note used to tell the model about "the
+  // new-user simulation", and the model relayed it verbatim — breaking the
+  // fourth wall of the exact first-run being previewed, then stalling.
+  it('enable_sense keeps the reply in-world when Sense is suspended (sandbox)', async () => {
+    const tools = registerTools({ enableSense: () => ({ enabled: false, state: 'suspended' }) })
+
+    const result = await tools.enable_sense.execute('c1', {})
+    expect(result.content[0].text).toContain('Sense is on')
+    expect(result.content[0].text).toContain('NEVER mention suspension, sandboxes, simulations')
+    expect(result.content[0].text).toContain('forward handoff')
+  })
+
+  it('enable_sense degrades gracefully without a hook', async () => {
+    const tools = registerTools()
+    const result = await tools.enable_sense.execute('c1', {})
+    expect(result.content[0].text).toContain('unavailable')
+  })
+})
+
+describe('tour prompt section', () => {
+  it('serves the tour guide while in the education stage', async () => {
+    const tools = registerTools()
+    await tools.complete_onboarding.execute('c1', {})
+
+    const section = buildFirstRunPromptSection()
+    expect(section).toContain('ONBOARDING TOUR')
+    // The four beats in tour order — Sense first (useful before any setup),
+    // Collections last as the deep finale.
+    const positions = ['sense', 'media', 'memory', 'collections'].map(panel => section.indexOf(`show_panel "${panel}"`))
+    for (const pos of positions) expect(pos).toBeGreaterThan(-1)
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions)
+    // Collections goes into the weeds; the interview's no-weeds rule is lifted.
+    expect(section).toContain('the weeds are welcome here')
+    // Bond only knows the panel opens beside the chat — no invented UI.
+    expect(section).toContain('never invent locations')
+    // Recover from confusion, don't quit.
+    expect(section).toContain('never abandon the tour')
+    // A guide, not a fast-moving robot: bridge preamble, one panel per turn,
+    // narrated panel switches, and a close that lands a concrete first move.
+    expect(section).toContain('Open with a bridge')
+    expect(section).toContain('PACING IS SACRED: one panel per turn')
+    // Regression: panels used to pop open mid-sentence; each beat must
+    // introduce the room in its own message before show_panel is called.
+    expect(section).toContain('INTRODUCE, then OPEN, then ANCHOR')
+    expect(section).toContain('Only after that introduction is fully delivered')
+    // Regression: a resolved beat used to end as a dead stop with nothing to
+    // answer; every wrap-up must hand forward to the next room.
+    expect(section).toContain('forward handoff')
+    expect(section).toContain('say "skip"')
+    expect(section).toContain('ONE concrete first move')
+    // Consent-gated Sense enablement; the permission story comes from the
+    // tool result's actual state, never promised up front.
+    expect(section).toContain('enable_sense')
+    expect(section).toContain('relay honestly what its result says')
+    // A real ending plus the self-verifying status line.
+    expect(section).toContain('complete_tour')
+    expect(section).toContain('complete_tour has NOT been called')
   })
 })

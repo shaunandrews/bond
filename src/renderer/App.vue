@@ -56,10 +56,11 @@ const sandboxed = ref(false)
 // window edge while the text streams, then rises in and takes focus.
 const revealText = ref<string | null>(null)
 const revealStreaming = ref(false)
-// True while the first-run interview is still open — drives the contextual
-// composer placeholder. Re-checked after every turn (completion happens
-// daemon-side via the complete_onboarding tool, invisible to the renderer).
+// True while first-run onboarding (interview or panel tour) is still open —
+// drives the contextual composer placeholder. Re-checked after every turn
+// (stage transitions happen daemon-side via tools, invisible to the renderer).
 const onboardingActive = ref(false)
+const ONBOARDING_OPEN_STATUSES = ['pending', 'education']
 const composerPlaceholder = computed<string | undefined>(() => {
   if (!onboardingActive.value) return undefined
   const hasAnswered = chat.messages.value.some(msg => msg.role === 'user')
@@ -114,7 +115,7 @@ async function playEntrance(introText: string) {
 watch(() => chat.busy.value, async (busy) => {
   if (busy || !onboardingActive.value) return
   try {
-    onboardingActive.value = (await window.bond.onboardingStatus()).status === 'pending'
+    onboardingActive.value = ONBOARDING_OPEN_STATUSES.includes((await window.bond.onboardingStatus()).status)
   } catch { /* keep the current placeholder */ }
 })
 
@@ -158,6 +159,16 @@ const rightPanelStyle = computed(() => ({
   marginRight: rightPanelHidden.value ? `-${rightPanelWidth.value}px` : '0',
   transition: `margin-right var(--transition-base)`,
 }))
+
+// Onboarding tour show_panel tool → open (never toggle-close) a panel.
+function handleShowPanel(event: Event) {
+  const panel = (event as CustomEvent<string>).detail as RightPanelContent
+  if (!validRightPanels.includes(panel)) return
+  rightPanelContent.value = panel
+  rightPanelCollapsed.value = false
+  localStorage.setItem('bond:right-panel', panel)
+  localStorage.setItem('bond:right-panel-content', panel)
+}
 
 function toggleRightPanel(panel?: RightPanelContent) {
   if (panel) {
@@ -276,6 +287,7 @@ function handleBeforeUnload() {
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('beforeunload', handleBeforeUnload)
+  window.addEventListener('bond:show-panel', handleShowPanel)
   removeCreateSkillListener = window.bond.onCreateSkill(handleCreateSkill)
   removeOpacityListener = window.bond.onWindowOpacity(applyWindowOpacity)
   removeAccentListener = window.bond.onAccentColor(applyExternalAccent)
@@ -306,9 +318,10 @@ onMounted(async () => {
     // itself is the normal agent driven by the first-run system prompt.
     const onboardingState = await window.bond.onboardingStatus()
     console.log(`[entrance] boot: onboarding=${onboardingState.status} sandboxed=${sandboxed.value}`)
+    // A reload mid-interview OR mid-tour still counts as onboarding-open.
+    onboardingActive.value = ONBOARDING_OPEN_STATUSES.includes(onboardingState.status)
     if (onboardingState.status === 'pending') {
       firstRunPending = true
-      onboardingActive.value = true
       // Hold the intro empty and the composer offstage from the first paint.
       revealText.value = ''
       revealStreaming.value = true
@@ -354,6 +367,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('bond:show-panel', handleShowPanel)
   removeCreateSkillListener?.()
   removeOpacityListener?.()
   removeAccentListener?.()
@@ -465,18 +479,8 @@ onUnmounted(() => {
     </BondPanel>
   </BondPanelGroup>
 
+  <!-- Order mirrors the onboarding tour: Sense, Media, Memory, Collections. -->
   <nav class="right-panel-controls no-drag" aria-label="Panel views">
-    <BondButton
-      variant="ghost"
-      size="sm"
-      icon
-      :aria-label="rightPanelOpen && rightPanelContent === 'collections' ? 'Close Collections panel' : 'Open Collections panel'"
-      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'collections' }"
-      @click.stop="toggleRightPanel('collections')"
-      v-tooltip="rightPanelOpen && rightPanelContent === 'collections' ? 'Close Collections' : 'Collections'"
-    >
-      <PhListBullets :size="16" weight="bold" />
-    </BondButton>
     <BondButton
       variant="ghost"
       size="sm"
@@ -509,6 +513,17 @@ onUnmounted(() => {
       v-tooltip="rightPanelOpen && rightPanelContent === 'memory' ? 'Close Memory' : 'Memory'"
     >
       <PhBrain :size="16" weight="bold" />
+    </BondButton>
+    <BondButton
+      variant="ghost"
+      size="sm"
+      icon
+      :aria-label="rightPanelOpen && rightPanelContent === 'collections' ? 'Close Collections panel' : 'Open Collections panel'"
+      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'collections' }"
+      @click.stop="toggleRightPanel('collections')"
+      v-tooltip="rightPanelOpen && rightPanelContent === 'collections' ? 'Close Collections' : 'Collections'"
+    >
+      <PhListBullets :size="16" weight="bold" />
     </BondButton>
   </nav>
 
