@@ -146,7 +146,8 @@ function eventTone(evt: TurnActivityEvent) {
 .activity-compact { width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid transparent; background: none; color: inherit; border-radius: var(--radius-lg); padding: 3px 8px; cursor: pointer; }
 .activity-compact:hover, .turn-activity.needs-approval .activity-compact, .turn-activity.failed .activity-compact { background: var(--color-tint); border-color: var(--color-border); }
 .activity-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--color-accent); animation: pulse 1.2s infinite; }
-.activity-label { font-weight: 500; color: var(--color-muted); }
+.activity-label { font-weight: 500; color: var(--color-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-compact > :not(.activity-label) { flex-shrink: 0; }
 .activity-duration, .activity-tool-count, .event-duration, .event-time { opacity: .72; font-variant-numeric: tabular-nums; }
 .activity-chevron, .event-chevron { transition: transform var(--transition-fast); }
 .activity-chevron.expanded, .event-chevron.expanded { transform: rotate(90deg); }
