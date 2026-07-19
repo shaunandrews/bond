@@ -11,9 +11,11 @@ import {
   getModelSetting, saveModelSetting,
   getAccentColor, saveAccentColor,
   getWindowOpacity, saveWindowOpacity,
+  getSenseSettings, setSenseSettings,
   getRemotePort, getOrCreateRemoteToken,
   DEFAULT_REMOTE_PORT,
 } from './settings'
+import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
 
 let testDir: string
 
@@ -123,6 +125,27 @@ describe('settings module', () => {
     it('returns 1 for invalid stored value', () => {
       setSetting('window_opacity', 'not-a-number')
       expect(getWindowOpacity()).toBe(1)
+    })
+  })
+
+  describe('sense settings', () => {
+    it('returns the defaults when nothing is stored', () => {
+      expect(getSenseSettings()).toEqual(DEFAULT_SENSE_SETTINGS)
+    })
+
+    it('merges stored values over the defaults', () => {
+      setSetting('sense', JSON.stringify({ enabled: true, retentionDays: 30 }))
+      expect(getSenseSettings()).toEqual({ ...DEFAULT_SENSE_SETTINGS, enabled: true, retentionDays: 30 })
+    })
+
+    it('falls back to the defaults for a garbage row', () => {
+      setSetting('sense', 'not-json{')
+      expect(getSenseSettings()).toEqual(DEFAULT_SENSE_SETTINGS)
+    })
+
+    it('round-trips through setSenseSettings', () => {
+      setSenseSettings({ ...DEFAULT_SENSE_SETTINGS, enabled: true, blacklistedApps: ['com.1password.1password'] })
+      expect(getSenseSettings()).toEqual({ ...DEFAULT_SENSE_SETTINGS, enabled: true, blacklistedApps: ['com.1password.1password'] })
     })
   })
 

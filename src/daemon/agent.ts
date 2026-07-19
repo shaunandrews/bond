@@ -1,10 +1,9 @@
 import type { BondStreamChunk } from '../shared/stream'
 import type { EditMode } from '../shared/session'
-import { getSoul, getSetting } from './settings'
+import { getSoul, getSenseSettings } from './settings'
 import { scanSkills, type SkillInfo } from './skills'
 import { getDb } from './db'
-import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
-import { runPiBondQuery, runPiTextPrompt } from './pi/runtime'
+import { escapeHistoricalText, runPiBondQuery, runPiTextPrompt } from './pi/runtime'
 import { retrieveMemory } from './memory/retrieval'
 import { readWorkingMemoryState } from './memory/service'
 import { searchMessages, getMessagesForRange } from './transcript'
@@ -124,21 +123,6 @@ function buildSenseInstructions(): string {
     'Use Sense data when the user references past activity, needs work summaries, wants to recall something they saw, or when context would help. Don\'t dump raw OCR — synthesize and summarize.\n'
 }
 
-function loadSenseSettings() {
-  try {
-    const raw = getSetting('sense')
-    if (raw) return { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
-  } catch { /* defaults */ }
-  return DEFAULT_SENSE_SETTINGS
-}
-
-function escapeHistoricalText(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-}
-
 function clampHistoricalText(value: string, maxChars: number): string {
   const normalized = value.replace(/\s+/g, ' ').trim()
   return normalized.length > maxChars ? `${normalized.slice(0, Math.max(0, maxChars - 1))}…` : normalized
@@ -157,7 +141,7 @@ function shouldRecallMemory(query: string): boolean {
 
 function buildRecentScreenContext(): string {
   try {
-    const senseSettings = loadSenseSettings()
+    const senseSettings = getSenseSettings()
     if (!senseSettings.enabled || !senseSettings.autoContextInChat) return ''
 
     const db = getDb()

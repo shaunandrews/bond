@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { PhCaretRight, PhWarningCircle } from '@phosphor-icons/vue'
 import type { TurnActivityData, TurnActivityEvent } from '../types/activity'
+import { formatDuration } from '../lib/format'
 
 const props = defineProps<{ data: TurnActivityData }>()
 defineEmits<{ approve: [requestId: string, approved: boolean] }>()
@@ -34,14 +35,6 @@ const toolCount = computed(() => props.data.events.filter(e => e.type === 'tool'
 const approvalPending = computed(() => props.data.events.some(e => e.type === 'approval' && e.status === 'pending'))
 const failed = computed(() => props.data.status === 'failed' || props.data.events.some(e => e.type === 'error' || (e.type === 'tool' && e.failed)))
 const last = computed(() => props.data.events[props.data.events.length - 1])
-
-function formatDuration(sec: number) {
-  if (sec < 1) return 'briefly'
-  if (sec < 60) return `${sec}s`
-  const m = Math.floor(sec / 60)
-  const s = sec % 60
-  return s ? `${m}m ${s}s` : `${m}m`
-}
 
 function statusLabel() {
   if (props.data.status === 'awaiting_approval') return 'Approval needed'

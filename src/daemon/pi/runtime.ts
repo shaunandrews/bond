@@ -12,6 +12,7 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import type { BondStreamChunk } from '../../shared/stream'
 import type { EditMode } from '../../shared/session'
+import { normalizeModelTier } from '../../shared/models'
 import { getImagePaths } from '../images'
 import { codexImageGenExtension, extractRevisedPrompt, IMAGEGEN_TOOL_NAMES, imageGenAvailable, saveGeneratedImages, stripResultImageData } from '../imagegen'
 import { createMemoryExtensionFactory, MEMORY_TOOL_NAMES } from '../memory/tools'
@@ -27,14 +28,6 @@ const MODEL_IDS = {
   balanced: 'claude-sonnet-4-5',
   fast: 'claude-haiku-4-5',
 } as const
-
-function normalizeTier(value: string | undefined): keyof typeof MODEL_IDS {
-  // Preserve existing saved choices while removing provider names from the product UI.
-  if (value === 'opus') return 'high'
-  if (value === 'sonnet') return 'balanced'
-  if (value === 'haiku') return 'fast'
-  return value === 'high' || value === 'fast' ? value : 'balanced'
-}
 
 function getSessionDir(): string {
   const dir = join(getDataDir(), 'pi', 'sessions')
@@ -86,7 +79,7 @@ function requestApproval(
   return registerApproval(requestId, turnId)
 }
 
-function escapeHistoricalText(value: string): string {
+export function escapeHistoricalText(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 }
 
@@ -121,7 +114,7 @@ function imageContent(imageIds: string[] | undefined) {
 
 async function selectModel(name: string | undefined) {
   const runtime = await ModelRuntime.create()
-  const tier = normalizeTier(name)
+  const tier = normalizeModelTier(name)
   const preferred = MODEL_IDS[tier]
   const available = await runtime.getAvailable()
   const anthropic = available.find(model => model.provider === 'anthropic' && model.id === preferred)

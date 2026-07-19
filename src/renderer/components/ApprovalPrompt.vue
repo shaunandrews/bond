@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
+import { formatApprovalInput } from '../lib/format'
 
 const props = defineProps<{
   requestId: string
@@ -15,11 +16,7 @@ defineEmits<{
 }>()
 
 function formatInput(): string {
-  const command = props.input.command
-  if (typeof command === 'string') return command
-  const path = props.input.file_path ?? props.input.path
-  if (typeof path === 'string') return path
-  try { return JSON.stringify(props.input, null, 2) } catch { return '' }
+  return formatApprovalInput(props.input)
 }
 </script>
 

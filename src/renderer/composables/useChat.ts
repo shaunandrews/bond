@@ -6,6 +6,7 @@ import type { AttachedImage, EditMode, SessionMessage } from '../../shared/sessi
 import type { TranscriptMessage, TranscriptPage } from '../../shared/transcript'
 import type { Message } from '../types/message'
 import type { TurnActivityData, TurnActivityEvent } from '../types/activity'
+import { formatToolLabel } from '../lib/format'
 
 const TRANSCRIPT_PAGE_SIZE = 80
 const TRANSCRIPT_BACKUP_KEY = 'bond:transcript-tail-backup'
@@ -125,14 +126,6 @@ export function useChat(deps: ChatDeps = window.bond) {
   let globalSubscribed = false
   let persistTimer: ReturnType<typeof setTimeout> | null = null
   let lastPersistPromise: Promise<void> = Promise.resolve()
-
-  function _formatToolLabel(name: string, summary?: string): string {
-    const filename = summary?.split('/').pop() || summary
-    const verbs: Record<string, string> = { Read: 'Read', Edit: 'Edited', Write: 'Wrote', Bash: 'Ran command', Glob: 'Searched files', Grep: 'Searched code', WebSearch: 'Searched the web', WebFetch: 'Fetched page', codex_generate_image: 'Generating image' }
-    const verb = verbs[name] ?? name
-    // Prompt-driven tools carry paragraph-length input summaries — verb only.
-    return filename && !['Bash', 'Glob', 'WebSearch', 'codex_generate_image'].includes(name) ? `${verb} ${filename}` : verb
-  }
 
   const pendingApprovals = computed(() => {
     activityRevision.value
@@ -351,7 +344,7 @@ export function useChat(deps: ChatDeps = window.bond) {
         break
       }
       case 'assistant_tool':
-        updateActivity(data => { finalizeOpenActivityEvents(data); data.status = 'working'; data.events.push({ id: uid(), type: 'tool', label: _formatToolLabel(chunk.name, chunk.summary), ts: Date.now(), toolUseId: chunk.toolUseId, toolName: chunk.name, input: chunk.input }) })
+        updateActivity(data => { finalizeOpenActivityEvents(data); data.status = 'working'; data.events.push({ id: uid(), type: 'tool', label: formatToolLabel(chunk.name, chunk.summary), ts: Date.now(), toolUseId: chunk.toolUseId, toolName: chunk.name, input: chunk.input }) })
         break
       case 'tool_result':
         updateActivity(data => {

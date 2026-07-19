@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { MODEL_IDS, type ModelId } from '../shared/models'
+import { normalizeModelTier, type ModelId } from '../shared/models'
+import { DEFAULT_SENSE_SETTINGS, type SenseSettings } from '../shared/sense'
 import { getDb } from './db'
 
 export function getSetting(key: string): string | null {
@@ -23,12 +24,7 @@ export function saveSoul(content: string): boolean {
 }
 
 export function getModelSetting(): ModelId {
-  const raw = getSetting('model')
-  if (raw === 'opus') return 'high'
-  if (raw === 'sonnet') return 'balanced'
-  if (raw === 'haiku') return 'fast'
-  if (raw && (MODEL_IDS as readonly string[]).includes(raw)) return raw as ModelId
-  return 'balanced'
+  return normalizeModelTier(getSetting('model') ?? undefined)
 }
 
 export function saveModelSetting(model: ModelId): boolean {
@@ -55,6 +51,19 @@ export function getWindowOpacity(): number {
 export function saveWindowOpacity(opacity: number): boolean {
   const clamped = Math.max(0, Math.min(1, opacity))
   return setSetting('window_opacity', String(clamped))
+}
+
+/** Persisted Sense settings merged over the defaults; garbage in the row falls back to defaults. */
+export function getSenseSettings(): SenseSettings {
+  try {
+    const raw = getSetting('sense')
+    if (raw) return { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
+  } catch { /* use defaults */ }
+  return DEFAULT_SENSE_SETTINGS
+}
+
+export function setSenseSettings(settings: SenseSettings): void {
+  setSetting('sense', JSON.stringify(settings))
 }
 
 // Reserved via Port Keeper (`portman list`) so local dev servers don't collide.

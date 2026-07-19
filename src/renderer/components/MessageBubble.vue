@@ -9,6 +9,7 @@ import ArtifactFrame from './ArtifactFrame.vue'
 import EmbedRenderer from './EmbedRenderer.vue'
 import { parseArtifacts, hasRichContent } from '../lib/parseArtifacts'
 import { copyToClipboard } from '../lib/clipboard'
+import { formatApprovalInput, formatDuration, formatToolLabel } from '../lib/format'
 import TurnActivity from './TurnActivity.vue'
 
 function renderUserMarkdown(text: string): string {
@@ -45,41 +46,15 @@ function copyText(msg: Message, event: MouseEvent) {
   toastTimer = setTimeout(() => { toast.value.visible = false }, 1200)
 }
 
-function formatApprovalInput(input: Record<string, unknown>): string {
-  const filePath = input.file_path ?? input.path
-  if (typeof filePath === 'string') {
-    const command = input.command
-    if (typeof command === 'string') return command
-    return filePath
-  }
-  if (typeof input.command === 'string') return input.command
-  return JSON.stringify(input, null, 2).slice(0, 300)
-}
-
-function formatDuration(sec: number | undefined): string {
-  if (sec == null || sec < 1) return 'briefly'
-  if (sec < 60) return `for ${sec}s`
-  const m = Math.floor(sec / 60)
-  const s = sec % 60
-  return s > 0 ? `for ${m}m ${s}s` : `for ${m}m`
+/** "for"-prefixed phrasing around the shared core: 'briefly' | 'for 45s' | 'for 1m 15s'. */
+function formatThoughtDuration(sec: number | undefined): string {
+  const core = formatDuration(sec ?? 0)
+  return core === 'briefly' ? core : `for ${core}`
 }
 
 function formatTime(ts: number | undefined): string {
   if (!ts) return ''
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-}
-
-function formatToolSummary(name: string, summary?: string): string {
-  const filename = summary?.split('/').pop() || summary
-  const verbs: Record<string, string> = {
-    Read: 'Read', Edit: 'Edited', Write: 'Wrote',
-    Bash: 'Ran command', Glob: 'Searched files', Grep: 'Searched code',
-    WebSearch: 'Searched the web', WebFetch: 'Fetched page',
-    codex_generate_image: 'Generating image',
-  }
-  const verb = verbs[name] ?? name
-  // Prompt-driven tools carry paragraph-length input summaries — verb only.
-  return filename && !['Bash', 'Glob', 'WebSearch', 'codex_generate_image'].includes(name) ? `${verb} ${filename}` : verb
 }
 </script>
 
@@ -201,7 +176,7 @@ function formatToolSummary(name: string, summary?: string): string {
     v-else-if="msg.kind === 'thinking'"
     class="activity-summary"
     @click="$emit('openActivity')"
-  >Thought {{ formatDuration(msg.durationSec) }}</span>
+  >Thought {{ formatThoughtDuration(msg.durationSec) }}</span>
 
   <!-- Skill invocation -->
   <div
@@ -217,7 +192,7 @@ function formatToolSummary(name: string, summary?: string): string {
     v-else-if="msg.kind === 'tool'"
     class="activity-summary"
     @click="$emit('openActivity')"
-  >{{ formatToolSummary(msg.name, msg.summary) }}</span>
+  >{{ formatToolLabel(msg.name, msg.summary) }}</span>
 
   <!-- Error -->
   <div

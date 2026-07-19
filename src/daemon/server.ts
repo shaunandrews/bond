@@ -68,10 +68,9 @@ import {
 } from './collections'
 import { createSenseController, type SenseController } from './sense/controller'
 import { getStats as getSenseStats, clearData as clearSenseData } from './sense/storage'
-import { getSetting, setSetting } from './settings'
+import { getSetting, setSetting, getSenseSettings, setSenseSettings } from './settings'
 import type { SenseSettings } from '../shared/sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from '../shared/memory'
-import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
 import { generateDebrief } from './generate-debrief'
 import {
   getDebrief,
@@ -220,13 +219,7 @@ let senseController: SenseController | null = null
 
 function getSenseController(): SenseController {
   if (!senseController) {
-    // Load persisted settings
-    let settings = DEFAULT_SENSE_SETTINGS
-    try {
-      const raw = getSetting('sense')
-      if (raw) settings = { ...DEFAULT_SENSE_SETTINGS, ...JSON.parse(raw) }
-    } catch { /* use defaults */ }
-
+    const settings = getSenseSettings()
     senseController = createSenseController(settings)
 
     // Broadcast state changes and capture requests to all clients
@@ -243,10 +236,6 @@ function getSenseController(): SenseController {
     }
   }
   return senseController
-}
-
-function persistSenseSettings(settings: SenseSettings): void {
-  setSetting('sense', JSON.stringify(settings))
 }
 
 function broadcastSenseEvent(method: string, params: unknown): void {
@@ -747,14 +736,14 @@ const handlers: RpcHandlers = {
   'sense.enable': () => {
     const ctrl = getSenseController()
     ctrl.enable()
-    persistSenseSettings(ctrl.getSettings())
+    setSenseSettings(ctrl.getSettings())
     return { ok: true }
   },
 
   'sense.disable': () => {
     const ctrl = getSenseController()
     ctrl.disable()
-    persistSenseSettings(ctrl.getSettings())
+    setSenseSettings(ctrl.getSettings())
     return { ok: true }
   },
 
@@ -920,7 +909,7 @@ const handlers: RpcHandlers = {
     if (!updates) throw new RpcError(RPC_INVALID_PARAMS, 'updates required')
     const ctrl = getSenseController()
     const newSettings = ctrl.updateSettings(updates)
-    persistSenseSettings(newSettings)
+    setSenseSettings(newSettings)
     return newSettings
   },
 
@@ -1159,7 +1148,7 @@ export function startServer(socketPath: string, authToken?: string, health?: Dae
     enableSense: () => {
       const ctrl = getSenseController()
       ctrl.enable()
-      persistSenseSettings(ctrl.getSettings())
+      setSenseSettings(ctrl.getSettings())
       return { enabled: ctrl.getSettings().enabled, state: ctrl.getState() }
     },
   })
