@@ -413,16 +413,24 @@ function removeIssueReference(key: string) {
   syncInput(value.replace(/ {2,}/g, ' ').trimStart())
 }
 
+function setIssueMenuIndex(index: number) {
+  issueMenuIndex.value = Math.max(0, Math.min(index, filteredIssueReferences.value.length - 1))
+  nextTick(() => {
+    const option = document.querySelector<HTMLElement>(`.issue-menu-item[data-issue-index="${issueMenuIndex.value}"]`)
+    option?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
 function handleKeyDown(e: KeyboardEvent) {
   if (showIssueMenu.value) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      issueMenuIndex.value = Math.min(issueMenuIndex.value + 1, filteredIssueReferences.value.length - 1)
+      setIssueMenuIndex(issueMenuIndex.value + 1)
       return
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      issueMenuIndex.value = Math.max(issueMenuIndex.value - 1, 0)
+      setIssueMenuIndex(issueMenuIndex.value - 1)
       return
     }
     if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
@@ -485,6 +493,7 @@ function handleKeyDown(e: KeyboardEvent) {
           type="button"
           class="skill-menu-item issue-menu-item"
           :class="{ 'is-selected': i === issueMenuIndex }"
+          :data-issue-index="i"
           @mousedown.prevent="selectIssueReference(issue)"
           @mouseenter="issueMenuIndex = i"
         >
