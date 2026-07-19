@@ -122,15 +122,17 @@ Electron main process. Spawns daemon if not running, creates window, proxies all
 
 ### Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` via `contextBridge` — typed API for the continuous transcript, settings, images, skills, model, Sense/memory, collections, and shell utilities.
+Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from `buildDaemonSurface` in `src/shared/bond-surface.ts` riding ONE generic `bond:rpc` IPC channel (allowlisted against `RPC_METHOD_NAMES` in main); the 27 Electron-local members (native menus, fs reads, window management, event registrars, and the three settings proxies with main-side broadcasts) are hand-written and typed by `ElectronBondSurface`, which also forces the web shim to acknowledge every one. Protocol skew between app and daemon hard-fails with a "daemon out of date" dialog (desktop) or a `mismatch` banner (web) — the version rides `/health`, `bond.auth`, and `bond.ping`.
 
 ### Shared (`src/shared/`)
 
 | File | Purpose |
 |------|---------|
-| `protocol.ts` | JSON-RPC 2.0 types and helpers |
+| `protocol.ts` | JSON-RPC 2.0 types and helpers + `PROTOCOL_VERSION` (bump on any breaking rpc-schema change; equality = compatibility) |
+| `rpc-schema.ts` | **Single source of truth for the RPC contract** — `RpcMethods` (per-method params/result), `RpcNotifications`, `RPC_METHOD_NAMES`; server handlers, both clients, preload, and the shim all derive from it, so contract drift is a compile error |
+| `bond-surface.ts` | The `window.bond` surface builder — `buildDaemonSurface(invoke)` generates the ~74 daemon proxies from the registry; `ElectronBondSurface` declares the 27 main-process-local members the shim must explicitly stub |
 | `stream.ts` | `BondStreamChunk` union type (text, thinking, tool, approval, error, system) |
-| `client.ts` | `BondClient` WebSocket client class |
+| `client.ts` | `BondClient` WebSocket client class — registry-typed `call`, token provider, reconnect-in-place, `daemonProtocolVersion` |
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Collection, and media/collection types |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
 | `models.ts` | `ModelId` — provider-neutral capability tiers (`'high' | 'balanced' | 'fast'`); Pi maps them to concrete models |
@@ -194,7 +196,9 @@ src/
     web.ts                           # Hidden-browser render host for daemon web tools
   preload/index.ts                   # contextBridge API
   shared/
-    protocol.ts                      # JSON-RPC 2.0 types
+    protocol.ts                      # JSON-RPC 2.0 types + PROTOCOL_VERSION
+    rpc-schema.ts                    # Typed RPC method/notification registry (the wire contract)
+    bond-surface.ts                  # window.bond surface builder (preload + shim derive from it)
     stream.ts                        # BondStreamChunk types (incl. thinking_text)
     client.ts                        # BondClient WebSocket client
     session.ts                       # Session, SessionMessage, Collection, CollectionItem, EditMode, AttachedImage types
