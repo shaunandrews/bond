@@ -154,19 +154,20 @@ function eventTone(evt: TurnActivityEvent) {
 
 <style scoped>
 .turn-activity { align-self: center; width: min(92%, 620px); font-size: 11px; color: var(--color-muted); }
-.activity-compact { width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid transparent; background: none; color: inherit; border-radius: var(--radius-lg); padding: 3px 8px; cursor: pointer; }
-.activity-compact:hover, .turn-activity.needs-approval .activity-compact, .turn-activity.failed .activity-compact { background: var(--color-tint); border-color: var(--color-border); }
+.activity-compact { width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: none; color: inherit; border-radius: var(--radius-md); padding: 3px 8px; cursor: pointer; }
+.activity-compact:hover { color: var(--color-text-primary); }
+.turn-activity.needs-approval .activity-compact, .turn-activity.failed .activity-compact { background: var(--color-tint); box-shadow: inset 0 0 0 1px var(--color-border); }
 .activity-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--color-accent); animation: pulse 1.2s infinite; }
 .activity-label { font-weight: 500; color: var(--color-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-compact > :not(.activity-label) { flex-shrink: 0; }
 .activity-duration, .activity-tool-count, .event-duration, .event-time { opacity: .72; font-variant-numeric: tabular-nums; }
 .activity-chevron, .event-chevron { transition: transform var(--transition-fast); }
 .activity-chevron.expanded, .event-chevron.expanded { transform: rotate(90deg); }
-.activity-timeline { margin-top: 4px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--color-surface) 76%, transparent); overflow: hidden; }
-.event-row { width: 100%; display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; padding: 6px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.event-row:hover { background: var(--color-tint); }
+.activity-timeline { margin-top: 2px; }
+.event-row { width: 100%; display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; padding: 5px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.event-row:hover .event-title { color: var(--color-accent); }
 .event-title { color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.event-detail { border-top: 1px solid var(--color-border); padding: 8px 10px 10px 72px; background: rgba(0,0,0,.03); }
+.event-detail { padding: 4px 10px 8px 72px; }
 .detail-block + .detail-block { margin-top: 8px; }
 .detail-block span, .approval-desc, .approval-status { display: block; margin-bottom: 4px; color: var(--color-muted); }
 .detail-toggle { margin-top: 5px; padding: 0; border: 0; background: none; color: var(--color-accent); font: inherit; cursor: pointer; }
