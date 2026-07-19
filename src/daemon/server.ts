@@ -3,13 +3,14 @@ import { createServer, type Server as HttpServer } from 'node:http'
 import { existsSync, unlinkSync, readFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { socketIdentity, socketLost, type DaemonHealth } from './lifecycle'
-import type { BondSendInput, TaggedChunk } from '../shared/stream'
+import type { TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
 import { parseEditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
 import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, getSourceMessages, reconcileInterruptedTurns } from './transcript'
 import type { ModelId } from '../shared/models'
+import type { DispatchableMethod, RpcParams, RpcResult } from '../shared/rpc-schema'
 import {
   makeResponse,
   makeErrorResponse,
@@ -32,7 +33,6 @@ import { resolveApproval } from './approvals'
 import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, abortActiveTurnForShutdown } from './turns'
 import { setRenderTransport, onRenderReady } from './web/broker'
 import { getRemoteStatus } from './remote'
-import type { WebRenderResult } from '../shared/web'
 import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
@@ -71,7 +71,6 @@ import { getSetting, setSetting } from './settings'
 import type { SenseSettings } from '../shared/sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from '../shared/memory'
 import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
-import { generateTitleAndSummary } from './generate-title'
 import { generateDebrief } from './generate-debrief'
 import {
   getDebrief,
@@ -107,7 +106,7 @@ import { enterSandbox, exitSandbox, isSandboxed } from './sandbox'
 
 // --- State ---
 
-let currentModel: string = 'balanced'
+let currentModel: ModelId = 'balanced'
 let serverWss: WebSocketServer | null = null
 
 /**
@@ -256,24 +255,29 @@ function broadcastSenseEvent(method: string, params: unknown): void {
 
 // --- RPC handler ---
 
-type RpcParams = Record<string, unknown> | unknown[] | undefined
+type RawParams = Record<string, unknown> | unknown[] | undefined
 
-function getParam(params: RpcParams, key: string): unknown {
+/** Params come off the wire untyped — treat every handler's params as untrusted. */
+function raw(params: unknown): RawParams {
+  return params as RawParams
+}
+
+function getParam(params: RawParams, key: string): unknown {
   if (Array.isArray(params)) return undefined
   return params?.[key]
 }
 
-function getStringParam(params: RpcParams, key: string): string | undefined {
+function getStringParam(params: RawParams, key: string): string | undefined {
   const v = getParam(params, key)
   return typeof v === 'string' ? v : undefined
 }
 
-function getBoolParam(params: RpcParams, key: string): boolean | undefined {
+function getBoolParam(params: RawParams, key: string): boolean | undefined {
   const v = getParam(params, key)
   return typeof v === 'boolean' ? v : undefined
 }
 
-function getNumberParam(params: RpcParams, key: string): number | undefined {
+function getNumberParam(params: RawParams, key: string): number | undefined {
   const v = getParam(params, key)
   return typeof v === 'number' ? v : undefined
 }
@@ -295,736 +299,751 @@ function sourceIdsForMemoryTags(tags: string[]): string[] {
     .filter(Boolean)
 }
 
-async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string> {
-  const { id, method, params } = req
-  const p = params as RpcParams
-
-  try {
-    switch (method) {
-      // --- Chat ---
-      case 'bond.send': {
-        const input = p as Partial<BondSendInput> & { sessionId?: string }
-        const text = typeof input.text === 'string' ? input.text.trim() : ''
-        const sessionId = typeof input.sessionId === 'string' ? input.sessionId : undefined
-        const images = Array.isArray(input.images) ? input.images as AttachedImage[] : undefined
-        if (!text && !images?.length) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'text or images required'))
-
-        const session = sessionId ? getSession(sessionId) : null
-        if (sessionId && !session) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'session not found'))
-
-        subscribeTo(sessionId, ws)
-
-        const result = await startBondTurn({
-          text,
-          sessionId,
-          images,
-          turnId: typeof input.turnId === 'string' ? input.turnId : undefined,
-          userMessageId: typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
-          assistantMessageId: typeof input.assistantMessageId === 'string' ? input.assistantMessageId : undefined,
-          activityMessageId: typeof input.activityMessageId === 'string' ? input.activityMessageId : undefined,
-          editMode: input.editMode ?? session?.editMode,
-          model: currentModel,
-        })
-        return JSON.stringify(makeResponse(id, result))
-      }
-
-      case 'bond.cancel': {
-        await cancelActiveTurn(getStringParam(p, 'sessionId'))
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-
-      case 'bond.approvalResponse': {
-        const requestId = getStringParam(p, 'requestId')
-        const approved = getBoolParam(p, 'approved')
-        if (!requestId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'requestId is required'))
-        if (approved === undefined) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'approved is required'))
-        resolveApproval(requestId, approved)
-        // Let every other live viewer flip its pending approval prompt —
-        // otherwise a second client shows a stale prompt until query_end.
-        broadcastChunk(undefined, { kind: 'approval_resolved', requestId, approved })
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-
-      // --- Remote access (LAN web server) ---
-      case 'remote.status': {
-        return JSON.stringify(makeResponse(id, getRemoteStatus()))
-      }
-
-      // Liveness probe — phone browsers use it to detect zombie sockets
-      // (iOS kills WebSockets on lock without firing close events).
-      case 'bond.ping':
-        return JSON.stringify(makeResponse(id, { ok: true }))
-
-      // --- Subscriptions ---
-      case 'bond.subscribe': {
-        // Pending approvals need no replay here: clients reconstruct them
-        // from persisted activity rows, and a daemon restart voids the
-        // resolver anyway — replaying such a prompt would strand the user.
-        subscribeTo(getStringParam(p, 'sessionId'), ws)
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-
-      case 'bond.unsubscribe': {
-        const sessionId = getStringParam(p, 'sessionId')
-        unsubscribeFrom(sessionId, ws)
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-
-      // --- Model ---
-      case 'bond.setModel': {
-        const model = getStringParam(p, 'model')
-        if (model && (MODEL_IDS as readonly string[]).includes(model)) {
-          currentModel = model
-          saveModelSetting(model as ModelId)
-        }
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-
-      case 'bond.getModel':
-        return JSON.stringify(makeResponse(id, currentModel))
-
-      // --- Continuous transcript ---
-      case 'transcript.list': {
-        const before = getParam(p, 'beforeSeq')
-        const limitValue = getParam(p, 'limit')
-        const beforeSeq = typeof before === 'number' ? before : undefined
-        const limit = typeof limitValue === 'number' ? limitValue : undefined
-        return JSON.stringify(makeResponse(id, listTranscriptMessages({ beforeSeq, limit })))
-      }
-
-      case 'transcript.upsert': {
-        const messages = getParam(p, 'messages')
-        if (!Array.isArray(messages)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'messages must be an array'))
-        upsertTranscriptMessages(messages as TranscriptMessage[])
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-
-      case 'transcript.search': {
-        const query = getStringParam(p, 'query')
-        if (!query) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'query is required'))
-        const limitValue = getParam(p, 'limit')
-        return JSON.stringify(makeResponse(id, { messages: searchTranscriptMessages(query, { limit: typeof limitValue === 'number' ? limitValue : undefined }) }))
-      }
-
-      // --- Sessions ---
-      case 'session.list':
-        return JSON.stringify(makeResponse(id, listSessions()))
-
-      case 'session.create': {
-        const sessionTitle = getStringParam(p, 'title')
-        return JSON.stringify(makeResponse(id, createSession({ title: sessionTitle || undefined })))
-      }
-
-      case 'session.get': {
-        const sid = getStringParam(p, 'id')
-        if (!sid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, getSession(sid)))
-      }
-
-      case 'session.update': {
-        const sid = getStringParam(p, 'id')
-        const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
-        if (!sid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const result = updateSession(sid, updates ?? {})
-
-        // Trigger debrief on archive (regenerates if one already exists from a prior archive)
-        if (updates?.archived === true) {
-          generateDebrief(sid).catch((err) => {
-            console.warn('[bond] debrief generation failed:', err.message)
-          })
-        }
-
-        return JSON.stringify(makeResponse(id, result))
-      }
-
-      case 'session.delete': {
-        const sid = getStringParam(p, 'id')
-        if (!sid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, deleteSession(sid)))
-      }
-
-      case 'session.deleteArchived': {
-        const count = deleteArchivedSessions()
-        return JSON.stringify(makeResponse(id, { ok: true, count }))
-      }
-
-      case 'session.getMessages': {
-        const sid = getStringParam(p, 'sessionId')
-        if (!sid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'sessionId is required'))
-        return JSON.stringify(makeResponse(id, getMessages(sid)))
-      }
-
-      case 'session.saveMessages': {
-        const sid = getStringParam(p, 'sessionId')
-        const msgs = getParam(p, 'messages') as SessionMessage[] | undefined
-        if (!sid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'sessionId is required'))
-        if (!msgs) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'messages is required'))
-        return JSON.stringify(makeResponse(id, saveMessages(sid, msgs)))
-      }
-
-      case 'session.generateTitle': {
-        const sid = getStringParam(p, 'sessionId')
-        if (!sid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'sessionId is required'))
-        const msgs = getMessages(sid)
-        const result = await generateTitleAndSummary(msgs)
-        updateSession(sid, result)
-        return JSON.stringify(makeResponse(id, result))
-      }
-
-      // --- Pi setup ---
-      case 'pi.status':
-        return JSON.stringify(makeResponse(id, await getPiAuthStatus()))
-      case 'pi.startOAuth': {
-        const provider = getStringParam(p, 'provider')
-        if (provider !== 'anthropic' && provider !== 'openai-codex') {
-          return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'A supported OAuth provider is required'))
-        }
-        return JSON.stringify(makeResponse(id, await startPiOAuth(provider)))
-      }
-
-      // --- Settings ---
-      case 'settings.getEditMode':
-        return JSON.stringify(makeResponse(id, parseEditMode(getSetting('edit_mode'))))
-
-      case 'settings.setEditMode': {
-        const raw = getParam(p, 'editMode')
-        if (!raw || typeof raw !== 'object' || !('type' in (raw as object))) {
-          return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'editMode is required'))
-        }
-        const editMode = parseEditMode(raw)
-        setSetting('edit_mode', JSON.stringify(editMode))
-        // One global mode: every live client (desktop, phone, quick chat)
-        // mirrors the change immediately instead of drifting until reload.
-        broadcastChunk(undefined, { kind: 'edit_mode_changed', editMode })
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-
-      case 'settings.getSoul':
-        return JSON.stringify(makeResponse(id, getSoul()))
-
-      case 'settings.saveSoul': {
-        const content = getStringParam(p, 'content')
-        if (content === undefined) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'content is required'))
-        return JSON.stringify(makeResponse(id, saveSoul(content)))
-      }
-
-      case 'settings.getAccentColor':
-        return JSON.stringify(makeResponse(id, getAccentColor()))
-
-      case 'settings.saveAccentColor': {
-        const hex = getStringParam(p, 'hex')
-        if (!hex) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'hex is required'))
-        return JSON.stringify(makeResponse(id, saveAccentColor(hex)))
-      }
-
-      case 'settings.getWindowOpacity':
-        return JSON.stringify(makeResponse(id, getWindowOpacity()))
-
-      case 'settings.saveWindowOpacity': {
-        const opacity = getParam(p, 'opacity')
-        if (typeof opacity !== 'number') return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'opacity is required'))
-        return JSON.stringify(makeResponse(id, saveWindowOpacity(opacity)))
-      }
-
-      // --- Skills ---
-      case 'skills.list':
-        return JSON.stringify(makeResponse(id, getCachedSkills()))
-
-      case 'skills.refresh':
-        return JSON.stringify(makeResponse(id, refreshSkillsCache()))
-
-      case 'skills.remove': {
-        const name = getStringParam(p, 'name')
-        if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
-        const removed = removeSkill(name)
-        if (removed) refreshSkillsCache()
-        return JSON.stringify(makeResponse(id, { ok: removed }))
-      }
-
-      // --- Images ---
-      case 'image.list':
-        return JSON.stringify(makeResponse(id, listAllImages()))
-
-      case 'image.get': {
-        const imageId = getStringParam(p, 'id')
-        if (!imageId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, getImage(imageId)))
-      }
-
-      case 'image.getMultiple': {
-        const ids = getParam(p, 'ids') as string[] | undefined
-        if (!ids || !Array.isArray(ids)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'ids is required'))
-        return JSON.stringify(makeResponse(id, getImages(ids)))
-      }
-
-      case 'image.import': {
-        const data = getStringParam(p, 'data')
-        const mediaType = getStringParam(p, 'mediaType')
-        if (!data || !mediaType) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'data and mediaType are required'))
-        const image = importImage(data, mediaType as any)
-        broadcastImageChanged()
-        return JSON.stringify(makeResponse(id, image))
-      }
-
-      case 'image.delete': {
-        const imageId = getStringParam(p, 'id')
-        if (!imageId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const deleted = deleteImage(imageId)
-        if (deleted) broadcastImageChanged()
-        return JSON.stringify(makeResponse(id, deleted))
-      }
-
-      // --- Collections ---
-      case 'collection.list':
-        return JSON.stringify(makeResponse(id, listCollections()))
-
-      case 'collection.get': {
-        const cid = getStringParam(p, 'id')
-        if (!cid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, getCollection(cid)))
-      }
-
-      case 'collection.create': {
-        const name = getStringParam(p, 'name')
-        if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
-        const schema = getParam(p, 'schema') as unknown[] | undefined
-        if (!schema || !Array.isArray(schema)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'schema is required'))
-        const icon = getStringParam(p, 'icon') ?? ''
-        const collection = createCollection(name, schema as any, icon)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, collection))
-      }
-
-      case 'collection.update': {
-        const cid = getStringParam(p, 'id')
-        if (!cid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
-        const updated = updateCollection(cid, updates ?? {})
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, updated))
-      }
-
-      case 'collection.delete': {
-        const cid = getStringParam(p, 'id')
-        if (!cid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const deleted = deleteCollection(cid)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, deleted))
-      }
-
-      case 'collection.renameField': {
-        const cid = getStringParam(p, 'id')
-        const oldName = getStringParam(p, 'oldName')
-        const newName = getStringParam(p, 'newName')
-        if (!cid || !oldName || !newName) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id, oldName, and newName are required'))
-        const renamed = renameField(cid, oldName, newName)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, renamed))
-      }
-
-      case 'collection.listItems': {
-        const collectionId = getStringParam(p, 'collectionId')
-        if (!collectionId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'collectionId is required'))
-        return JSON.stringify(makeResponse(id, listItems(collectionId)))
-      }
-
-      case 'collection.getItem': {
-        const itemId = getStringParam(p, 'id')
-        if (!itemId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        return JSON.stringify(makeResponse(id, getItem(itemId)))
-      }
-
-      case 'collection.addItem': {
-        const collectionId = getStringParam(p, 'collectionId')
-        if (!collectionId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'collectionId is required'))
-        const data = getParam(p, 'data') as Record<string, unknown> | undefined
-        if (!data) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'data is required'))
-        const item = addItem(collectionId, data)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, item))
-      }
-
-      case 'collection.updateItem': {
-        const itemId = getStringParam(p, 'id')
-        if (!itemId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const data = getParam(p, 'data') as Record<string, unknown> | undefined
-        if (!data) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'data is required'))
-        const updated = updateItem(itemId, data)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, updated))
-      }
-
-      case 'collection.deleteItem': {
-        const itemId = getStringParam(p, 'id')
-        if (!itemId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const deleted = deleteItem(itemId)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, deleted))
-      }
-
-      case 'collection.reorderItems': {
-        const ids = getParam(p, 'ids') as string[] | undefined
-        if (!ids || !Array.isArray(ids)) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'ids array is required'))
-        reorderItems(ids)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, true))
-      }
-
-      // --- Collection item comments ---
-
-      case 'collection.addItemComment': {
-        const itemId = getStringParam(p, 'itemId')
-        const author = getStringParam(p, 'author') as 'user' | 'bond' | undefined
-        const body = getStringParam(p, 'body')
-        if (!itemId || !author || !body) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'itemId, author, and body are required'))
-        const comment = addItemComment(itemId, author, body)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, comment))
-      }
-
-      case 'collection.deleteItemComment': {
-        const cid = getStringParam(p, 'id')
-        if (!cid) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const deleted = deleteItemComment(cid)
-        broadcastCollectionsChanged()
-        return JSON.stringify(makeResponse(id, deleted))
-      }
-
-      case 'collection.listItemComments': {
-        const itemId = getStringParam(p, 'itemId')
-        if (!itemId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'itemId is required'))
-        return JSON.stringify(makeResponse(id, listItemComments(itemId)))
-      }
-
-      case 'collection.searchItems': {
-        const collectionId = getStringParam(p, 'collectionId')
-        const query = getStringParam(p, 'query')
-        if (!collectionId || !query) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'collectionId and query are required'))
-        return JSON.stringify(makeResponse(id, searchItems(collectionId, query)))
-      }
-
-      case 'collection.getByName': {
-        const name = getStringParam(p, 'name')
-        if (!name) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'name is required'))
-        return JSON.stringify(makeResponse(id, getCollectionByName(name)))
-      }
-
-      // --- Sense ---
-      case 'sense.status': {
-        const ctrl = getSenseController()
-        const stats = getSenseStats()
-        return JSON.stringify(makeResponse(id, {
-          enabled: ctrl.getSettings().enabled,
-          state: ctrl.getState(),
-          ...stats,
-        }))
-      }
-      case 'sense.enable': {
-        const ctrl = getSenseController()
-        ctrl.enable()
-        persistSenseSettings(ctrl.getSettings())
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-      case 'sense.disable': {
-        const ctrl = getSenseController()
-        ctrl.disable()
-        persistSenseSettings(ctrl.getSettings())
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-      case 'sense.pause': {
-        const ctrl = getSenseController()
-        const minutes = getNumberParam(p, 'minutes') ?? 10
-        ctrl.pause(minutes)
-        return JSON.stringify(makeResponse(id, { ok: true, resumeAt: new Date(Date.now() + minutes * 60_000).toISOString() }))
-      }
-      case 'sense.resume': {
-        const ctrl = getSenseController()
-        ctrl.resume()
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-      case 'sense.captureReady': {
-        const ctrl = getSenseController()
-        const captureId = getStringParam(p, 'captureId')
-        const imagePath = getStringParam(p, 'imagePath')
-        if (!captureId || !imagePath) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'captureId and imagePath required'))
-        ctrl.onCaptureReady(captureId, imagePath)
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-      case 'sense.permissionChanged': {
-        // Main process notifies daemon about permission changes
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-
-      // --- Web (hidden-browser render round-trip) ---
-      case 'web.renderReady': {
-        const renderId = getStringParam(p, 'renderId')
-        if (!renderId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'renderId is required'))
-        const handled = onRenderReady(p as unknown as WebRenderResult)
-        return JSON.stringify(makeResponse(id, { ok: handled }))
-      }
-      case 'sense.now': {
-        const db = getDb()
-        const capture = db.prepare(
-          'SELECT * FROM sense_captures ORDER BY captured_at DESC LIMIT 1'
-        ).get() as Record<string, unknown> | undefined
-        const ctrl = getSenseController()
-        return JSON.stringify(makeResponse(id, {
-          capture: capture ?? null,
-          state: ctrl.getState(),
-        }))
-      }
-      case 'sense.today': {
-        const db = getDb()
-        const now = new Date()
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString()
-        const sessions = db.prepare(
-          "SELECT * FROM sense_sessions WHERE started_at >= ? ORDER BY started_at ASC"
-        ).all(todayStart)
-        const apps = db.prepare(`
-          SELECT app_name, COUNT(*) as capture_count,
-            MIN(captured_at) as first_seen, MAX(captured_at) as last_seen
-          FROM sense_captures
-          WHERE captured_at >= ? AND app_name IS NOT NULL
-          GROUP BY app_name
-          ORDER BY capture_count DESC
-        `).all(todayStart)
-        return JSON.stringify(makeResponse(id, { sessions, apps }))
-      }
-      case 'sense.search': {
-        const searchQuery = getStringParam(p, 'query')
-        if (!searchQuery) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'query required'))
-        const limit = getNumberParam(p, 'limit') ?? 20
-        const db = getDb()
-
-        // Cross-channel search: screen captures + session debriefs
-        const captures = db.prepare(`
-          SELECT *, 'see' as channel FROM sense_captures
-          WHERE text_content LIKE ? OR app_name LIKE ? OR window_title LIKE ?
-          ORDER BY captured_at DESC
-          LIMIT ?
-        `).all(`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, limit) as Record<string, unknown>[]
-
-        const debriefResults = searchDebriefs(searchQuery, limit).map(d => ({
-          ...d,
-          channel: 'chat' as const,
-        }))
-
-        // Unified results sorted by date
-        const unified = [
-          ...captures.map(c => ({ ...c, _sortDate: c.captured_at as string })),
-          ...debriefResults.map(d => ({ ...d, _sortDate: d.createdAt })),
-        ].sort((a, b) => b._sortDate.localeCompare(a._sortDate)).slice(0, limit)
-
-        return JSON.stringify(makeResponse(id, unified))
-      }
-      case 'sense.apps': {
-        const range = getStringParam(p, 'range') ?? 'today'
-        const db = getDb()
-        let since: string
-        const now = new Date()
-        if (range === 'week') {
-          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-          since = weekAgo.toISOString()
-        } else {
-          since = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString()
-        }
-        const apps = db.prepare(`
-          SELECT app_name, app_bundle_id, COUNT(*) as capture_count,
-            MIN(captured_at) as first_seen, MAX(captured_at) as last_seen
-          FROM sense_captures
-          WHERE captured_at >= ? AND app_name IS NOT NULL
-          GROUP BY app_bundle_id
-          ORDER BY capture_count DESC
-        `).all(since)
-        return JSON.stringify(makeResponse(id, apps))
-      }
-      case 'sense.timeline': {
-        const from = getStringParam(p, 'from')
-        const to = getStringParam(p, 'to')
-        const limit = getNumberParam(p, 'limit') ?? 5000
-        const db = getDb()
-        let sql = 'SELECT * FROM sense_captures WHERE 1=1'
-        const params: (string | number)[] = []
-        if (from) { sql += ' AND captured_at >= ?'; params.push(from) }
-        if (to) { sql += ' AND captured_at <= ?'; params.push(to) }
-        sql += ' ORDER BY captured_at ASC LIMIT ?'
-        params.push(limit)
-        const results = db.prepare(sql).all(...params)
-        return JSON.stringify(makeResponse(id, results))
-      }
-      case 'sense.capture': {
-        const captureId = getStringParam(p, 'id')
-        if (!captureId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id required'))
-        const db = getDb()
-        const capture = db.prepare('SELECT * FROM sense_captures WHERE id = ?').get(captureId) as Record<string, unknown> | undefined
-        if (!capture) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'capture not found'))
-        let image: string | null = null
-        const imgPath = capture.image_path as string | null
-        if (imgPath && existsSync(imgPath)) {
-          try {
-            image = readFileSync(imgPath).toString('base64')
-          } catch { /* image unreadable */ }
-        }
-        return JSON.stringify(makeResponse(id, { capture, image }))
-      }
-      case 'sense.sessions': {
-        const from = getStringParam(p, 'from')
-        const to = getStringParam(p, 'to')
-        const db = getDb()
-        let sql = 'SELECT * FROM sense_sessions WHERE 1=1'
-        const params: string[] = []
-        if (from) { sql += ' AND (ended_at >= ? OR ended_at IS NULL)'; params.push(from) }
-        if (to) { sql += ' AND started_at <= ?'; params.push(to) }
-        sql += ' ORDER BY started_at ASC'
-        const results = db.prepare(sql).all(...params)
-        return JSON.stringify(makeResponse(id, results))
-      }
-      case 'sense.settings': {
-        const ctrl = getSenseController()
-        return JSON.stringify(makeResponse(id, ctrl.getSettings()))
-      }
-      case 'sense.updateSettings': {
-        const updates = getParam(p, 'updates') as Partial<SenseSettings> | undefined
-        if (!updates) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'updates required'))
-        const ctrl = getSenseController()
-        const newSettings = ctrl.updateSettings(updates)
-        persistSenseSettings(newSettings)
-        return JSON.stringify(makeResponse(id, newSettings))
-      }
-      case 'sense.clear': {
-        const range = getParam(p, 'range') as { from?: string; to?: string } | undefined
-        const deleted = clearSenseData(range)
-        return JSON.stringify(makeResponse(id, { deletedCount: deleted }))
-      }
-      case 'sense.stats': {
-        const stats = getSenseStats()
-        return JSON.stringify(makeResponse(id, stats))
-      }
-
-      // --- Onboarding ---
-      case 'onboarding.status':
-        return JSON.stringify(makeResponse(id, getFirstRunStatus()))
-      case 'onboarding.begin':
-        return JSON.stringify(makeResponse(id, beginFirstRun()))
-      case 'onboarding.skip':
-        return JSON.stringify(makeResponse(id, skipFirstRun()))
-
-      // --- New-user sandbox ---
-      case 'sandbox.status':
-        return JSON.stringify(makeResponse(id, { sandboxed: isSandboxed() }))
-      case 'sandbox.enter': {
-        // Sense stays suspended while sandboxed — a fresh install has no Sense.
-        await settleForDataSwap()
-        try {
-          enterSandbox()
-        } catch (error) {
-          wakeAfterDataSwap()
-          throw error
-        }
-        return JSON.stringify(makeResponse(id, { sandboxed: true }))
-      }
-      case 'sandbox.exit': {
-        await settleForDataSwap()
-        exitSandbox()
-        wakeAfterDataSwap()
-        return JSON.stringify(makeResponse(id, { sandboxed: false }))
-      }
-
-      // --- Memory ---
-      case 'memory.core': {
-        return JSON.stringify(makeResponse(id, readCoreMemory() as CoreMemory))
-      }
-      case 'memory.updateCore': {
-        const core = getParam(p, 'core') as CoreMemory | undefined
-        if (!core) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'core is required'))
-        const saved = await withCoreMemoryLock(() => writeCoreMemoryAtomic({ ...core, updatedAt: new Date().toISOString() }))
-        return JSON.stringify(makeResponse(id, saved))
-      }
-      case 'memory.working': {
-        return JSON.stringify(makeResponse(id, readWorkingMemoryState()))
-      }
-      case 'memory.updateWorking': {
-        const working = getParam(p, 'working') as WorkingState | undefined
-        if (!working) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'working is required'))
-        // The service writer redacts — text pasted into the MemoryView must
-        // never persist secrets that then ride along in every future prompt.
-        return JSON.stringify(makeResponse(id, writeWorkingMemoryState(createWorkingState(working))))
-      }
-      case 'memory.clearWorking': {
-        const empty = writeWorkingMemoryState(createWorkingState())
-        return JSON.stringify(makeResponse(id, empty))
-      }
-      case 'memory.search': {
-        const query = getStringParam(p, 'query') ?? ''
-        const limit = getNumberParam(p, 'limit') ?? 20
-        const results = query.trim()
-          ? searchMemory(query, { limit })
-          : listRecentMemory({ limit }).map(item => ({ item, score: 0 }))
-        return JSON.stringify(makeResponse(id, { results }))
-      }
-      case 'memory.upsert': {
-        const item = getParam(p, 'item') as MemoryItemInput | undefined
-        if (!item || typeof item.text !== 'string') return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'item.text is required'))
-        return JSON.stringify(makeResponse(id, upsertMemoryItem(item)))
-      }
-      case 'memory.delete': {
-        const memoryId = getStringParam(p, 'id')
-        if (!memoryId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const current = getMemoryItem(memoryId)
-        if (!current) return JSON.stringify(makeResponse(id, { ok: false }))
-        upsertMemoryItem({ ...current, active: false, updatedAt: new Date().toISOString() })
-        return JSON.stringify(makeResponse(id, { ok: true }))
-      }
-      case 'memory.sources': {
-        const memoryId = getStringParam(p, 'id')
-        if (!memoryId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const item = getMemoryItem(memoryId)
-        const relatedSourceIds = item ? getMemoryItemSourceIds(item.id) : []
-        const sourceIds = relatedSourceIds.length > 0 ? relatedSourceIds : (item ? sourceIdsForMemoryTags(item.tags) : [])
-        return JSON.stringify(makeResponse(id, { sourceIds, messages: getSourceMessages(sourceIds) }))
-      }
-
-      // --- Sense Debriefs ---
-      case 'sense.memory': {
-        const limit = getNumberParam(p, 'limit') ?? 20
-        const debriefs = listDebriefs({ limit })
-        return JSON.stringify(makeResponse(id, { debriefs }))
-      }
-      case 'sense.debrief': {
-        const debriefId = getStringParam(p, 'id')
-        const sessionId = getStringParam(p, 'sessionId')
-        let debrief = null
-        if (debriefId) debrief = getDebrief(debriefId)
-        else if (sessionId) debrief = getDebriefBySession(sessionId)
-        return JSON.stringify(makeResponse(id, debrief))
-      }
-      case 'sense.deleteDebrief': {
-        const debriefId = getStringParam(p, 'id')
-        if (!debriefId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'id is required'))
-        const ok = deleteDebrief(debriefId)
-        return JSON.stringify(makeResponse(id, { ok }))
-      }
-      case 'sense.systemPromptPreview': {
-        const editMode = getParam(p, 'editMode') as EditMode | undefined
-        const prompt = buildSystemPromptPreview({ editMode })
-        return JSON.stringify(makeResponse(id, { prompt }))
-      }
-      case 'sense.backfill': {
-        const limit = getNumberParam(p, 'limit') ?? 50
-        backfillDebriefs(limit).then(result => {
-          console.log(`[bond] backfill complete: ${result.generated} generated, ${result.skipped} skipped, ${result.failed} failed`)
-        }).catch(err => {
-          console.warn('[bond] backfill failed:', err.message)
-        })
-        return JSON.stringify(makeResponse(id, { ok: true, message: 'Backfill started in background' }))
-      }
-
-      default:
-        return JSON.stringify(makeErrorResponse(id, RPC_METHOD_NOT_FOUND, `Unknown method: ${method}`))
+interface RpcContext { ws: WebSocket }
+
+type RpcHandler<M extends DispatchableMethod> = (params: RpcParams<M>, ctx: RpcContext) => Promise<RpcResult<M>> | RpcResult<M>
+
+type RpcHandlers = { [M in DispatchableMethod]: RpcHandler<M> }
+
+class RpcError extends Error {
+  constructor(public code: number, message: string) {
+    super(message)
+  }
+}
+
+const handlers: RpcHandlers = {
+  // --- Chat ---
+  'bond.send': async (input, { ws }) => {
+    const text = typeof input.text === 'string' ? input.text.trim() : ''
+    const sessionId = typeof input.sessionId === 'string' ? input.sessionId : undefined
+    const images = Array.isArray(input.images) ? input.images as AttachedImage[] : undefined
+    if (!text && !images?.length) throw new RpcError(RPC_INVALID_PARAMS, 'text or images required')
+
+    const session = sessionId ? getSession(sessionId) : null
+    if (sessionId && !session) throw new RpcError(RPC_INVALID_PARAMS, 'session not found')
+
+    subscribeTo(sessionId, ws)
+
+    return await startBondTurn({
+      text,
+      sessionId,
+      images,
+      turnId: typeof input.turnId === 'string' ? input.turnId : undefined,
+      userMessageId: typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
+      assistantMessageId: typeof input.assistantMessageId === 'string' ? input.assistantMessageId : undefined,
+      activityMessageId: typeof input.activityMessageId === 'string' ? input.activityMessageId : undefined,
+      editMode: input.editMode ?? session?.editMode,
+      model: currentModel,
+    })
+  },
+
+  'bond.cancel': async (params) => {
+    await cancelActiveTurn(getStringParam(raw(params), 'sessionId'))
+    return { ok: true }
+  },
+
+  'bond.approvalResponse': (params) => {
+    const p = raw(params)
+    const requestId = getStringParam(p, 'requestId')
+    const approved = getBoolParam(p, 'approved')
+    if (!requestId) throw new RpcError(RPC_INVALID_PARAMS, 'requestId is required')
+    if (approved === undefined) throw new RpcError(RPC_INVALID_PARAMS, 'approved is required')
+    resolveApproval(requestId, approved)
+    // Let every other live viewer flip its pending approval prompt —
+    // otherwise a second client shows a stale prompt until query_end.
+    broadcastChunk(undefined, { kind: 'approval_resolved', requestId, approved })
+    return { ok: true }
+  },
+
+  // --- Remote access (LAN web server) ---
+  'remote.status': () => getRemoteStatus(),
+
+  // Liveness probe — phone browsers use it to detect zombie sockets
+  // (iOS kills WebSockets on lock without firing close events).
+  'bond.ping': () => ({ ok: true }),
+
+  // --- Subscriptions ---
+  'bond.subscribe': (params, { ws }) => {
+    // Pending approvals need no replay here: clients reconstruct them
+    // from persisted activity rows, and a daemon restart voids the
+    // resolver anyway — replaying such a prompt would strand the user.
+    subscribeTo(getStringParam(raw(params), 'sessionId'), ws)
+    return { ok: true }
+  },
+
+  'bond.unsubscribe': (params, { ws }) => {
+    const sessionId = getStringParam(raw(params), 'sessionId')
+    unsubscribeFrom(sessionId, ws)
+    return { ok: true }
+  },
+
+  // --- Model ---
+  'bond.setModel': (params) => {
+    const model = getStringParam(raw(params), 'model')
+    if (model && (MODEL_IDS as readonly string[]).includes(model)) {
+      currentModel = model as ModelId
+      saveModelSetting(model as ModelId)
     }
+    return { ok: true }
+  },
+
+  'bond.getModel': () => currentModel,
+
+  // --- Continuous transcript ---
+  'transcript.list': (params) => {
+    const p = raw(params)
+    const before = getParam(p, 'beforeSeq')
+    const limitValue = getParam(p, 'limit')
+    const beforeSeq = typeof before === 'number' ? before : undefined
+    const limit = typeof limitValue === 'number' ? limitValue : undefined
+    return listTranscriptMessages({ beforeSeq, limit })
+  },
+
+  'transcript.upsert': (params) => {
+    const messages = getParam(raw(params), 'messages')
+    if (!Array.isArray(messages)) throw new RpcError(RPC_INVALID_PARAMS, 'messages must be an array')
+    upsertTranscriptMessages(messages as TranscriptMessage[])
+    return { ok: true }
+  },
+
+  'transcript.search': (params) => {
+    const p = raw(params)
+    const query = getStringParam(p, 'query')
+    if (!query) throw new RpcError(RPC_INVALID_PARAMS, 'query is required')
+    const limitValue = getParam(p, 'limit')
+    return { messages: searchTranscriptMessages(query, { limit: typeof limitValue === 'number' ? limitValue : undefined }) }
+  },
+
+  // --- Sessions ---
+  'session.list': () => listSessions(),
+
+  'session.create': (params) => {
+    const sessionTitle = getStringParam(raw(params), 'title')
+    return createSession({ title: sessionTitle || undefined })
+  },
+
+  'session.get': (params) => {
+    const sid = getStringParam(raw(params), 'id')
+    if (!sid) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return getSession(sid)
+  },
+
+  'session.update': (params) => {
+    const p = raw(params)
+    const sid = getStringParam(p, 'id')
+    const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
+    if (!sid) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const result = updateSession(sid, updates ?? {})
+
+    // Trigger debrief on archive (regenerates if one already exists from a prior archive)
+    if (updates?.archived === true) {
+      generateDebrief(sid).catch((err) => {
+        console.warn('[bond] debrief generation failed:', err.message)
+      })
+    }
+
+    return result
+  },
+
+  'session.delete': (params) => {
+    const sid = getStringParam(raw(params), 'id')
+    if (!sid) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return deleteSession(sid)
+  },
+
+  'session.deleteArchived': () => {
+    const count = deleteArchivedSessions()
+    return { ok: true, count }
+  },
+
+  'session.getMessages': (params) => {
+    const sid = getStringParam(raw(params), 'sessionId')
+    if (!sid) throw new RpcError(RPC_INVALID_PARAMS, 'sessionId is required')
+    return getMessages(sid)
+  },
+
+  'session.saveMessages': (params) => {
+    const p = raw(params)
+    const sid = getStringParam(p, 'sessionId')
+    const msgs = getParam(p, 'messages') as SessionMessage[] | undefined
+    if (!sid) throw new RpcError(RPC_INVALID_PARAMS, 'sessionId is required')
+    if (!msgs) throw new RpcError(RPC_INVALID_PARAMS, 'messages is required')
+    return saveMessages(sid, msgs)
+  },
+
+  // --- Pi setup ---
+  'pi.status': async () => await getPiAuthStatus(),
+
+  'pi.startOAuth': async (params) => {
+    const provider = getStringParam(raw(params), 'provider')
+    if (provider !== 'anthropic' && provider !== 'openai-codex') {
+      throw new RpcError(RPC_INVALID_PARAMS, 'A supported OAuth provider is required')
+    }
+    return await startPiOAuth(provider)
+  },
+
+  // --- Settings ---
+  'settings.getEditMode': () => parseEditMode(getSetting('edit_mode')),
+
+  'settings.setEditMode': (params) => {
+    const rawMode = getParam(raw(params), 'editMode')
+    if (!rawMode || typeof rawMode !== 'object' || !('type' in (rawMode as object))) {
+      throw new RpcError(RPC_INVALID_PARAMS, 'editMode is required')
+    }
+    const editMode = parseEditMode(rawMode)
+    setSetting('edit_mode', JSON.stringify(editMode))
+    // One global mode: every live client (desktop, phone, quick chat)
+    // mirrors the change immediately instead of drifting until reload.
+    broadcastChunk(undefined, { kind: 'edit_mode_changed', editMode })
+    return { ok: true }
+  },
+
+  'settings.getSoul': () => getSoul(),
+
+  'settings.saveSoul': (params) => {
+    const content = getStringParam(raw(params), 'content')
+    if (content === undefined) throw new RpcError(RPC_INVALID_PARAMS, 'content is required')
+    return saveSoul(content)
+  },
+
+  'settings.getAccentColor': () => getAccentColor(),
+
+  'settings.saveAccentColor': (params) => {
+    const hex = getStringParam(raw(params), 'hex')
+    if (!hex) throw new RpcError(RPC_INVALID_PARAMS, 'hex is required')
+    return saveAccentColor(hex)
+  },
+
+  'settings.getWindowOpacity': () => getWindowOpacity(),
+
+  'settings.saveWindowOpacity': (params) => {
+    const opacity = getParam(raw(params), 'opacity')
+    if (typeof opacity !== 'number') throw new RpcError(RPC_INVALID_PARAMS, 'opacity is required')
+    return saveWindowOpacity(opacity)
+  },
+
+  // --- Skills ---
+  'skills.list': () => getCachedSkills(),
+
+  'skills.refresh': () => refreshSkillsCache(),
+
+  'skills.remove': (params) => {
+    const name = getStringParam(raw(params), 'name')
+    if (!name) throw new RpcError(RPC_INVALID_PARAMS, 'name is required')
+    const removed = removeSkill(name)
+    if (removed) refreshSkillsCache()
+    return { ok: removed }
+  },
+
+  // --- Images ---
+  'image.list': () => listAllImages(),
+
+  'image.get': (params) => {
+    const imageId = getStringParam(raw(params), 'id')
+    if (!imageId) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return getImage(imageId)
+  },
+
+  'image.getMultiple': (params) => {
+    const ids = getParam(raw(params), 'ids') as string[] | undefined
+    if (!ids || !Array.isArray(ids)) throw new RpcError(RPC_INVALID_PARAMS, 'ids is required')
+    return getImages(ids)
+  },
+
+  'image.import': (params) => {
+    const p = raw(params)
+    const data = getStringParam(p, 'data')
+    const mediaType = getStringParam(p, 'mediaType')
+    if (!data || !mediaType) throw new RpcError(RPC_INVALID_PARAMS, 'data and mediaType are required')
+    const image = importImage(data, mediaType as any)
+    broadcastImageChanged()
+    return image
+  },
+
+  'image.delete': (params) => {
+    const imageId = getStringParam(raw(params), 'id')
+    if (!imageId) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const deleted = deleteImage(imageId)
+    if (deleted) broadcastImageChanged()
+    return deleted
+  },
+
+  // --- Collections ---
+  'collection.list': () => listCollections(),
+
+  'collection.get': (params) => {
+    const cid = getStringParam(raw(params), 'id')
+    if (!cid) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return getCollection(cid)
+  },
+
+  'collection.create': (params) => {
+    const p = raw(params)
+    const name = getStringParam(p, 'name')
+    if (!name) throw new RpcError(RPC_INVALID_PARAMS, 'name is required')
+    const schema = getParam(p, 'schema') as unknown[] | undefined
+    if (!schema || !Array.isArray(schema)) throw new RpcError(RPC_INVALID_PARAMS, 'schema is required')
+    const icon = getStringParam(p, 'icon') ?? ''
+    const collection = createCollection(name, schema as any, icon)
+    broadcastCollectionsChanged()
+    return collection
+  },
+
+  'collection.update': (params) => {
+    const p = raw(params)
+    const cid = getStringParam(p, 'id')
+    if (!cid) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const updates = getParam(p, 'updates') as Record<string, unknown> | undefined
+    const updated = updateCollection(cid, updates ?? {})
+    broadcastCollectionsChanged()
+    return updated
+  },
+
+  'collection.delete': (params) => {
+    const cid = getStringParam(raw(params), 'id')
+    if (!cid) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const deleted = deleteCollection(cid)
+    broadcastCollectionsChanged()
+    return deleted
+  },
+
+  'collection.renameField': (params) => {
+    const p = raw(params)
+    const cid = getStringParam(p, 'id')
+    const oldName = getStringParam(p, 'oldName')
+    const newName = getStringParam(p, 'newName')
+    if (!cid || !oldName || !newName) throw new RpcError(RPC_INVALID_PARAMS, 'id, oldName, and newName are required')
+    const renamed = renameField(cid, oldName, newName)
+    broadcastCollectionsChanged()
+    return renamed
+  },
+
+  'collection.listItems': (params) => {
+    const collectionId = getStringParam(raw(params), 'collectionId')
+    if (!collectionId) throw new RpcError(RPC_INVALID_PARAMS, 'collectionId is required')
+    return listItems(collectionId)
+  },
+
+  'collection.getItem': (params) => {
+    const itemId = getStringParam(raw(params), 'id')
+    if (!itemId) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return getItem(itemId)
+  },
+
+  'collection.addItem': (params) => {
+    const p = raw(params)
+    const collectionId = getStringParam(p, 'collectionId')
+    if (!collectionId) throw new RpcError(RPC_INVALID_PARAMS, 'collectionId is required')
+    const data = getParam(p, 'data') as Record<string, unknown> | undefined
+    if (!data) throw new RpcError(RPC_INVALID_PARAMS, 'data is required')
+    const item = addItem(collectionId, data)
+    broadcastCollectionsChanged()
+    return item
+  },
+
+  'collection.updateItem': (params) => {
+    const p = raw(params)
+    const itemId = getStringParam(p, 'id')
+    if (!itemId) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const data = getParam(p, 'data') as Record<string, unknown> | undefined
+    if (!data) throw new RpcError(RPC_INVALID_PARAMS, 'data is required')
+    const updated = updateItem(itemId, data)
+    broadcastCollectionsChanged()
+    return updated
+  },
+
+  'collection.deleteItem': (params) => {
+    const itemId = getStringParam(raw(params), 'id')
+    if (!itemId) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const deleted = deleteItem(itemId)
+    broadcastCollectionsChanged()
+    return deleted
+  },
+
+  'collection.reorderItems': (params) => {
+    const ids = getParam(raw(params), 'ids') as string[] | undefined
+    if (!ids || !Array.isArray(ids)) throw new RpcError(RPC_INVALID_PARAMS, 'ids array is required')
+    reorderItems(ids)
+    broadcastCollectionsChanged()
+    return true
+  },
+
+  // --- Collection item comments ---
+
+  'collection.addItemComment': (params) => {
+    const p = raw(params)
+    const itemId = getStringParam(p, 'itemId')
+    const author = getStringParam(p, 'author') as 'user' | 'bond' | undefined
+    const body = getStringParam(p, 'body')
+    if (!itemId || !author || !body) throw new RpcError(RPC_INVALID_PARAMS, 'itemId, author, and body are required')
+    const comment = addItemComment(itemId, author, body)
+    broadcastCollectionsChanged()
+    return comment
+  },
+
+  'collection.deleteItemComment': (params) => {
+    const cid = getStringParam(raw(params), 'id')
+    if (!cid) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const deleted = deleteItemComment(cid)
+    broadcastCollectionsChanged()
+    return deleted
+  },
+
+  'collection.listItemComments': (params) => {
+    const itemId = getStringParam(raw(params), 'itemId')
+    if (!itemId) throw new RpcError(RPC_INVALID_PARAMS, 'itemId is required')
+    return listItemComments(itemId)
+  },
+
+  'collection.searchItems': (params) => {
+    const p = raw(params)
+    const collectionId = getStringParam(p, 'collectionId')
+    const query = getStringParam(p, 'query')
+    if (!collectionId || !query) throw new RpcError(RPC_INVALID_PARAMS, 'collectionId and query are required')
+    return searchItems(collectionId, query)
+  },
+
+  'collection.getByName': (params) => {
+    const name = getStringParam(raw(params), 'name')
+    if (!name) throw new RpcError(RPC_INVALID_PARAMS, 'name is required')
+    return getCollectionByName(name)
+  },
+
+  // --- Sense ---
+  'sense.status': () => {
+    const ctrl = getSenseController()
+    const stats = getSenseStats()
+    return {
+      enabled: ctrl.getSettings().enabled,
+      state: ctrl.getState(),
+      ...stats,
+    }
+  },
+
+  'sense.enable': () => {
+    const ctrl = getSenseController()
+    ctrl.enable()
+    persistSenseSettings(ctrl.getSettings())
+    return { ok: true }
+  },
+
+  'sense.disable': () => {
+    const ctrl = getSenseController()
+    ctrl.disable()
+    persistSenseSettings(ctrl.getSettings())
+    return { ok: true }
+  },
+
+  'sense.pause': (params) => {
+    const ctrl = getSenseController()
+    const minutes = getNumberParam(raw(params), 'minutes') ?? 10
+    ctrl.pause(minutes)
+    return { ok: true, resumeAt: new Date(Date.now() + minutes * 60_000).toISOString() }
+  },
+
+  'sense.resume': () => {
+    const ctrl = getSenseController()
+    ctrl.resume()
+    return { ok: true }
+  },
+
+  'sense.captureReady': (params) => {
+    const p = raw(params)
+    const ctrl = getSenseController()
+    const captureId = getStringParam(p, 'captureId')
+    const imagePath = getStringParam(p, 'imagePath')
+    if (!captureId || !imagePath) throw new RpcError(RPC_INVALID_PARAMS, 'captureId and imagePath required')
+    ctrl.onCaptureReady(captureId, imagePath)
+    return { ok: true }
+  },
+
+  // --- Web (hidden-browser render round-trip) ---
+  'web.renderReady': (params) => {
+    const renderId = getStringParam(raw(params), 'renderId')
+    if (!renderId) throw new RpcError(RPC_INVALID_PARAMS, 'renderId is required')
+    const handled = onRenderReady(params)
+    return { ok: handled }
+  },
+
+  'sense.now': () => {
+    const db = getDb()
+    const capture = db.prepare(
+      'SELECT * FROM sense_captures ORDER BY captured_at DESC LIMIT 1'
+    ).get() as Record<string, unknown> | undefined
+    const ctrl = getSenseController()
+    return {
+      capture: capture ?? null,
+      state: ctrl.getState(),
+    }
+  },
+
+  'sense.today': () => {
+    const db = getDb()
+    const now = new Date()
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString()
+    const sessions = db.prepare(
+      "SELECT * FROM sense_sessions WHERE started_at >= ? ORDER BY started_at ASC"
+    ).all(todayStart) as Record<string, unknown>[]
+    const apps = db.prepare(`
+      SELECT app_name, COUNT(*) as capture_count,
+        MIN(captured_at) as first_seen, MAX(captured_at) as last_seen
+      FROM sense_captures
+      WHERE captured_at >= ? AND app_name IS NOT NULL
+      GROUP BY app_name
+      ORDER BY capture_count DESC
+    `).all(todayStart) as Record<string, unknown>[]
+    return { sessions, apps }
+  },
+
+  'sense.search': (params) => {
+    const p = raw(params)
+    const searchQuery = getStringParam(p, 'query')
+    if (!searchQuery) throw new RpcError(RPC_INVALID_PARAMS, 'query required')
+    const limit = getNumberParam(p, 'limit') ?? 20
+    const db = getDb()
+
+    // Cross-channel search: screen captures + session debriefs
+    const captures = db.prepare(`
+      SELECT *, 'see' as channel FROM sense_captures
+      WHERE text_content LIKE ? OR app_name LIKE ? OR window_title LIKE ?
+      ORDER BY captured_at DESC
+      LIMIT ?
+    `).all(`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, limit) as Record<string, unknown>[]
+
+    const debriefResults = searchDebriefs(searchQuery, limit).map(d => ({
+      ...d,
+      channel: 'chat' as const,
+    }))
+
+    // Unified results sorted by date
+    const unified = [
+      ...captures.map(c => ({ ...c, _sortDate: c.captured_at as string })),
+      ...debriefResults.map(d => ({ ...d, _sortDate: d.createdAt })),
+    ].sort((a, b) => b._sortDate.localeCompare(a._sortDate)).slice(0, limit)
+
+    return unified
+  },
+
+  'sense.apps': (params) => {
+    const range = getStringParam(raw(params), 'range') ?? 'today'
+    const db = getDb()
+    let since: string
+    const now = new Date()
+    if (range === 'week') {
+      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+      since = weekAgo.toISOString()
+    } else {
+      since = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString()
+    }
+    const apps = db.prepare(`
+      SELECT app_name, app_bundle_id, COUNT(*) as capture_count,
+        MIN(captured_at) as first_seen, MAX(captured_at) as last_seen
+      FROM sense_captures
+      WHERE captured_at >= ? AND app_name IS NOT NULL
+      GROUP BY app_bundle_id
+      ORDER BY capture_count DESC
+    `).all(since) as Record<string, unknown>[]
+    return apps
+  },
+
+  'sense.timeline': (params) => {
+    const p = raw(params)
+    const from = getStringParam(p, 'from')
+    const to = getStringParam(p, 'to')
+    const limit = getNumberParam(p, 'limit') ?? 5000
+    const db = getDb()
+    let sql = 'SELECT * FROM sense_captures WHERE 1=1'
+    const sqlParams: (string | number)[] = []
+    if (from) { sql += ' AND captured_at >= ?'; sqlParams.push(from) }
+    if (to) { sql += ' AND captured_at <= ?'; sqlParams.push(to) }
+    sql += ' ORDER BY captured_at ASC LIMIT ?'
+    sqlParams.push(limit)
+    return db.prepare(sql).all(...sqlParams) as Record<string, unknown>[]
+  },
+
+  'sense.capture': (params) => {
+    const captureId = getStringParam(raw(params), 'id')
+    if (!captureId) throw new RpcError(RPC_INVALID_PARAMS, 'id required')
+    const db = getDb()
+    const capture = db.prepare('SELECT * FROM sense_captures WHERE id = ?').get(captureId) as Record<string, unknown> | undefined
+    if (!capture) throw new RpcError(RPC_INVALID_PARAMS, 'capture not found')
+    let image: string | null = null
+    const imgPath = capture.image_path as string | null
+    if (imgPath && existsSync(imgPath)) {
+      try {
+        image = readFileSync(imgPath).toString('base64')
+      } catch { /* image unreadable */ }
+    }
+    return { capture, image }
+  },
+
+  'sense.sessions': (params) => {
+    const p = raw(params)
+    const from = getStringParam(p, 'from')
+    const to = getStringParam(p, 'to')
+    const db = getDb()
+    let sql = 'SELECT * FROM sense_sessions WHERE 1=1'
+    const sqlParams: string[] = []
+    if (from) { sql += ' AND (ended_at >= ? OR ended_at IS NULL)'; sqlParams.push(from) }
+    if (to) { sql += ' AND started_at <= ?'; sqlParams.push(to) }
+    sql += ' ORDER BY started_at ASC'
+    return db.prepare(sql).all(...sqlParams) as Record<string, unknown>[]
+  },
+
+  'sense.settings': () => {
+    const ctrl = getSenseController()
+    return ctrl.getSettings()
+  },
+
+  'sense.updateSettings': (params) => {
+    const updates = getParam(raw(params), 'updates') as Partial<SenseSettings> | undefined
+    if (!updates) throw new RpcError(RPC_INVALID_PARAMS, 'updates required')
+    const ctrl = getSenseController()
+    const newSettings = ctrl.updateSettings(updates)
+    persistSenseSettings(newSettings)
+    return newSettings
+  },
+
+  'sense.clear': (params) => {
+    const range = getParam(raw(params), 'range') as { from?: string; to?: string } | undefined
+    const deleted = clearSenseData(range)
+    return { deletedCount: deleted }
+  },
+
+  'sense.stats': () => getSenseStats(),
+
+  // --- Onboarding ---
+  'onboarding.status': () => getFirstRunStatus(),
+  'onboarding.begin': () => beginFirstRun(),
+  'onboarding.skip': () => skipFirstRun(),
+
+  // --- New-user sandbox ---
+  'sandbox.status': () => ({ sandboxed: isSandboxed() }),
+
+  'sandbox.enter': async () => {
+    // Sense stays suspended while sandboxed — a fresh install has no Sense.
+    await settleForDataSwap()
+    try {
+      enterSandbox()
+    } catch (error) {
+      wakeAfterDataSwap()
+      throw error
+    }
+    return { sandboxed: true }
+  },
+
+  'sandbox.exit': async () => {
+    await settleForDataSwap()
+    exitSandbox()
+    wakeAfterDataSwap()
+    return { sandboxed: false }
+  },
+
+  // --- Memory ---
+  'memory.core': () => readCoreMemory() as CoreMemory,
+
+  'memory.updateCore': async (params) => {
+    const core = getParam(raw(params), 'core') as CoreMemory | undefined
+    if (!core) throw new RpcError(RPC_INVALID_PARAMS, 'core is required')
+    return await withCoreMemoryLock(() => writeCoreMemoryAtomic({ ...core, updatedAt: new Date().toISOString() }))
+  },
+
+  'memory.working': () => readWorkingMemoryState(),
+
+  'memory.updateWorking': (params) => {
+    const working = getParam(raw(params), 'working') as WorkingState | undefined
+    if (!working) throw new RpcError(RPC_INVALID_PARAMS, 'working is required')
+    // The service writer redacts — text pasted into the MemoryView must
+    // never persist secrets that then ride along in every future prompt.
+    return writeWorkingMemoryState(createWorkingState(working))
+  },
+
+  'memory.clearWorking': () => writeWorkingMemoryState(createWorkingState()),
+
+  'memory.search': (params) => {
+    const p = raw(params)
+    const query = getStringParam(p, 'query') ?? ''
+    const limit = getNumberParam(p, 'limit') ?? 20
+    const results = query.trim()
+      ? searchMemory(query, { limit })
+      : listRecentMemory({ limit }).map(item => ({ item, score: 0 }))
+    return { results }
+  },
+
+  'memory.upsert': (params) => {
+    const item = getParam(raw(params), 'item') as MemoryItemInput | undefined
+    if (!item || typeof item.text !== 'string') throw new RpcError(RPC_INVALID_PARAMS, 'item.text is required')
+    return upsertMemoryItem(item)
+  },
+
+  'memory.delete': (params) => {
+    const memoryId = getStringParam(raw(params), 'id')
+    if (!memoryId) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const current = getMemoryItem(memoryId)
+    if (!current) return { ok: false }
+    upsertMemoryItem({ ...current, active: false, updatedAt: new Date().toISOString() })
+    return { ok: true }
+  },
+
+  'memory.sources': (params) => {
+    const memoryId = getStringParam(raw(params), 'id')
+    if (!memoryId) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const item = getMemoryItem(memoryId)
+    const relatedSourceIds = item ? getMemoryItemSourceIds(item.id) : []
+    const sourceIds = relatedSourceIds.length > 0 ? relatedSourceIds : (item ? sourceIdsForMemoryTags(item.tags) : [])
+    return { sourceIds, messages: getSourceMessages(sourceIds) }
+  },
+
+  // --- Sense Debriefs ---
+  'sense.memory': (params) => {
+    const limit = getNumberParam(raw(params), 'limit') ?? 20
+    const debriefs = listDebriefs({ limit })
+    return { debriefs }
+  },
+
+  'sense.debrief': (params) => {
+    const p = raw(params)
+    const debriefId = getStringParam(p, 'id')
+    const sessionId = getStringParam(p, 'sessionId')
+    let debrief = null
+    if (debriefId) debrief = getDebrief(debriefId)
+    else if (sessionId) debrief = getDebriefBySession(sessionId)
+    return debrief
+  },
+
+  'sense.deleteDebrief': (params) => {
+    const debriefId = getStringParam(raw(params), 'id')
+    if (!debriefId) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const ok = deleteDebrief(debriefId)
+    return { ok }
+  },
+
+  'sense.systemPromptPreview': (params) => {
+    const editMode = getParam(raw(params), 'editMode') as EditMode | undefined
+    const prompt = buildSystemPromptPreview({ editMode })
+    return { prompt }
+  },
+
+  'sense.backfill': (params) => {
+    const limit = getNumberParam(raw(params), 'limit') ?? 50
+    backfillDebriefs(limit).then(result => {
+      console.log(`[bond] backfill complete: ${result.generated} generated, ${result.skipped} skipped, ${result.failed} failed`)
+    }).catch(err => {
+      console.warn('[bond] backfill failed:', err.message)
+    })
+    return { ok: true, message: 'Backfill started in background' }
+  },
+}
+
+async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string> {
+  const handler = (handlers as unknown as Record<string, ((p: unknown, c: RpcContext) => unknown) | undefined>)[req.method]
+  if (!handler) return JSON.stringify(makeErrorResponse(req.id, RPC_METHOD_NOT_FOUND, `Unknown method: ${req.method}`))
+  try {
+    const result = await handler(req.params, { ws })
+    return JSON.stringify(makeResponse(req.id, result))
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    return JSON.stringify(makeErrorResponse(id, RPC_INTERNAL_ERROR, message))
+    if (e instanceof RpcError) return JSON.stringify(makeErrorResponse(req.id, e.code, e.message))
+    return JSON.stringify(makeErrorResponse(req.id, RPC_INTERNAL_ERROR, e instanceof Error ? e.message : String(e)))
   }
 }
 
