@@ -278,6 +278,11 @@ const filteredSkills = computed(() => {
 })
 
 
+const selectedIssueReferences = computed(() => {
+  const text = inputText.value
+  return issueReferences.value.filter(issue => new RegExp(`\\b${issue.key}\\b`, 'i').test(text))
+})
+
 const filteredIssueReferences = computed(() => {
   const el = inputEl.value
   if (!el) return []
@@ -515,6 +520,20 @@ function handleKeyDown(e: KeyboardEvent) {
         />
       </div>
 
+      <div v-if="selectedIssueReferences.length" class="issue-token-strip" aria-label="Referenced issues">
+        <button
+          v-for="issue in selectedIssueReferences"
+          :key="issue.item.id"
+          type="button"
+          class="issue-reference-token"
+          :title="issue.title"
+          @click="focus()"
+        >
+          <span>{{ issue.key }}</span>
+          <span class="issue-reference-title">{{ issue.title }}</span>
+        </button>
+      </div>
+
       <!-- Scoped paths input -->
       <div v-if="editMode.type === 'scoped'" class="px-3 pt-2">
         <input
@@ -728,6 +747,43 @@ function handleKeyDown(e: KeyboardEvent) {
   font-weight: 700;
 }
 
+
+.issue-token-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.15rem 0.5rem 0.35rem;
+}
+
+.issue-reference-token {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.18rem 0.42rem;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  border-radius: 0.4rem;
+  background: color-mix(in srgb, var(--color-accent) 13%, transparent);
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.issue-reference-token:hover {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+.issue-reference-title {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .image-strip {
   display: flex;
