@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -224,5 +224,58 @@ describe('db module', () => {
       closeDb()
       expect(() => getDb()).not.toThrow()
     })
+  })
+})
+
+describe('schema reset vs quarantine', () => {
+  it('quarantines an unreadable database instead of wiping user data', () => {
+    // Regression: a merely-unreadable DB (torn WAL, permissions, corruption)
+    // used to take the same wipe path as a deliberate schema cutover,
+    // destroying Pi sessions and images along with it.
+    writeFileSync(getDbPath(), 'this is not a sqlite database')
+    const piDir = join(testDir, 'pi', 'sessions')
+    const imgDir = join(testDir, 'images')
+    mkdirSync(piDir, { recursive: true })
+    mkdirSync(imgDir, { recursive: true })
+    writeFileSync(join(piDir, 'session.jsonl'), '{"role":"user"}\n')
+    writeFileSync(join(imgDir, 'photo.png'), 'png-bytes')
+
+    const db = getDb()
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").all()).toHaveLength(1)
+
+    const quarantined = readdirSync(testDir).filter((f) => f.startsWith('bond.db.corrupt-'))
+    expect(quarantined).toHaveLength(1)
+    expect(existsSync(join(piDir, 'session.jsonl'))).toBe(true)
+    expect(existsSync(join(imgDir, 'photo.png'))).toBe(true)
+  })
+
+  it('still wipes a readable database with a stale schema version (cutover)', () => {
+    const old = new Database(getDbPath())
+    old.exec("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT)")
+    old.prepare("INSERT INTO app_meta (key, value) VALUES ('schema_version', '1')").run()
+    old.exec("CREATE TABLE relic (id TEXT)")
+    old.prepare("INSERT INTO relic (id) VALUES ('old-data')").run()
+    old.close()
+    const piDir = join(testDir, 'pi', 'sessions')
+    mkdirSync(piDir, { recursive: true })
+    writeFileSync(join(piDir, 'session.jsonl'), '{"role":"user"}\n')
+
+    const db = getDb()
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='relic'").all()).toHaveLength(0)
+    expect(existsSync(join(piDir, 'session.jsonl'))).toBe(false)
+    expect(readdirSync(testDir).filter((f) => f.startsWith('bond.db.corrupt-'))).toHaveLength(0)
+  })
+
+  it('leaves a current-version database untouched', () => {
+    const db1 = getDb()
+    db1.prepare(
+      "INSERT INTO sessions (id, title, created_at, updated_at) VALUES ('s1', 'Keep me', datetime('now'), datetime('now'))"
+    ).run()
+    closeDb()
+
+    const db2 = getDb()
+    const rows = db2.prepare("SELECT title FROM sessions WHERE id = 's1'").all() as { title: string }[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0].title).toBe('Keep me')
   })
 })

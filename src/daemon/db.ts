@@ -61,35 +61,51 @@ export function getDb(): Database.Database {
   return _db
 }
 
-/**
- * Bond's chat model is deliberately a clean cutover. A missing or stale
- * version means this database belongs to the pre-continuous-Bond product.
- */
-function resetIfSchemaChanged(): void {
-  const path = getDbPath()
-  if (!existsSync(path)) return
+type SchemaProbe =
+  | { kind: 'current' }
+  | { kind: 'stale'; preserveLegacyJournal: boolean }
+  | { kind: 'unreadable'; error: unknown }
 
+function probeSchemaVersion(path: string): SchemaProbe {
   let db: Database.Database | null = null
-  let version: number | null = null
-  let preserveLegacyJournal = false
   try {
     db = new Database(path)
     const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_meta'").get()
     if (table) {
       const row = db.prepare('SELECT value FROM app_meta WHERE key = ?').get('schema_version') as { value: string } | undefined
-      version = row ? Number(row.value) : null
-    } else {
-      // Journal is an independent product table; retain it when opening a
-      // database created for that standalone data-layer operation.
-      preserveLegacyJournal = Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'journal_entries'").get())
+      const version = row ? Number(row.value) : null
+      return version === APP_SCHEMA_VERSION ? { kind: 'current' } : { kind: 'stale', preserveLegacyJournal: false }
     }
-  } catch {
-    version = null
+    // Journal is an independent product table; retain it when opening a
+    // database created for that standalone data-layer operation.
+    const journal = Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'journal_entries'").get())
+    return { kind: 'stale', preserveLegacyJournal: journal }
+  } catch (error) {
+    return { kind: 'unreadable', error }
   } finally {
     try { db?.close() } catch { /* best effort */ }
   }
+}
 
-  if (version === APP_SCHEMA_VERSION || preserveLegacyJournal) return
+/**
+ * Bond's chat model is deliberately a clean cutover: a READABLE database with
+ * a missing or stale version belongs to the pre-continuous-Bond product and
+ * is wiped along with its Pi sessions and images. A database that cannot even
+ * be read (corruption, permissions, a torn WAL) is a different situation —
+ * destroying the user's history over it is never acceptable, so it gets
+ * quarantined with a rename and everything else is left in place.
+ */
+function resetIfSchemaChanged(): void {
+  const path = getDbPath()
+  if (!existsSync(path)) return
+
+  const probe = probeSchemaVersion(path)
+  if (probe.kind === 'current') return
+  if (probe.kind === 'unreadable') {
+    quarantineUnreadableDb(path, probe.error)
+    return
+  }
+  if (probe.preserveLegacyJournal) return
 
   for (const suffix of ['', '-wal', '-shm']) {
     try { unlinkSync(`${path}${suffix}`) } catch { /* absent */ }
@@ -102,6 +118,27 @@ function resetIfSchemaChanged(): void {
   try {
     for (const file of readdirSync(join(getDataDir(), 'images'))) unlinkSync(join(getDataDir(), 'images', file))
   } catch { /* directory may not exist */ }
+}
+
+function quarantineUnreadableDb(path: string, error: unknown): void {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const target = `${path}.corrupt-${stamp}`
+  try {
+    renameSync(path, target)
+    for (const suffix of ['-wal', '-shm']) {
+      try { renameSync(`${path}${suffix}`, `${target}${suffix}`) } catch { /* absent */ }
+    }
+    console.error(
+      `[bond] DATABASE UNREADABLE — quarantined instead of wiping.\n` +
+      `[bond]   moved ${path} -> ${target}\n` +
+      `[bond]   Pi sessions and images were left untouched.\n` +
+      `[bond]   original error: ${error instanceof Error ? error.message : String(error)}`
+    )
+  } catch (renameError) {
+    // Quarantine itself failed (permissions?). Leave everything in place —
+    // the open that follows will fail loudly, which beats deleting anything.
+    console.error(`[bond] DATABASE UNREADABLE and quarantine rename failed: ${String(renameError)}`)
+  }
 }
 
 export function closeDb(): void {
