@@ -37,6 +37,11 @@ export interface JsonRpcNotification {
 
 export type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification
 
+// --- Protocol version ---
+
+/** Bump on ANY breaking change to RpcMethods/RpcNotifications (rpc-schema.ts). Equality = compatibility. */
+export const PROTOCOL_VERSION = 1
+
 // --- Error codes ---
 
 export const RPC_PARSE_ERROR = -32700

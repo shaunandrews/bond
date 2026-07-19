@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { AttachedImage, EditMode } from '../shared/session'
+import type { BondSendResult } from '../shared/rpc-schema'
 import type { BondStreamChunk } from '../shared/stream'
 import { parseEditMode } from '../shared/session'
 import { runBondQuery, buildAgentContextEnvelope } from './agent'
@@ -55,13 +56,7 @@ export interface StartTurnInput {
   model: string
 }
 
-export interface StartTurnResult {
-  ok: true
-  queued: false
-  imageIds?: string[]
-  turnId: string
-  epochId: string
-}
+export type StartTurnResult = BondSendResult
 
 type ActiveTurn = {
   sessionId?: string
