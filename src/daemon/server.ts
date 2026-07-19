@@ -112,7 +112,7 @@ import {
 import { readCoreMemory, withCoreMemoryLock, writeCoreMemoryAtomic } from './memory/core-memory'
 import { getMemoryItem, getMemoryItemSourceIds, listRecentMemory, searchMemory, upsertMemoryItem } from './memory/store'
 import { createWorkingState } from './memory/working-state'
-import { finalObserverHook, memoryFlushHook, scheduleEpochObservation, waitForMemoryQueue } from './memory/service'
+import { finalObserverHook, memoryFlushHook, readWorkingMemoryState, scheduleEpochObservation, waitForMemoryQueue, writeWorkingMemoryState } from './memory/service'
 import { beginFirstRun, getFirstRunStatus, skipFirstRun } from './onboarding'
 import { enterSandbox, exitSandbox, isSandboxed } from './sandbox'
 
@@ -342,24 +342,6 @@ function guessExt(contentType: string): string {
     'application/json': '.json', 'text/plain': '.txt',
   }
   return map[contentType] || ''
-}
-
-const WORKING_MEMORY_SETTING = 'memory.working'
-
-function readWorkingMemory(): WorkingState {
-  const raw = getSetting(WORKING_MEMORY_SETTING)
-  if (!raw) return createWorkingState()
-  try {
-    return createWorkingState(JSON.parse(raw) as Partial<WorkingState>)
-  } catch {
-    return createWorkingState()
-  }
-}
-
-function writeWorkingMemory(working: WorkingState): WorkingState {
-  const next = createWorkingState({ ...working, updatedAt: new Date().toISOString() })
-  setSetting(WORKING_MEMORY_SETTING, JSON.stringify(next))
-  return next
 }
 
 function sourceIdsForMemoryTags(tags: string[]): string[] {
@@ -1168,15 +1150,17 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         return JSON.stringify(makeResponse(id, saved))
       }
       case 'memory.working': {
-        return JSON.stringify(makeResponse(id, readWorkingMemory()))
+        return JSON.stringify(makeResponse(id, readWorkingMemoryState()))
       }
       case 'memory.updateWorking': {
         const working = getParam(p, 'working') as WorkingState | undefined
         if (!working) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'working is required'))
-        return JSON.stringify(makeResponse(id, writeWorkingMemory(working)))
+        // The service writer redacts — text pasted into the MemoryView must
+        // never persist secrets that then ride along in every future prompt.
+        return JSON.stringify(makeResponse(id, writeWorkingMemoryState(createWorkingState(working))))
       }
       case 'memory.clearWorking': {
-        const empty = writeWorkingMemory(createWorkingState())
+        const empty = writeWorkingMemoryState(createWorkingState())
         return JSON.stringify(makeResponse(id, empty))
       }
       case 'memory.search': {

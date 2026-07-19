@@ -330,3 +330,31 @@ describe('edit mode setting', () => {
     client2.close()
   })
 })
+
+describe('working memory RPC', () => {
+  it('redacts secrets on the updateWorking write path', async () => {
+    // Regression: the RPC used a server-local writer that skipped the
+    // service layer's redaction — a key pasted into MemoryView persisted
+    // verbatim and rode along in every future prompt.
+    const secret = `deploy key sk-${'a'.repeat(48)}`
+    const saved = await client.memoryUpdateWorking({
+      sessionId: null,
+      projectId: null,
+      goal: secret,
+      facts: ['likes tea', secret],
+      preferences: [],
+      decisions: [],
+      openThreads: [],
+      updatedAt: new Date().toISOString(),
+    })
+
+    expect(saved.goal).toBe('')
+    expect(saved.facts).toEqual(['likes tea'])
+
+    const read = await client.memoryWorking()
+    expect(read.facts).toEqual(['likes tea'])
+
+    const row = getDb().prepare("SELECT value FROM settings WHERE key = 'memory.working'").get() as { value: string } | undefined
+    expect(row?.value ?? '').not.toContain('sk-aaaa')
+  })
+})

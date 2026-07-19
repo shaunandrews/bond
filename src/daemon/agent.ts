@@ -6,10 +6,9 @@ import { getDb } from './db'
 import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
 import { runPiBondQuery, resolvePiPendingApproval, clearPiSessionApprovals, runPiTextPrompt } from './pi/runtime'
 import { retrieveMemory } from './memory/retrieval'
-import { createWorkingState } from './memory/working-state'
+import { readWorkingMemoryState } from './memory/service'
 import { searchMessages, getMessagesForRange } from './transcript'
 import { buildFirstRunPromptSection } from './onboarding'
-import type { WorkingState } from './memory/types'
 import type { Epoch } from './epochs'
 
 export function getCachedSkills(): SkillInfo[] {
@@ -149,16 +148,6 @@ function historicalLine(value: string, maxChars = 500): string {
   return clampHistoricalText(value, maxChars)
 }
 
-function readWorkingMemoryForContext(): WorkingState {
-  const raw = getSetting('memory.working')
-  if (!raw) return createWorkingState()
-  try {
-    return createWorkingState(JSON.parse(raw) as Partial<WorkingState>)
-  } catch {
-    return createWorkingState()
-  }
-}
-
 function shouldRecallMemory(query: string): boolean {
   const normalized = query.toLocaleLowerCase()
   if (/\b(remember|recall|previous|earlier|last time|again|preference|decision|we discussed|you know)\b/.test(normalized)) return true
@@ -239,7 +228,7 @@ function buildEpochHandoffContext(previousEpoch?: Epoch | null): string {
 
 export function buildAgentContextEnvelope(input: { query: string; sessionId?: string | null; projectId?: string | null; excludeMessageIds?: string[]; previousEpoch?: Epoch | null } | string): string {
   const options = typeof input === 'string' ? { query: input } : input
-  const working = readWorkingMemoryForContext()
+  const working = readWorkingMemoryState()
   const memory = retrieveMemory({
     query: shouldRecallMemory(options.query) ? options.query : '',
     projectId: options.projectId ?? working.projectId ?? null,
