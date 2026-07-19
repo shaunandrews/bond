@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { join, resolve } from 'node:path'
 import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync, appendFileSync, watch, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { connect as netConnect } from 'node:net'
 import { BondClient } from '../shared/client'
+import { PROTOCOL_VERSION } from '../shared/protocol'
 import { initSense, destroySense } from './sense'
 import { initWeb, destroyWeb } from './web'
 import { initTray, destroyTray } from './tray'
@@ -188,6 +189,23 @@ function readAuthToken(): string | undefined {
     }
   } catch { /* ignore */ }
   return undefined
+}
+
+/**
+ * Hard-fail on protocol skew: the daemon deliberately outlives app updates
+ * (launchd KeepAlive), and a mismatched pair fails per-call with "Unknown
+ * method" — some features silently broken beats nothing visibly broken.
+ */
+function daemonProtocolMismatch(): boolean {
+  const version = client.daemonProtocolVersion
+  return version !== null && version !== PROTOCOL_VERSION
+}
+
+function showProtocolMismatchDialog(): void {
+  dialog.showErrorBox(
+    'Bond daemon is out of date',
+    `The running Bond daemon speaks protocol ${client.daemonProtocolVersion || 'pre-1'} but this app needs ${PROTOCOL_VERSION}.\n\nRun "bin/bond restart" (dev) or log out and back in, then reopen Bond.`
+  )
 }
 
 async function connectClient(): Promise<void> {
@@ -567,6 +585,11 @@ async function attemptReconnect(): Promise<void> {
       // the client here once silently severed all of them until app relaunch.
       await client.reconnect()
       isReconnecting = false
+      if (daemonProtocolMismatch()) {
+        showProtocolMismatchDialog()
+        app.quit()
+        return
+      }
       console.log('[bond] reconnected to daemon')
       broadcast('bond:connectionRestored')
       return
@@ -594,6 +617,11 @@ if (!gotLock) {
 app.whenReady().then(async () => {
   await ensureDaemon()
   await connectClient()
+  if (daemonProtocolMismatch()) {
+    showProtocolMismatchDialog()
+    app.quit()
+    return
+  }
   setupAutoReconnect()
   initSense(client)
   initWeb(client)

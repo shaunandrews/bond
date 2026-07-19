@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { WebBondClient, readPairingToken, clearPairingToken } from './client'
-import { makeResponse, makeErrorResponse, makeNotification, type JsonRpcRequest } from '../../shared/protocol'
+import { makeResponse, makeErrorResponse, makeNotification, PROTOCOL_VERSION, type JsonRpcRequest } from '../../shared/protocol'
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = []
@@ -70,7 +70,7 @@ describe('WebBondClient', () => {
     expect(ws.sent[0]).toMatchObject({ method: 'bond.auth', params: { token: 'tok' } })
     expect(ws.sent).toHaveLength(1)
 
-    ws.respondTo('bond.auth', { ok: true })
+    ws.respondTo('bond.auth', { ok: true, protocolVersion: PROTOCOL_VERSION })
     expect(client.state).toBe('connected')
     await vi.waitFor(() => expect(ws.sent.some(m => m.method === 'transcript.list')).toBe(true))
 
@@ -81,7 +81,7 @@ describe('WebBondClient', () => {
   it('rejects calls whose response is a JSON-RPC error', async () => {
     const { client, ws } = makeClient()
     ws.open()
-    ws.respondTo('bond.auth', { ok: true })
+    ws.respondTo('bond.auth', { ok: true, protocolVersion: PROTOCOL_VERSION })
 
     const call = client.call('skills.remove', { name: 'x' })
     await vi.waitFor(() => expect(ws.sent.some(m => m.method === 'skills.remove')).toBe(true))
@@ -94,7 +94,7 @@ describe('WebBondClient', () => {
   it('dispatches bond.chunk notifications to onChunk listeners', async () => {
     const { client, ws } = makeClient()
     ws.open()
-    ws.respondTo('bond.auth', { ok: true })
+    ws.respondTo('bond.auth', { ok: true, protocolVersion: PROTOCOL_VERSION })
 
     const chunks: unknown[] = []
     const dispose = client.onChunk(chunk => chunks.push(chunk))
@@ -121,13 +121,29 @@ describe('WebBondClient', () => {
     expect(timeouts).toHaveLength(0)
   })
 
+  it('parks as mismatch when the daemon speaks a different protocol version', async () => {
+    // An old daemon (or one missing the version entirely) would fail per-call
+    // with Unknown method — park with a clear state instead of limping.
+    const timeouts: Array<() => void> = []
+    const setTimeoutImpl = ((fn: () => void) => { timeouts.push(fn); return 0 }) as unknown as typeof setTimeout
+    const { client, ws } = makeClient({ setTimeoutImpl })
+
+    ws.open()
+    ws.respondTo('bond.auth', { ok: true })
+    expect(client.state).toBe('mismatch')
+
+    ws.close()
+    expect(client.state).toBe('mismatch')
+    expect(timeouts).toHaveLength(0)
+  })
+
   it('reconnects with backoff after a drop and re-subscribes automatically', async () => {
     const timeouts: Array<{ fn: () => void; ms: number }> = []
     const setTimeoutImpl = ((fn: () => void, ms: number) => { timeouts.push({ fn, ms }); return 0 }) as unknown as typeof setTimeout
     const { client, ws } = makeClient({ setTimeoutImpl })
 
     ws.open()
-    ws.respondTo('bond.auth', { ok: true })
+    ws.respondTo('bond.auth', { ok: true, protocolVersion: PROTOCOL_VERSION })
     const subscribed = client.subscribe()
     await vi.waitFor(() => expect(ws.sent.some(m => m.method === 'bond.subscribe')).toBe(true))
     ws.respondTo('bond.subscribe', { ok: true })
@@ -142,7 +158,7 @@ describe('WebBondClient', () => {
     const ws2 = FakeWebSocket.instances.at(-1)!
     expect(ws2).not.toBe(ws)
     ws2.open()
-    ws2.respondTo('bond.auth', { ok: true })
+    ws2.respondTo('bond.auth', { ok: true, protocolVersion: PROTOCOL_VERSION })
     expect(client.state).toBe('connected')
     // The global subscription is re-established without the app's help.
     await vi.waitFor(() => expect(ws2.sent.some(m => m.method === 'bond.subscribe')).toBe(true))
@@ -167,7 +183,7 @@ describe('WebBondClient', () => {
     const setTimeoutImpl = ((fn: () => void, ms: number) => { timeouts.push({ fn, ms }); return 0 }) as unknown as typeof setTimeout
     const { client, ws } = makeClient({ setTimeoutImpl })
     ws.open()
-    ws.respondTo('bond.auth', { ok: true })
+    ws.respondTo('bond.auth', { ok: true, protocolVersion: PROTOCOL_VERSION })
 
     // Auth success scheduled the heartbeat.
     const heartbeat = timeouts.find(t => t.ms === 20_000)
@@ -189,7 +205,7 @@ describe('WebBondClient', () => {
     const setTimeoutImpl = ((fn: () => void, ms: number) => { timeouts.push({ fn, ms }); return 0 }) as unknown as typeof setTimeout
     const { client, ws } = makeClient({ setTimeoutImpl })
     ws.open()
-    ws.respondTo('bond.auth', { ok: true })
+    ws.respondTo('bond.auth', { ok: true, protocolVersion: PROTOCOL_VERSION })
 
     timeouts.find(t => t.ms === 20_000)!.fn()
     await vi.waitFor(() => expect(ws.sent.some(m => m.method === 'bond.ping')).toBe(true))
@@ -205,7 +221,7 @@ describe('WebBondClient', () => {
     client.onStateChange(state => states.push(state))
 
     ws.open()
-    ws.respondTo('bond.auth', { ok: true })
+    ws.respondTo('bond.auth', { ok: true, protocolVersion: PROTOCOL_VERSION })
     expect(states).toEqual(['connected'])
   })
 })

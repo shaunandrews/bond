@@ -159,6 +159,8 @@ cmd_status() {
   if [[ -n "$serving" ]]; then
     echo -e "${G}Daemon running${N}  pid $serving ($supervision)"
     warn_if_stale_bundle "$h"
+    proto=$(health_num protocolVersion "$h")
+    echo -e "  proto   ${proto:-pre-1}"
     echo -e "  socket  $SOCK_FILE"
     echo -e "  log     $LOG_FILE"
   else

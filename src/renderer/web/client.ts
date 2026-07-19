@@ -1,4 +1,4 @@
-import { makeRequest, isResponse, isNotification, type JsonRpcMessage } from '../../shared/protocol'
+import { makeRequest, isResponse, isNotification, PROTOCOL_VERSION, type JsonRpcMessage } from '../../shared/protocol'
 import type { TaggedChunk } from '../../shared/stream'
 import type {
   DispatchableMethod,
@@ -20,7 +20,7 @@ import type {
  * 'unpaired' instead of hammering the server.
  */
 
-export type ConnectionState = 'connecting' | 'connected' | 'unpaired' | 'disconnected'
+export type ConnectionState = 'connecting' | 'connected' | 'unpaired' | 'mismatch' | 'disconnected'
 
 export interface WebBondClientOptions {
   url: string
@@ -129,6 +129,15 @@ export class WebBondClient {
             this.setState('unpaired')
             this.rejectAuthed(new Error('Pairing token rejected'))
           } else {
+            // Version skew parks like a bad token — every call against a
+            // mismatched daemon is potentially "Unknown method", and only
+            // restarting Bond on the Mac (then reloading here) can fix it.
+            const version = (msg.result as { protocolVersion?: number } | undefined)?.protocolVersion ?? 0
+            if (version !== PROTOCOL_VERSION) {
+              this.setState('mismatch')
+              this.rejectAuthed(new Error(`Daemon speaks protocol ${version}, this client needs ${PROTOCOL_VERSION}`))
+              return
+            }
             this.backoffMs = 1000
             this.setState('connected')
             if (this.wasSubscribed) {
@@ -159,12 +168,12 @@ export class WebBondClient {
         clearTimeout(this.heartbeatTimer)
         this.heartbeatTimer = null
       }
-      const wasUnpaired = this._state === 'unpaired'
+      const parked = this._state === 'unpaired' || this._state === 'mismatch'
       this.rejectAuthed(new Error('Connection closed'))
       this.resetAuthedGate()
       for (const entry of this.pending.values()) entry.reject(new Error('Connection closed'))
       this.pending.clear()
-      if (this.closed || wasUnpaired) return
+      if (this.closed || parked) return
       this.setState('disconnected')
       this.reconnectTimer = (this.options.setTimeoutImpl ?? setTimeout)(() => this.connect(), this.backoffMs)
       this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS)

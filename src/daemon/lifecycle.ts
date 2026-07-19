@@ -19,6 +19,7 @@
 
 import { connect } from 'node:net'
 import { closeSync, openSync, statSync, unlinkSync, writeSync } from 'node:fs'
+import { PROTOCOL_VERSION } from '../shared/protocol'
 
 /**
  * True when something accepts connections on the socket path. ENOENT,
@@ -156,6 +157,8 @@ export interface DaemonHealth {
   bundlePath: string | null
   /** mtime of the bundle this process loaded — lets tooling flag a daemon older than the bundle on disk. */
   bundleMtimeMs: number | null
+  /** RPC contract version this daemon speaks (shared/protocol.ts PROTOCOL_VERSION). */
+  protocolVersion: number
 }
 
 /**
@@ -168,5 +171,5 @@ export function daemonHealth(bundlePath: string | null, startedAt: Date, pid: nu
   if (bundlePath) {
     try { bundleMtimeMs = Math.floor(statSync(bundlePath).mtimeMs) } catch { /* bundle moved or deleted since load */ }
   }
-  return { pid, startedAt: startedAt.toISOString(), bundlePath, bundleMtimeMs }
+  return { pid, startedAt: startedAt.toISOString(), bundlePath, bundleMtimeMs, protocolVersion: PROTOCOL_VERSION }
 }

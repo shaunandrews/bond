@@ -38,6 +38,8 @@ export class BondClient {
   private socketPath: string
   private tokenProvider: () => string | undefined
   private _connected = false
+  /** null until an auth handshake completes; 0 marks a pre-versioning daemon. */
+  private _daemonProtocolVersion: number | null = null
 
   constructor(socketPath: string, auth?: string | (() => string | undefined)) {
     this.socketPath = socketPath
@@ -46,6 +48,11 @@ export class BondClient {
 
   get connected(): boolean {
     return this._connected
+  }
+
+  /** Protocol version the daemon reported at auth (null = never authenticated, 0 = pre-versioning daemon). */
+  get daemonProtocolVersion(): number | null {
+    return this._daemonProtocolVersion
   }
 
   connect(): Promise<void> {
@@ -70,6 +77,8 @@ export class BondClient {
                     if (resp.error) {
                       authReject(new Error(resp.error.message))
                     } else {
+                      const version = (resp.result as { protocolVersion?: number } | undefined)?.protocolVersion
+                      this._daemonProtocolVersion = typeof version === 'number' ? version : 0
                       authResolve()
                     }
                   }

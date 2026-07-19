@@ -19,6 +19,7 @@ import {
   RPC_METHOD_NOT_FOUND,
   RPC_INTERNAL_ERROR,
   RPC_INVALID_PARAMS,
+  PROTOCOL_VERSION,
   type JsonRpcRequest,
   type JsonRpcMessage
 } from '../shared/protocol'
@@ -360,7 +361,7 @@ const handlers: RpcHandlers = {
 
   // Liveness probe — phone browsers use it to detect zombie sockets
   // (iOS kills WebSockets on lock without firing close events).
-  'bond.ping': () => ({ ok: true }),
+  'bond.ping': () => ({ ok: true, protocolVersion: PROTOCOL_VERSION }),
 
   // --- Subscriptions ---
   'bond.subscribe': (params, { ws }) => {
@@ -1071,7 +1072,9 @@ export function attachConnection(ws: WebSocket, expectedToken?: string): void {
         const token = (msg.params as any)?.token
         if (token === expectedToken) {
           authenticatedClients.add(ws)
-          ws.send(JSON.stringify(makeResponse(msg.id, { ok: true })))
+          // Version rides the handshake so clients can hard-fail on skew
+          // instead of dying per-call on Unknown method.
+          ws.send(JSON.stringify(makeResponse(msg.id, { ok: true, protocolVersion: PROTOCOL_VERSION })))
         } else {
           console.warn('[bond-daemon] client auth failed — invalid token')
           ws.send(JSON.stringify(makeErrorResponse(msg.id, -32600, 'Invalid auth token')))

@@ -87,7 +87,15 @@ function handleEditModeChange(mode: EditMode) {
 
 <template>
   <div class="web-app">
-    <div v-if="needsPairing" class="pairing-screen">
+    <div v-if="connection === 'mismatch'" class="pairing-screen">
+      <BondText as="h1" size="xl" weight="semibold">Bond</BondText>
+      <BondText as="p" color="muted" align="center">
+        Bond on your Mac was updated and speaks a different protocol version.
+        Restart Bond there, then reload this page.
+      </BondText>
+    </div>
+
+    <div v-else-if="needsPairing" class="pairing-screen">
       <BondText as="h1" size="xl" weight="semibold">Bond</BondText>
       <BondText as="p" color="muted" align="center">
         This device isn't paired{{ connection === 'unpaired' ? ' anymore' : '' }}.

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, utimesSync, existsSync, unlinkSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, type Server } from 'node:net'
+import { PROTOCOL_VERSION } from '../shared/protocol'
 import {
   probeSocketAlive,
   acquireStartLock,
@@ -190,6 +191,7 @@ describe('daemonHealth', () => {
     expect(health.startedAt).toBe('2026-07-19T12:00:00.000Z')
     expect(health.bundlePath).toBe(bundle)
     expect(health.bundleMtimeMs).toBe(Math.floor(statSync(bundle).mtimeMs))
+    expect(health.protocolVersion).toBe(PROTOCOL_VERSION)
   })
 
   it('tolerates a missing bundle path', () => {

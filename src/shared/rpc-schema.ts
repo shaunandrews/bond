@@ -107,13 +107,13 @@ export type CollectionUpdates = Partial<
 
 export interface RpcMethods {
   // Auth (consumed by attachConnection before dispatch — see DispatchableMethod)
-  'bond.auth': { params: { token: string }; result: { ok: true } }
+  'bond.auth': { params: { token: string }; result: { ok: true; protocolVersion: number } }
 
   // Chat
   'bond.send': { params: Partial<BondSendInput> & { sessionId?: string }; result: BondSendResult }
   'bond.cancel': { params: { sessionId?: string } | void; result: { ok: true } }
   'bond.approvalResponse': { params: { requestId: string; approved: boolean }; result: { ok: true } }
-  'bond.ping': { params: void; result: { ok: true } }
+  'bond.ping': { params: void; result: { ok: true; protocolVersion: number } }
 
   // Remote access (LAN web server)
   'remote.status': { params: void; result: RemoteStatusResult }

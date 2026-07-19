@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { startServer, type BondServer } from '../daemon/server'
 import { setDataDir } from '../daemon/paths'
+import { PROTOCOL_VERSION } from './protocol'
 import { BondClient } from './client'
 
 let server: BondServer
@@ -45,11 +46,13 @@ async function restartServer(token: string): Promise<void> {
 }
 
 describe('BondClient auth', () => {
-  it('authenticates with a plain string token', async () => {
+  it('authenticates with a plain string token and captures the protocol version', async () => {
     server = startServer(socketPath, 'token-a')
     client = new BondClient(socketPath, 'token-a')
+    expect(client.daemonProtocolVersion).toBeNull()
     await client.connect()
     await expect(client.listSessions()).resolves.toEqual([])
+    expect(client.daemonProtocolVersion).toBe(PROTOCOL_VERSION)
   })
 
   it('rejects connect with a wrong token', async () => {
