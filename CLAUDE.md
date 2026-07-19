@@ -15,15 +15,19 @@ npx vitest run -t "streams thinking deltas"               # Run tests matching a
 npx tsc --noEmit       # Typecheck the project (no lint tooling is configured)
 ```
 
-The daemon is a **separate long-lived process**, not part of the Vite dev server. `npm run dev` hot-reloads the renderer but **not** the daemon — after changing anything under `src/daemon/` or `src/shared/`, rebuild and restart it. Skills are cached at daemon startup, so new or edited skills also require a daemon restart. Use the `bin/bond` CLI to manage it during development:
+The daemon is a **separate long-lived process**, not part of the Vite dev server. `npm run dev` hot-reloads the renderer but **not** the daemon — after changing anything under `src/daemon/` or `src/shared/`, rebuild and restart it. Skills are cached at daemon startup, so new or edited skills also require a daemon restart. **Web client changes (`src/renderer/web/`) need NO daemon restart** — run `npm run build:web` and refresh the browser; the daemon serves `out/web` from disk per request. Use the `bin/bond` CLI to manage it during development:
 
 ```bash
-bin/bond status          # Is the daemon running? (pid, socket, log paths)
+bin/bond status          # Who is serving (via GET /health on the socket), strays, bundle freshness
 bin/bond dev             # Stop daemon, rebuild it, then run electron-vite dev
-bin/bond rebuild daemon  # Stop, rebuild daemon, restart — after daemon/shared changes
-bin/bond restart         # Stop + start without rebuilding
+bin/bond rebuild daemon  # Rebuild daemon, then supervised restart — after daemon/shared changes
+bin/bond restart         # Supervised restart (launchctl kickstart) without rebuilding
 bin/bond log             # Tail ~/.bond/daemon.log
 ```
+
+`bin/bond start` runs the daemon under **launchd supervision** (`~/Library/LaunchAgents/com.bond.daemon.plist`, `KeepAlive`/`SuccessfulExit=false`): a crash or stray kill (nonzero exit) resurrects within ~5s and remote clients auto-reconnect, while voluntary exits stay down. `bin/bond stop` boots the agent out AND kills every daemon process, so an intentional stop stays stopped. `bin/bond restart` is safe to run from inside a Bond conversation: launchd completes the restart even though the calling bash process dies with the daemon.
+
+**Single-instance enforcement** lives in `src/daemon/lifecycle.ts`, never in pid files (a pid file can only name one process — it once hid fifteen zombie daemons). Three layers: (1) startup **claim** — socket takeover is serialized through an O_EXCL start lock and gated on a live-connection probe, so a second starter bows out (exit 0) and only a provably dead socket file is ever unlinked; (2) **watchdog** — the daemon remembers the bound socket file's dev+ino and exits if the path vanishes or changes, so an orphaned daemon can never linger; (3) **health** — `GET /health` on the unix socket reports the serving pid and the loaded bundle's mtime, which `bin/bond status` compares against `out/daemon/main.mjs` on disk to flag a stale daemon. Tooling that needs "is a daemon running" must probe the socket (the Electron main process does) or enumerate exact command lines, never read `daemon.pid`.
 
 ## Testing
 
@@ -70,7 +74,9 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 
 | File | Purpose |
 |------|---------|
-| `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
+| `main.ts` | Entry point — claims the socket, starts servers, watchdog + signal handling |
+| `lifecycle.ts` | Single-instance enforcement — socket claim under a start lock, orphan watchdog, `/health` payload |
+| `wire-debug.ts` | Wire-level tool visibility — logs every model request's tool manifest (fetch + WebSocket, zstd-aware) |
 | `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`, `web.*`) |
 | `agent.ts` / `pi/runtime.ts` | Builds Bond context, runs Pi sessions, streams chunks, handles tool approvals |
 | `pi/runtime.ts` | Pi session lifecycle, event streaming, edit-mode → tool/permission mapping, Bond memory tool registration, tier resolution, Pi OAuth |
