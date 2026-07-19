@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { Message } from '../types/message'
-import { imageDataUri } from '../../shared/session'
+import { imageDataUri, type Collection } from '../../shared/session'
 import MarkdownMessage from './MarkdownMessage.vue'
 import ArtifactFrame from './ArtifactFrame.vue'
 import EmbedRenderer from './EmbedRenderer.vue'
@@ -14,14 +14,48 @@ import TurnActivity from './TurnActivity.vue'
 
 function renderUserMarkdown(text: string): string {
   const raw = marked.parse(text, { async: false, gfm: true, breaks: true }) as string
-  return DOMPurify.sanitize(raw)
+  return DOMPurify.sanitize(raw).replace(/\b([A-Z]{4}-\d+)\b/g, '<span class="issue-reference" data-issue-key="$1">$1</span>')
 }
 
 const props = defineProps<{ msg: Message }>()
+const issueTitles = ref<Record<string, string>>({})
+const issueHover = ref<{ key: string; title: string; x: number; y: number } | null>(null)
+const userHtml = computed(() => renderUserMarkdown(props.msg.role === 'user' ? props.msg.text : ''))
+
 defineEmits<{
   approve: [requestId: string, approved: boolean]
   openActivity: []
 }>()
+
+async function loadIssueTitles() {
+  try {
+    const collections = await window.bond.listCollections()
+    const trackers = collections.filter(collection => collection.issuePrefix || collection.name === 'Bond Issues')
+    const lists = await Promise.all(trackers.map(collection => window.bond.listCollectionItems(collection.id)))
+    const titles: Record<string, string> = {}
+    lists.forEach((items, index) => {
+      const collection: Collection = trackers[index]
+      const prefix = collection.issuePrefix || (collection.name === 'Bond Issues' ? 'BOND' : '')
+      const primary = collection.schema.find(field => field.primary)
+      for (const item of items) {
+        titles[`${prefix}-${item.displayNumber}`] = primary && item.data[primary.name] != null ? String(item.data[primary.name]) : 'Untitled issue'
+      }
+    })
+    issueTitles.value = titles
+  } catch { /* messages still render readable keys offline */ }
+}
+
+function updateIssueHover(event: MouseEvent) {
+  const token = (event.target as HTMLElement).closest('.issue-reference') as HTMLElement | null
+  if (!token) {
+    issueHover.value = null
+    return
+  }
+  const key = token.dataset.issueKey ?? ''
+  issueHover.value = { key, title: issueTitles.value[key] ?? 'Issue reference', x: event.clientX + 14, y: event.clientY + 16 }
+}
+
+onMounted(() => { void loadIssueTitles() })
 
 const segments = computed(() => {
   if (props.msg.role !== 'bond' || !hasRichContent(props.msg.text)) return null
@@ -60,7 +94,7 @@ function formatTime(ts: number | undefined): string {
 
 <template>
   <!-- User message -->
-  <div v-if="msg.role === 'user'" class="self-end max-w-[92%] flex flex-col items-end gap-1.5" @dblclick="copyText(msg, $event)">
+  <div v-if="msg.role === 'user'" class="self-end max-w-[92%] flex flex-col items-end gap-1.5" @dblclick="copyText(msg, $event)" @mousemove="updateIssueHover" @mouseleave="issueHover = null">
     <div v-if="msg.images?.length" class="flex flex-wrap justify-end gap-1.5">
       <img
         v-for="(img, i) in msg.images"
@@ -72,8 +106,14 @@ function formatTime(ts: number | undefined): string {
     <div
       v-if="msg.text"
       class="user-markdown px-3.5 py-2.5 rounded-[10px] leading-relaxed bg-surface shadow-sm"
-      v-html="renderUserMarkdown(msg.text)"
+      v-html="userHtml"
     />
+    <Teleport to="body">
+      <div v-if="issueHover" class="issue-hover-card" :style="{ left: issueHover.x + 'px', top: issueHover.y + 'px' }">
+        <span class="issue-hover-key">{{ issueHover.key }}</span>
+        <span class="issue-hover-title">{{ issueHover.title }}</span>
+      </div>
+    </Teleport>
     <span v-if="msg.ts" class="msg-timestamp">{{ formatTime(msg.ts) }}</span>
   </div>
 
@@ -298,4 +338,42 @@ function formatTime(ts: number | undefined): string {
 }
 .user-markdown :deep(li) { margin: 0.1em 0; }
 .user-markdown :deep(a) { color: var(--color-accent); text-decoration: underline; }
+.user-markdown :deep(.issue-reference) {
+  display: inline-block;
+  padding: 0.05em 0.32em;
+  border-radius: 0.3em;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  font-weight: 700;
+  cursor: default;
+}
+
+.issue-hover-card {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-width: 260px;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+}
+
+.issue-hover-key {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.issue-hover-title {
+  color: var(--color-text-primary);
+  font-size: 0.78rem;
+}
 </style>

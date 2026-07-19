@@ -371,21 +371,43 @@ function selectSkill(skill: SkillInfo) {
   nextTick(autoResize)
 }
 
+function syncInput(value: string, cursor = value.length) {
+  const el = inputEl.value
+  if (!el) return
+  el.value = value
+  inputText.value = value
+  nextTick(() => {
+    el.focus()
+    el.setSelectionRange(cursor, cursor)
+    autoResize()
+  })
+}
+
 function selectIssueReference(issue: IssueReference) {
   const el = inputEl.value
   if (!el) return
   const cursor = el.selectionStart ?? el.value.length
   const after = el.value.slice(cursor)
   const spacer = after && !/^\s/.test(after) ? ' ' : ''
-  el.value = `${el.value.slice(0, issueMatchStart.value)}${issue.key}${spacer}${after}`
-  inputText.value = el.value
-  const nextCursor = issueMatchStart.value + issue.key.length + spacer.length
+  const value = `${el.value.slice(0, issueMatchStart.value)}${issue.key}${spacer}${after}`
   showIssueMenu.value = false
-  el.focus()
-  nextTick(() => {
-    el.setSelectionRange(nextCursor, nextCursor)
-    autoResize()
-  })
+  syncInput(value, issueMatchStart.value + issue.key.length + spacer.length)
+}
+
+function cancelIssueReference() {
+  const el = inputEl.value
+  if (!el) return
+  const cursor = el.selectionStart ?? el.value.length
+  showIssueMenu.value = false
+  syncInput(`${el.value.slice(0, issueMatchStart.value)}${el.value.slice(cursor)}`, issueMatchStart.value)
+}
+
+function removeIssueReference(key: string) {
+  const el = inputEl.value
+  if (!el) return
+  const expression = new RegExp(`(^|\\s)${key.replace('-', '\\-')}(?=\\s|$)`, 'i')
+  const value = el.value.replace(expression, (_match, before: string) => before)
+  syncInput(value.replace(/ {2,}/g, ' ').trimStart())
 }
 
 function handleKeyDown(e: KeyboardEvent) {
@@ -408,7 +430,7 @@ function handleKeyDown(e: KeyboardEvent) {
     }
     if (e.key === 'Escape') {
       e.preventDefault()
-      showIssueMenu.value = false
+      cancelIssueReference()
       return
     }
   }
@@ -445,20 +467,29 @@ function handleKeyDown(e: KeyboardEvent) {
 <template>
   <div class="pt-2 relative pb-5">
     <!-- Skill autocomplete menu -->
-    <div v-if="showIssueMenu" class="skill-menu issue-menu" role="listbox" aria-label="Issue references">
-      <button
-        v-for="(issue, i) in filteredIssueReferences"
-        :key="issue.item.id"
-        type="button"
-        class="skill-menu-item issue-menu-item"
-        :class="{ 'is-selected': i === issueMenuIndex }"
-        @mousedown.prevent="selectIssueReference(issue)"
-        @mouseenter="issueMenuIndex = i"
-      >
-        <span class="issue-key">{{ issue.key }}</span>
-        <span class="text-text-primary text-sm truncate">{{ issue.title }}</span>
-      </button>
-    </div>
+    <BondFlyoutMenu
+      :open="showIssueMenu"
+      :anchor="inputEl"
+      placement="top-start"
+      :width="360"
+      padding
+      @close="showIssueMenu = false"
+    >
+      <div class="skill-menu issue-menu" role="listbox" aria-label="Issue references">
+        <button
+          v-for="(issue, i) in filteredIssueReferences"
+          :key="issue.item.id"
+          type="button"
+          class="skill-menu-item issue-menu-item"
+          :class="{ 'is-selected': i === issueMenuIndex }"
+          @mousedown.prevent="selectIssueReference(issue)"
+          @mouseenter="issueMenuIndex = i"
+        >
+          <span class="issue-key">{{ issue.key }}</span>
+          <span class="text-text-primary text-sm truncate">{{ issue.title }}</span>
+        </button>
+      </div>
+    </BondFlyoutMenu>
 
     <div v-if="showSkillMenu" class="skill-menu">
       <button
@@ -537,6 +568,7 @@ function handleKeyDown(e: KeyboardEvent) {
         >
           <span>{{ issue.key }}</span>
           <span class="issue-reference-title">{{ issue.title }}</span>
+          <span class="issue-reference-remove" role="button" aria-label="Remove issue reference" @click.stop="removeIssueReference(issue.key)"><PhX :size="12" weight="bold" /></span>
         </button>
       </div>
 
@@ -791,6 +823,17 @@ function handleKeyDown(e: KeyboardEvent) {
   white-space: nowrap;
 }
 
+.issue-reference-remove {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.05rem;
+  color: var(--color-muted);
+}
+
+.issue-reference-token:hover .issue-reference-remove {
+  color: var(--color-text-primary);
+}
+
 .image-strip {
   display: flex;
   flex-wrap: wrap;
@@ -833,6 +876,18 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 .skill-menu-item.is-selected {
   background: var(--color-tint);
+}
+
+.issue-menu {
+  position: static;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
 }
 
 .issue-menu-item {
