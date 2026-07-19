@@ -54,7 +54,8 @@ onMounted(async () => {
     if (toLoad.length > 0) {
       const images = await window.bond.getImages(toLoad)
       for (let i = 0; i < toLoad.length; i++) {
-        if (images[i]) imageData.value.set(toLoad[i], images[i])
+        const image = images[i]
+        if (image) imageData.value.set(toLoad[i], image)
       }
     }
   } finally {

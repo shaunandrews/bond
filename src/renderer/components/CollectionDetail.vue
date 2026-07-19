@@ -40,6 +40,10 @@ const visibleFields = computed(() => orderedFields.value.filter(field => !hidden
 const selectFields = computed(() => schema.value.filter(f => f.type === 'select'))
 const isBondIssues = computed(() => props.collection.name === 'Bond Issues')
 
+function openExternalLink(url: string) {
+  void window.bond.openExternal(url)
+}
+
 function itemReference(item: CollectionItem): string | null {
   return isBondIssues.value ? `Bond#${item.displayNumber}` : null
 }
@@ -344,7 +348,7 @@ function formatValue(value: unknown, field: FieldDef): string {
                   <span class="field-badge">{{ item.data[f.name] ?? '' }}</span>
                 </template>
                 <template v-else-if="f.type === 'url' && item.data[f.name]">
-                  <a class="field-link" @click.prevent.stop="window.bond.openExternal(String(item.data[f.name]))">link</a>
+                  <a class="field-link" @click.prevent.stop="openExternalLink(String(item.data[f.name]))">link</a>
                 </template>
                 <template v-else>
                   {{ formatValue(item.data[f.name], f) }}

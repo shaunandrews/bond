@@ -12,7 +12,7 @@ npm run build:native   # Compile the Obj-C Sense helpers → out/daemon/bin/sens
 npm run test:run       # Run the whole test suite once
 npx vitest run src/renderer/composables/useChat.test.ts   # Run a single test file
 npx vitest run -t "streams thinking deltas"               # Run tests matching a name
-npx tsc --noEmit       # Typecheck the project (no lint tooling is configured)
+npx vue-tsc --noEmit   # Typecheck the project incl. .vue call sites (no lint tooling is configured)
 ```
 
 The daemon is a **separate long-lived process**, not part of the Vite dev server. `npm run dev` hot-reloads the renderer but **not** the daemon — after changing anything under `src/daemon/` or `src/shared/`, rebuild and restart it. Skills are cached at daemon startup, so new or edited skills also require a daemon restart. **Web client changes (`src/renderer/web/`) need NO daemon restart** — run `npm run build:web` and refresh the browser; the daemon serves `out/web` from disk per request. Use the `bin/bond` CLI to manage it during development:

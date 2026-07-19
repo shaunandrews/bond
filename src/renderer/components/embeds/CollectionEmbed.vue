@@ -91,6 +91,10 @@ onUnmounted(() => {
   unsub?.()
 })
 
+function openExternalLink(url: string) {
+  void window.bond.openExternal(url)
+}
+
 function getPrimaryField(schema: FieldDef[]): FieldDef | undefined {
   return schema.find(f => f.primary)
 }
@@ -153,7 +157,7 @@ function formatValue(value: unknown, field: FieldDef): string {
                   <span class="field-badge">{{ item.data[field.name] }}</span>
                 </template>
                 <template v-else-if="field.type === 'url'">
-                  <a class="field-link" @click.prevent="window.bond.openExternal(String(item.data[field.name]))">{{ field.name }}</a>
+                  <a class="field-link" @click.prevent="openExternalLink(String(item.data[field.name]))">{{ field.name }}</a>
                 </template>
                 <template v-else>
                   <span class="field-value">{{ formatValue(item.data[field.name], field) }}</span>

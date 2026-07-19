@@ -437,7 +437,7 @@ onUnmounted(() => {
                 :toolName="approval.toolName"
                 :input="approval.input"
                 :description="approval.description"
-                :context="approvalContext(approval.sessionId)"
+                :context="approvalContext()"
                 @respond="chat.respondToApproval"
               />
             </div>

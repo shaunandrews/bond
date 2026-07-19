@@ -75,6 +75,10 @@ function hasDetail(evt: TurnActivityEvent) {
   return evt.type === 'thinking' || evt.type === 'tool' || evt.type === 'approval' || evt.type === 'error'
 }
 
+function eventEnd(evt: TurnActivityEvent): number | undefined {
+  return 'endTs' in evt ? evt.endTs : undefined
+}
+
 function toggleEvent(id: string) {
   const next = new Set(expandedEvents.value)
   next.has(id) ? next.delete(id) : next.add(id)
@@ -120,7 +124,7 @@ function eventTone(evt: TurnActivityEvent) {
         <button class="event-row" :class="eventTone(evt)" @click="hasDetail(evt) && toggleEvent(evt.id)">
           <span class="event-time">{{ time(evt.ts) }}</span>
           <span class="event-title">{{ evt.label }}</span>
-          <span v-if="duration(evt.ts, evt.endTs)" class="event-duration">{{ duration(evt.ts, evt.endTs) }}</span>
+          <span v-if="duration(evt.ts, eventEnd(evt))" class="event-duration">{{ duration(evt.ts, eventEnd(evt)) }}</span>
           <PhCaretRight v-if="hasDetail(evt)" :size="9" class="event-chevron" :class="{ expanded: expandedEvents.has(evt.id) }" />
         </button>
         <div v-if="expandedEvents.has(evt.id)" class="event-detail">
