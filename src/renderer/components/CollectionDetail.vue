@@ -22,11 +22,27 @@ const sortAsc = ref(true)
 
 // Grouping
 const groupByField = ref<string | null>(null)
+const viewMode = ref<'table' | 'list' | 'cards'>('table')
 
 const schema = computed(() => props.collection.schema)
 const primaryField = computed(() => schema.value.find(f => f.primary))
-const visibleFields = computed(() => schema.value.filter(f => !f.primary))
+const columnOrder = ref<string[]>([])
+const hiddenColumns = ref<string[]>([])
+const columnMenuOpen = ref(false)
+const draggedColumn = ref<string | null>(null)
+const nonPrimaryFields = computed(() => schema.value.filter(f => !f.primary))
+const orderedFields = computed(() => {
+  const byName = new Map(nonPrimaryFields.value.map(field => [field.name, field]))
+  const ordered = columnOrder.value.map(name => byName.get(name)).filter((field): field is FieldDef => !!field)
+  return [...ordered, ...nonPrimaryFields.value.filter(field => !columnOrder.value.includes(field.name))]
+})
+const visibleFields = computed(() => orderedFields.value.filter(field => !hiddenColumns.value.includes(field.name)))
 const selectFields = computed(() => schema.value.filter(f => f.type === 'select'))
+const isBondIssues = computed(() => props.collection.name === 'Bond Issues')
+
+function itemReference(item: CollectionItem): string | null {
+  return isBondIssues.value ? `Bond#${item.displayNumber}` : null
+}
 
 const sortedItems = computed(() => {
   let list = [...items.value]
@@ -93,6 +109,45 @@ function toggleGroup(fieldName: string) {
   groupByField.value = groupByField.value === fieldName ? null : fieldName
 }
 
+function columnSettingsKey() {
+  return `bond:collection-columns:${props.collection.id}`
+}
+
+function loadColumnSettings() {
+  const fields = nonPrimaryFields.value.map(field => field.name)
+  try {
+    const saved = JSON.parse(localStorage.getItem(columnSettingsKey()) ?? '{}') as { order?: string[]; hidden?: string[] }
+    columnOrder.value = [...(saved.order ?? []).filter(name => fields.includes(name)), ...fields.filter(name => !(saved.order ?? []).includes(name))]
+    hiddenColumns.value = (saved.hidden ?? []).filter(name => fields.includes(name))
+  } catch {
+    columnOrder.value = fields
+    hiddenColumns.value = []
+  }
+}
+
+function saveColumnSettings() {
+  try {
+    localStorage.setItem(columnSettingsKey(), JSON.stringify({ order: columnOrder.value, hidden: hiddenColumns.value }))
+  } catch { /* local storage may be unavailable */ }
+}
+
+function toggleColumn(fieldName: string) {
+  hiddenColumns.value = hiddenColumns.value.includes(fieldName)
+    ? hiddenColumns.value.filter(name => name !== fieldName)
+    : [...hiddenColumns.value, fieldName]
+  saveColumnSettings()
+}
+
+function dropColumn(target: string) {
+  const source = draggedColumn.value
+  if (!source || source === target) return
+  const next = columnOrder.value.filter(name => name !== source)
+  next.splice(next.indexOf(target), 0, source)
+  columnOrder.value = next
+  draggedColumn.value = null
+  saveColumnSettings()
+}
+
 async function refresh() {
   items.value = await window.bond.listCollectionItems(props.collection.id)
 }
@@ -100,6 +155,7 @@ async function refresh() {
 let unsub: (() => void) | null = null
 
 onMounted(async () => {
+  loadColumnSettings()
   try {
     await refresh()
   } finally {
@@ -183,8 +239,33 @@ function formatValue(value: unknown, field: FieldDef): string {
     </div>
 
     <template v-else>
-      <!-- Toolbar: group by -->
-      <div v-if="selectFields.length" class="detail-toolbar">
+      <!-- View and grouping controls -->
+      <div class="detail-toolbar">
+        <div class="view-switcher" aria-label="Collection view">
+          <button v-for="view in ['table', 'list', 'cards'] as const" :key="view" class="view-chip" :class="{ active: viewMode === view }" @click="viewMode = view">
+            {{ view === 'cards' ? 'Cards' : view[0].toUpperCase() + view.slice(1) }}
+          </button>
+        </div>
+        <div class="columns-control">
+          <button class="columns-trigger" :aria-expanded="columnMenuOpen" @click="columnMenuOpen = !columnMenuOpen">Columns</button>
+          <div v-if="columnMenuOpen" class="columns-menu">
+            <div class="columns-menu-label">Drag to reorder · toggle visibility</div>
+            <label
+              v-for="field in orderedFields"
+              :key="field.name"
+              class="column-option"
+              draggable="true"
+              @dragstart="draggedColumn = field.name"
+              @dragover.prevent
+              @drop.prevent="dropColumn(field.name)"
+            >
+              <input type="checkbox" :checked="!hiddenColumns.includes(field.name)" @change="toggleColumn(field.name)" />
+              <span class="column-grip" aria-hidden="true">⠿</span>
+              <span>{{ field.name }}</span>
+            </label>
+          </div>
+        </div>
+        <template v-if="selectFields.length">
         <BondText size="xs" color="muted">Group by:</BondText>
         <button
           v-for="f in selectFields"
@@ -195,6 +276,7 @@ function formatValue(value: unknown, field: FieldDef): string {
         >
           {{ f.name }}
         </button>
+        </template>
       </div>
 
       <!-- Empty state -->
@@ -213,7 +295,7 @@ function formatValue(value: unknown, field: FieldDef): string {
             {{ group.label }} ({{ group.items.length }})
           </BondText>
 
-          <div class="items-table">
+          <div v-if="viewMode === 'table'" class="items-table">
             <!-- Header -->
             <div class="table-header">
               <div
@@ -241,6 +323,7 @@ function formatValue(value: unknown, field: FieldDef): string {
             <!-- Rows -->
             <div v-for="item in group.items" :key="item.id" class="table-row" @click="selectedItemId = item.id">
               <div v-if="primaryField" class="td td-primary">
+                <span v-if="itemReference(item)" class="item-reference">{{ itemReference(item) }}</span>
                 {{ getItemLabel(item) }}
               </div>
               <div v-for="f in visibleFields" :key="f.name" class="td">
@@ -273,6 +356,20 @@ function formatValue(value: unknown, field: FieldDef): string {
                 </BondButton>
               </div>
             </div>
+          </div>
+
+          <div v-else-if="viewMode === 'list'" class="items-list">
+            <button v-for="item in group.items" :key="item.id" class="list-item" @click="selectedItemId = item.id">
+              <div class="list-item-title"><span v-if="itemReference(item)" class="item-reference">{{ itemReference(item) }}</span>{{ getItemLabel(item) }}</div>
+              <div class="list-item-meta"><span v-for="f in visibleFields.filter(f => item.data[f.name] != null).slice(0, 3)" :key="f.name">{{ f.name }}: {{ formatValue(item.data[f.name], f) }}</span></div>
+            </button>
+          </div>
+
+          <div v-else class="items-cards">
+            <button v-for="item in group.items" :key="item.id" class="item-card" @click="selectedItemId = item.id">
+              <div class="list-item-title"><span v-if="itemReference(item)" class="item-reference">{{ itemReference(item) }}</span>{{ getItemLabel(item) }}</div>
+              <div class="card-details">{{ visibleFields.map(f => formatValue(item.data[f.name], f)).filter(Boolean).join(' · ') }}</div>
+            </button>
           </div>
         </div>
 
@@ -331,8 +428,63 @@ function formatValue(value: unknown, field: FieldDef): string {
 .detail-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-bottom: 1rem;
+}
+.view-switcher {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.view-chip {
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  padding: 0.2rem 0.55rem;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.view-chip.active { background: var(--color-tint); color: var(--color-text-primary); }
+.columns-control { position: relative; }
+.columns-trigger {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.24rem 0.55rem;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.columns-trigger:hover { color: var(--color-text-primary); border-color: var(--color-accent); }
+.columns-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 5px);
+  left: 0;
+  min-width: 190px;
+  padding: 0.35rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+.columns-menu-label { padding: 0.2rem 0.35rem 0.35rem; color: var(--color-muted); font-size: 0.68rem; }
+.column-option { display: flex; align-items: center; gap: 0.45rem; padding: 0.35rem; border-radius: var(--radius-sm); color: var(--color-text-primary); font-size: 0.78rem; cursor: grab; }
+.column-option:hover { background: var(--color-tint); }
+.column-grip { color: var(--color-muted); font-size: 0.9rem; letter-spacing: -0.2em; }
+.item-reference {
+  display: inline-block;
+  margin-right: 0.45rem;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  font-weight: 500;
 }
 
 .group-chip {
@@ -368,6 +520,46 @@ function formatValue(value: unknown, field: FieldDef): string {
 .items-table {
   width: 100%;
 }
+.items-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--color-border);
+}
+.list-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.8rem 0.15rem;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.list-item:hover { background: var(--color-tint); }
+.list-item-title { min-width: 0; font-weight: 550; }
+.list-item-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.65rem; color: var(--color-muted); font-size: 0.78rem; }
+.items-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 0.75rem;
+}
+.item-card {
+  min-height: 112px;
+  padding: 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.item-card:hover { border-color: var(--color-accent); }
+.card-details { margin-top: 0.45rem; color: var(--color-muted); font-size: 0.8rem; line-height: 1.45; }
 
 .table-header {
   display: flex;
