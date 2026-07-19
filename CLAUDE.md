@@ -98,8 +98,9 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `debriefs.ts` | Session debrief storage (SQLite) |
 | `generate-debrief.ts` | Auto-generates session debriefs (summary + topics) |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
-| `db.ts` | Database init, migrations, WAL mode; an UNREADABLE db is quarantined (renamed `.corrupt-<ts>`, Pi sessions/images untouched) — only a readable stale-version db takes the clean-cutover wipe |
-| `settings.ts` | Key-value settings storage (soul, model, accent color) |
+| `db.ts` | Database init, migrations, WAL mode; an UNREADABLE db is quarantined (renamed `.corrupt-<ts>`, Pi sessions/images untouched) — only a readable stale-version db takes the clean-cutover wipe. `transcript.ts` owns the `messages` table shape; `APP_SCHEMA_VERSION` stays pinned (bumping it IS the wipe) — schema evolves via in-version migrations |
+| `fts.ts` | `buildMatchQuery` — safe FTS5 MATCH construction (token extraction, quote-doubling, optional prefix) shared by transcript search and `sense.search` |
+| `settings.ts` | Key-value settings storage (soul, model, accent color) + typed accessors (`getSenseSettings`/`setSenseSettings`) |
 | `paths.ts` | Data directory resolution |
 | `index.ts` | Daemon library exports |
 | `skills.ts` | Skill scanning from ~/.bond/skills/ |
@@ -171,6 +172,7 @@ src/
     settings.ts                      # Settings storage
     paths.ts                         # Data directory paths
     skills.ts                        # Skill scanning from ~/.bond/skills/
+    fts.ts                           # Safe FTS5 MATCH query construction
     remote.ts                        # Remote (LAN) access — static bundle + WebSocket RPC on TCP 3113
     web/
       tools.ts                       # web_search + fetch_content Pi tools (keyless, cached)
@@ -260,6 +262,7 @@ src/
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
     lib/clipboard.ts                 # copyToClipboard with insecure-context fallback
+    lib/format.ts                    # Shared formatters (tool labels, durations, approval previews)
 electron.vite.config.ts                  # Build config (main, preload, renderer)
 vite.web.config.ts                       # Browser bundle build for remote access → out/web
 electron-builder.yml                     # Packaging config (macOS DMG, extraResources for daemon)
