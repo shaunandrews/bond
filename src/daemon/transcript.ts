@@ -320,6 +320,35 @@ export function startTurn(turnId: string, epochId: string): void {
   })()
 }
 
+const LIVE_ACTIVITY_STATUSES = ['working', 'responding', 'awaiting_approval']
+
+/**
+ * Flip a still-live activity row to its terminal status. The live-status
+ * guard means the renderer's richer final persist (full events, timings) is
+ * never clobbered — this only finishes rows nobody else did: a crashed
+ * client mid-stream, or a daemon death reconciled at startup. Without it a
+ * row stuck on 'working' renders as an eternally pulsing "Working…".
+ */
+function finalizeActivityMessage(db: Database.Database, activityMessageId: string, status: TurnStatus, completedAt: string): void {
+  const row = db.prepare('SELECT * FROM messages WHERE id = ?').get(activityMessageId) as MessageRow | undefined
+  if (!row) return
+  const data = parseJsonObject(row.data)
+  if (!data || !LIVE_ACTIVITY_STATUSES.includes(String(data.status))) return
+
+  const endedAt = Date.parse(completedAt) || Date.now()
+  data.status = status === 'done' ? 'done' : status === 'cancelled' ? 'cancelled' : 'failed'
+  if (typeof data.endedAt !== 'number') data.endedAt = endedAt
+  const events = Array.isArray(data.events) ? data.events : []
+  for (const raw of events) {
+    if (!raw || typeof raw !== 'object') continue
+    const evt = raw as Record<string, unknown>
+    if (evt.type === 'approval' && evt.status === 'pending') evt.status = 'cancelled'
+    if (typeof evt.endTs !== 'number' && (evt.type === 'thinking' || evt.type === 'tool' || evt.type === 'responding')) evt.endTs = endedAt
+  }
+  db.prepare('UPDATE messages SET data = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(data), completedAt, row.id)
+  updateMessageFts(db, { id: row.id, role: row.role, kind: row.kind, text: row.text, data })
+}
+
 export function completeTurn(input: CompleteTurnInput): void {
   const db = getDb()
   ensureTranscriptSchema(db)
@@ -327,7 +356,7 @@ export function completeTurn(input: CompleteTurnInput): void {
   const status: TurnStatus = input.status
 
   db.transaction(() => {
-    const row = db.prepare('SELECT epoch_id FROM turns WHERE id = ?').get(input.turnId) as { epoch_id: string } | undefined
+    const row = db.prepare('SELECT epoch_id, activity_message_id FROM turns WHERE id = ?').get(input.turnId) as { epoch_id: string; activity_message_id: string } | undefined
     if (!row) return
     db.prepare(`
       UPDATE turns
@@ -343,7 +372,25 @@ export function completeTurn(input: CompleteTurnInput): void {
         WHERE id = ?
       `).run(input.contextTokens ?? null, input.contextWindow ?? null, row.epoch_id)
     }
+
+    finalizeActivityMessage(db, row.activity_message_id, status, completedAt)
   })()
+}
+
+/**
+ * Finish turns stranded by a daemon death: anything still 'running' or
+ * 'queued' at startup can have no live query behind it. Marked cancelled
+ * (not failed) — the daemon died out from under the turn; the turn itself
+ * did nothing wrong. Same recovery idea as the Sense capture re-queue.
+ */
+export function reconcileInterruptedTurns(now = nowIso()): number {
+  const db = getDb()
+  ensureTranscriptSchema(db)
+  const stuck = db.prepare("SELECT id FROM turns WHERE status IN ('queued','running')").all() as Array<{ id: string }>
+  for (const turn of stuck) {
+    completeTurn({ turnId: turn.id, status: 'cancelled', completedAt: now })
+  }
+  return stuck.length
 }
 
 export function listMessages(options: { beforeSeq?: number; limit?: number } = {}): TranscriptPage {

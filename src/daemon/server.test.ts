@@ -357,3 +357,34 @@ describe('working memory RPC', () => {
     expect(row?.value ?? '').not.toContain('sk-aaaa')
   })
 })
+
+describe('startup reconciliation', () => {
+  it('clears stuck running turns from a previous daemon life on startup', async () => {
+    // Seed a stranded 'running' turn (as a crashed daemon would leave), then
+    // boot a fresh server against the same data dir and expect it finished.
+    const { insertTurnStart } = await import('./transcript')
+    const { ensureActiveEpoch } = await import('./epochs')
+    const { epoch } = await ensureActiveEpoch({})
+    insertTurnStart({
+      epochId: epoch.id,
+      turnId: 'stranded-turn',
+      userMessageId: 'stranded-user',
+      assistantMessageId: 'stranded-bond',
+      activityMessageId: 'stranded-activity',
+      text: 'interrupted question',
+      activityData: { turnId: 'stranded-turn', status: 'working', startedAt: Date.now(), events: [] } as never,
+    })
+
+    client.close()
+    await server.close()
+    const secondSocket = join(tempDir, 'bond-2.sock')
+    server = startServer(secondSocket)
+    client = new BondClient(secondSocket)
+    await client.connect()
+
+    const turn = getDb().prepare("SELECT status FROM turns WHERE id = 'stranded-turn'").get() as { status: string }
+    expect(turn.status).toBe('cancelled')
+    const activity = getDb().prepare("SELECT data FROM messages WHERE id = 'stranded-activity'").get() as { data: string }
+    expect(JSON.parse(activity.data).status).toBe('cancelled')
+  })
+})

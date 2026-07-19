@@ -9,7 +9,7 @@ import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
 import { parseEditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
-import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, insertTurnStart, startTurn, completeTurn, getSourceMessages, getMaxMessageSeq } from './transcript'
+import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, insertTurnStart, startTurn, completeTurn, getSourceMessages, getMaxMessageSeq, reconcileInterruptedTurns } from './transcript'
 import { ensureActiveEpoch } from './epochs'
 import type { ModelId } from '../shared/models'
 import {
@@ -1243,6 +1243,15 @@ export function startServer(socketPath: string, authToken?: string, health?: Dae
 
   // Load persisted model
   currentModel = getModelSetting()
+
+  // A daemon death mid-turn leaves turns 'running' and their activity rows
+  // pulsing "Working…" forever — finish them as cancelled before serving.
+  try {
+    const reconciled = reconcileInterruptedTurns()
+    if (reconciled) console.log(`[bond-daemon] reconciled ${reconciled} interrupted turn(s) from a previous run`)
+  } catch (error) {
+    console.warn('[bond-daemon] turn reconciliation failed:', error)
+  }
 
   // Eagerly initialize Sense controller so it auto-enables on daemon startup
   getSenseController()

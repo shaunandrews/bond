@@ -12,6 +12,7 @@ import {
   getSourceMessages,
   insertTurnStart,
   listMessages,
+  reconcileInterruptedTurns,
   searchMessages,
   upsertMessages,
 } from './transcript'
@@ -148,5 +149,78 @@ describe('transcript store', () => {
     expect(searchMessages('project file').map(m => m.id)).toEqual(['a1'])
     expect(searchMessages('do-not-index-me')).toEqual([])
     expect(searchMessages('secret-after-cap')).toEqual([])
+  })
+})
+
+describe('turn reconciliation', () => {
+  function seedRunningTurn(turnId: string, activityData: Record<string, unknown>) {
+    insertTurnStart({
+      epochId: 'epoch-1',
+      turnId,
+      userMessageId: `user-${turnId}`,
+      assistantMessageId: `bond-${turnId}`,
+      activityMessageId: `activity-${turnId}`,
+      text: 'hello',
+      activityData: activityData as never,
+    })
+  }
+
+  function activityData(turnId: string): Record<string, unknown> {
+    const raw = getDb().prepare('SELECT data FROM messages WHERE id = ?').get(`activity-${turnId}`) as { data: string }
+    return JSON.parse(raw.data)
+  }
+
+  it('completeTurn finalizes a live activity row and cancels its pending approvals', () => {
+    seedRunningTurn('turn-f1', {
+      turnId: 'turn-f1',
+      status: 'awaiting_approval',
+      startedAt: 1000,
+      events: [
+        { id: 'e1', type: 'thinking', label: 'Thinking', ts: 1000, text: 'hmm' },
+        { id: 'e2', type: 'approval', label: 'Approval requested: bash', ts: 1500, requestId: 'req-1', toolName: 'bash', input: {}, status: 'pending' },
+      ],
+    })
+
+    completeTurn({ turnId: 'turn-f1', status: 'cancelled' })
+
+    const data = activityData('turn-f1')
+    expect(data.status).toBe('cancelled')
+    expect(typeof data.endedAt).toBe('number')
+    const events = data.events as Array<Record<string, unknown>>
+    expect(events[0].endTs).toBeDefined()
+    expect(events[1].status).toBe('cancelled')
+  })
+
+  it('completeTurn leaves a renderer-finalized activity row untouched', () => {
+    seedRunningTurn('turn-f2', {
+      turnId: 'turn-f2',
+      status: 'done',
+      startedAt: 1000,
+      endedAt: 2000,
+      events: [{ id: 'e1', type: 'thinking', label: 'Thinking', ts: 1000, endTs: 1900, text: 'rich detail' }],
+    })
+
+    completeTurn({ turnId: 'turn-f2', status: 'failed' })
+
+    // The renderer already wrote its richer final state — daemon must not clobber.
+    const data = activityData('turn-f2')
+    expect(data.status).toBe('done')
+    expect(data.endedAt).toBe(2000)
+  })
+
+  it('reconcileInterruptedTurns cancels turns stranded by a crash and finalizes their activity rows', () => {
+    seedRunningTurn('turn-r1', { turnId: 'turn-r1', status: 'working', startedAt: 1000, events: [] })
+    seedRunningTurn('turn-r2', { turnId: 'turn-r2', status: 'working', startedAt: 2000, events: [] })
+    completeTurn({ turnId: 'turn-r2', status: 'done' })
+
+    const reconciled = reconcileInterruptedTurns()
+
+    expect(reconciled).toBe(1)
+    const statuses = getDb().prepare('SELECT id, status FROM turns ORDER BY started_at').all() as Array<{ id: string; status: string }>
+    expect(statuses).toEqual([
+      { id: 'turn-r1', status: 'cancelled' },
+      { id: 'turn-r2', status: 'done' },
+    ])
+    expect(activityData('turn-r1').status).toBe('cancelled')
   })
 })
