@@ -6,6 +6,7 @@
 npm run dev            # Build daemon, then launch the Electron app with renderer hot-reload
 npm run build          # Full build: electron-vite (main/preload/renderer) + daemon (esbuild) + native helpers
 npm run build:daemon   # Bundle the daemon only → out/daemon/main.mjs (esbuild)
+npm run build:web      # Build the browser bundle for remote (LAN) access → out/web (vite.web.config.ts)
 npm run build:cli      # Bundle bin/bond CLI subcommands → out/cli/*.js (esbuild)
 npm run build:native   # Compile the Obj-C Sense helpers → out/daemon/bin/sense/ (macOS only)
 npm run test:run       # Run the whole test suite once
@@ -59,7 +60,9 @@ Bond uses a daemon architecture. The renderer never talks to Pi (the agent runti
 Renderer (Vue) → Electron IPC → Main Process → WebSocket over Unix socket (JSON-RPC 2.0) → Daemon → Pi → model provider
 ```
 
-The daemon runs an HTTP + WebSocket server (`ws`) bound to the Unix socket `~/.bond/bond.sock`. `BondClient` (`src/shared/client.ts`) is the shared WebSocket client used by both the main process and the CLI. All agent work runs through **Pi** (`@earendil-works/pi-coding-agent`), which resolves Bond's capability tiers against the user's connected subscription — Bond never calls a provider API directly. Pi session transcripts persist as JSONL under `~/Library/Application Support/bond/pi/sessions/`.
+The daemon runs an HTTP + WebSocket server (`ws`) bound to the Unix socket `~/.bond/bond.sock`. `BondClient` (`src/shared/client.ts`) is the shared WebSocket client used by both the main process and the CLI.
+
+**Remote access**: the daemon also listens on TCP `0.0.0.0:3113` (`remote.port` setting; port reserved via Port Keeper), serving the `out/web` browser bundle over HTTP and the same JSON-RPC WebSocket protocol. Browsers on the LAN pair via a URL/QR from Settings → Remote access whose `#t=…` fragment carries a persistent token (`remote.token` setting); the WebSocket auth gate plus a same-origin upgrade check are the security boundary. The web client (`src/renderer/web/`) reuses the renderer components with a browser `window.bond` shim over a native WebSocket. Live multi-device sync rides on two chunks: `turn_start` (mirrors the sender's user message + activity ids on other clients) and `approval_resolved` (flips pending approval prompts everywhere). **The web client runs in an insecure context** (plain http on a LAN IP) — secure-context-only APIs (`crypto.randomUUID`, `navigator.clipboard`, service workers) are undefined there; any renderer code the web client can reach needs fallbacks (`uid()` in `useChat.ts` is the pattern). All agent work runs through **Pi** (`@earendil-works/pi-coding-agent`), which resolves Bond's capability tiers against the user's connected subscription — Bond never calls a provider API directly. Pi session transcripts persist as JSONL under `~/Library/Application Support/bond/pi/sessions/`.
 
 ### Daemon (`src/daemon/`)
 
@@ -78,6 +81,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `web/tools.ts` | Bond-owned Pi tools `web_search` + `fetch_content` — keyless, zero-config web access with a 15-min cache and polite batch spacing |
 | `web/broker.ts` | Render broker — parks tool promises, sends `web.requestRender` to the app, resolves on `web.renderReady`; errors clearly when no app is connected |
 | `web/extract.ts` | DuckDuckGo SERP parsing (linkedom) and page → markdown extraction (Readability + Turndown) over app-rendered HTML |
+| `remote.ts` | Remote (LAN) access server — TCP listener on `0.0.0.0:3113` serving the `out/web` bundle + WebSocket RPC gated by the persistent pairing token (`remote.token`), same-origin upgrade check, `remote.status` RPC |
 | `imagegen.ts` | Bond glue for the bundled `pi-codex-image-gen` Pi extension (`codex_generate_image` — gpt-image-2 via the ChatGPT/Codex subscription already connected in Pi, no API key). Gates the tool on an `openai-codex` OAuth credential, captures generated images into the Bond image store, emits `generated_image` stream chunks, and strips base64 from activity previews. The package's disk writes and install telemetry are disabled via env defaults in `main.ts` |
 | `onboarding.ts` | First-run detection, transcript intro seeding, and the staged interview → panel-tour flow (`pending` → `education` → `completed`). Serves stage-specific system-prompt sections and Pi tools: `complete_onboarding` (closes the interview, seeds the soul, returns the tour script), `complete_tour`, `show_panel` (opens a side panel via a `show_panel` stream chunk), and `enable_sense`. The interview and tour are the real agent — no scripted flow |
 | `sandbox.ts` | New-user sandbox: swaps the daemon's data dir to a fresh empty directory (and back) so the real app runs a genuine first-run without touching real data |
@@ -155,6 +159,7 @@ src/
     settings.ts                      # Settings storage
     paths.ts                         # Data directory paths
     skills.ts                        # Skill scanning from ~/.bond/skills/
+    remote.ts                        # Remote (LAN) access — static bundle + WebSocket RPC on TCP 3113
     web/
       tools.ts                       # web_search + fetch_content Pi tools (keyless, cached)
       broker.ts                      # Render broker for the app's hidden browser window
@@ -188,6 +193,12 @@ src/
     web.ts                           # WebRenderRequest/WebRenderResult render round-trip types
   renderer/
     App.vue                          # Root shell — panel layout + view routing
+    web/
+      index.html                     # Browser entry served by the daemon's remote server
+      main.ts                        # Installs the window.bond shim, mounts WebApp
+      WebApp.vue                     # Single-column phone-friendly chat (reuses MessageBubble/ChatInput/ApprovalPrompt)
+      client.ts                      # WebBondClient — JSON-RPC over native WebSocket, pairing token, reconnect
+      shim.ts                        # window.bond built on WebBondClient; Electron-only methods become no-ops
     ViewerWindow.vue                 # Markdown file viewer window
     app.css                          # Tailwind v4 theme tokens
     types/message.ts                 # Message union type
@@ -235,6 +246,7 @@ src/
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
 electron.vite.config.ts                  # Build config (main, preload, renderer)
+vite.web.config.ts                       # Browser bundle build for remote access → out/web
 electron-builder.yml                     # Packaging config (macOS DMG, extraResources for daemon)
 build/icon.icns                          # macOS app icon
 ```
