@@ -59,6 +59,7 @@ function toTranscriptMessage(m: Message): TranscriptMessage {
   if (m.role === 'user') return { ...base, role: 'user', text: m.text, images: plainImages(m.images), imageIds: m.imageIds ? [...m.imageIds] : undefined }
   if (m.role === 'bond') return { ...base, role: 'bond', text: m.text }
   if (m.kind === 'activity') return { ...base, role: 'meta', kind: 'activity', data: plainJson(m.data) as unknown as Record<string, unknown> }
+  if (m.kind === 'image') return { ...base, role: 'meta', kind: 'image', imageIds: [...m.imageIds], data: m.alt ? { alt: m.alt } : undefined }
   if (m.kind === 'tool') return { ...base, role: 'meta', kind: 'tool', text: m.summary ?? null, data: { name: m.name, summary: m.summary } }
   if (m.kind === 'skill') return { ...base, role: 'meta', kind: 'skill', text: m.args ?? null, data: { name: m.name, args: m.args } }
   if (m.kind === 'thinking') return { ...base, role: 'meta', kind: 'thinking', text: m.text, data: { durationSec: m.durationSec } }
@@ -72,6 +73,7 @@ function fromTranscriptMessage(m: TranscriptMessage): Message | null {
   if (m.role === 'user') return { id: m.id, role: 'user', text: m.text ?? '', images: m.images, imageIds: m.imageIds, ts }
   if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text ?? '', streaming: false, ts }
   if (m.kind === 'activity' && m.data) return { id: m.id, role: 'meta', kind: 'activity', data: m.data as unknown as TurnActivityData, ts }
+  if (m.kind === 'image') return { id: m.id, role: 'meta', kind: 'image', imageIds: m.imageIds ?? [], images: m.images, alt: typeof m.data?.alt === 'string' ? m.data.alt : undefined, ts }
   if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: String(m.data?.name ?? ''), summary: m.text ?? String(m.data?.summary ?? ''), ts }
   if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: String(m.data?.name ?? ''), args: m.text ?? String(m.data?.args ?? ''), ts }
   if (m.kind === 'thinking') {
@@ -110,9 +112,10 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   function _formatToolLabel(name: string, summary?: string): string {
     const filename = summary?.split('/').pop() || summary
-    const verbs: Record<string, string> = { Read: 'Read', Edit: 'Edited', Write: 'Wrote', Bash: 'Ran command', Glob: 'Searched files', Grep: 'Searched code', WebSearch: 'Searched the web', WebFetch: 'Fetched page' }
+    const verbs: Record<string, string> = { Read: 'Read', Edit: 'Edited', Write: 'Wrote', Bash: 'Ran command', Glob: 'Searched files', Grep: 'Searched code', WebSearch: 'Searched the web', WebFetch: 'Fetched page', codex_generate_image: 'Generating image' }
     const verb = verbs[name] ?? name
-    return filename && !['Bash', 'Glob', 'WebSearch'].includes(name) ? `${verb} ${filename}` : verb
+    // Prompt-driven tools carry paragraph-length input summaries — verb only.
+    return filename && !['Bash', 'Glob', 'WebSearch', 'codex_generate_image'].includes(name) ? `${verb} ${filename}` : verb
   }
 
   const pendingApprovals = computed(() => {
@@ -293,6 +296,17 @@ export function useChat(deps: ChatDeps = window.bond) {
           if (ev?.type === 'tool') { ev.output = chunk.output; ev.endTs = now; ev.failed = chunk.isError; if (chunk.isError) data.expanded = true }
         })
         break
+      case 'generated_image': {
+        addMessage({ id: uid(), role: 'meta', kind: 'image', imageIds: [...chunk.imageIds], alt: chunk.alt })
+        schedulePersist()
+        // The daemon already persisted the files; fetch base64 for display.
+        // Resolve onto the reactive proxy from the messages array — assigning
+        // to the raw object updates silently and the bubble keeps showing the
+        // loading placeholder forever.
+        const live = messages.value[messages.value.length - 1]
+        void resolveImages([live]).catch(() => {})
+        break
+      }
       case 'tool_approval':
         updateActivity(data => {
           if (data.events.some(evt => evt.type === 'approval' && evt.requestId === chunk.requestId)) return
@@ -325,6 +339,10 @@ export function useChat(deps: ChatDeps = window.bond) {
         addMessage({ id: uid(), role: 'meta', kind: 'system', text: chunk.text ?? chunk.subtype })
         schedulePersist()
         break
+      case 'show_panel':
+        // UI side-effect, not transcript content: App opens the panel.
+        window.dispatchEvent(new CustomEvent('bond:show-panel', { detail: chunk.panel }))
+        break
     }
   }
 
@@ -344,13 +362,17 @@ export function useChat(deps: ChatDeps = window.bond) {
     return loadTranscript({ beforeSeq: nextBeforeSeq.value, append: true })
   }
 
+  function hasResolvableImages(m: Message): m is Message & { imageIds?: string[]; images?: AttachedImage[] } {
+    return m.role === 'user' || (m.role === 'meta' && m.kind === 'image')
+  }
+
   async function resolveImages(target: Message[]) {
-    const allIds = target.flatMap(m => m.role === 'user' ? (m.imageIds ?? []) : [])
+    const allIds = target.flatMap(m => hasResolvableImages(m) ? (m.imageIds ?? []) : [])
     if (!allIds.length) return
     const loaded = await deps.getImages(allIds)
     const map = new Map<string, AttachedImage>()
     allIds.forEach((id, i) => { if (loaded[i]) map.set(id, loaded[i]!) })
-    for (const msg of target) if (msg.role === 'user' && msg.imageIds?.length) msg.images = msg.imageIds.map(id => map.get(id)!).filter(Boolean)
+    for (const msg of target) if (hasResolvableImages(msg) && msg.imageIds?.length) msg.images = msg.imageIds.map(id => map.get(id)!).filter(Boolean)
   }
 
   async function ensureGlobalSubscription() {

@@ -46,6 +46,12 @@ function removeToken(): void {
 }
 
 function main(): void {
+  // Bond-owned defaults for the bundled pi-codex-image-gen extension: Bond
+  // persists generated images itself (no duplicate files under Pi's agent
+  // dir) and ships no install telemetry. An explicit user env still wins.
+  process.env.PI_CODEX_IMAGE_SAVE_MODE ??= 'none'
+  process.env.PI_TELEMETRY ??= '0'
+
   ensureDir(runtimeDir)
   ensureDir(dataDir)
   setDataDir(dataDir)

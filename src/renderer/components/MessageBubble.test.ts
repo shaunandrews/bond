@@ -40,6 +40,17 @@ describe('MessageBubble', () => {
     expect(wrapper.find('.activity-summary').exists()).toBe(true)
   })
 
+  it('renders image generation tool calls as a friendly verb without the prompt', () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: {
+        msg: { id: 'i1', role: 'meta' as const, kind: 'tool' as const, name: 'codex_generate_image', summary: '{"prompt":"A very long prompt"}' },
+      },
+    })
+
+    expect(wrapper.text()).toContain('Generating image')
+    expect(wrapper.text()).not.toContain('prompt')
+  })
+
   it('renders tool call without summary as verb only', () => {
     const wrapper = shallowMount(MessageBubble, {
       props: {
@@ -48,6 +59,39 @@ describe('MessageBubble', () => {
     })
 
     expect(wrapper.text()).toContain('Searched files')
+  })
+
+  it('renders a generated image with data URI, alt text, and start alignment', () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: {
+        msg: {
+          id: 'g1',
+          role: 'meta' as const,
+          kind: 'image' as const,
+          imageIds: ['img-1'],
+          images: [{ data: 'aGVsbG8=', mediaType: 'image/png' as const }],
+          alt: 'A watercolor fox',
+        },
+      },
+    })
+
+    const img = wrapper.find('img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe('data:image/png;base64,aGVsbG8=')
+    expect(img.attributes('alt')).toBe('A watercolor fox')
+    expect(wrapper.find('.self-start').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Loading image')
+  })
+
+  it('shows a placeholder for a generated image whose data is still loading', () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: {
+        msg: { id: 'g2', role: 'meta' as const, kind: 'image' as const, imageIds: ['img-1'] },
+      },
+    })
+
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Loading image')
   })
 
   it('renders error message with error styling', () => {

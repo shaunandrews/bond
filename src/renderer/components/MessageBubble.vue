@@ -74,9 +74,11 @@ function formatToolSummary(name: string, summary?: string): string {
     Read: 'Read', Edit: 'Edited', Write: 'Wrote',
     Bash: 'Ran command', Glob: 'Searched files', Grep: 'Searched code',
     WebSearch: 'Searched the web', WebFetch: 'Fetched page',
+    codex_generate_image: 'Generating image',
   }
   const verb = verbs[name] ?? name
-  return filename && !['Bash', 'Glob', 'WebSearch'].includes(name) ? `${verb} ${filename}` : verb
+  // Prompt-driven tools carry paragraph-length input summaries — verb only.
+  return filename && !['Bash', 'Glob', 'WebSearch', 'codex_generate_image'].includes(name) ? `${verb} ${filename}` : verb
 }
 </script>
 
@@ -168,6 +170,26 @@ function formatToolSummary(name: string, summary?: string): string {
     </div>
     <div v-else class="mt-1.5 text-[11px] font-medium" :class="msg.status === 'approved' ? 'text-ok' : 'text-err'">
       {{ msg.status === 'approved' ? 'Allowed' : 'Denied' }}
+    </div>
+  </div>
+
+  <!-- Generated image -->
+  <div
+    v-else-if="msg.kind === 'image'"
+    class="self-start max-w-[92%] flex flex-col items-start gap-1.5 px-3.5"
+  >
+    <img
+      v-for="(img, i) in msg.images ?? []"
+      :key="i"
+      :src="imageDataUri(img)"
+      :alt="msg.alt ?? 'Generated image'"
+      class="rounded-lg max-w-[420px] max-h-[420px] object-contain shadow-sm"
+    />
+    <div
+      v-if="!msg.images?.length"
+      class="px-3.5 py-2.5 rounded-[10px] text-xs text-muted border border-dashed border-border"
+    >
+      Loading image…
     </div>
   </div>
 

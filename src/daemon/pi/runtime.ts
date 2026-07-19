@@ -13,8 +13,11 @@ import {
 import type { BondStreamChunk } from '../../shared/stream'
 import type { EditMode } from '../../shared/session'
 import { getImagePaths } from '../images'
+import { codexImageGenExtension, extractRevisedPrompt, IMAGEGEN_TOOL_NAMES, imageGenAvailable, saveGeneratedImages, stripResultImageData } from '../imagegen'
 import { createMemoryExtensionFactory, MEMORY_TOOL_NAMES } from '../memory/tools'
-import { createOnboardingExtensionFactory, getFirstRunStatus, ONBOARDING_TOOL_NAME } from '../onboarding'
+import { createWebExtensionFactory, WEB_TOOL_NAMES } from '../web/tools'
+import { createOnboardingExtensionFactory, getFirstRunStatus, ONBOARDING_STAGE_TOOLS, type BondPanelId, type OnboardingToolHooks } from '../onboarding'
+import type { OnboardingFirstRunStatus } from '../../shared/onboarding'
 import { getDataDir } from '../paths'
 import { getMessages } from '../sessions'
 
@@ -52,7 +55,7 @@ function findSessionFile(sessionId: string): string | undefined {
 function summarizeInput(input: unknown): string | undefined {
   if (!input || typeof input !== 'object') return undefined
   const value = input as Record<string, unknown>
-  const path = value.path ?? value.file_path ?? value.pattern ?? value.command
+  const path = value.path ?? value.file_path ?? value.pattern ?? value.command ?? value.prompt
   return typeof path === 'string' ? path.slice(0, 240) : JSON.stringify(value).slice(0, 240)
 }
 
@@ -152,6 +155,18 @@ async function selectModel(name: string | undefined) {
   throw new Error('No authenticated Claude or ChatGPT subscription is available in Pi.')
 }
 
+/**
+ * Pi streams assistant text as bare blocks with no separator between them, so
+ * a block that starts after earlier prose this turn (post-tool continuation,
+ * or thinking sandwiched between paragraphs) rendered as "…the chat.One of…".
+ * Returns the paragraph-break chunk to emit before such a block.
+ */
+export function textBlockSeparator(event: any, narrated: boolean): BondStreamChunk | null {
+  return narrated && event?.type === 'message_update' && event.assistantMessageEvent?.type === 'text_start'
+    ? { kind: 'assistant_text', text: '\n\n' }
+    : null
+}
+
 /** Translate Pi's SDK event vocabulary into the renderer's stable stream protocol. */
 export function piEventToChunks(event: any): BondStreamChunk[] {
   if (event.type === 'message_update') {
@@ -166,7 +181,10 @@ export function piEventToChunks(event: any): BondStreamChunk[] {
     return [{ kind: 'assistant_tool', name: event.toolName, summary: summarizeInput(event.args), input: event.args, toolUseId: event.toolCallId }]
   }
   if (event.type === 'tool_execution_end') {
-    const output = typeof event.result === 'string' ? event.result : JSON.stringify(event.result)
+    // Image-bearing results (codex_generate_image) carry megabytes of base64;
+    // the activity preview gets a placeholder instead.
+    const result = stripResultImageData(event.result)
+    const output = typeof result === 'string' ? result : JSON.stringify(result)
     return [{ kind: 'tool_result', toolName: event.toolName, toolUseId: event.toolCallId, output: output.slice(0, 4_000), isError: !!event.isError }]
   }
   if (event.type === 'auto_retry_start') {
@@ -242,6 +260,8 @@ export interface PiBondQueryOptions {
   systemPrompt: string
   contextEnvelope?: string
   memorySourceMessageId?: string
+  /** Daemon-side hooks for the onboarding tour tools (e.g. enabling Sense). */
+  onboardingHooks?: Pick<OnboardingToolHooks, 'enableSense'>
 }
 
 export interface PiBondQueryResult {
@@ -279,17 +299,37 @@ export function activateRequestedTools(
   return active
 }
 
-export function toolsForEditMode(editMode: EditMode, firstRunPending = false): string[] {
+/**
+ * A show_panel call deferred for arriving before any prose opens at turn end
+ * only if an introduction was actually delivered and the turn survived.
+ */
+export function shouldFlushDeferredPanel(deferred: BondPanelId | null, narrated: boolean, aborted: boolean): BondPanelId | null {
+  return deferred && narrated && !aborted ? deferred : null
+}
+
+export function toolsForEditMode(editMode: EditMode, onboardingStatus: OnboardingFirstRunStatus = 'completed', options: { imageGen?: boolean } = {}): string[] {
   const workspaceTools = editMode.type === 'readonly'
     ? ['read', 'grep', 'find', 'ls']
     : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash']
   // Bond memory is application state, not workspace editing. Memory tools remain
   // available in every edit mode so explicit remember/recall requests still work.
-  // complete_onboarding joins the allowlist only while first-run onboarding is
-  // open — without this, the registered tool is deactivated and the interview
-  // can never be marked finished.
-  const onboardingTools = firstRunPending ? [ONBOARDING_TOOL_NAME] : []
-  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...onboardingTools]
+  // Onboarding tools join the allowlist while onboarding is open — without
+  // this, the registered tools are deactivated and the interview/tour can
+  // never be marked finished. The pending stage carries the tour tools too:
+  // Pi activates tools once per turn, and the tour's first beat runs in the
+  // SAME turn that complete_onboarding flips the status, so show_panel must
+  // already be active there.
+  const onboardingTools = onboardingStatus === 'pending'
+    ? [...ONBOARDING_STAGE_TOOLS.pending, ...ONBOARDING_STAGE_TOOLS.education]
+    : onboardingStatus === 'education'
+      ? ONBOARDING_STAGE_TOOLS.education
+      : []
+  // Web tools are network reads through the app's hidden browser — they touch
+  // no workspace files, so they stay available in every edit mode.
+  // The Codex image tool likewise only feeds Bond's own image store, but it
+  // needs the ChatGPT/Codex subscription login, so it's gated on that.
+  const imageGenTools = options.imageGen ? IMAGEGEN_TOOL_NAMES : []
+  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...imageGenTools, ...onboardingTools]
 }
 
 /** Run one Bond turn through Pi and persist it in Bond-owned Pi JSONL storage. */
@@ -304,7 +344,14 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     options.onChunk({ kind: 'raw_error', message: 'Pi is not connected. Open Settings → Pi connection and add an Anthropic API key.' })
     return failedPiResult(piSessionId)
   }
-  const tools = toolsForEditMode(editMode, getFirstRunStatus().status === 'pending')
+  const tools = toolsForEditMode(editMode, getFirstRunStatus().status, { imageGen: imageGenAvailable(auth.providers) })
+
+  // Set once assistant prose streams in this turn. show_panel calls that land
+  // before it (models front-load their tool batch) are deferred and flushed
+  // by us once the introduction has actually been delivered — so a tour panel
+  // can neither open unannounced nor silently fail to open.
+  let narratedThisTurn = false
+  let deferredPanel: BondPanelId | null = null
 
   const loader = new DefaultResourceLoader({
     cwd: homedir(),
@@ -316,7 +363,20 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     systemPromptOverride: () => options.systemPrompt,
     extensionFactories: [
       createMemoryExtensionFactory({ sourceMessageId: options.memorySourceMessageId }),
-      createOnboardingExtensionFactory(),
+      createWebExtensionFactory(),
+      codexImageGenExtension,
+      createOnboardingExtensionFactory({
+        // show_panel rides the normal chunk stream to the renderer.
+        showPanel: (panel) => {
+          if (!narratedThisTurn) {
+            deferredPanel = panel
+            return 'deferred'
+          }
+          options.onChunk({ kind: 'show_panel', panel })
+          return 'opened'
+        },
+        enableSense: options.onboardingHooks?.enableSense,
+      }),
       (pi: any) => {
         pi.on('tool_call', async (event: any) => {
           const toolName = event.toolName as string
@@ -362,7 +422,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
   // the allowlist with no registered tool means an extension silently failed
   // (or vice versa: a registered tool missing from the allowlist would have
   // been deactivated by activateRequestedTools above).
-  const requiredBondTools = [...MEMORY_TOOL_NAMES, ONBOARDING_TOOL_NAME].filter(name => tools.includes(name))
+  const requiredBondTools = [...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...IMAGEGEN_TOOL_NAMES, ...Object.values(ONBOARDING_STAGE_TOOLS).flat()].filter(name => tools.includes(name))
   const missingBondTools = requiredBondTools.filter(name => !activeTools.includes(name))
   if (missingBondTools.length) {
     session.dispose()
@@ -371,8 +431,23 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
 
   let hadError = false
   const unsubscribe = session.subscribe((event) => {
-    for (const chunk of piEventToChunks(event)) options.onChunk(chunk)
+    const separator = textBlockSeparator(event, narratedThisTurn)
+    if (separator) options.onChunk(separator)
+    for (const chunk of piEventToChunks(event)) {
+      if (chunk.kind === 'assistant_text' && chunk.text.trim()) narratedThisTurn = true
+      options.onChunk(chunk)
+    }
     if (event.type === 'tool_execution_end' && event.isError) hadError = true
+    if (event.type === 'tool_execution_end' && !event.isError && IMAGEGEN_TOOL_NAMES.includes(event.toolName)) {
+      // Persist generated images into Bond's image store and surface them as
+      // first-class transcript content — the activity row only carries text.
+      try {
+        const imageIds = saveGeneratedImages(event.result)
+        if (imageIds.length) options.onChunk({ kind: 'generated_image', imageIds, alt: extractRevisedPrompt(event.result) })
+      } catch (error) {
+        options.onChunk({ kind: 'system', subtype: 'imagegen_save_failed', text: `A generated image could not be saved: ${error instanceof Error ? error.message : String(error)}` })
+      }
+    }
   })
 
   const abort = () => {
@@ -385,6 +460,11 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     const history = isNewSession ? legacyTranscript(uiSessionId) : ''
     const promptWithContext = composePromptWithContext(prompt, options.contextEnvelope)
     await session.prompt(`${promptWithContext}${history}`, { images: imageContent(options.imageIds) })
+    // Flush a deferred tour panel now that the turn's prose is fully
+    // delivered. Without narration there is nothing to attach the panel to —
+    // opening it silently was the original bug — so it stays closed.
+    const flushPanel = shouldFlushDeferredPanel(deferredPanel, narratedThisTurn, options.abortSignal.aborted)
+    if (flushPanel) options.onChunk({ kind: 'show_panel', panel: flushPanel })
     if (session.agent.state.errorMessage) {
       hadError = true
       options.onChunk({ kind: 'raw_error', message: session.agent.state.errorMessage })

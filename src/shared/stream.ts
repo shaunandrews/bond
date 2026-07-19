@@ -24,6 +24,10 @@ export type BondStreamChunk =
   | { kind: 'query_start' }
   | { kind: 'query_end'; succeeded: boolean }
   | { kind: 'queue_update'; queuedTurnIds: string[]; turns: Array<{ turnId: string; text: string; imageIds?: string[] }> }
+  /** UI side-effect: open a side panel (onboarding tour's show_panel tool). */
+  | { kind: 'show_panel'; panel: 'collections' | 'sense' | 'media' | 'memory' }
+  /** Tool-generated image(s) persisted to the Bond image store (codex_generate_image). */
+  | { kind: 'generated_image'; imageIds: string[]; alt?: string }
 
 /** Chunk tagged with global turn/epoch metadata for renderer routing. */
 export type TaggedChunk = BondStreamChunk & {

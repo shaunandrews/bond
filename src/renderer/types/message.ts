@@ -14,4 +14,5 @@ export type Message =
   | BaseMsg & { role: 'meta'; kind: 'error'; text: string }
   | BaseMsg & { role: 'meta'; kind: 'approval'; requestId: string; toolName: string; input: Record<string, unknown>; title?: string; description?: string; status: 'pending' | 'approved' | 'denied' }
   | BaseMsg & { role: 'meta'; kind: 'activity'; data: TurnActivityData }
+  | BaseMsg & { role: 'meta'; kind: 'image'; imageIds: string[]; images?: AttachedImage[]; alt?: string }
   | BaseMsg & { role: 'meta'; kind: 'system'; text: string }

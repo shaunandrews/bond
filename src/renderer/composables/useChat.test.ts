@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createApp, defineComponent, nextTick } from 'vue'
+import { createApp, defineComponent, nextTick, watch } from 'vue'
 import { useChat, type ChatDeps } from './useChat'
 import type { TaggedChunk } from '../../shared/stream'
 
@@ -40,6 +40,18 @@ describe('useChat continuous transcript', () => {
     handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
   })
 
+  it('dispatches show_panel chunks as a window event, not transcript content', () => {
+    const seen: string[] = []
+    const listener = (event: Event) => seen.push((event as CustomEvent<string>).detail)
+    window.addEventListener('bond:show-panel', listener)
+
+    handler({ kind: 'show_panel', panel: 'memory' })
+
+    window.removeEventListener('bond:show-panel', listener)
+    expect(seen).toEqual(['memory'])
+    expect(chat.messages.value).toHaveLength(0)
+  })
+
   it('loads the global transcript page and resolves image IDs', async () => {
     ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockResolvedValue({
       messages: [{ id: 'u1', role: 'user', text: 'hello', imageIds: ['img-1'], seq: 1 }],
@@ -52,6 +64,77 @@ describe('useChat continuous transcript', () => {
     expect(deps.listTranscript).toHaveBeenCalledWith({ beforeSeq: undefined, limit: 80 })
     expect(deps.getImages).toHaveBeenCalledWith(['img-1'])
     expect(chat.messages.value[0]).toMatchObject({ id: 'u1', role: 'user', text: 'hello' })
+  })
+
+  // Regression: the activity label for codex_generate_image was the raw tool
+  // name plus a 240-char JSON input summary, wrapping the compact working
+  // indicator across several garbled lines.
+  it('labels image generation activity with a friendly verb, not the prompt JSON', async () => {
+    await chat.submit('draw me something')
+    handler({
+      kind: 'assistant_tool',
+      name: 'codex_generate_image',
+      summary: '{"prompt":"A very long painterly prompt that goes on and on"}',
+      input: { prompt: 'A very long painterly prompt that goes on and on' },
+      toolUseId: 'call-1',
+    })
+
+    const activity = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
+    expect(activity && activity.role === 'meta' && activity.kind === 'activity' ? activity.data.events.at(-1) : undefined)
+      .toMatchObject({ type: 'tool', label: 'Generating image' })
+  })
+
+  it('turns generated_image chunks into transcript image messages with resolved data', async () => {
+    ;(deps.getImages as ReturnType<typeof vi.fn>).mockResolvedValue([{ data: 'abc', mediaType: 'image/png' }])
+
+    handler({ kind: 'generated_image', imageIds: ['gen-1'], alt: 'A watercolor fox' })
+
+    expect(chat.messages.value.at(-1)).toMatchObject({ role: 'meta', kind: 'image', imageIds: ['gen-1'], alt: 'A watercolor fox' })
+    await vi.waitFor(() => expect(deps.getImages).toHaveBeenCalledWith(['gen-1']))
+    await vi.waitFor(() => {
+      const msg = chat.messages.value.at(-1)
+      expect(msg && 'images' in msg ? msg.images : undefined).toEqual([{ data: 'abc', mediaType: 'image/png' }])
+    })
+
+    // Persists as imageIds + alt — never base64 — so the files stay canonical.
+    await chat.persistMessages()
+    const payload = (deps.upsertTranscript as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]
+    expect(payload.at(-1)).toMatchObject({ role: 'meta', kind: 'image', imageIds: ['gen-1'], data: { alt: 'A watercolor fox' } })
+    expect(payload.at(-1).images).toBeUndefined()
+  })
+
+  // Regression: the handler resolved base64 onto the raw message object, not
+  // the reactive proxy in messages — the data arrived but no effect ever
+  // triggered, so the bubble showed "Loading image…" forever.
+  it('resolves generated image data through the reactive proxy so the bubble re-renders', async () => {
+    ;(deps.getImages as ReturnType<typeof vi.fn>).mockResolvedValue([{ data: 'abc', mediaType: 'image/png' }])
+
+    handler({ kind: 'generated_image', imageIds: ['gen-1'] })
+
+    const msg = chat.messages.value.at(-1)!
+    let triggered = false
+    const stop = watch(() => (msg as { images?: unknown }).images, () => { triggered = true })
+    await vi.waitFor(() => expect(triggered).toBe(true))
+    stop()
+  })
+
+  it('restores generated image messages from the transcript with resolved images', async () => {
+    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      messages: [{ id: 'g1', role: 'meta', kind: 'image', imageIds: ['img-9'], data: { alt: 'Poster' }, seq: 1 }],
+      nextBeforeSeq: null,
+    })
+    ;(deps.getImages as ReturnType<typeof vi.fn>).mockResolvedValue([{ data: 'xyz', mediaType: 'image/webp' }])
+
+    await chat.loadTranscript()
+
+    expect(deps.getImages).toHaveBeenCalledWith(['img-9'])
+    expect(chat.messages.value[0]).toMatchObject({
+      role: 'meta',
+      kind: 'image',
+      imageIds: ['img-9'],
+      alt: 'Poster',
+      images: [{ data: 'xyz', mediaType: 'image/webp' }],
+    })
   })
 
   it('lets the daemon insert canonical turn rows before renderer upserts', async () => {
