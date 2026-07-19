@@ -32,6 +32,8 @@ import {
   buildAgentContextEnvelope,
 } from './agent'
 import { getPiAuthStatus, startPiOAuth } from './pi/runtime'
+import { setRenderTransport, onRenderReady } from './web/broker'
+import type { WebRenderResult } from '../shared/web'
 import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
@@ -387,6 +389,9 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (images?.length) {
           if (!sessionId) ensureGlobalTranscriptSession()
           imageIds = saveImages(sessionId ?? GLOBAL_TRANSCRIPT_SESSION_ID, images)
+          // Chat attachments land in the media library too — without this the
+          // Media panel sits on "No images uploaded yet" until an app restart.
+          broadcastImageChanged()
         }
 
         const cleanText = text.replace(/@\[([^\]]+)\]\(project:[a-f0-9-]+\)/g, '@$1')
@@ -428,6 +433,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           abortSignal: ac.signal,
           onChunk: (chunk) => {
             if (chunk.kind === 'assistant_text') assistantText += chunk.text
+            // Generated images land in the media library too, like attachments.
+            if (chunk.kind === 'generated_image') broadcastImageChanged()
             broadcastChunk(sessionId, chunk.kind === 'assistant_text' ? { ...chunk, assistantMessageId } : chunk, tags)
           },
           model: currentModel,
@@ -437,6 +444,16 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           editMode: input.editMode ?? session?.editMode,
           contextEnvelope,
           memorySourceMessageId: userMessageId,
+          onboardingHooks: {
+            // Lets the tour's enable_sense tool flip Sense on after explicit
+            // user consent — same path as the Settings toggle.
+            enableSense: () => {
+              const ctrl = getSenseController()
+              ctrl.enable()
+              persistSenseSettings(ctrl.getSettings())
+              return { enabled: ctrl.getSettings().enabled, state: ctrl.getState() }
+            },
+          },
         }).then((result) => {
           const succeeded = result.succeeded
           if (assistantText.trim()) {
@@ -925,6 +942,14 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         // Main process notifies daemon about permission changes
         return JSON.stringify(makeResponse(id, { ok: true }))
       }
+
+      // --- Web (hidden-browser render round-trip) ---
+      case 'web.renderReady': {
+        const renderId = getStringParam(p, 'renderId')
+        if (!renderId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'renderId is required'))
+        const handled = onRenderReady(p as unknown as WebRenderResult)
+        return JSON.stringify(makeResponse(id, { ok: handled }))
+      }
       case 'sense.now': {
         const db = getDb()
         const capture = db.prepare(
@@ -1208,6 +1233,21 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
   // Eagerly initialize Sense controller so it auto-enables on daemon startup
   getSenseController()
 
+  // Web tools ask connected app clients to render pages in a hidden browser
+  // window. Delivery is a broadcast — only the Electron main process listens.
+  setRenderTransport((request) => {
+    if (!serverWss) return false
+    const msg = JSON.stringify(makeNotification('web.requestRender', { ...request }))
+    let delivered = false
+    for (const client of serverWss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(msg)
+        delivered = true
+      }
+    }
+    return delivered
+  })
+
   // Track authenticated connections
   const authenticatedClients = new WeakSet<WebSocket>()
 
@@ -1283,6 +1323,7 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
         senseController.destroy()
         senseController = null
       }
+      setRenderTransport(null)
 
       wss.close(() => {
         httpServer.close(() => {

@@ -1,7 +1,7 @@
 {
   "name": "bond",
   "version": "0.1.0",
-  "description": "Bond — local Electron assistant powered by Pi", 
+  "description": "Bond — local Electron assistant powered by Pi",
   "main": "./out/main/index.js",
   "type": "module",
   "scripts": {
@@ -31,6 +31,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/dompurify": "^3.0.5",
     "@types/node": "^25.5.0",
+    "@types/turndown": "^5.0.6",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.5",
     "@vitest/coverage-v8": "^4.1.4",
@@ -54,6 +55,10 @@
     "@earendil-works/pi-agent-core": "^0.80.10",
     "@earendil-works/pi-ai": "^0.80.10",
     "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.18.13",
+    "pi-codex-image-gen": "^0.1.12",
+    "turndown": "^7.2.4",
     "ws": "^8.20.0"
   }
 }

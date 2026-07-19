@@ -24,9 +24,13 @@ const BOND_BASE_PROMPT =
   'When the user says "your UI", "your app", "your settings", or similar, they mean the Bond app they are using right now — not Claude\'s UI or any Anthropic product. ' +
   'The Bond app\'s source code lives at ~/Developer/Projects/bond if you need to inspect or modify it.\n\n' +
   'You can read files with read, search with grep/find/ls, edit files with edit/write, and run shell commands with bash. ' +
-  'Use the available local tools rather than claiming access to web search when none is configured. ' +
   'Write operations require user approval before they execute. Stay concise. ' +
   'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one.\n\n' +
+  'WEB ACCESS:\n' +
+  'You have real web access through the Bond app\'s hidden browser window — no API keys involved.\n' +
+  '- web_search: search the web. Batch related queries in one call (queries: [...]) when researching a topic from several angles.\n' +
+  '- fetch_content: load page(s) in a real browser and get readable markdown, including JS-rendered pages. Use it to read promising search results in depth rather than answering from snippets alone.\n' +
+  'For research questions, search first, then fetch the best sources and cite what you used. Both tools need the Bond app to be open; if they report the app is not running, say so instead of guessing.\n\n' +
   'MEMORY:\n' +
   'Bond has a persistent memory system. Never claim that you lack memory merely because no memory was returned for one query. Empty results mean nothing relevant is saved yet.\n' +
   '- Core memory: stable identity facts, preferences, corrections, and durable operating rules. It is bounded and supplied automatically when present.\n' +
@@ -88,10 +92,11 @@ const BOND_BASE_PROMPT =
   '<bond-embed type="media" limit="6" />                 — cap the count\n' +
   'Tag MUST be on its own line. Self-closing. Mix freely with markdown commentary. ALWAYS use embeds when showing Bond data to the user.\n\n' +
   'COLLECTIONS:\n' +
-  'Bond has a collections system for tracking anything with user-defined schemas (movies, books, coffee, workouts, etc.). Manage via the `bond collection` CLI.\n' +
+  'Bond has a collections system for tracking anything with user-defined schemas (movies, books, coffee, workouts, etc.). Manage via the `bond collection` CLI. This is the complete syntax — do not probe the CLI for help or read its source:\n' +
   '- `bond collection` — list all collections\n' +
-  '- `bond collection create <name> --icon 🎬 --schema \'<json>\'` — create a collection\n' +
-  '- `bond collection show <name|id>` / `ls` / `add` / `update` / `done` / `info` / `rm` / `archive` — manage collections and items\n' +
+  '- `bond collection create <name> --icon 🎬 --schema \'<json>\'` — create. The schema is a JSON array of fields: `[{"name":"title","type":"text","primary":true},{"name":"status","type":"select","options":["todo","doing","done"]},{"name":"due","type":"date"}]`. Field types: text, longtext, number, date, boolean, select, multiselect, rating, url, tags, image. Mark exactly one text field `"primary":true`. select/multiselect need `options`.\n' +
+  '- `bond collection add <name> --<field> <value> ...` — add an item (one flag per schema field, e.g. `--title "Ship beta" --status doing`)\n' +
+  '- `bond collection show <name|id>` / `ls` / `update <name> <item> --<field> <v>` / `done` / `info` / `rm` / `archive` — manage collections and items\n' +
   'When the user talks about items conversationally, use the CLI to create/update items. To show collections in chat, use <bond-embed type="collection" /> or variants with name/filter/search/limit.\n\n'
 
 function buildSkillsPrompt(): string {
@@ -261,7 +266,7 @@ ${escapeHistoricalText(s)}
 
 function buildEditModeSuffix(editMode: EditMode): string {
   if (editMode.type === 'readonly') {
-    return '\n\nThis session is in READ-ONLY workspace mode. You cannot edit files, write files, or run shell commands. You may still use Bond memory tools because they operate on assistant memory rather than project files.'
+    return '\n\nThis session is in READ-ONLY workspace mode. You cannot edit files, write files, or run shell commands. You may still use Bond memory and web tools because they operate on assistant memory and network reads rather than project files.'
   }
   if (editMode.type === 'scoped') {
     return `\n\nThis session is in SCOPED WRITE mode. Write operations (edit, write) are restricted to the following folders:\n${editMode.allowedPaths.map(p => `- ${p}`).join('\n')}\nbash commands still require user approval. Do not attempt to write to files outside these folders.`
@@ -326,6 +331,7 @@ export async function runBondQuery(
     editMode?: EditMode
     contextEnvelope?: string
     memorySourceMessageId?: string
+    onboardingHooks?: { enableSense?: () => { enabled: boolean; state?: string } }
   }
 ): Promise<BondQueryResult> {
   return runPiBondQuery(prompt, {

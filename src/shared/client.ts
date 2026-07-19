@@ -5,6 +5,7 @@ import type { TranscriptMessage, TranscriptPage } from './transcript'
 import type { SenseStatus, SenseSettings, SenseCapture, SessionDebrief } from './sense'
 import type { CoreMemory, MemoryItem, MemoryItemInput, MemorySourcesResult, RetrievedMemory, WorkingState } from './memory'
 import type { OnboardingFirstRunState, SandboxStatus } from './onboarding'
+import type { WebRenderRequest, WebRenderResult } from './web'
 import {
   makeRequest,
   isResponse,
@@ -18,6 +19,7 @@ type CollectionChangeListener = () => void
 type ImageChangeListener = () => void
 type SenseRequestCaptureListener = (payload: { captureDir: string; captureId: string }) => void
 type SenseStateChangedListener = (payload: { state: string }) => void
+type WebRequestRenderListener = (payload: WebRenderRequest) => void
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -33,6 +35,7 @@ export class BondClient {
   private imageChangeListeners = new Set<ImageChangeListener>()
   private senseRequestCaptureListeners = new Set<SenseRequestCaptureListener>()
   private senseStateChangedListeners = new Set<SenseStateChangedListener>()
+  private webRequestRenderListeners = new Set<WebRequestRenderListener>()
   private disconnectListeners = new Set<() => void>()
   private socketPath: string
   private authToken?: string
@@ -147,6 +150,11 @@ export class BondClient {
         } else if (msg.method === 'sense.stateChanged' && msg.params) {
           const payload = msg.params as { state: string }
           for (const fn of this.senseStateChangedListeners) {
+            fn(payload)
+          }
+        } else if (msg.method === 'web.requestRender' && msg.params) {
+          const payload = msg.params as unknown as WebRenderRequest
+          for (const fn of this.webRequestRenderListeners) {
             fn(payload)
           }
         }
@@ -443,6 +451,10 @@ export class BondClient {
     return await this.call('sense.captureReady', { captureId, imagePath }) as { ok: boolean }
   }
 
+  async webRenderReady(result: WebRenderResult): Promise<{ ok: boolean }> {
+    return await this.call('web.renderReady', { ...result }) as { ok: boolean }
+  }
+
   async sensePermissionChanged(screen: boolean, accessibility: boolean): Promise<{ ok: boolean }> {
     return await this.call('sense.permissionChanged', { screen, accessibility }) as { ok: boolean }
   }
@@ -581,6 +593,11 @@ export class BondClient {
   onSenseStateChanged(fn: SenseStateChangedListener): () => void {
     this.senseStateChangedListeners.add(fn)
     return () => this.senseStateChangedListeners.delete(fn)
+  }
+
+  onWebRequestRender(fn: WebRequestRenderListener): () => void {
+    this.webRequestRenderListeners.add(fn)
+    return () => this.webRequestRenderListeners.delete(fn)
   }
 
   // --- Shell (client-side only, not proxied through daemon) ---

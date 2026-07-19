@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { BondClient } from '../shared/client'
 import { initSense, destroySense } from './sense'
+import { initWeb, destroyWeb } from './web'
 import { initTray, destroyTray } from './tray'
 import { initQuickChat, destroyQuickChat } from './quick-chat'
 import { registerWindow, registerSessionWindow, routeChunk, broadcast } from './window-router'
@@ -587,6 +588,7 @@ app.whenReady().then(async () => {
   await connectClient()
   setupAutoReconnect()
   initSense(client)
+  initWeb(client)
   initTray(client)
   initQuickChat(client)
 
@@ -863,5 +865,6 @@ app.on('before-quit', () => {
   destroyQuickChat()
   destroyTray()
   destroySense()
+  destroyWeb()
   client?.close()
 })
