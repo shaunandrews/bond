@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import Database from 'better-sqlite3'
 import { setDataDir } from './paths'
 import { getDb, closeDb } from './db'
 import {
@@ -222,5 +223,189 @@ describe('turn reconciliation', () => {
       { id: 'turn-r2', status: 'done' },
     ])
     expect(activityData('turn-r1').status).toBe('cancelled')
+  })
+})
+
+describe('messages table ownership', () => {
+  // These tests need to control the database from before its first open, so
+  // they swap in their own data dir and restore the suite's one afterwards.
+  let ownDir: string | null = null
+
+  function freshDataDir(): string {
+    closeDb()
+    ownDir = join(tmpdir(), `bond-test-transcript-own-${randomUUID()}`)
+    mkdirSync(ownDir, { recursive: true })
+    setDataDir(ownDir)
+    return ownDir
+  }
+
+  afterEach(() => {
+    if (ownDir) {
+      closeDb()
+      rmSync(ownDir, { recursive: true, force: true })
+      ownDir = null
+      setDataDir(testDir)
+    }
+  })
+
+  const LEGACY_MESSAGES_PREAMBLE = `
+    CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO app_meta VALUES ('schema_version', '2');
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT 'New chat',
+      summary TEXT NOT NULL DEFAULT '',
+      archived INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO sessions VALUES ('s1', 'Chat', '', 0, '2026-01-01', '2026-01-01');
+  `
+
+  it('gives a fresh install the canonical shape with NO rebuild', () => {
+    const dir = freshDataDir()
+    const execSpy = vi.spyOn(Database.prototype, 'exec')
+    try {
+      const db = getDb()
+      // The rebuild path is the only code that touches the shadow table name.
+      const executed = execSpy.mock.calls.map(c => String(c[0]))
+      expect(executed.some(sql => sql.includes('messages_transcript_new'))).toBe(false)
+
+      const byName = new Map((db.pragma('table_info(messages)') as Array<{ name: string; notnull: number }>).map(c => [c.name, c]))
+      expect(byName.get('session_id')?.notnull).toBe(0)
+      expect(byName.has('seq')).toBe(true)
+      expect(byName.has('position')).toBe(true)
+      expect(byName.get('position')?.notnull).toBe(0)
+      expect(dir).toBe(ownDir)
+    } finally {
+      execSpy.mockRestore()
+    }
+  })
+
+  it('rebuilds the legacy NOT NULL shape without losing a single column value', () => {
+    const dir = freshDataDir()
+    const legacy = new Database(join(dir, 'bond.db'))
+    legacy.exec(`
+      ${LEGACY_MESSAGES_PREAMBLE}
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT,
+        streaming INTEGER,
+        kind TEXT,
+        name TEXT,
+        summary TEXT,
+        status TEXT,
+        data TEXT,
+        images TEXT,
+        updated_at TEXT
+      );
+      INSERT INTO messages VALUES ('m1', 's1', 0, 'user', 'hello', 1, 'kind-x', 'name-x', 'sum-x', 'ok', '{"a":1}', '["img-1"]', '2026-01-02');
+    `)
+    legacy.close()
+
+    const db = getDb()
+    const row = db.prepare("SELECT * FROM messages WHERE id = 'm1'").get() as Record<string, unknown>
+    expect(row).toMatchObject({
+      session_id: 's1',
+      position: 0,
+      role: 'user',
+      text: 'hello',
+      streaming: 1,
+      kind: 'kind-x',
+      name: 'name-x',
+      summary: 'sum-x',
+      status: 'ok',
+      data: '{"a":1}',
+      images: '["img-1"]',
+      updated_at: '2026-01-02',
+    })
+    const byName = new Map((db.pragma('table_info(messages)') as Array<{ name: string; notnull: number }>).map(c => [c.name, c]))
+    expect(byName.get('session_id')?.notnull).toBe(0)
+    expect(byName.has('seq')).toBe(true)
+  })
+
+  it('keeps data in canonical columns the old hardcoded copy list silently dropped', () => {
+    const dir = freshDataDir()
+    const legacy = new Database(join(dir, 'bond.db'))
+    legacy.exec(`
+      ${LEGACY_MESSAGES_PREAMBLE}
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT,
+        seq INTEGER,
+        image_ids TEXT,
+        created_at TEXT
+      );
+      INSERT INTO messages VALUES ('m1', 's1', 0, 'user', 'hello', 7, '["img-9"]', '2026-01-03');
+    `)
+    legacy.close()
+
+    const row = getDb().prepare("SELECT * FROM messages WHERE id = 'm1'").get() as Record<string, unknown>
+    expect(row).toMatchObject({ seq: 7, image_ids: '["img-9"]', created_at: '2026-01-03' })
+  })
+
+  it('drops the retired epochs.observed_at_context_tokens column, keeping row data', () => {
+    const dir = freshDataDir()
+    const legacy = new Database(join(dir, 'bond.db'))
+    legacy.exec(`
+      CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO app_meta VALUES ('schema_version', '2');
+      CREATE TABLE epochs (
+        id TEXT PRIMARY KEY,
+        pi_session_id TEXT NOT NULL UNIQUE,
+        pi_session_file TEXT,
+        status TEXT NOT NULL CHECK(status IN ('active','closed')),
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        end_reason TEXT,
+        context_tokens INTEGER NOT NULL DEFAULT 0,
+        context_window INTEGER NOT NULL DEFAULT 0,
+        observed_through_seq INTEGER NOT NULL DEFAULT 0,
+        observed_at_context_tokens INTEGER NOT NULL DEFAULT 0,
+        reflected_through_seq INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO epochs (id, pi_session_id, status, started_at, observed_through_seq)
+      VALUES ('e1', 'pi-e1', 'closed', '2026-01-01', 42);
+    `)
+    legacy.close()
+
+    const db = getDb()
+    const cols = (db.pragma('table_info(epochs)') as Array<{ name: string }>).map(c => c.name)
+    expect(cols).not.toContain('observed_at_context_tokens')
+    const row = db.prepare("SELECT observed_through_seq FROM epochs WHERE id = 'e1'").get() as { observed_through_seq: number }
+    expect(row.observed_through_seq).toBe(42)
+  })
+})
+
+describe('ensureTranscriptSchema runs once per db handle', () => {
+  it('performs zero execs on an already-ensured handle', () => {
+    const db = getDb() // ensured inside getDb()
+    const execSpy = vi.spyOn(db, 'exec')
+    try {
+      ensureTranscriptSchema(db)
+      ensureTranscriptSchema(db)
+      expect(execSpy).not.toHaveBeenCalled()
+    } finally {
+      execSpy.mockRestore()
+    }
+  })
+
+  it('re-runs the DDL for the fresh handle after closeDb()', () => {
+    closeDb()
+    const execSpy = vi.spyOn(Database.prototype, 'exec')
+    try {
+      getDb()
+      const executed = execSpy.mock.calls.map(c => String(c[0]))
+      expect(executed.some(sql => sql.includes('CREATE TABLE IF NOT EXISTS epochs'))).toBe(true)
+      expect(executed.some(sql => sql.includes('message_fts'))).toBe(true)
+    } finally {
+      execSpy.mockRestore()
+    }
   })
 })

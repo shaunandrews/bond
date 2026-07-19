@@ -3,7 +3,7 @@ import Database from 'better-sqlite3'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getDataDir, getDbPath } from './paths'
-import { ensureTranscriptSchema } from './transcript'
+import { ensureTranscriptSchema, messagesTableDdl, transcriptPrereqDdl } from './transcript'
 import { ensureMemorySchema } from './memory/store'
 
 /** Increment when the persisted Bond product schema is intentionally replaced. */
@@ -30,31 +30,24 @@ export function getDb(): Database.Database {
   migrateFromFiles(_db)
   migrateInlineImages(_db)
   migrateAddSiteIdColumn(_db)
-  migrateCreateTodosTable(_db)
-  migrateAddTodoNotesColumn(_db)
-  migrateAddTodoGroupColumn(_db)
   migrateCreateProjectsTable(_db)
   migrateAddProjectIdColumns(_db)
-  migrateAddProjectDeadlineColumn(_db)
-  migrateAddTodoSortOrder(_db)
   migrateAddFavoritedColumn(_db)
   migrateAddIconSeedColumn(_db)
   migrateCreateCollectionsTable(_db)
-  migrateCreateJournalTable(_db)
   migrateAddMessageUpdatedAt(_db)
   migrateAddMessageDataColumn(_db)
-  migrateCreatePendingApprovalsTable(_db)
-  migrateCreateJournalCommentsTable(_db)
   migrateCreateSenseTables(_db)
-  migrateCreateOperativesTable(_db)
+  migrateFixSenseFtsUpdateTrigger(_db)
+  migrateRebuildSenseFts(_db)
   migrateAddQuickColumn(_db)
   migrateAddCollectionFeatures(_db)
   migrateCreateCollectionItemCommentsTable(_db)
   migrateAddCollectionItemProjectId(_db)
   migrateAddCollectionItemDisplayNumber(_db)
   retireLegacyJournalCollection(_db)
-  migrateAddOperativeContextWindow(_db)
   migrateCreateSenseMemoryTables(_db)
+  migrateDropRetiredTables(_db)
   ensureTranscriptSchema(_db)
   ensureMemorySchema(_db)
 
@@ -164,21 +157,17 @@ function createSchema(db: Database.Database): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+  `)
 
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-      position INTEGER NOT NULL,
-      role TEXT NOT NULL,
-      text TEXT,
-      streaming INTEGER,
-      kind TEXT,
-      name TEXT,
-      summary TEXT,
-      status TEXT,
-      data TEXT
-    );
+  // transcript.ts is the single owner of the messages table shape. A fresh
+  // install gets the canonical DDL directly — no legacy shape, no rebuild.
+  // Epochs and turns must exist first: messages carries FK references to
+  // both, and with foreign_keys = ON a missing parent table fails every
+  // insert (migrateFromFiles writes messages before ensureTranscriptSchema).
+  db.exec(transcriptPrereqDdl())
+  db.exec(messagesTableDdl('messages'))
 
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, position);
 
     CREATE TABLE IF NOT EXISTS settings (
@@ -287,32 +276,13 @@ function migrateAddSiteIdColumn(db: Database.Database): void {
   }
 }
 
-function migrateCreateTodosTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS todos (
-      id TEXT PRIMARY KEY,
-      text TEXT NOT NULL,
-      done INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-  `)
-}
-
-function migrateAddTodoNotesColumn(db: Database.Database): void {
-  const columns = db.pragma('table_info(todos)') as { name: string }[]
-  if (!columns.some(c => c.name === 'notes')) {
-    db.exec("ALTER TABLE todos ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
-  }
-}
-
-function migrateAddTodoGroupColumn(db: Database.Database): void {
-  const columns = db.pragma('table_info(todos)') as { name: string }[]
-  if (!columns.some(c => c.name === 'group_name')) {
-    db.exec("ALTER TABLE todos ADD COLUMN group_name TEXT NOT NULL DEFAULT ''")
-  }
-}
-
+/**
+ * Projects is a retired feature, but the TABLE must stay as a stub:
+ * `sessions`, `collection_items`, `sense_debriefs`, and `sense_facts` all
+ * hold live `REFERENCES projects(id)` foreign keys, and with
+ * `PRAGMA foreign_keys = ON` dropping the parent table would break inserts
+ * on all four. Nothing reads or writes projects anymore.
+ */
 function migrateCreateProjectsTable(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS projects (
@@ -324,16 +294,6 @@ function migrateCreateProjectsTable(db: Database.Database): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
-
-    CREATE TABLE IF NOT EXISTS project_resources (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL,
-      value TEXT NOT NULL,
-      label TEXT,
-      created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_project_resources_project ON project_resources(project_id);
   `)
 }
 
@@ -341,29 +301,6 @@ function migrateAddProjectIdColumns(db: Database.Database): void {
   const sessionCols = db.pragma('table_info(sessions)') as { name: string }[]
   if (!sessionCols.some(c => c.name === 'project_id')) {
     db.exec('ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL')
-  }
-
-  const todoCols = db.pragma('table_info(todos)') as { name: string }[]
-  if (!todoCols.some(c => c.name === 'project_id')) {
-    db.exec('ALTER TABLE todos ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL')
-  }
-}
-
-function migrateAddProjectDeadlineColumn(db: Database.Database): void {
-  const columns = db.pragma('table_info(projects)') as { name: string }[]
-  if (!columns.some(c => c.name === 'deadline')) {
-    db.exec('ALTER TABLE projects ADD COLUMN deadline TEXT')
-  }
-}
-
-function migrateAddTodoSortOrder(db: Database.Database): void {
-  const columns = db.pragma('table_info(todos)') as { name: string }[]
-  if (!columns.some(c => c.name === 'sort_order')) {
-    db.exec('ALTER TABLE todos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
-    // Backfill existing todos with sequential sort_order based on created_at
-    const rows = db.prepare('SELECT id FROM todos ORDER BY created_at ASC').all() as { id: string }[]
-    const stmt = db.prepare('UPDATE todos SET sort_order = ? WHERE id = ?')
-    rows.forEach((row, i) => stmt.run(i, row.id))
   }
 }
 
@@ -405,26 +342,6 @@ function migrateCreateCollectionsTable(db: Database.Database): void {
   `)
 }
 
-function migrateCreateJournalTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS journal_entries (
-      id TEXT PRIMARY KEY,
-      author TEXT NOT NULL,
-      title TEXT NOT NULL DEFAULT '',
-      body TEXT NOT NULL,
-      tags TEXT NOT NULL DEFAULT '[]',
-      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
-      session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-      pinned INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_journal_created ON journal_entries(created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_journal_project ON journal_entries(project_id);
-    CREATE INDEX IF NOT EXISTS idx_journal_author ON journal_entries(author);
-  `)
-}
-
 function migrateAddMessageUpdatedAt(db: Database.Database): void {
   const columns = db.pragma('table_info(messages)') as { name: string }[]
   if (!columns.some(c => c.name === 'updated_at')) {
@@ -437,34 +354,6 @@ function migrateAddMessageDataColumn(db: Database.Database): void {
   if (!columns.some(c => c.name === 'data')) {
     db.exec('ALTER TABLE messages ADD COLUMN data TEXT')
   }
-}
-
-function migrateCreatePendingApprovalsTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS pending_approvals (
-      request_id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-      tool_name TEXT NOT NULL,
-      input TEXT,
-      title TEXT,
-      description TEXT,
-      created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_pending_approvals_session ON pending_approvals(session_id);
-  `)
-}
-
-function migrateCreateJournalCommentsTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS journal_comments (
-      id TEXT PRIMARY KEY,
-      entry_id TEXT NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
-      author TEXT NOT NULL,
-      body TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_journal_comments_entry ON journal_comments(entry_id, created_at ASC);
-  `)
 }
 
 function migrateCreateSenseTables(db: Database.Database): void {
@@ -530,13 +419,7 @@ function migrateCreateSenseTables(db: Database.Database): void {
           VALUES (NEW.rowid, NEW.text_content, NEW.app_name, NEW.window_title);
       END;
 
-      CREATE TRIGGER sense_fts_update AFTER UPDATE OF text_content ON sense_captures
-        WHEN NEW.text_content IS NOT NULL BEGIN
-          INSERT INTO sense_fts(sense_fts, rowid, text_content, app_name, window_title)
-          VALUES ('delete', OLD.rowid, OLD.text_content, OLD.app_name, OLD.window_title);
-          INSERT INTO sense_fts(rowid, text_content, app_name, window_title)
-          VALUES (NEW.rowid, NEW.text_content, NEW.app_name, NEW.window_title);
-      END;
+      ${SENSE_FTS_UPDATE_TRIGGER}
 
       CREATE TRIGGER sense_fts_delete AFTER DELETE ON sense_captures
         WHEN OLD.text_content IS NOT NULL BEGIN
@@ -547,46 +430,40 @@ function migrateCreateSenseTables(db: Database.Database): void {
   }
 }
 
-function migrateCreateOperativesTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS operatives (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      prompt TEXT NOT NULL,
-      working_dir TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'queued',
-      session_id TEXT,
-      sdk_session_id TEXT,
-      worktree TEXT,
-      branch TEXT,
-      model TEXT,
-      result_summary TEXT,
-      error_message TEXT,
-      exit_code INTEGER,
-      input_tokens INTEGER DEFAULT 0,
-      output_tokens INTEGER DEFAULT 0,
-      cost_usd REAL DEFAULT 0,
-      timeout_ms INTEGER,
-      max_budget_usd REAL,
-      started_at TEXT,
-      completed_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
+/**
+ * The update trigger must handle NULL text transitions per-half: emit the
+ * external-content 'delete' only when the OLD row was actually indexed, and
+ * insert only when the NEW row is indexable. The original single
+ * `WHEN NEW.text_content IS NOT NULL` guard skipped the whole trigger on a
+ * text -> NULL transition, stranding a stale index entry, and emitted a
+ * bogus 'delete' for never-indexed rows on NULL -> text.
+ */
+const SENSE_FTS_UPDATE_TRIGGER = `
+      CREATE TRIGGER sense_fts_update AFTER UPDATE OF text_content ON sense_captures BEGIN
+        INSERT INTO sense_fts(sense_fts, rowid, text_content, app_name, window_title)
+        SELECT 'delete', OLD.rowid, OLD.text_content, OLD.app_name, OLD.window_title
+        WHERE OLD.text_content IS NOT NULL;
+        INSERT INTO sense_fts(rowid, text_content, app_name, window_title)
+        SELECT NEW.rowid, NEW.text_content, NEW.app_name, NEW.window_title
+        WHERE NEW.text_content IS NOT NULL;
+      END;
+`
 
-    CREATE INDEX IF NOT EXISTS idx_operatives_status ON operatives(status);
-    CREATE INDEX IF NOT EXISTS idx_operatives_session ON operatives(session_id);
+/** Replace the mis-guarded update trigger on databases that predate the fix. */
+function migrateFixSenseFtsUpdateTrigger(db: Database.Database): void {
+  db.exec(`DROP TRIGGER IF EXISTS sense_fts_update;\n${SENSE_FTS_UPDATE_TRIGGER}`)
+}
 
-    CREATE TABLE IF NOT EXISTS operative_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      operative_id TEXT NOT NULL REFERENCES operatives(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL,
-      data TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_operative_events_operative ON operative_events(operative_id, id);
-  `)
+/**
+ * One-time index rebuild to repair drift accumulated while the update trigger
+ * mishandled NULL transitions (and while nothing queried the index to notice).
+ * Guarded by a settings flag, same pattern as `images_migrated`.
+ */
+function migrateRebuildSenseFts(db: Database.Database): void {
+  const flag = db.prepare('SELECT value FROM settings WHERE key = ?').get('sense_fts_rebuilt') as { value: string } | undefined
+  if (flag?.value === '1') return
+  db.exec("INSERT INTO sense_fts(sense_fts) VALUES('rebuild')")
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('sense_fts_rebuilt', '1')
 }
 
 function migrateAddQuickColumn(db: Database.Database): void {
@@ -841,9 +718,35 @@ function migrateCreateSenseMemoryTables(db: Database.Database): void {
   }
 }
 
-function migrateAddOperativeContextWindow(db: Database.Database): void {
-  const columns = db.pragma('table_info(operatives)') as { name: string }[]
-  if (!columns.some(c => c.name === 'context_window')) {
-    db.exec('ALTER TABLE operatives ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0')
+/**
+ * Retired tables — created and migrated by earlier product iterations,
+ * referenced by no code anymore. Legacy journal entries are exported to a
+ * JSON backup before the drop (same preservation intent that keeps a
+ * pre-app_meta standalone-journal DB from being wiped in
+ * resetIfSchemaChanged). Children are dropped before parents so live FK
+ * enforcement never sees an orphaned child table.
+ */
+function migrateDropRetiredTables(db: Database.Database): void {
+  const hasJournal = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='journal_entries'").get()
+  if (hasJournal) {
+    const entries = db.prepare('SELECT * FROM journal_entries').all()
+    if (entries.length > 0) {
+      const hasComments = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='journal_comments'").get()
+      const comments = hasComments ? db.prepare('SELECT * FROM journal_comments').all() : []
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const backupPath = join(getDataDir(), `journal-legacy-backup-${stamp}.json`)
+      writeFileSync(backupPath, JSON.stringify({ entries, comments }, null, 2))
+      console.log(`[bond] Legacy journal preserved: ${entries.length} entries exported to ${backupPath}`)
+    }
   }
+
+  db.exec(`
+    DROP TABLE IF EXISTS operative_events;
+    DROP TABLE IF EXISTS operatives;
+    DROP TABLE IF EXISTS journal_comments;
+    DROP TABLE IF EXISTS journal_entries;
+    DROP TABLE IF EXISTS project_resources;
+    DROP TABLE IF EXISTS todos;
+    DROP TABLE IF EXISTS pending_approvals;
+  `)
 }

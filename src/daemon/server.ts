@@ -34,9 +34,9 @@ import { resolveApproval } from './approvals'
 import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, abortActiveTurnForShutdown } from './turns'
 import { setRenderTransport, onRenderReady } from './web/broker'
 import { getRemoteStatus } from './remote'
-import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
+import { buildMatchQuery } from './fts'
 import {
   listSessions,
   createSession,
@@ -283,14 +283,37 @@ function getNumberParam(params: RawParams, key: string): number | undefined {
   return typeof v === 'number' ? v : undefined
 }
 
-function guessExt(contentType: string): string {
-  const map: Record<string, string> = {
-    'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
-    'image/webp': '.webp', 'image/svg+xml': '.svg',
-    'application/pdf': '.pdf', 'text/html': '.html',
-    'application/json': '.json', 'text/plain': '.txt',
+/**
+ * Sense capture search: FTS5 over the trigger-maintained sense_fts index.
+ * Per-term prefix matching approximates the old LIKE substring recall.
+ * Returns null when the query has no indexable tokens or FTS5 rejects the
+ * match string — callers fall back to the LIKE scan.
+ */
+function searchSenseCapturesFts(db: ReturnType<typeof getDb>, query: string, limit: number): Record<string, unknown>[] | null {
+  const match = buildMatchQuery(query, { prefix: true })
+  if (!match) return null
+  try {
+    return db.prepare(`
+      SELECT c.*, 'see' AS channel
+      FROM sense_fts f
+      JOIN sense_captures c ON c.rowid = f.rowid
+      WHERE sense_fts MATCH ?
+      ORDER BY c.captured_at DESC
+      LIMIT ?
+    `).all(match, limit) as Record<string, unknown>[]
+  } catch {
+    return null
   }
-  return map[contentType] || ''
+}
+
+/** LIKE fallback for queries FTS cannot represent (pure punctuation, etc.). */
+function searchSenseCapturesLike(db: ReturnType<typeof getDb>, query: string, limit: number): Record<string, unknown>[] {
+  return db.prepare(`
+    SELECT *, 'see' as channel FROM sense_captures
+    WHERE text_content LIKE ? OR app_name LIKE ? OR window_title LIKE ?
+    ORDER BY captured_at DESC
+    LIMIT ?
+  `).all(`%${query}%`, `%${query}%`, `%${query}%`, limit) as Record<string, unknown>[]
 }
 
 function sourceIdsForMemoryTags(tags: string[]): string[] {
@@ -804,12 +827,8 @@ const handlers: RpcHandlers = {
     const db = getDb()
 
     // Cross-channel search: screen captures + session debriefs
-    const captures = db.prepare(`
-      SELECT *, 'see' as channel FROM sense_captures
-      WHERE text_content LIKE ? OR app_name LIKE ? OR window_title LIKE ?
-      ORDER BY captured_at DESC
-      LIMIT ?
-    `).all(`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, limit) as Record<string, unknown>[]
+    const captures = searchSenseCapturesFts(db, searchQuery, limit)
+      ?? searchSenseCapturesLike(db, searchQuery, limit)
 
     const debriefResults = searchDebriefs(searchQuery, limit).map(d => ({
       ...d,

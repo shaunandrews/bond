@@ -389,6 +389,47 @@ describe('startup reconciliation', () => {
   })
 })
 
+describe('sense.search', () => {
+  function seedCapture(id: string, text: string | null, extras: { appName?: string; windowTitle?: string } = {}): void {
+    const db = getDb()
+    const now = new Date().toISOString()
+    db.prepare('INSERT OR IGNORE INTO sense_sessions (id, started_at, created_at) VALUES (?, ?, ?)').run('ss1', now, now)
+    db.prepare(
+      'INSERT INTO sense_captures (id, session_id, captured_at, app_name, window_title, text_content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, 'ss1', now, extras.appName ?? 'TestApp', extras.windowTitle ?? 'A window', text, now)
+  }
+
+  it('finds captures through the FTS index, including hyphenated terms', async () => {
+    seedCapture('c1', 'planning the foo-bar retro tomorrow')
+    seedCapture('c2', 'unrelated grocery list')
+
+    const results = await client.senseSearch('foo-bar') as Array<Record<string, unknown>>
+    expect(results.map(r => r.id)).toEqual(['c1'])
+    expect(results[0].channel).toBe('see')
+    expect(results[0]._sortDate).toBe(results[0].captured_at)
+  })
+
+  it('falls back to the LIKE scan when the query has no indexable tokens', async () => {
+    seedCapture('c1', 'what is this ??? thing anyway')
+    seedCapture('c2', 'plain text without punctuation')
+
+    const results = await client.senseSearch('???') as Array<Record<string, unknown>>
+    expect(results.map(r => r.id)).toEqual(['c1'])
+  })
+
+  it('tracks text transitions through NULL (update-trigger regression)', async () => {
+    seedCapture('c1', null)
+    expect(await client.senseSearch('zephyr')).toHaveLength(0)
+
+    getDb().prepare("UPDATE sense_captures SET text_content = 'zephyr sighting confirmed' WHERE id = 'c1'").run()
+    const found = await client.senseSearch('zephyr') as Array<Record<string, unknown>>
+    expect(found.map(r => r.id)).toEqual(['c1'])
+
+    getDb().prepare("UPDATE sense_captures SET text_content = NULL WHERE id = 'c1'").run()
+    expect(await client.senseSearch('zephyr')).toHaveLength(0)
+  })
+})
+
 describe('racing sends over the socket', () => {
   it('serializes near-simultaneous sends from two clients without overlap', async () => {
     let concurrent = 0

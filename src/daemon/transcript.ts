@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { getDb } from './db'
+import { buildMatchQuery } from './fts'
 import type { CompleteTurnInput, InsertTurnStartInput, TranscriptMessage, TranscriptPage, TranscriptRole, TurnStatus } from '../shared/transcript'
 
 const TOOL_OUTPUT_INDEX_LIMIT = 4_000
@@ -23,41 +24,96 @@ type MessageRow = {
   updated_at: string | null
 }
 
-export function ensureTranscriptSchema(db = getDb()): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS epochs (
+/**
+ * Canonical DDL for the `messages` table — the SINGLE owner of its shape.
+ * db.ts createSchema uses it for fresh installs and ensureMessagesTableShape
+ * uses it for the legacy-upgrade shadow copy, so the two can never drift.
+ */
+export function messagesTableDdl(tableName: string): string {
+  return `
+    CREATE TABLE IF NOT EXISTS ${tableName} (
       id TEXT PRIMARY KEY,
-      pi_session_id TEXT NOT NULL UNIQUE,
-      pi_session_file TEXT,
-      status TEXT NOT NULL CHECK(status IN ('active','closed')),
-      started_at TEXT NOT NULL,
-      ended_at TEXT,
-      end_reason TEXT,
-      context_tokens INTEGER NOT NULL DEFAULT 0,
-      context_window INTEGER NOT NULL DEFAULT 0,
-      observed_through_seq INTEGER NOT NULL DEFAULT 0,
-      observed_at_context_tokens INTEGER NOT NULL DEFAULT 0,
-      reflected_through_seq INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS one_active_epoch ON epochs(status) WHERE status = 'active';
-  `)
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS turns (
-      id TEXT PRIMARY KEY,
+      session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+      position INTEGER,
+      role TEXT NOT NULL CHECK(role IN ('user','bond','meta')),
+      text TEXT,
+      streaming INTEGER,
+      kind TEXT,
+      name TEXT,
+      summary TEXT,
+      status TEXT,
+      images TEXT,
+      data TEXT,
       epoch_id TEXT REFERENCES epochs(id),
-      user_message_id TEXT NOT NULL,
-      assistant_message_id TEXT NOT NULL,
-      activity_message_id TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')),
-      model TEXT,
-      started_at TEXT NOT NULL,
-      completed_at TEXT,
-      context_tokens INTEGER,
-      context_window INTEGER
+      turn_id TEXT REFERENCES turns(id),
+      seq INTEGER UNIQUE,
+      image_ids TEXT,
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_turns_epoch ON turns(epoch_id, started_at);
-  `)
+  `
+}
+
+const EPOCHS_DDL = `
+  CREATE TABLE IF NOT EXISTS epochs (
+    id TEXT PRIMARY KEY,
+    pi_session_id TEXT NOT NULL UNIQUE,
+    pi_session_file TEXT,
+    status TEXT NOT NULL CHECK(status IN ('active','closed')),
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    end_reason TEXT,
+    context_tokens INTEGER NOT NULL DEFAULT 0,
+    context_window INTEGER NOT NULL DEFAULT 0,
+    observed_through_seq INTEGER NOT NULL DEFAULT 0,
+    reflected_through_seq INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_active_epoch ON epochs(status) WHERE status = 'active';
+`
+
+const TURNS_DDL = `
+  CREATE TABLE IF NOT EXISTS turns (
+    id TEXT PRIMARY KEY,
+    epoch_id TEXT REFERENCES epochs(id),
+    user_message_id TEXT NOT NULL,
+    assistant_message_id TEXT NOT NULL,
+    activity_message_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')),
+    model TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    context_tokens INTEGER,
+    context_window INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_turns_epoch ON turns(epoch_id, started_at);
+`
+
+/**
+ * Epochs and turns DDL, exported so db.ts createSchema can create them BEFORE
+ * the canonical messages table: messages carries REFERENCES epochs(id) /
+ * turns(id), and with PRAGMA foreign_keys = ON, SQLite refuses ANY insert into
+ * a table whose FK parent is missing — even for NULL FK values.
+ */
+export function transcriptPrereqDdl(): string {
+  return EPOCHS_DDL + TURNS_DDL
+}
+
+/**
+ * The transcript DDL is pure CREATE IF NOT EXISTS + pragma probes, but it used
+ * to run on EVERY transcript operation — hot-path overhead on every send. Each
+ * Database handle only needs it once; closeDb() and the sandbox swap both
+ * construct a brand-new Database instance, so a WeakSet keyed on the handle
+ * needs no reset plumbing. Added only AFTER the DDL succeeds, so a throw never
+ * poisons the handle.
+ */
+const ensured = new WeakSet<Database.Database>()
+
+export function ensureTranscriptSchema(db = getDb()): void {
+  if (ensured.has(db)) return
+
+  db.exec(EPOCHS_DDL)
+  dropRetiredEpochColumns(db)
+  db.exec(TURNS_DDL)
 
   ensureMessagesTableShape(db)
 
@@ -71,6 +127,16 @@ export function ensureTranscriptSchema(db = getDb()): void {
       tokenize='unicode61 remove_diacritics 2'
     );
   `)
+
+  ensured.add(db)
+}
+
+/** observed_at_context_tokens was written by nothing and read by nothing. */
+function dropRetiredEpochColumns(db: Database.Database): void {
+  const cols = db.pragma('table_info(epochs)') as Array<{ name: string }>
+  if (cols.some(c => c.name === 'observed_at_context_tokens')) {
+    db.exec('ALTER TABLE epochs DROP COLUMN observed_at_context_tokens')
+  }
 }
 
 function ensureMessagesTableShape(db: Database.Database): void {
@@ -79,33 +145,13 @@ function ensureMessagesTableShape(db: Database.Database): void {
   const needsRebuild = cols.length === 0 || byName.get('session_id')?.notnull === 1 || byName.get('seq')?.notnull === 1
 
   if (needsRebuild) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS messages_transcript_new (
-        id TEXT PRIMARY KEY,
-        session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
-        position INTEGER,
-        role TEXT NOT NULL CHECK(role IN ('user','bond','meta')),
-        text TEXT,
-        streaming INTEGER,
-        kind TEXT,
-        name TEXT,
-        summary TEXT,
-        status TEXT,
-        images TEXT,
-        data TEXT,
-        epoch_id TEXT REFERENCES epochs(id),
-        turn_id TEXT REFERENCES turns(id),
-        seq INTEGER UNIQUE,
-        image_ids TEXT,
-        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-        updated_at TEXT
-      );
-    `)
+    db.exec(messagesTableDdl('messages_transcript_new'))
 
     if (cols.length > 0) {
-      const names = new Set(cols.map(c => c.name))
-      const copyCols = ['id', 'session_id', 'position', 'role', 'text', 'streaming', 'kind', 'name', 'summary', 'status', 'images', 'data', 'updated_at']
-        .filter(c => names.has(c))
+      // Copy the runtime intersection of old and canonical columns — a
+      // hardcoded list once silently dropped any column it didn't know about.
+      const newCols = new Set((db.pragma('table_info(messages_transcript_new)') as Array<{ name: string }>).map(c => c.name))
+      const copyCols = cols.map(c => c.name).filter(name => newCols.has(name))
       db.exec(`INSERT OR IGNORE INTO messages_transcript_new (${copyCols.join(', ')}) SELECT ${copyCols.join(', ')} FROM messages`)
       db.exec('DROP TABLE messages')
     }
@@ -429,12 +475,7 @@ export function getSourceMessages(ids: string[]): TranscriptMessage[] {
 }
 
 function buildFtsQuery(query: string): string | null {
-  const terms = query
-    .normalize('NFKC')
-    .match(/[\p{L}\p{N}_-]+/gu)
-    ?.slice(0, MAX_SEARCH_TERMS) ?? []
-  if (terms.length === 0) return null
-  return terms.map(t => `"${t.replace(/"/g, '""')}"`).join(' ')
+  return buildMatchQuery(query, { maxTerms: MAX_SEARCH_TERMS, prefix: false })
 }
 
 export function searchMessages(query: string, filters: { role?: TranscriptRole; kind?: string; limit?: number } = {}): TranscriptMessage[] {
