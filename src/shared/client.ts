@@ -38,12 +38,12 @@ export class BondClient {
   private webRequestRenderListeners = new Set<WebRequestRenderListener>()
   private disconnectListeners = new Set<() => void>()
   private socketPath: string
-  private authToken?: string
+  private tokenProvider: () => string | undefined
   private _connected = false
 
-  constructor(socketPath: string, authToken?: string) {
+  constructor(socketPath: string, auth?: string | (() => string | undefined)) {
     this.socketPath = socketPath
-    this.authToken = authToken
+    this.tokenProvider = typeof auth === 'function' ? auth : () => auth
   }
 
   get connected(): boolean {
@@ -56,10 +56,13 @@ export class BondClient {
       this.ws = new WebSocket(url)
 
       this.ws.on('open', async () => {
-        // Authenticate if a token is provided
-        if (this.authToken && this.ws) {
+        // Authenticate if a token is available. Read through the provider on
+        // every attempt — a restarted daemon mints a new token, and reconnect()
+        // must pick it up without recreating the client (listeners live here).
+        const token = this.tokenProvider()
+        if (token && this.ws) {
           try {
-            const authMsg = JSON.stringify(makeRequest(this.nextId++, 'bond.auth', { token: this.authToken }))
+            const authMsg = JSON.stringify(makeRequest(this.nextId++, 'bond.auth', { token }))
             const authPromise = new Promise<void>((authResolve, authReject) => {
               const onMsg = (raw: WebSocket.Data) => {
                 try {

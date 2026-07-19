@@ -191,8 +191,7 @@ function readAuthToken(): string | undefined {
 }
 
 async function connectClient(): Promise<void> {
-  const token = readAuthToken()
-  client = new BondClient(socketPath, token)
+  client = new BondClient(socketPath, readAuthToken)
 
   let lastError: Error | undefined
   for (let i = 0; i < 10; i++) {
@@ -562,10 +561,11 @@ async function attemptReconnect(): Promise<void> {
     await new Promise(r => setTimeout(r, 1000))
     try {
       await ensureDaemon()
-      // A daemon restart generates a new auth token. Recreate the client
-      // instead of reconnecting the old instance with stale credentials.
-      await connectClient()
-      setupAutoReconnect()
+      // Reconnect the SAME client instance: its token provider re-reads the
+      // restarted daemon's fresh token, and every registered push listener
+      // (chunks, sense, web renders, tray, quick chat) survives. Recreating
+      // the client here once silently severed all of them until app relaunch.
+      await client.reconnect()
       isReconnecting = false
       console.log('[bond] reconnected to daemon')
       broadcast('bond:connectionRestored')
