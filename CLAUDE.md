@@ -66,7 +66,7 @@ Renderer (Vue) → Electron IPC → Main Process → WebSocket over Unix socket 
 
 The daemon runs an HTTP + WebSocket server (`ws`) bound to the Unix socket `~/.bond/bond.sock`. `BondClient` (`src/shared/client.ts`) is the shared WebSocket client used by both the main process and the CLI.
 
-**Remote access**: the daemon also listens on TCP `0.0.0.0:3113` (`remote.port` setting; port reserved via Port Keeper), serving the `out/web` browser bundle over HTTP and the same JSON-RPC WebSocket protocol. Browsers on the LAN pair via a URL/QR from Settings → Remote access whose `#t=…` fragment carries a persistent token (`remote.token` setting); the WebSocket auth gate plus a same-origin upgrade check are the security boundary. The web client (`src/renderer/web/`) reuses the renderer components with a browser `window.bond` shim over a native WebSocket. Live multi-device sync rides on two chunks: `turn_start` (mirrors the sender's user message + activity ids on other clients) and `approval_resolved` (flips pending approval prompts everywhere). **The web client runs in an insecure context** (plain http on a LAN IP) — secure-context-only APIs (`crypto.randomUUID`, `navigator.clipboard`, service workers) are undefined there; any renderer code the web client can reach needs fallbacks (`uid()` in `useChat.ts` is the pattern). All agent work runs through **Pi** (`@earendil-works/pi-coding-agent`), which resolves Bond's capability tiers against the user's connected subscription — Bond never calls a provider API directly. Pi session transcripts persist as JSONL under `~/Library/Application Support/bond/pi/sessions/`.
+**Remote access**: the daemon also listens on TCP `0.0.0.0:3113` (`remote.port` setting; port reserved via Port Keeper), serving the `out/web` browser bundle over HTTP and the same JSON-RPC WebSocket protocol. Browsers on the LAN pair via a URL/QR from Settings → Remote access whose `#t=…` fragment carries a persistent token (`remote.token` setting); the WebSocket auth gate plus a same-origin upgrade check are the security boundary. The web client (`src/renderer/web/`) reuses the renderer components with a browser `window.bond` shim over a native WebSocket. Live multi-device sync rides on three chunks: `turn_start` (mirrors the sender's user message + activity ids on other clients), `approval_resolved` (flips pending approval prompts everywhere), and `edit_mode_changed` (mirrors the global permissions mode). The renderer drops turn-scoped chunks whose `turnId` it doesn't own — a straggler racing a cancel can't mint orphan activity rows. **The web client runs in an insecure context** (plain http on a LAN IP) — secure-context-only APIs (`crypto.randomUUID`, `navigator.clipboard`, service workers) are undefined there; any renderer code the web client can reach needs fallbacks (`uid()` in `useChat.ts` and `lib/clipboard.ts` are the pattern). All agent work runs through **Pi** (`@earendil-works/pi-coding-agent`), which resolves Bond's capability tiers against the user's connected subscription — Bond never calls a provider API directly. Pi session transcripts persist as JSONL under `~/Library/Application Support/bond/pi/sessions/`.
 
 ### Daemon (`src/daemon/`)
 
@@ -77,10 +77,12 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `main.ts` | Entry point — claims the socket, starts servers, watchdog + signal handling |
 | `lifecycle.ts` | Single-instance enforcement — socket claim under a start lock, orphan watchdog, `/health` payload |
 | `wire-debug.ts` | Wire-level tool visibility — logs every model request's tool manifest (fetch + WebSocket, zstd-aware) |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`, `web.*`) |
-| `agent.ts` / `pi/runtime.ts` | Builds Bond context, runs Pi sessions, streams chunks, handles tool approvals |
+| `server.ts` | WebSocket server with thin JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`, `web.*`) — turn lifecycle lives in `turns.ts` |
+| `turns.ts` | Turn runner — serialized send lifecycle (a new send atomically aborts the running turn), active-turn ownership, broadcast/Sense transport seam |
+| `approvals.ts` | The single pending-approval registry — `requestId` resolves, `turnId` scopes bulk clears; clients reconstruct pending prompts from persisted activity rows (no replay) |
+| `agent.ts` / `pi/runtime.ts` | Builds Bond context, runs Pi sessions, streams chunks, parks tool approvals via `approvals.ts` |
 | `pi/runtime.ts` | Pi session lifecycle, event streaming, edit-mode → tool/permission mapping, Bond memory tool registration, tier resolution, Pi OAuth |
-| `memory/service.ts` | Serialized automatic observer persistence + epoch observer/reflector hooks |
+| `memory/service.ts` | Serialized automatic observer persistence + epoch observer/reflector hooks; `enqueueMemoryTask` runs deferred work (incl. epoch-rollover hooks) on the same queue so it never blocks a send |
 | `memory/tools.ts` | Bond-owned Pi tools for memory status/search/recall/history and explicit remember/update/forget |
 | `memory/store.ts` | Searchable memory CRUD, FTS, and relational source-message provenance |
 | `memory/core-memory.ts` | Bounded persistent Core memory in `memory/core.json` |
@@ -96,7 +98,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `debriefs.ts` | Session debrief storage (SQLite) |
 | `generate-debrief.ts` | Auto-generates session debriefs (summary + topics) |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
-| `db.ts` | Database init, migrations, WAL mode |
+| `db.ts` | Database init, migrations, WAL mode; an UNREADABLE db is quarantined (renamed `.corrupt-<ts>`, Pi sessions/images untouched) — only a readable stale-version db takes the clean-cutover wipe |
 | `settings.ts` | Key-value settings storage (soul, model, accent color) |
 | `paths.ts` | Data directory resolution |
 | `index.ts` | Daemon library exports |
@@ -116,7 +118,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 
 ### Main Process (`src/main/`)
 
-Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. Builds the native application menu, including **Bond → Run/Exit New-User Simulation** (⌘⌥N) which toggles the daemon's sandbox data set and reloads the window — the real app then boots into a genuine first-run. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), the web render host (`src/main/web.ts` — a persistent hidden `BrowserWindow` that serves the daemon's `web.requestRender` requests so `web_search`/`fetch_content` get real-Chromium rendered HTML with no API keys), tray indicator (`src/main/tray.ts`).
+Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. On daemon restart it reconnects the **same** `BondClient` instance in place (the auth token is read through a provider on every attempt), so registered push listeners — chunk streaming, Sense, web renders, tray — survive `bin/bond rebuild daemon` without an app relaunch. Builds the native application menu, including **Bond → Run/Exit New-User Simulation** (⌘⌥N) which toggles the daemon's sandbox data set and reloads the window — the real app then boots into a genuine first-run. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), the web render host (`src/main/web.ts` — a persistent hidden `BrowserWindow` that serves the daemon's `web.requestRender` requests so `web_search`/`fetch_content` get real-Chromium rendered HTML with no API keys), tray indicator (`src/main/tray.ts`).
 
 ### Preload (`src/preload/index.ts`)
 
@@ -155,7 +157,9 @@ src/
     accessibility-helper.m           # AXUIElement tree walker native helper (Obj-C)
   daemon/
     main.ts                          # Daemon entry point
-    server.ts                        # WebSocket JSON-RPC server
+    server.ts                        # WebSocket JSON-RPC server (thin dispatch)
+    turns.ts                         # Turn runner — serialized send lifecycle
+    approvals.ts                     # Single pending-approval registry
     agent.ts                         # Bond prompt and Pi runtime entrypoint
      pi/runtime.ts                    # Pi session, event, and permission bridge
     sessions.ts                      # Session CRUD (SQLite)
@@ -251,6 +255,7 @@ src/
       MemoryView.vue                 # Core/working/search/source memory panel
       DevComponents.vue              # Dev-only component catalog
     lib/highlight.ts                 # highlight.js language registration
+    lib/clipboard.ts                 # copyToClipboard with insecure-context fallback
 electron.vite.config.ts                  # Build config (main, preload, renderer)
 vite.web.config.ts                       # Browser bundle build for remote access → out/web
 electron-builder.yml                     # Packaging config (macOS DMG, extraResources for daemon)
@@ -506,7 +511,7 @@ type EditMode =
   | { type: 'scoped', allowedPaths: string[] }     // Read/write restricted to specific paths
 ```
 
-The edit mode selector appears in ChatInput's toolbar as current composer state. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
+Edit mode is **one global, daemon-persisted setting** (`edit_mode`, validated through `parseEditMode` in `shared/session.ts`): loaded into the composer at boot on every surface (desktop, web, quick chat), applied per-turn via `BondSendInput.editMode`, and mirrored live to all clients through the `edit_mode_changed` chunk when any device changes it. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
 
 ## Image Storage
 
