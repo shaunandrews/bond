@@ -7,13 +7,13 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { connect as netConnect } from 'node:net'
 import { BondClient } from '../shared/client'
 import { PROTOCOL_VERSION } from '../shared/protocol'
+import { RPC_METHOD_NAMES, type DispatchableMethod } from '../shared/rpc-schema'
 import { initSense, destroySense } from './sense'
 import { initWeb, destroyWeb } from './web'
 import { initTray, destroyTray } from './tray'
 import { initQuickChat, destroyQuickChat } from './quick-chat'
 import { registerWindow, registerSessionWindow, routeChunk, broadcast } from './window-router'
-import type { BondSendInput, TaggedChunk } from '../shared/stream'
-import type { AttachedImage, EditMode } from '../shared/session'
+import type { TaggedChunk } from '../shared/stream'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -701,51 +701,32 @@ app.whenReady().then(async () => {
     }
   })
 
-  // --- Chat (proxied to daemon) ---
-  ipcMain.handle('bond:send', async (_event, inputOrText: BondSendInput | string, sessionId?: string, images?: AttachedImage[]) => {
-    // Legacy session windows still register for the old renderer until the UI cutover lands.
-    if (sessionId) {
-      const senderWindow = BrowserWindow.fromWebContents(_event.sender)
-      if (senderWindow) registerSessionWindow(sessionId, senderWindow)
+  // --- Daemon proxies: one generic channel, registry-gated ---
+  // Every pure daemon proxy on window.bond rides bond:rpc (see
+  // src/shared/bond-surface.ts). Only methods with main-side broadcast side
+  // effects keep dedicated channels below.
+  const RPC_METHODS = new Set<string>(RPC_METHOD_NAMES)
+  ipcMain.handle('bond:rpc', (event, method: string, params: unknown) => {
+    if (!RPC_METHODS.has(method) || method === 'bond.auth') {
+      throw new Error(`Unknown RPC method: ${method}`)
     }
-    return typeof inputOrText === 'string'
-      ? client.send(inputOrText, sessionId, images)
-      : client.send(inputOrText)
+    if (method === 'bond.send') {
+      // Legacy session windows still register for the old renderer until the UI cutover lands.
+      const sessionId = (params as { sessionId?: string } | undefined)?.sessionId
+      if (sessionId) {
+        const win = BrowserWindow.fromWebContents(event.sender)
+        if (win) registerSessionWindow(sessionId, win)
+      }
+    }
+    return client.call(method as DispatchableMethod, params as never)
   })
 
-  ipcMain.handle('bond:cancel', async (_e, sessionId?: string) => {
-    return client.cancel(sessionId)
-  })
-
-  ipcMain.handle('bond:approvalResponse', (_e, requestId: string, approved: boolean) => {
-    return client.respondToApproval(requestId, approved)
-  })
-
-  ipcMain.handle('bond:subscribe', (_e, sessionId?: string) => {
-    return client.subscribe(sessionId)
-  })
-
-  ipcMain.handle('bond:unsubscribe', (_e, sessionId?: string) => {
-    return client.unsubscribe(sessionId)
-  })
-
-  // --- Model ---
+  // --- Model (broadcasts to all windows after the daemon call) ---
   ipcMain.handle('bond:setModel', async (_e, model: string) => {
     const result = await client.setModel(model)
     broadcast('bond:modelChanged', model)
     return result
   })
-
-  ipcMain.handle('bond:getModel', () => {
-    return client.getModel()
-  })
-  ipcMain.handle('settings:getEditMode', () => client.getEditMode())
-  ipcMain.handle('settings:setEditMode', (_e, editMode: EditMode) => client.setEditMode(editMode))
-
-  ipcMain.handle('pi:status', () => client.getPiStatus())
-  ipcMain.handle('pi:startOAuth', (_e, provider: 'anthropic' | 'openai-codex') => client.startPiOAuth(provider))
-
-  ipcMain.handle('remote:status', () => client.remoteStatus())
 
   // --- Context menu ---
   ipcMain.handle('context-menu:show', (_e, items: { id: string; label: string; type?: string }[]) => {
@@ -761,54 +742,6 @@ app.whenReady().then(async () => {
     })
   })
 
-  // --- Continuous transcript ---
-  ipcMain.handle('transcript:list', (_e, options?: { beforeSeq?: number; limit?: number }) => client.listTranscript(options))
-  ipcMain.handle('transcript:upsert', (_e, messages: unknown[]) => client.upsertTranscript(messages as any))
-  ipcMain.handle('transcript:search', (_e, query: string, limit?: number) => client.searchTranscript(query, limit))
-
-  // --- Sessions ---
-  ipcMain.handle('session:list', () => client.listSessions())
-  ipcMain.handle('session:create', (_e, options?: { title?: string }) => client.createSession(options))
-  ipcMain.handle('session:get', (_e, id: string) => client.getSession(id))
-  ipcMain.handle('session:update', (_e, id: string, updates: Record<string, unknown>) => client.updateSession(id, updates))
-  ipcMain.handle('session:delete', (_e, id: string) => client.deleteSession(id))
-  ipcMain.handle('session:deleteArchived', () => client.deleteArchivedSessions())
-  ipcMain.handle('session:getMessages', (_e, sessionId: string) => client.getMessages(sessionId))
-  ipcMain.handle('session:saveMessages', (_e, sessionId: string, messages: unknown[]) => {
-    if (isQuitting) return true
-    return client.saveMessages(sessionId, messages as any)
-  })
-
-  // --- Skills ---
-  ipcMain.handle('skills:list', () => client.listSkills())
-  ipcMain.handle('skills:refresh', () => client.refreshSkills())
-  ipcMain.handle('skills:remove', (_e, name: string) => client.removeSkill(name))
-
-  // --- Images ---
-  ipcMain.handle('image:list', () => client.listImages())
-  ipcMain.handle('image:get', (_e, imageId: string) => client.getImage(imageId))
-  ipcMain.handle('image:getMultiple', (_e, ids: string[]) => client.getImages(ids))
-  ipcMain.handle('image:import', (_e, data: string, mediaType: string) => client.importImage(data, mediaType))
-  ipcMain.handle('image:delete', (_e, imageId: string) => client.deleteImage(imageId))
-
-  // --- Collections ---
-  ipcMain.handle('collection:list', () => client.listCollections())
-  ipcMain.handle('collection:get', (_e, id: string) => client.getCollection(id))
-  ipcMain.handle('collection:create', (_e, name: string, schema: unknown[], icon?: string) => client.createCollection(name, schema as any, icon))
-  ipcMain.handle('collection:update', (_e, id: string, updates: Record<string, unknown>) => client.updateCollection(id, updates))
-  ipcMain.handle('collection:delete', (_e, id: string) => client.deleteCollection(id))
-  ipcMain.handle('collection:renameField', (_e, id: string, oldName: string, newName: string) => client.renameCollectionField(id, oldName, newName))
-  ipcMain.handle('collection:listItems', (_e, collectionId: string) => client.listCollectionItems(collectionId))
-  ipcMain.handle('collection:getItem', (_e, id: string) => client.getCollectionItem(id))
-  ipcMain.handle('collection:addItem', (_e, collectionId: string, data: Record<string, unknown>) => client.addCollectionItem(collectionId, data))
-  ipcMain.handle('collection:updateItem', (_e, id: string, data: Record<string, unknown>) => client.updateCollectionItem(id, data))
-  ipcMain.handle('collection:deleteItem', (_e, id: string) => client.deleteCollectionItem(id))
-  ipcMain.handle('collection:reorderItems', (_e, ids: string[]) => client.reorderCollectionItems(ids))
-
-  // --- Collection item comments ---
-  ipcMain.handle('collection:addItemComment', (_e, itemId: string, author: string, body: string) => client.addItemComment(itemId, author as any, body))
-  ipcMain.handle('collection:deleteItemComment', (_e, id: string) => client.deleteItemComment(id))
-
   ipcMain.handle('image:readLocal', (_e, filePath: string): string | null => {
     if (!isAllowedPath(filePath)) return null
     const EXT_TO_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
@@ -819,68 +752,18 @@ app.whenReady().then(async () => {
     return `data:${mime};base64,${data}`
   })
 
-  // --- Settings ---
-  ipcMain.handle('settings:getSoul', () => client.getSoul())
-  ipcMain.handle('settings:saveSoul', (_e, content: string) => client.saveSoul(content))
-  ipcMain.handle('settings:getAccentColor', () => client.getAccentColor())
+  // --- Settings with main-side broadcast (all windows react to the change) ---
   ipcMain.handle('settings:saveAccentColor', async (_e, hex: string) => {
     const result = await client.saveAccentColor(hex)
     broadcast('bond:accentColor', hex)
     return result
   })
-  ipcMain.handle('settings:getWindowOpacity', () => client.getWindowOpacity())
   ipcMain.handle('settings:saveWindowOpacity', async (_e, opacity: number) => {
     const result = await client.saveWindowOpacity(opacity)
     broadcast('bond:windowOpacity', opacity)
     return result
   })
 
-  // Sense IPC handlers — proxy to daemon via BondClient
-  ipcMain.handle('sense:status', () => client.senseStatus())
-  ipcMain.handle('sense:enable', () => client.senseEnable())
-  ipcMain.handle('sense:disable', () => client.senseDisable())
-  ipcMain.handle('sense:pause', (_e, minutes?: number) => client.sensePause(minutes))
-  ipcMain.handle('sense:resume', () => client.senseResume())
-  ipcMain.handle('sense:now', () => client.senseNow())
-  ipcMain.handle('sense:today', () => client.senseToday())
-  ipcMain.handle('sense:search', (_e, query: string, limit?: number) => client.senseSearch(query, limit))
-  ipcMain.handle('sense:apps', (_e, range?: string) => client.senseApps(range))
-  ipcMain.handle('sense:timeline', (_e, from?: string, to?: string, limit?: number) => client.senseTimeline(from, to, limit))
-  ipcMain.handle('sense:capture', (_e, id: string) => client.senseCapture(id))
-  ipcMain.handle('sense:sessions', (_e, from?: string, to?: string) => client.senseSessions(from, to))
-  ipcMain.handle('sense:settings', () => client.senseSettings())
-  ipcMain.handle('sense:updateSettings', (_e, updates: Record<string, unknown>) => client.senseUpdateSettings(updates))
-  ipcMain.handle('sense:clear', (_e, range?: { from?: string; to?: string }) => client.senseClear(range))
-  ipcMain.handle('sense:stats', () => client.senseStats())
-
-  // Onboarding IPC handlers
-  ipcMain.handle('onboarding:status', () => client.onboardingStatus())
-  ipcMain.handle('onboarding:begin', () => client.onboardingBegin())
-  ipcMain.handle('onboarding:skip', () => client.onboardingSkip())
-  ipcMain.handle('sandbox:status', () => client.sandboxStatus())
-
-  // Memory IPC handlers
-  ipcMain.handle('memory:core', () => client.memoryCore())
-  ipcMain.handle('memory:updateCore', (_e, core: import('../shared/memory').CoreMemory) => client.memoryUpdateCore(core))
-  ipcMain.handle('memory:working', () => client.memoryWorking())
-  ipcMain.handle('memory:updateWorking', (_e, working: import('../shared/memory').WorkingState) => client.memoryUpdateWorking(working))
-  ipcMain.handle('memory:clearWorking', () => client.memoryClearWorking())
-  ipcMain.handle('memory:search', (_e, query: string, limit?: number) => client.memorySearch(query, limit))
-  ipcMain.handle('memory:upsert', (_e, item: import('../shared/memory').MemoryItemInput) => client.memoryUpsert(item))
-  ipcMain.handle('memory:delete', (_e, id: string) => client.memoryDelete(id))
-  ipcMain.handle('memory:sources', (_e, id: string) => client.memorySources(id))
-
-  ipcMain.handle('sense:memory', (_e, limit?: number) => client.senseMemory(limit))
-  ipcMain.handle('sense:debrief', (_e, id?: string, sessionId?: string) => client.senseDebrief(id, sessionId))
-  ipcMain.handle('sense:deleteDebrief', (_e, id: string) => client.senseDeleteDebrief(id))
-  ipcMain.handle('sense:systemPromptPreview', async (_e, editMode?: import('../shared/session').EditMode) => {
-    try {
-      return await client.senseSystemPromptPreview(editMode)
-    } catch (err) {
-      console.error('[bond] system prompt preview failed:', err)
-      throw err
-    }
-  })
   ipcMain.handle('sense:hasPermission', () => {
     const { hasScreenRecordingPermission } = require('./sense') as typeof import('./sense')
     return hasScreenRecordingPermission()

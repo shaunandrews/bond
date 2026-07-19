@@ -21,6 +21,15 @@ describe('buildBondShim', () => {
     bond = buildBondShim(client as unknown as WebBondClient)
   })
 
+  it('routes subscribe through WebBondClient so re-subscribe survives reconnects', async () => {
+    await bond.subscribe()
+    expect(client.subscribe).toHaveBeenCalledWith(undefined)
+    expect(client.call).not.toHaveBeenCalledWith('bond.subscribe', expect.anything())
+
+    await bond.subscribe('s1')
+    expect(client.subscribe).toHaveBeenCalledWith('s1')
+  })
+
   it('maps chat methods to the daemon RPC surface', async () => {
     await bond.send({ text: 'hi', turnId: 't', userMessageId: 'u', assistantMessageId: 'a', activityMessageId: 'act' })
     expect(client.call).toHaveBeenCalledWith('bond.send', expect.objectContaining({ text: 'hi', turnId: 't' }))

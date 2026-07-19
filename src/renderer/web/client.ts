@@ -237,7 +237,7 @@ export class WebBondClient {
     })
   }
 
-  async subscribe(sessionId?: string): Promise<{ ok: boolean }> {
+  async subscribe(sessionId?: string): Promise<{ ok: true }> {
     if (!sessionId) this.wasSubscribed = true
     return await this.call('bond.subscribe', sessionId ? { sessionId } : undefined)
   }
