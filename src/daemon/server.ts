@@ -49,11 +49,7 @@ import {
   deleteSession,
   deleteArchivedSessions,
   getMessages,
-  saveMessages,
-  savePendingApproval,
-  removePendingApproval,
-  clearSessionPendingApprovals,
-  getPendingApprovals
+  saveMessages
 } from './sessions'
 import {
   listCollections,
@@ -141,10 +137,6 @@ async function settleForDataSwap(): Promise<void> {
     const existing = activeQuery
     existing.ac.abort()
     clearTurnApprovals(existing.turnId)
-    if (existing.sessionId) {
-      pendingApprovalChunks.delete(existing.sessionId)
-      try { clearSessionPendingApprovals(existing.sessionId) } catch { /* best effort */ }
-    }
     try { await existing.promise } catch { /* already handled */ }
     if (activeQuery?.turnId === existing.turnId) activeQuery = null
   }
@@ -184,9 +176,6 @@ function eachOpenClient(fn: (ws: WebSocket) => void): void {
     }
   }
 }
-
-// Track pending approvals per session for replay on reconnect
-const pendingApprovalChunks = new Map<string, TaggedChunk[]>()
 
 function subscribeTo(sessionId: string | undefined, ws: WebSocket): void {
   if (!sessionId) {
@@ -232,17 +221,6 @@ function broadcastChunk(sessionId: string | undefined, chunk: BondStreamChunk, t
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(msg)
     }
-  }
-
-  // Track pending approval chunks for replay (in-memory + SQLite)
-  if (chunk.kind === 'tool_approval' && sessionId) {
-    let pending = pendingApprovalChunks.get(sessionId)
-    if (!pending) {
-      pending = []
-      pendingApprovalChunks.set(sessionId, pending)
-    }
-    pending.push(tagged)
-    try { savePendingApproval(sessionId, tagged) } catch { /* best effort */ }
   }
 }
 
@@ -295,18 +273,6 @@ function persistSenseSettings(settings: SenseSettings): void {
 function broadcastSenseEvent(method: string, params: unknown): void {
   const msg = JSON.stringify(makeNotification(method, params))
   eachOpenClient(client => client.send(msg))
-}
-
-function clearPendingApprovalChunk(requestId: string): void {
-  for (const [sessionId, chunks] of pendingApprovalChunks) {
-    const idx = chunks.findIndex(c => c.kind === 'tool_approval' && c.requestId === requestId)
-    if (idx !== -1) {
-      chunks.splice(idx, 1)
-      if (chunks.length === 0) pendingApprovalChunks.delete(sessionId)
-      break
-    }
-  }
-  try { removePendingApproval(requestId) } catch { /* best effort */ }
 }
 
 // --- RPC handler ---
@@ -373,10 +339,6 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           const existing = activeQuery
           existing.ac.abort()
           clearTurnApprovals(existing.turnId)
-          if (existing.sessionId) {
-            pendingApprovalChunks.delete(existing.sessionId)
-            try { clearSessionPendingApprovals(existing.sessionId) } catch { /* best effort */ }
-          }
           try { await existing.promise } catch { /* already handled */ }
           if (activeQuery?.turnId === existing.turnId) activeQuery = null
         }
@@ -497,10 +459,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
         queryPromise.then((succeeded) => {
           if (activeQuery?.turnId === turnId) activeQuery = null
-          if (sessionId) {
-            pendingApprovalChunks.delete(sessionId)
-            try { clearSessionPendingApprovals(sessionId) } catch { /* best effort */ }
-          }
+          clearTurnApprovals(turnId)
           broadcastChunk(sessionId, { kind: 'query_end', succeeded }, tags)
         })
 
@@ -513,10 +472,6 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (entry && (!sessionId || entry.sessionId === sessionId)) {
           entry.ac.abort()
           clearTurnApprovals(entry.turnId)
-          if (entry.sessionId) {
-            pendingApprovalChunks.delete(entry.sessionId)
-            try { clearSessionPendingApprovals(entry.sessionId) } catch { /* best effort */ }
-          }
           try { await entry.promise } catch { /* already handled */ }
           if (activeQuery?.turnId === entry.turnId) activeQuery = null
         }
@@ -529,7 +484,6 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (!requestId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'requestId is required'))
         if (approved === undefined) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'approved is required'))
         resolveApproval(requestId, approved)
-        clearPendingApprovalChunk(requestId)
         // Let every other live viewer flip its pending approval prompt —
         // otherwise a second client shows a stale prompt until query_end.
         broadcastChunk(undefined, { kind: 'approval_resolved', requestId, approved })
@@ -548,28 +502,10 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
       // --- Subscriptions ---
       case 'bond.subscribe': {
-        const sessionId = getStringParam(p, 'sessionId')
-        subscribeTo(sessionId, ws)
-
-        // Replay pending approval chunks — prefer in-memory, fall back to SQLite
-        let pending = sessionId ? pendingApprovalChunks.get(sessionId) : undefined
-        if (sessionId && (!pending || pending.length === 0)) {
-          try {
-            const dbApprovals = getPendingApprovals(sessionId)
-            if (dbApprovals.length > 0) {
-              pending = dbApprovals
-              pendingApprovalChunks.set(sessionId, dbApprovals)
-            }
-          } catch { /* best effort */ }
-        }
-        if (pending) {
-          for (const chunk of pending) {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify(makeNotification('bond.chunk', chunk)))
-            }
-          }
-        }
-
+        // Pending approvals need no replay here: clients reconstruct them
+        // from persisted activity rows, and a daemon restart voids the
+        // resolver anyway — replaying such a prompt would strand the user.
+        subscribeTo(getStringParam(p, 'sessionId'), ws)
         return JSON.stringify(makeResponse(id, { ok: true }))
       }
 

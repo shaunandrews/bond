@@ -8,7 +8,6 @@ import { getDb, closeDb } from './db'
 import {
   listSessions, createSession, getSession, updateSession, deleteSession,
   deleteArchivedSessions, getMessages, saveMessages,
-  savePendingApproval, removePendingApproval, clearSessionPendingApprovals, getPendingApprovals,
 } from './sessions'
 
 // Mock deleteSessionImages since it touches the filesystem
@@ -258,50 +257,4 @@ describe('sessions module', () => {
     })
   })
 
-  describe('pending approvals', () => {
-    it('saves and retrieves pending approval', () => {
-      const s = createSession()
-      savePendingApproval(s.id, {
-        kind: 'tool_approval',
-        sessionId: s.id,
-        requestId: 'req-1',
-        toolName: 'bash',
-        input: { command: 'ls' },
-        title: 'Run command',
-        description: 'List files',
-      } as any)
-
-      const approvals = getPendingApprovals(s.id)
-      expect(approvals).toHaveLength(1)
-      const approval = approvals[0]
-      expect(approval.kind).toBe('tool_approval')
-      if (approval.kind === 'tool_approval') {
-        expect(approval.requestId).toBe('req-1')
-        expect(approval.toolName).toBe('bash')
-      }
-    })
-
-    it('ignores non-approval chunks', () => {
-      const s = createSession()
-      savePendingApproval(s.id, { kind: 'text', text: 'hello' } as any)
-      expect(getPendingApprovals(s.id)).toHaveLength(0)
-    })
-
-    it('removes specific approval', () => {
-      const s = createSession()
-      savePendingApproval(s.id, {
-        kind: 'tool_approval', sessionId: s.id, requestId: 'req-1', toolName: 'bash',
-      } as any)
-      removePendingApproval('req-1')
-      expect(getPendingApprovals(s.id)).toHaveLength(0)
-    })
-
-    it('clears all session approvals', () => {
-      const s = createSession()
-      savePendingApproval(s.id, { kind: 'tool_approval', sessionId: s.id, requestId: 'r1', toolName: 'a' } as any)
-      savePendingApproval(s.id, { kind: 'tool_approval', sessionId: s.id, requestId: 'r2', toolName: 'b' } as any)
-      clearSessionPendingApprovals(s.id)
-      expect(getPendingApprovals(s.id)).toHaveLength(0)
-    })
-  })
 })
