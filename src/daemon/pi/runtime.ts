@@ -20,11 +20,8 @@ import { createOnboardingExtensionFactory, getFirstRunStatus, ONBOARDING_STAGE_T
 import type { OnboardingFirstRunStatus } from '../../shared/onboarding'
 import { getDataDir } from '../paths'
 import { getMessages } from '../sessions'
+import { registerApproval, clearTurnApprovals, type ApprovalResult } from '../approvals'
 
-type ApprovalResult = { approved: boolean; input?: Record<string, unknown> }
-type PendingApproval = { sessionId: string; resolve: (result: ApprovalResult) => void }
-
-const pendingApprovals = new Map<string, PendingApproval>()
 const MODEL_IDS = {
   high: 'claude-opus-4-6',
   balanced: 'claude-sonnet-4-5',
@@ -72,7 +69,7 @@ function requiresApproval(toolName: string): boolean {
 }
 
 function requestApproval(
-  sessionId: string,
+  turnId: string,
   toolName: string,
   input: Record<string, unknown>,
   onChunk: (chunk: BondStreamChunk) => void,
@@ -86,25 +83,7 @@ function requestApproval(
     title: `Allow ${toolName}?`,
     description: summarizeInput(input),
   })
-  return new Promise((resolveApproval) => {
-    pendingApprovals.set(requestId, { sessionId, resolve: resolveApproval })
-  })
-}
-
-export function resolvePiPendingApproval(requestId: string, approved: boolean, input?: Record<string, unknown>): void {
-  const pending = pendingApprovals.get(requestId)
-  if (!pending) return
-  pendingApprovals.delete(requestId)
-  pending.resolve({ approved, input })
-}
-
-export function clearPiSessionApprovals(sessionId: string): void {
-  for (const [id, pending] of pendingApprovals) {
-    if (pending.sessionId === sessionId) {
-      pendingApprovals.delete(id)
-      pending.resolve({ approved: false })
-    }
-  }
+  return registerApproval(requestId, turnId)
 }
 
 function escapeHistoricalText(value: string): string {
@@ -251,7 +230,9 @@ export interface PiBondQueryOptions {
   abortSignal: AbortSignal
   onChunk: (chunk: BondStreamChunk) => void
   model?: string
-  /** Legacy Bond UI session id, used for approval routing and pre-cutover chat history. */
+  /** Turn id owning this query — the scope for pending-approval cleanup. */
+  turnId: string
+  /** Legacy Bond UI session id, used for pre-cutover chat history. */
   sessionId?: string
   /** Pi runtime session id owned by the active epoch. */
   piSessionId?: string
@@ -392,7 +373,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
               return { block: true, reason: `Path ${target} is outside this session's allowed folders.` }
             }
           }
-          const decision = await requestApproval(uiSessionId, toolName, input, options.onChunk)
+          const decision = await requestApproval(options.turnId, toolName, input, options.onChunk)
           if (!decision.approved) return { block: true, reason: 'User denied this action.' }
           if (decision.input) Object.assign(input, decision.input)
         })
@@ -457,7 +438,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
   })
 
   const abort = () => {
-    clearPiSessionApprovals(uiSessionId)
+    clearTurnApprovals(options.turnId)
     void session.abort()
   }
   options.abortSignal.addEventListener('abort', abort, { once: true })
@@ -487,7 +468,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     return failedPiResult(piSessionId)
   } finally {
     options.abortSignal.removeEventListener('abort', abort)
-    clearPiSessionApprovals(uiSessionId)
+    clearTurnApprovals(options.turnId)
     unsubscribe()
     session.dispose()
   }

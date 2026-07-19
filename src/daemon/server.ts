@@ -26,14 +26,13 @@ import {
 import { MODEL_IDS } from '../shared/models'
 import {
   runBondQuery,
-  resolvePendingApproval,
-  clearSessionApprovals,
   getCachedSkills,
   refreshSkillsCache,
   buildSystemPromptPreview,
   buildAgentContextEnvelope,
 } from './agent'
 import { getPiAuthStatus, startPiOAuth } from './pi/runtime'
+import { resolveApproval, clearTurnApprovals } from './approvals'
 import { setRenderTransport, onRenderReady } from './web/broker'
 import { getRemoteStatus } from './remote'
 import type { WebRenderResult } from '../shared/web'
@@ -141,8 +140,8 @@ async function settleForDataSwap(): Promise<void> {
   if (activeQuery) {
     const existing = activeQuery
     existing.ac.abort()
+    clearTurnApprovals(existing.turnId)
     if (existing.sessionId) {
-      clearSessionApprovals(existing.sessionId)
       pendingApprovalChunks.delete(existing.sessionId)
       try { clearSessionPendingApprovals(existing.sessionId) } catch { /* best effort */ }
     }
@@ -373,8 +372,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (activeQuery) {
           const existing = activeQuery
           existing.ac.abort()
+          clearTurnApprovals(existing.turnId)
           if (existing.sessionId) {
-            clearSessionApprovals(existing.sessionId)
             pendingApprovalChunks.delete(existing.sessionId)
             try { clearSessionPendingApprovals(existing.sessionId) } catch { /* best effort */ }
           }
@@ -442,6 +441,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         let assistantText = ''
         const queryPromise = runBondQuery(cleanText, {
           abortSignal: ac.signal,
+          turnId,
           onChunk: (chunk) => {
             if (chunk.kind === 'assistant_text') assistantText += chunk.text
             // Generated images land in the media library too, like attachments.
@@ -512,8 +512,8 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const entry = activeQuery
         if (entry && (!sessionId || entry.sessionId === sessionId)) {
           entry.ac.abort()
+          clearTurnApprovals(entry.turnId)
           if (entry.sessionId) {
-            clearSessionApprovals(entry.sessionId)
             pendingApprovalChunks.delete(entry.sessionId)
             try { clearSessionPendingApprovals(entry.sessionId) } catch { /* best effort */ }
           }
@@ -528,7 +528,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         const approved = getBoolParam(p, 'approved')
         if (!requestId) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'requestId is required'))
         if (approved === undefined) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'approved is required'))
-        resolvePendingApproval(requestId, approved)
+        resolveApproval(requestId, approved)
         clearPendingApprovalChunk(requestId)
         // Let every other live viewer flip its pending approval prompt —
         // otherwise a second client shows a stale prompt until query_end.
@@ -1358,7 +1358,7 @@ export function startServer(socketPath: string, authToken?: string, health?: Dae
       // Abort the active query
       if (activeQuery) {
         activeQuery.ac.abort()
-        clearSessionApprovals(activeQuery.sessionId)
+        clearTurnApprovals(activeQuery.turnId)
         activeQuery = null
       }
       globalSubscribers.clear()

@@ -4,7 +4,7 @@ import { getSoul, getSetting } from './settings'
 import { scanSkills, type SkillInfo } from './skills'
 import { getDb } from './db'
 import { DEFAULT_SENSE_SETTINGS } from '../shared/sense'
-import { runPiBondQuery, resolvePiPendingApproval, clearPiSessionApprovals, runPiTextPrompt } from './pi/runtime'
+import { runPiBondQuery, runPiTextPrompt } from './pi/runtime'
 import { retrieveMemory } from './memory/retrieval'
 import { readWorkingMemoryState } from './memory/service'
 import { searchMessages, getMessagesForRange } from './transcript'
@@ -294,14 +294,6 @@ export function refreshSkillsCache(): SkillInfo[] {
 export type { BondStreamChunk }
 
 /** Pi owns execution and JSONL persistence; Bond owns prompt composition and UI chunks. */
-export function resolvePendingApproval(requestId: string, approved: boolean, input?: Record<string, unknown>): void {
-  resolvePiPendingApproval(requestId, approved, input)
-}
-
-export function clearSessionApprovals(sessionId: string): void {
-  clearPiSessionApprovals(sessionId)
-}
-
 export type BondQueryResult = {
   succeeded: boolean
   piSessionId?: string
@@ -316,6 +308,7 @@ export async function runBondQuery(
     abortSignal: AbortSignal
     onChunk: (c: BondStreamChunk) => void
     model?: string
+    turnId: string
     sessionId?: string
     piSessionId?: string
     imageIds?: string[]

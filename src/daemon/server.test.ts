@@ -7,10 +7,10 @@ import { BondClient } from '../shared/client'
 import { setDataDir } from './paths'
 import { getDb } from './db'
 import { listMessages as listTranscriptMessages } from './transcript'
+import { registerApproval } from './approvals'
 
-const { runBondQueryMock, clearSessionApprovalsMock } = vi.hoisted(() => ({
+const { runBondQueryMock } = vi.hoisted(() => ({
   runBondQueryMock: vi.fn(),
-  clearSessionApprovalsMock: vi.fn(),
 }))
 
 vi.mock('./agent', async (importOriginal) => {
@@ -18,8 +18,6 @@ vi.mock('./agent', async (importOriginal) => {
   return {
     ...actual,
     runBondQuery: runBondQueryMock,
-    clearSessionApprovals: clearSessionApprovalsMock,
-    resolvePendingApproval: vi.fn(),
   }
 })
 
@@ -30,7 +28,6 @@ let socketPath: string
 
 beforeEach(async () => {
   runBondQueryMock.mockReset()
-  clearSessionApprovalsMock.mockReset()
   runBondQueryMock.mockResolvedValue({ succeeded: true, piSessionId: 'pi-test', contextTokens: 100, contextWindow: 1000 })
   tempDir = mkdtempSync(join(tmpdir(), 'bond-test-'))
   socketPath = join(tempDir, 'bond.sock')
@@ -260,12 +257,14 @@ describe('daemon runtime integration', () => {
     }))
     runBondQueryMock.mockResolvedValueOnce({ succeeded: true, piSessionId: 'pi-next', contextTokens: 5, contextWindow: 10 })
 
-    await client.send('first', first.id)
+    const firstSend = await client.send('first', first.id) as { ok: boolean; turnId?: string }
+    // Park a real approval on the first turn — aborting it must deny the prompt.
+    const parked = registerApproval('req-abort-test', firstSend.turnId!)
     await client.send('second', second.id)
     firstAbort?.()
     await new Promise(resolve => setTimeout(resolve, 20))
 
-    expect(clearSessionApprovalsMock).toHaveBeenCalledWith(first.id)
+    await expect(parked).resolves.toEqual({ approved: false })
     const turns = getDb().prepare('SELECT status FROM turns ORDER BY started_at ASC').all() as Array<{ status: string }>
     expect(turns.map(t => t.status)).toEqual(['cancelled', 'done'])
   })
