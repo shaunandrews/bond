@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
 import QuickChat from './QuickChat.vue'
+import ChatInput from './ChatInput.vue'
 
 describe('QuickChat', () => {
   beforeEach(() => {
@@ -18,6 +19,10 @@ describe('QuickChat', () => {
       createSession: vi.fn().mockResolvedValue({ id: 'transport-1' }),
       getModel: vi.fn().mockResolvedValue('balanced'),
       setModel: vi.fn().mockResolvedValue({ ok: true }),
+      getEditMode: vi.fn().mockResolvedValue({ type: 'full' }),
+      setEditMode: vi.fn().mockResolvedValue({ ok: true }),
+      subscribe: vi.fn().mockResolvedValue({ ok: true }),
+      unsubscribe: vi.fn().mockResolvedValue({ ok: true }),
       onQuickChatInit: vi.fn().mockReturnValue(() => {}),
       onQuickChatDismiss: vi.fn().mockReturnValue(() => {}),
       quickChatDismissed: vi.fn().mockResolvedValue(undefined),
@@ -69,6 +74,37 @@ describe('QuickChat', () => {
     expect(wrapper.find('.context-bar').exists()).toBe(true)
     expect(wrapper.text()).toContain('VS Code')
     expect(wrapper.text()).toContain('Figma')
+  })
+
+  it('sends attached images through and passes no phantom trim-bottom attr', async () => {
+    // Regression: handleSend ignored ChatInput's images payload, silently
+    // discarding pasted images, and passed a trim-bottom prop that ChatInput
+    // never declared.
+    let initCallback: Function | undefined
+    ;(window as any).bond.onQuickChatInit = vi.fn((fn: Function) => {
+      initCallback = fn
+      return () => {}
+    })
+
+    const wrapper = shallowMount(QuickChat)
+    await initCallback?.({ senseApps: [] })
+    await wrapper.vm.$nextTick()
+    await new Promise(r => setTimeout(r, 50))
+    await wrapper.vm.$nextTick()
+
+    const input = wrapper.findComponent(ChatInput)
+    expect(input.exists()).toBe(true)
+    expect(input.attributes('trim-bottom')).toBeUndefined()
+
+    const image = { data: 'abc', mediaType: 'image/png' }
+    input.vm.$emit('submit', 'look at this', [image])
+
+    await vi.waitFor(() => {
+      expect(window.bond.send).toHaveBeenCalledWith(expect.objectContaining({
+        text: 'look at this',
+        images: [image],
+      }))
+    })
   })
 
   it('does not show context bar when no sense apps', async () => {

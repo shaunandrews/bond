@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChat } from '../composables/useChat'
 import { useAutoScroll } from '../composables/useAutoScroll'
 import type { ModelId } from '../types/message'
-import type { EditMode } from '../../shared/session'
+import type { AttachedImage, EditMode } from '../../shared/session'
 import MessageBubble from './MessageBubble.vue'
 import ChatInput from './ChatInput.vue'
 
@@ -70,8 +70,8 @@ watch(() => chat.messages.value.length, () => {
   nextTick(() => scrollToBottom())
 })
 
-function handleSend(text: string) {
-  chat.submit(text)
+function handleSend(text: string, images: AttachedImage[]) {
+  chat.submit(text, images.length ? images : undefined)
   nextTick(() => scrollToBottom())
 }
 
@@ -137,7 +137,6 @@ onUnmounted(() => {
           :busy="chat.busy.value"
           :model="selectedModel"
           :edit-mode="chat.editMode.value"
-          trim-bottom
           @submit="handleSend"
           @cancel="handleCancel"
           @update:model="handleModelUpdate"

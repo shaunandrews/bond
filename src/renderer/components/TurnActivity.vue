@@ -15,8 +15,20 @@ watch(() => props.data.expanded, v => { if (v) expanded.value = true })
 
 const nowTick = ref(Date.now())
 const active = computed(() => ['working', 'responding', 'awaiting_approval'].includes(props.data.status))
-const timer = setInterval(() => { if (active.value) nowTick.value = Date.now() }, 1000)
-onUnmounted(() => clearInterval(timer))
+// 500ms tick so the 1s-resolution counter never visibly skips a second. The
+// interval exists only while the row is live — a loaded transcript page holds
+// dozens of completed rows and must not keep dozens of timers firing forever.
+let timer: ReturnType<typeof setInterval> | null = null
+watch(active, (isActive) => {
+  if (isActive && !timer) {
+    nowTick.value = Date.now()
+    timer = setInterval(() => { nowTick.value = Date.now() }, 500)
+  } else if (!isActive && timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}, { immediate: true })
+onUnmounted(() => { if (timer) clearInterval(timer) })
 const elapsedSec = computed(() => Math.max(0, Math.round(((props.data.endedAt ?? nowTick.value) - props.data.startedAt) / 1000)))
 const toolCount = computed(() => props.data.events.filter(e => e.type === 'tool').length)
 const approvalPending = computed(() => props.data.events.some(e => e.type === 'approval' && e.status === 'pending'))
@@ -49,7 +61,9 @@ function statusLabel() {
 }
 
 function duration(start: number, end?: number) {
-  const sec = Math.max(0, Math.round(((end ?? Date.now()) - start) / 1000))
+  // nowTick (not Date.now()) so live durations are reactive — the interval
+  // drives re-renders even when no stream chunks are arriving
+  const sec = Math.max(0, Math.round(((end ?? nowTick.value) - start) / 1000))
   return sec < 1 ? '' : formatDuration(sec)
 }
 

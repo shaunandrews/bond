@@ -1,7 +1,17 @@
-import { describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, expect, it, vi } from 'vitest'
+import { nextTick, type ComponentPublicInstance } from 'vue'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import TurnActivity from './TurnActivity.vue'
 import type { TurnActivityData } from '../types/activity'
+
+// Same workaround as MarkdownMessage.test.ts: VTU's mount return type
+// collapses SFC prop types under this toolchain, so pin the instance type to
+// keep setProps() type-safe.
+type ActivityWrapper = VueWrapper<unknown, ComponentPublicInstance<{ data: TurnActivityData }>>
+
+function mountActivity(data: TurnActivityData): ActivityWrapper {
+  return mount(TurnActivity, { props: { data } }) as unknown as ActivityWrapper
+}
 
 function activity(overrides: Partial<TurnActivityData> = {}): TurnActivityData {
   const now = Date.now()
@@ -58,6 +68,52 @@ describe('TurnActivity', () => {
     ] }) } })
     expect(wrapper.text()).toContain('Failed')
     expect(wrapper.text()).toContain('Error')
+  })
+
+  it('keeps the elapsed counter ticking while active even when no chunks arrive', async () => {
+    vi.useFakeTimers()
+    try {
+      const data = activity({ status: 'working', startedAt: Date.now(), endedAt: undefined, events: [] })
+      const wrapper = mount(TurnActivity, { props: { data } })
+      expect(wrapper.text()).toContain('Working')
+
+      vi.advanceTimersByTime(45_000)
+      await nextTick()
+      expect(wrapper.text()).toContain('45s')
+
+      vi.advanceTimersByTime(30_000)
+      await nextTick()
+      expect(wrapper.text()).toContain('1m 15s')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('creates no timer for completed rows', () => {
+    // A transcript page renders dozens of finished activity rows; none of
+    // them should keep an interval alive.
+    vi.useFakeTimers()
+    try {
+      mount(TurnActivity, { props: { data: activity({ status: 'done', startedAt: 1000, endedAt: 2000, events: [] }) } })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops the timer when a live row completes', async () => {
+    vi.useFakeTimers()
+    try {
+      const data = activity({ status: 'working', startedAt: Date.now(), endedAt: undefined, events: [] })
+      const wrapper = mountActivity(data)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await wrapper.setProps({ data: { ...data, status: 'done', endedAt: Date.now() } })
+      await nextTick()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('emits approvals from approval events', async () => {
