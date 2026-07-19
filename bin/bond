@@ -8,88 +8,266 @@ LOG_FILE="$BOND_DIR/daemon.log"
 SCRIPT_PATH="$0"
 [[ -L "$SCRIPT_PATH" ]] && SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
 PROJECT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+DAEMON_JS="$PROJECT_DIR/out/daemon/main.mjs"
+
+# launchd supervision — KeepAlive/SuccessfulExit=false resurrects the daemon
+# after a crash or stray kill (nonzero exit) but leaves voluntary exits alone:
+# a duplicate starter that finds a live daemon bows out with exit 0, so
+# launchd doesn't respawn-loop against it.
+LABEL="com.bond.daemon"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+DOMAIN="gui/$(id -u)"
 
 # Colors
 R='\033[0;31m' G='\033[0;32m' Y='\033[0;33m' B='\033[0;34m' D='\033[0;90m' N='\033[0m'
 
-daemon_pid() {
-  if [[ -f "$PID_FILE" ]]; then
-    local pid
-    pid=$(<"$PID_FILE")
+# ---------------------------------------------------------------------------
+# Lifecycle truth. The pid file can only name one process and lies whenever
+# another daemon exists — sixteen invisible zombies taught us that. Truth
+# comes from two places instead:
+#   - all_daemon_pids: every live process running THIS project's daemon
+#     bundle, verified against its exact command line (never a loose pattern)
+#   - GET /health on the unix socket: which pid is actually serving, and the
+#     build time of the bundle it loaded
+# ---------------------------------------------------------------------------
+
+all_daemon_pids() {
+  local pid cmd
+  for pid in $(pgrep -f "$DAEMON_JS" 2>/dev/null || true); do
+    cmd=$(ps -o command= -p "$pid" 2>/dev/null) || continue
+    case "$cmd" in
+      *" $DAEMON_JS") echo "$pid" ;;
+    esac
+  done
+}
+
+health_json() {
+  curl -s --max-time 2 --unix-socket "$SOCK_FILE" http://bond/health 2>/dev/null || true
+}
+
+health_num() { # $1=field $2=json — extract a numeric field
+  sed -n "s/.*\"$1\":\([0-9][0-9]*\).*/\1/p" <<<"$2"
+}
+
+serving_pid() {
+  health_num pid "$(health_json)"
+}
+
+parent_of() {
+  ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '
+}
+
+# Daemon processes that are NOT the serving pid (or its node-shim parent).
+stray_pids() {
+  local serving="${1:-}" parent="" pid
+  if [[ -n "$serving" ]]; then parent=$(parent_of "$serving"); fi
+  for pid in $(all_daemon_pids); do
+    if [[ -n "$serving" && "$pid" == "$serving" ]]; then continue; fi
+    if [[ -n "$parent" && "$pid" == "$parent" ]]; then continue; fi
+    echo "$pid"
+  done
+}
+
+kill_pids() { # TERM each pid, wait up to 6s for all, then KILL stragglers
+  if [[ $# -eq 0 ]]; then return 0; fi
+  local pid waited=0 alive
+  for pid in "$@"; do kill "$pid" 2>/dev/null || true; done
+  while [[ $waited -lt 60 ]]; do
+    alive=""
+    for pid in "$@"; do
+      if kill -0 "$pid" 2>/dev/null; then alive=1; fi
+    done
+    if [[ -z "$alive" ]]; then return 0; fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  for pid in "$@"; do
     if kill -0 "$pid" 2>/dev/null; then
+      echo -e "${R}Force killing${N} pid $pid"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+  sleep 0.2
+}
+
+warn_if_stale_bundle() { # $1=health json
+  local run disk
+  run=$(health_num bundleMtimeMs "$1")
+  disk=$(stat -f %m "$DAEMON_JS" 2>/dev/null || true)
+  if [[ -n "$run" && -n "$disk" && $((run / 1000)) -ne $disk ]]; then
+    echo -e "  ${Y}running daemon predates the bundle on disk${N} — run: bin/bond restart"
+  fi
+}
+
+wait_for_health() { # $1=tries (tenths of a second); echoes the serving pid
+  local tries="$1" pid
+  for _ in $(seq 1 "$tries"); do
+    pid=$(serving_pid)
+    if [[ -n "$pid" ]]; then
       echo "$pid"
       return 0
     fi
-  fi
+    sleep 0.1
+  done
   return 1
 }
 
+agent_loaded() {
+  launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1
+}
+
+write_plist() {
+  # Resolve the real node binary (a version-manager shim like volta would
+  # add a wrapper process between launchd and the daemon).
+  local node_bin
+  node_bin="$(node -e 'process.stdout.write(process.execPath)' 2>/dev/null || command -v node)"
+  mkdir -p "$(dirname "$PLIST")" "$BOND_DIR"
+  cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$node_bin</string>
+    <string>$DAEMON_JS</string>
+  </array>
+  <key>WorkingDirectory</key><string>$PROJECT_DIR</string>
+  <key>StandardOutPath</key><string>$LOG_FILE</string>
+  <key>StandardErrorPath</key><string>$LOG_FILE</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$PATH</string>
+  </dict>
+</dict>
+</plist>
+EOF
+}
+
 cmd_status() {
-  local pid
-  if pid=$(daemon_pid); then
-    echo -e "${G}Daemon running${N}  pid $pid"
+  local h serving supervision strays count
+  h=$(health_json)
+  serving=$(health_num pid "$h")
+  if agent_loaded; then supervision="supervised by launchd"; else supervision="${Y}unsupervised${N}"; fi
+  if [[ -n "$serving" ]]; then
+    echo -e "${G}Daemon running${N}  pid $serving ($supervision)"
+    warn_if_stale_bundle "$h"
     echo -e "  socket  $SOCK_FILE"
     echo -e "  log     $LOG_FILE"
   else
-    echo -e "${D}Daemon not running${N}"
+    count=$(all_daemon_pids | grep -c . || true)
+    if [[ "$count" -gt 0 ]]; then
+      echo -e "${R}No daemon answering on the socket${N}, but $count bond daemon process(es) exist ($supervision)"
+      echo -e "  run ${Y}bin/bond stop && bin/bond start${N} to recover"
+    else
+      echo -e "${D}Daemon not running${N} ($supervision)"
+    fi
+  fi
+  strays=$(stray_pids "$serving")
+  if [[ -n "$strays" ]]; then
+    echo -e "  ${R}stray daemon processes:${N}" $strays
+    echo -e "  run ${Y}bin/bond stop && bin/bond start${N} to converge on one supervised daemon"
   fi
 }
 
 cmd_stop() {
-  local pid waited
-  if pid=$(daemon_pid); then
-    kill "$pid" 2>/dev/null || echo -e "${R}Failed to signal${N} pid $pid"
-    # Wait for the process to actually exit before clearing its files — the
-    # daemon holds the remote TCP port, and a successor spawned while the old
-    # process is still shutting down inherits an EADDRINUSE race.
-    waited=0
-    while kill -0 "$pid" 2>/dev/null && [[ $waited -lt 50 ]]; do
-      sleep 0.1
-      waited=$((waited + 1))
-    done
-    if kill -0 "$pid" 2>/dev/null; then
-      echo -e "${R}Daemon didn't exit in 5s — force killing${N} (pid $pid)"
-      kill -9 "$pid" 2>/dev/null
-      sleep 0.2
-    fi
-    echo -e "${Y}Stopped${N} daemon (pid $pid)"
-    rm -f "$PID_FILE" "$SOCK_FILE"
-  else
-    echo -e "${D}Daemon not running${N}"
-    rm -f "$PID_FILE" "$SOCK_FILE"
+  local pids
+  if agent_loaded; then
+    # Bootout removes supervision too — an intentional stop stays stopped.
+    echo -e "${Y}Stopping${N} supervised daemon"
+    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
   fi
+  # Then kill EVERY daemon process, not just the supervised one — strays
+  # from any spawn path (the app, old workflows) die here too.
+  pids=$(all_daemon_pids)
+  if [[ -n "$pids" ]]; then
+    echo -e "${Y}Stopping${N} daemon process(es):" $pids
+    kill_pids $pids
+    echo -e "${Y}Stopped${N}"
+  elif ! agent_loaded; then
+    echo -e "${D}Daemon not running${N}"
+  else
+    echo -e "${Y}Stopped${N}"
+  fi
+  # Everything is dead — nobody owns these files now.
+  rm -f "$PID_FILE" "$SOCK_FILE"
 }
 
 cmd_start() {
-  if pid=$(daemon_pid); then
-    echo -e "${D}Already running${N} (pid $pid)"
-    return 0
-  fi
-  local daemon="$PROJECT_DIR/out/daemon/main.mjs"
-  if [[ ! -f "$daemon" ]]; then
+  local h serving strays pid
+  if [[ ! -f "$DAEMON_JS" ]]; then
     echo -e "${B}Building daemon...${N}"
     (cd "$PROJECT_DIR" && npm run build:daemon)
   fi
-  echo -e "${B}Starting daemon...${N}"
-  mkdir -p "$BOND_DIR"
-  nohup node "$daemon" >> "$LOG_FILE" 2>&1 </dev/null &
-  local child=$!
-  for _ in {1..30}; do
-    if daemon_pid >/dev/null; then
-      echo -e "${G}Daemon running${N} (pid $(daemon_pid))"
-      return 0
-    fi
-    if ! kill -0 "$child" 2>/dev/null; then
-      echo -e "${R}Daemon failed to start${N}; see $LOG_FILE"
-      return 1
-    fi
-    sleep 0.1
-  done
-  echo -e "${R}Daemon did not become ready${N}; see $LOG_FILE"
-  return 1
+  h=$(health_json)
+  serving=$(health_num pid "$h")
+  strays=$(stray_pids "$serving")
+  if [[ -n "$strays" ]]; then
+    echo -e "${Y}Sweeping stray daemon(s):${N}" $strays
+    kill_pids $strays
+  fi
+  if [[ -n "$serving" ]] && agent_loaded; then
+    echo -e "${D}Already running${N} (pid $serving, supervised)"
+    warn_if_stale_bundle "$h"
+    return 0
+  fi
+  if [[ -n "$serving" ]]; then
+    # An unsupervised daemon (spawned by the app, or a dev run) holds the
+    # socket — take it over so the launchd copy binds cleanly.
+    echo -e "${Y}Taking over unsupervised daemon${N} (pid $serving)"
+    kill_pids $(all_daemon_pids)
+  fi
+  echo -e "${B}Starting daemon under launchd...${N}"
+  write_plist
+  if agent_loaded; then
+    launchctl kickstart -k "$DOMAIN/$LABEL"
+  else
+    launchctl bootstrap "$DOMAIN" "$PLIST"
+  fi
+  if pid=$(wait_for_health 50); then
+    echo -e "${G}Daemon running${N} (pid $pid, supervised by launchd)"
+    warn_if_stale_bundle "$(health_json)"
+  else
+    echo -e "${R}Daemon did not become ready${N}; see $LOG_FILE"
+    return 1
+  fi
 }
 
 cmd_restart() {
+  if agent_loaded; then
+    # Atomic supervised restart: launchd finishes it even if the caller dies
+    # mid-command — which is exactly what happens when Bond restarts itself
+    # (its bash process lives inside the daemon it's killing).
+    local old_pid now_pid strays
+    old_pid=$(serving_pid)
+    echo -e "${B}Restarting via launchd...${N}"
+    launchctl kickstart -k "$DOMAIN/$LABEL"
+    # Graceful shutdown alone can take 5s (the daemon's hard-exit timeout)
+    # before launchd even spawns the successor — wait up to 15s.
+    for _ in $(seq 1 150); do
+      now_pid=$(serving_pid)
+      if [[ -n "$now_pid" && "$now_pid" != "$old_pid" ]]; then
+        echo -e "${G}Daemon running${N} (pid $now_pid, supervised by launchd)"
+        warn_if_stale_bundle "$(health_json)"
+        strays=$(stray_pids "$now_pid")
+        if [[ -n "$strays" ]]; then
+          echo -e "${Y}Sweeping stray daemon(s):${N}" $strays
+          kill_pids $strays
+        fi
+        return 0
+      fi
+      sleep 0.1
+    done
+    echo -e "${R}Daemon did not come back${N}; see $LOG_FILE"
+    return 1
+  fi
   cmd_stop
   sleep 0.3
   cmd_start
@@ -117,10 +295,10 @@ cmd_build() {
 }
 
 cmd_rebuild() {
-  cmd_stop
+  # Build first, then swap — the running daemon serves until the new one is
+  # ready, and the supervised restart path stays crash-safe.
   cmd_build "${1:-all}"
-  sleep 0.3
-  cmd_start
+  cmd_restart
 }
 
 cmd_log() {
@@ -129,6 +307,22 @@ cmd_log() {
   else
     echo -e "${D}No log file yet${N}"
   fi
+}
+
+cmd_app() {
+  local electron="$PROJECT_DIR/node_modules/.bin/electron"
+  if [[ ! -x "$electron" ]]; then
+    echo -e "${R}Electron is not installed${N}; run npm install in $PROJECT_DIR"
+    return 1
+  fi
+  if [[ ! -f "$PROJECT_DIR/out/main/index.js" ]]; then
+    echo -e "${B}Building Bond app...${N}"
+    cmd_build all
+  fi
+  cmd_start
+  echo -e "${B}Opening Bond...${N}"
+  nohup "$electron" "$PROJECT_DIR" >> "$BOND_DIR/app.log" 2>&1 &
+  disown || true
 }
 
 cmd_dev() {
@@ -177,10 +371,11 @@ cmd_screenshot() {
 cmd_help() {
   echo -e "${B}bond${N} — Bond CLI"
   echo ""
-  echo -e "  ${G}status${N}             Daemon status"
-  echo -e "  ${G}start${N}              Start dev server"
-  echo -e "  ${G}stop${N}               Stop the daemon"
+  echo -e "  ${G}status${N}             Daemon status (serving pid, strays, bundle freshness)"
+  echo -e "  ${G}start${N}              Start the daemon under launchd"
+  echo -e "  ${G}stop${N}               Stop ALL daemon processes"
   echo -e "  ${G}restart${N}            Stop + start"
+  echo -e "  ${G}app${N}                Open the built Bond desktop app"
   echo -e "  ${G}dev${N}                Stop daemon, then run full dev server"
   echo -e "  ${G}build${N} [daemon|all] Build (default: all)"
   echo -e "  ${G}rebuild${N} [target]   Stop, build, start"
@@ -197,6 +392,7 @@ case "${1:-help}" in
   stop)    cmd_stop ;;
   start)   cmd_start ;;
   restart) cmd_restart ;;
+  app)     cmd_app ;;
   dev)     cmd_dev ;;
   build)   cmd_build "${2:-all}" ;;
   rebuild) cmd_rebuild "${2:-daemon}" ;;

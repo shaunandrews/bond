@@ -3,6 +3,7 @@ import { createServer, type Server as HttpServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { existsSync, unlinkSync, readFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
+import { socketIdentity, socketLost, type DaemonHealth } from './lifecycle'
 import type { BondSendInput, TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
@@ -1317,11 +1318,10 @@ export interface BondServer {
   wss: WebSocketServer
 }
 
-export function startServer(socketPath: string, authToken?: string): BondServer {
-  // Clean up stale socket
-  if (existsSync(socketPath)) {
-    unlinkSync(socketPath)
-  }
+export function startServer(socketPath: string, authToken?: string, health?: DaemonHealth): BondServer {
+  // The caller must have claimed the socket path via claimSocket() first —
+  // an EADDRINUSE here means the single-instance guard was bypassed, and
+  // crashing loudly beats silently stealing a live daemon's socket.
 
   // Load persisted model
   currentModel = getModelSetting()
@@ -1344,7 +1344,18 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
     return delivered
   })
 
-  const httpServer: HttpServer = createServer()
+  // /health is the lifecycle source of truth: bin/bond asks the socket who
+  // is serving (pid, bundle build time) instead of trusting the pid file.
+  // The socket file is chmod 0600, so no auth gate is needed.
+  const httpServer: HttpServer = createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/health' && health) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(health))
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
   const wss = new WebSocketServer({ server: httpServer })
   serverWss = wss
 
@@ -1354,6 +1365,10 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
 
   // Restrict socket file permissions to owner-only
   try { chmodSync(socketPath, 0o600) } catch { /* ignore on platforms that don't support it */ }
+
+  // Remember which file we bound — close() must never unlink a successor's
+  // socket after this daemon has been orphaned.
+  const boundIdentity = socketIdentity(socketPath)
 
   return {
     wss,
@@ -1375,9 +1390,9 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
 
       wss.close(() => {
         httpServer.close(() => {
-          // Clean up socket file
+          // Clean up the socket file — only if it is still the one we bound
           closeDb()
-          if (existsSync(socketPath)) {
+          if (boundIdentity && !socketLost(socketPath, boundIdentity)) {
             try { unlinkSync(socketPath) } catch { /* ignore */ }
           }
           resolve()

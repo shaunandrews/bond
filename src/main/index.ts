@@ -4,6 +4,7 @@ import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSyn
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { connect as netConnect } from 'node:net'
 import { BondClient } from '../shared/client'
 import { initSense, destroySense } from './sense'
 import { initWeb, destroyWeb } from './web'
@@ -20,7 +21,6 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const runtimeDir = join(homedir(), '.bond')
 const socketPath = join(runtimeDir, 'bond.sock')
 const tokenPath = join(runtimeDir, 'bond.token')
-const pidPath = join(runtimeDir, 'daemon.pid')
 const logPath = join(runtimeDir, 'daemon.log')
 const dataDir = join(homedir(), 'Library', 'Application Support', 'bond')
 
@@ -38,19 +38,27 @@ function ensureRuntimeDir(): void {
 
 // --- Daemon process management ---
 
-function isDaemonRunning(): boolean {
-  if (!existsSync(pidPath)) return false
-  try {
-    const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
-    process.kill(pid, 0)
-    return true
-  } catch {
-    try { unlinkSync(pidPath) } catch { /* ignore */ }
-    if (existsSync(socketPath)) {
-      try { unlinkSync(socketPath) } catch { /* ignore */ }
+/**
+ * A daemon is running iff something accepts connections on the socket — a
+ * pid file can only describe one process and lies whenever another daemon
+ * exists (that's how zombies used to accumulate). Never delete the socket
+ * or pid file from here: the daemon owns its runtime files, and a spawn
+ * race is safe because the daemon's own claim logic makes the loser bow out.
+ */
+function isDaemonRunning(): Promise<boolean> {
+  return new Promise((resolveAlive) => {
+    const sock = netConnect(socketPath)
+    let settled = false
+    const done = (alive: boolean): void => {
+      if (settled) return
+      settled = true
+      sock.destroy()
+      resolveAlive(alive)
     }
-    return false
-  }
+    sock.once('connect', () => done(true))
+    sock.once('error', () => done(false))
+    sock.setTimeout(500, () => done(true))
+  })
 }
 
 function getDaemonPath(): string {
@@ -151,7 +159,7 @@ function spawnDaemon(): void {
 async function ensureDaemon(): Promise<void> {
   ensureRuntimeDir()
 
-  if (isDaemonRunning()) return
+  if (await isDaemonRunning()) return
 
   spawnDaemon()
 
