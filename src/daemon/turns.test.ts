@@ -8,8 +8,9 @@ import { registerApproval } from './approvals'
 import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, getActiveTurn } from './turns'
 import type { TaggedChunk } from '../shared/stream'
 
-const { runBondQueryMock } = vi.hoisted(() => ({
+const { runBondQueryMock, scheduleEpochObservationMock } = vi.hoisted(() => ({
   runBondQueryMock: vi.fn(),
+  scheduleEpochObservationMock: vi.fn(),
 }))
 
 vi.mock('./agent', async (importOriginal) => {
@@ -20,11 +21,20 @@ vi.mock('./agent', async (importOriginal) => {
   }
 })
 
+vi.mock('./memory/service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./memory/service')>()
+  return {
+    ...actual,
+    scheduleEpochObservation: scheduleEpochObservationMock,
+  }
+})
+
 let tempDir: string
 let chunks: TaggedChunk[]
 
 beforeEach(() => {
   runBondQueryMock.mockReset()
+  scheduleEpochObservationMock.mockReset()
   runBondQueryMock.mockResolvedValue({ succeeded: true, piSessionId: 'pi-test', contextTokens: 10, contextWindow: 100 })
   tempDir = mkdtempSync(join(tmpdir(), 'bond-turns-test-'))
   setDataDir(tempDir)
@@ -122,6 +132,24 @@ describe('turn runner serialization', () => {
     expect(getActiveTurn()).toBeNull()
     expect(turnStatuses()).toEqual(['cancelled'])
     expect(chunks.some(c => c.kind === 'query_end' && c.turnId === 'cancel-me')).toBe(true)
+  })
+
+  it('persists done and schedules memory observation for a turn that recovered from tool errors', async () => {
+    // Regression: any tool_execution_end with isError used to flag the whole
+    // turn failed — recovered turns were recorded as failures and their
+    // memory observation silently skipped.
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_tool', name: 'read', toolUseId: 'call-1', summary: '/missing/path' })
+      options.onChunk({ kind: 'tool_result', toolName: 'read', toolUseId: 'call-1', output: 'ENOENT', isError: true })
+      options.onChunk({ kind: 'assistant_text', text: 'Found it elsewhere — here you go.' })
+      return { succeeded: true, piSessionId: options.piSessionId, contextTokens: 42, contextWindow: 100 }
+    })
+
+    await startBondTurn({ text: 'read that file for me', turnId: 'recovered-turn', model: 'balanced' })
+    await vi.waitFor(() => {
+      expect(turnStatuses()).toEqual(['done'])
+    })
+    expect(scheduleEpochObservationMock).toHaveBeenCalledTimes(1)
   })
 
   it('broadcasts turn_start, query_start, and query_end in order with tags', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ONBOARDING_STAGE_TOOLS } from '../onboarding'
-import { activateRequestedTools, composePromptWithContext, contextUsageFromSession, piEventToChunks, shouldFlushDeferredPanel, textBlockSeparator, toolsForEditMode } from './runtime'
+import { activateRequestedTools, composePromptWithContext, contextUsageFromSession, piEventToChunks, piResultFromState, shouldFlushDeferredPanel, textBlockSeparator, toolsForEditMode } from './runtime'
 import { IMAGEGEN_TOOL_NAMES } from '../imagegen'
 import { MEMORY_TOOL_NAMES } from '../memory/tools'
 import { WEB_TOOL_NAMES } from '../web/tools'
@@ -153,5 +153,25 @@ describe('contextUsageFromSession', () => {
     expect(contextUsageFromSession({ getContextUsage: () => ({ tokens: null, contextWindow: 1000 }) }))
       .toEqual({ contextTokens: null, contextWindow: 1000 })
     expect(contextUsageFromSession({})).toEqual({ contextTokens: null, contextWindow: null })
+  })
+})
+
+describe('piResultFromState', () => {
+  const usage = { contextTokens: 10, contextWindow: 100 }
+
+  it('classifies a turn as succeeded when the agent state is clean, regardless of mid-loop tool errors', () => {
+    // The signature deliberately takes no tool-error input — a failed read
+    // probe or denied approval is recoverable feedback, not turn failure.
+    const result = piResultFromState({ aborted: false, agentErrorMessage: undefined, piSessionId: 'pi-1', usage })
+    expect(result.succeeded).toBe(true)
+    expect(result.contextTokens).toBe(10)
+  })
+
+  it('fails a turn on agent error state', () => {
+    expect(piResultFromState({ aborted: false, agentErrorMessage: 'overloaded', piSessionId: 'pi-1', usage }).succeeded).toBe(false)
+  })
+
+  it('fails a turn on abort', () => {
+    expect(piResultFromState({ aborted: true, agentErrorMessage: undefined, piSessionId: 'pi-1', usage }).succeeded).toBe(false)
   })
 })

@@ -257,6 +257,28 @@ function failedPiResult(piSessionId: string): PiBondQueryResult {
   return { succeeded: false, piSessionId }
 }
 
+/**
+ * Classify a finished Pi turn. Tool errors mid-loop (a failed read probe, a
+ * denied approval) are recoverable feedback the model routinely works
+ * around; only the agent's terminal error state or an abort fails the turn.
+ * Flagging any tool error used to persist recovered turns as 'failed' AND
+ * skip their memory observation.
+ */
+export function piResultFromState(input: {
+  aborted: boolean
+  agentErrorMessage: string | undefined
+  piSessionId: string
+  piSessionFile?: string
+  usage: Pick<PiBondQueryResult, 'contextTokens' | 'contextWindow'>
+}): PiBondQueryResult {
+  return {
+    succeeded: !input.aborted && !input.agentErrorMessage,
+    piSessionId: input.piSessionId,
+    piSessionFile: input.piSessionFile,
+    ...input.usage,
+  }
+}
+
 export function contextUsageFromSession(session: { getContextUsage?: () => { tokens?: number | null; contextWindow?: number | null } | undefined }): Pick<PiBondQueryResult, 'contextTokens' | 'contextWindow'> {
   const usage = session.getContextUsage?.()
   return {
@@ -416,7 +438,6 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     throw new Error(`Bond tools failed to register: ${missingBondTools.join(', ')}`)
   }
 
-  let hadError = false
   const unsubscribe = session.subscribe((event) => {
     const separator = textBlockSeparator(event, narratedThisTurn)
     if (separator) options.onChunk(separator)
@@ -424,7 +445,6 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
       if (chunk.kind === 'assistant_text' && chunk.text.trim()) narratedThisTurn = true
       options.onChunk(chunk)
     }
-    if (event.type === 'tool_execution_end' && event.isError) hadError = true
     if (event.type === 'tool_execution_end' && !event.isError && IMAGEGEN_TOOL_NAMES.includes(event.toolName)) {
       // Persist generated images into Bond's image store and surface them as
       // first-class transcript content — the activity row only carries text.
@@ -453,16 +473,15 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     const flushPanel = shouldFlushDeferredPanel(deferredPanel, narratedThisTurn, options.abortSignal.aborted)
     if (flushPanel) options.onChunk({ kind: 'show_panel', panel: flushPanel })
     if (session.agent.state.errorMessage) {
-      hadError = true
       options.onChunk({ kind: 'raw_error', message: session.agent.state.errorMessage })
     }
-    const usage = contextUsageFromSession(session)
-    return {
-      succeeded: !options.abortSignal.aborted && !hadError,
+    return piResultFromState({
+      aborted: options.abortSignal.aborted,
+      agentErrorMessage: session.agent.state.errorMessage,
       piSessionId,
       piSessionFile: session.sessionFile,
-      ...usage,
-    }
+      usage: contextUsageFromSession(session),
+    })
   } catch (error) {
     options.onChunk({ kind: 'raw_error', message: error instanceof Error ? error.message : String(error) })
     return failedPiResult(piSessionId)
