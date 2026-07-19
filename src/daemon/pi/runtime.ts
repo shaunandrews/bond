@@ -412,12 +412,18 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     tools,
     resourceLoader: loader,
     sessionManager,
-    settingsManager: SettingsManager.inMemory(),
+    // Force the SSE transport. The default 'auto' uses the Codex WebSocket
+    // path with connection-scoped cached context (previous_response_id
+    // deltas) — an unobservable transport that served requests whose tool
+    // manifest the model reported as missing. SSE sends the full body every
+    // turn and is the path verified end-to-end to deliver Bond's tools.
+    settingsManager: SettingsManager.inMemory({ transport: 'sse' }),
   })
   // Resumed Pi sessions restore their previously active tool names. Force the
   // current Bond allowlist after extensions have registered so newly shipped
   // Bond tools become active without requiring a new epoch/session.
   const activeTools = activateRequestedTools(session, tools)
+  console.log(`[bond-daemon] turn tools session=${piSessionId.slice(0, 8)} active=${JSON.stringify(activeTools)}`)
   // Every requested Bond-owned tool must have actually registered — a name in
   // the allowlist with no registered tool means an extension silently failed
   // (or vice versa: a registered tool missing from the allowlist would have
