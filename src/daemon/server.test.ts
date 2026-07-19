@@ -216,10 +216,38 @@ describe('daemon runtime integration', () => {
     const turn = getDb().prepare('SELECT status, context_tokens, context_window FROM turns WHERE id = ?').get(user!.turnId) as Record<string, unknown>
     expect(turn).toMatchObject({ status: 'done', context_tokens: 321, context_window: 1000 })
     expect(chunks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'turn_start', turnId: user!.turnId, userMessageId: user!.id, text: 'hello' }),
       expect.objectContaining({ kind: 'query_start', epochId: user!.epochId, turnId: user!.turnId }),
       expect.objectContaining({ kind: 'assistant_text', epochId: user!.epochId, turnId: user!.turnId, text: 'hello back' }),
       expect.objectContaining({ kind: 'query_end', epochId: user!.epochId, turnId: user!.turnId, succeeded: true }),
     ]))
+  })
+
+  it('mirrors turns and approval resolutions to other live viewers', async () => {
+    // A second client (e.g. the phone browser) subscribed globally must see
+    // the sender's turn_start with its message ids, and approval outcomes.
+    const client2 = new BondClient(socketPath)
+    await client2.connect()
+    await client2.subscribe()
+    const chunks2: any[] = []
+    client2.onChunk((chunk) => chunks2.push(chunk))
+
+    const session = await client.createSession()
+    await client.send('sync me', session.id)
+    await client.respondToApproval('req-42', true)
+    await vi.waitFor(() => {
+      expect(chunks2).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'turn_start',
+          text: 'sync me',
+          userMessageId: expect.any(String),
+          assistantMessageId: expect.any(String),
+          activityMessageId: expect.any(String),
+        }),
+        expect.objectContaining({ kind: 'approval_resolved', requestId: 'req-42', approved: true }),
+      ]))
+    })
+    client2.close()
   })
 
   it('keeps one global active query and aborts the previous session', async () => {

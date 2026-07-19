@@ -709,6 +709,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('pi:status', () => client.getPiStatus())
   ipcMain.handle('pi:startOAuth', (_e, provider: 'anthropic' | 'openai-codex') => client.startPiOAuth(provider))
 
+  ipcMain.handle('remote:status', () => client.remoteStatus())
+
   // --- Context menu ---
   ipcMain.handle('context-menu:show', (_e, items: { id: string; label: string; type?: string }[]) => {
     const win = BrowserWindow.getFocusedWindow()

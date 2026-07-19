@@ -7,12 +7,15 @@
  * Manages agent queries, sessions, and settings independently of any UI.
  */
 
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { mkdirSync, writeFileSync, unlinkSync, existsSync, chmodSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { setDataDir, ensureSkillsDir } from './paths'
-import { startServer } from './server'
+import { startServer, attachConnection, registerBroadcastServer } from './server'
+import { startRemoteServer, type RemoteServer } from './remote'
+import { getRemotePort, getOrCreateRemoteToken } from './settings'
 
 const runtimeDir = join(homedir(), '.bond')
 const socketPath = join(runtimeDir, 'bond.sock')
@@ -61,11 +64,39 @@ function main(): void {
   const server = startServer(socketPath, authToken)
   writePid()
 
+  // Remote access: serve the browser bundle + WebSocket RPC on the LAN,
+  // gated by the persistent pairing token. Failure (e.g. port in use) is
+  // logged inside startRemoteServer and never takes the daemon down.
+  let remote: RemoteServer | null = null
+  try {
+    const remoteToken = getOrCreateRemoteToken()
+    const webRoot = join(dirname(fileURLToPath(import.meta.url)), '..', 'web')
+    remote = startRemoteServer({
+      port: getRemotePort(),
+      token: remoteToken,
+      webRoot,
+      attach: (ws) => attachConnection(ws, remoteToken),
+    })
+    registerBroadcastServer(remote.wss)
+  } catch (err) {
+    console.error(`[bond-daemon] remote server failed to start: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
   console.log(`[bond-daemon] pid=${process.pid} socket=${socketPath}`)
 
   function shutdown(): void {
     console.log('[bond-daemon] shutting down…')
-    server.close().then(() => {
+    // If any close hangs (a lingering connection, a wedged handle), exit
+    // anyway — a zombie daemon keeps holding the remote port and the next
+    // daemon can't bind it.
+    setTimeout(() => {
+      console.error('[bond-daemon] shutdown timed out — exiting')
+      removePid()
+      removeToken()
+      process.exit(1)
+    }, 5000).unref()
+    const closeRemote = remote ? remote.close() : Promise.resolve()
+    closeRemote.then(() => server.close()).then(() => {
       removePid()
       removeToken()
       process.exit(0)

@@ -33,7 +33,15 @@ export interface ChatDeps {
 }
 
 function uid(): string {
-  return crypto.randomUUID()
+  // crypto.randomUUID only exists in secure contexts — the remote web client
+  // is served over plain http on a LAN IP, where calling it throws and killed
+  // submit() before the message rendered. getRandomValues works everywhere.
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 function nowIso(): string {
@@ -223,6 +231,40 @@ export function useChat(deps: ChatDeps = window.bond) {
   function handleChunk(chunk: TaggedChunk) {
     if (currentSessionId.value && chunk.sessionId && chunk.sessionId !== currentSessionId.value) return
 
+    if (chunk.kind === 'turn_start') {
+      // A turn started on another client (desktop vs. phone). Mirror its user
+      // message and activity row under the sender's ids so both transcripts
+      // stay one set of rows; the sender itself already has them — dedupe.
+      if (!messages.value.some(m => m.id === chunk.userMessageId)) {
+        busy.value = true
+        addMessage({ id: chunk.userMessageId, role: 'user', text: chunk.text, ...(chunk.imageIds?.length ? { imageIds: chunk.imageIds } : {}) })
+        const data: TurnActivityData = { turnId: chunk.turnId, userMessageId: chunk.userMessageId, assistantMessageId: chunk.assistantMessageId, status: 'working', startedAt: Date.now(), events: [] }
+        addMessage({ id: chunk.activityMessageId, role: 'meta', kind: 'activity', data, ts: data.startedAt })
+        activeActivityId.value = chunk.activityMessageId
+        if (chunk.imageIds?.length) {
+          const live = messages.value.find(m => m.id === chunk.userMessageId)
+          if (live) void resolveImages([live]).catch(() => {})
+        }
+      }
+      return
+    }
+
+    if (chunk.kind === 'approval_resolved') {
+      // Answered elsewhere (possibly another client) — flip our pending
+      // prompt instead of leaving it stale until query_end.
+      for (const m of messages.value) {
+        if (m.role !== 'meta' || m.kind !== 'activity') continue
+        const evt = m.data.events.find((e): e is Extract<TurnActivityEvent, { type: 'approval' }> => e.type === 'approval' && e.requestId === chunk.requestId)
+        if (!evt || evt.status !== 'pending') continue
+        evt.status = chunk.approved ? 'approved' : 'denied'
+        evt.endTs = Date.now()
+        const stillPending = m.data.events.some(e => e.type === 'approval' && e.status === 'pending')
+        if (m.data.status === 'awaiting_approval' && !stillPending) m.data.status = 'working'
+        activityRevision.value++
+      }
+      return
+    }
+
     if (chunk.kind === 'query_start') {
       busy.value = true
       updateActivity(data => { data.status = 'working'; data.startedAt ||= Date.now() })
@@ -401,7 +443,10 @@ export function useChat(deps: ChatDeps = window.bond) {
   async function submit(text: string, images?: AttachedImage[]) {
     const trimmed = text.trim()
     if (!trimmed && !images?.length) return
-    await ensureGlobalSubscription()
+    // Non-fatal: bond.send subscribes the sender daemon-side anyway, and a
+    // transient transport failure here must not silently swallow the message
+    // before it even renders — let send() fail visibly instead.
+    await ensureGlobalSubscription().catch(() => {})
 
     if (busy.value) {
       queuedMessages.value = [...queuedMessages.value, { id: uid(), text: trimmed, images: images?.length ? images : undefined }]

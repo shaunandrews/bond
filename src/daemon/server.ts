@@ -33,6 +33,7 @@ import {
 } from './agent'
 import { getPiAuthStatus, startPiOAuth } from './pi/runtime'
 import { setRenderTransport, onRenderReady } from './web/broker'
+import { getRemoteStatus } from './remote'
 import type { WebRenderResult } from '../shared/web'
 import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
@@ -158,6 +159,31 @@ function wakeAfterDataSwap(): void {
 const sessionSubscribers = new Map<string, Set<WebSocket>>()
 const globalSubscribers = new Set<WebSocket>()
 
+// Authenticated connections across all listeners (unix socket + remote TCP)
+const authenticatedClients = new WeakSet<WebSocket>()
+
+// Additional WebSocket servers (the remote LAN listener) whose clients should
+// receive entity-change notifications alongside the unix-socket clients.
+const extraBroadcastServers = new Set<WebSocketServer>()
+
+export function registerBroadcastServer(wss: WebSocketServer): () => void {
+  extraBroadcastServers.add(wss)
+  return () => extraBroadcastServers.delete(wss)
+}
+
+function eachOpenClient(fn: (ws: WebSocket) => void): void {
+  if (serverWss) {
+    for (const client of serverWss.clients) {
+      if (client.readyState === WebSocket.OPEN) fn(client)
+    }
+  }
+  for (const wss of extraBroadcastServers) {
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) fn(client)
+    }
+  }
+}
+
 // Track pending approvals per session for replay on reconnect
 const pendingApprovalChunks = new Map<string, TaggedChunk[]>()
 
@@ -220,21 +246,13 @@ function broadcastChunk(sessionId: string | undefined, chunk: BondStreamChunk, t
 }
 
 function broadcastImageChanged(): void {
-  if (!serverWss) return
   const msg = JSON.stringify(makeNotification('image.changed', {}))
-  for (const client of serverWss.clients) {
-    if (client.readyState === WebSocket.OPEN) client.send(msg)
-  }
+  eachOpenClient(client => client.send(msg))
 }
 
 function broadcastCollectionsChanged(): void {
-  if (!serverWss) return
   const msg = JSON.stringify(makeNotification('collection.changed', {}))
-  for (const client of serverWss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg)
-    }
-  }
+  eachOpenClient(client => client.send(msg))
 }
 
 
@@ -274,13 +292,8 @@ function persistSenseSettings(settings: SenseSettings): void {
 }
 
 function broadcastSenseEvent(method: string, params: unknown): void {
-  if (!serverWss) return
   const msg = JSON.stringify(makeNotification(method, params))
-  for (const client of serverWss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg)
-    }
-  }
+  eachOpenClient(client => client.send(msg))
 }
 
 function clearPendingApprovalChunk(requestId: string): void {
@@ -420,6 +433,20 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         })
         startTurn(turnId, epoch.id)
 
+        // Tell every other live viewer about this turn's user message and
+        // message ids. Without this, a second client (desktop vs. phone)
+        // streams the response but never shows the user bubble, and mints a
+        // duplicate activity row under its own id. The sender dedupes by id.
+        broadcastChunk(sessionId, {
+          kind: 'turn_start',
+          turnId,
+          userMessageId,
+          assistantMessageId,
+          activityMessageId,
+          text: cleanText,
+          imageIds,
+        }, tags)
+
         const contextEnvelope = buildAgentContextEnvelope({
           query: cleanText,
           sessionId: sessionId ?? epoch.piSessionId,
@@ -519,8 +546,21 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
         if (approved === undefined) return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'approved is required'))
         resolvePendingApproval(requestId, approved)
         clearPendingApprovalChunk(requestId)
+        // Let every other live viewer flip its pending approval prompt —
+        // otherwise a second client shows a stale prompt until query_end.
+        broadcastChunk(undefined, { kind: 'approval_resolved', requestId, approved })
         return JSON.stringify(makeResponse(id, { ok: true }))
       }
+
+      // --- Remote access (LAN web server) ---
+      case 'remote.status': {
+        return JSON.stringify(makeResponse(id, getRemoteStatus()))
+      }
+
+      // Liveness probe — phone browsers use it to detect zombie sockets
+      // (iOS kills WebSockets on lock without firing close events).
+      case 'bond.ping':
+        return JSON.stringify(makeResponse(id, { ok: true }))
 
       // --- Subscriptions ---
       case 'bond.subscribe': {
@@ -1214,6 +1254,62 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
   }
 }
 
+// --- Connection handling ---
+
+/**
+ * Wire a WebSocket into the JSON-RPC dispatch. Shared by every listener: the
+ * unix-socket server passes the per-start daemon token, the remote LAN server
+ * passes the persistent pairing token. Subscriber state is module-level, so
+ * clients from any listener join the same broadcast pools.
+ */
+export function attachConnection(ws: WebSocket, expectedToken?: string): void {
+  ws.on('message', async (data) => {
+    let msg: JsonRpcMessage
+    try {
+      msg = JSON.parse(data.toString())
+    } catch {
+      ws.send(JSON.stringify(makeErrorResponse(0, -32700, 'Parse error')))
+      return
+    }
+
+    // Auth gate: if a token is configured, the first message must be bond.auth
+    if (expectedToken && !authenticatedClients.has(ws)) {
+      if (isRequest(msg) && msg.method === 'bond.auth') {
+        const token = (msg.params as any)?.token
+        if (token === expectedToken) {
+          authenticatedClients.add(ws)
+          ws.send(JSON.stringify(makeResponse(msg.id, { ok: true })))
+        } else {
+          console.warn('[bond-daemon] client auth failed — invalid token')
+          ws.send(JSON.stringify(makeErrorResponse(msg.id, -32600, 'Invalid auth token')))
+          ws.close()
+        }
+        return
+      }
+      // Not authenticated and not an auth request — reject
+      ws.send(JSON.stringify(makeErrorResponse(
+        isRequest(msg) ? msg.id : 0,
+        -32600,
+        'Authentication required — send bond.auth first'
+      )))
+      ws.close()
+      return
+    }
+
+    if (isRequest(msg)) {
+      const response = await handleRequest(msg, ws)
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(response)
+      }
+    }
+    // Notifications from client are fire-and-forget, nothing to handle currently
+  })
+
+  ws.on('close', () => {
+    unsubscribeAll(ws)
+  })
+}
+
 // --- Server lifecycle ---
 
 export interface BondServer {
@@ -1248,59 +1344,11 @@ export function startServer(socketPath: string, authToken?: string): BondServer 
     return delivered
   })
 
-  // Track authenticated connections
-  const authenticatedClients = new WeakSet<WebSocket>()
-
   const httpServer: HttpServer = createServer()
   const wss = new WebSocketServer({ server: httpServer })
   serverWss = wss
 
-  wss.on('connection', (ws) => {
-    ws.on('message', async (data) => {
-      let msg: JsonRpcMessage
-      try {
-        msg = JSON.parse(data.toString())
-      } catch {
-        ws.send(JSON.stringify(makeErrorResponse(0, -32700, 'Parse error')))
-        return
-      }
-
-      // Auth gate: if a token is configured, the first message must be bond.auth
-      if (authToken && !authenticatedClients.has(ws)) {
-        if (isRequest(msg) && msg.method === 'bond.auth') {
-          const token = (msg.params as any)?.token
-          if (token === authToken) {
-            authenticatedClients.add(ws)
-            ws.send(JSON.stringify(makeResponse(msg.id, { ok: true })))
-          } else {
-            ws.send(JSON.stringify(makeErrorResponse(msg.id, -32600, 'Invalid auth token')))
-            ws.close()
-          }
-          return
-        }
-        // Not authenticated and not an auth request — reject
-        ws.send(JSON.stringify(makeErrorResponse(
-          isRequest(msg) ? msg.id : 0,
-          -32600,
-          'Authentication required — send bond.auth first'
-        )))
-        ws.close()
-        return
-      }
-
-      if (isRequest(msg)) {
-        const response = await handleRequest(msg, ws)
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(response)
-        }
-      }
-      // Notifications from client are fire-and-forget, nothing to handle currently
-    })
-
-    ws.on('close', () => {
-      unsubscribeAll(ws)
-    })
-  })
+  wss.on('connection', (ws) => attachConnection(ws, authToken))
 
   httpServer.listen(socketPath)
 

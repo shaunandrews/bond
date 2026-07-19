@@ -11,6 +11,8 @@ import {
   getModelSetting, saveModelSetting,
   getAccentColor, saveAccentColor,
   getWindowOpacity, saveWindowOpacity,
+  getRemotePort, getOrCreateRemoteToken,
+  DEFAULT_REMOTE_PORT,
 } from './settings'
 
 let testDir: string
@@ -121,6 +123,30 @@ describe('settings module', () => {
     it('returns 1 for invalid stored value', () => {
       setSetting('window_opacity', 'not-a-number')
       expect(getWindowOpacity()).toBe(1)
+    })
+  })
+
+  describe('remote access', () => {
+    it('defaults to the reserved port', () => {
+      expect(getRemotePort()).toBe(DEFAULT_REMOTE_PORT)
+    })
+
+    it('honors a stored port override', () => {
+      setSetting('remote.port', '4200')
+      expect(getRemotePort()).toBe(4200)
+    })
+
+    it('falls back to the default for invalid ports', () => {
+      setSetting('remote.port', 'not-a-port')
+      expect(getRemotePort()).toBe(DEFAULT_REMOTE_PORT)
+      setSetting('remote.port', '99999')
+      expect(getRemotePort()).toBe(DEFAULT_REMOTE_PORT)
+    })
+
+    it('generates a pairing token once and keeps it stable', () => {
+      const token = getOrCreateRemoteToken()
+      expect(token).toMatch(/^[0-9a-f]{64}$/)
+      expect(getOrCreateRemoteToken()).toBe(token)
     })
   })
 })

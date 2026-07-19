@@ -34,6 +34,13 @@ extraResources:
     filter:
       - "**/*"
 
+  # Browser bundle for remote (LAN) access — the daemon resolves it as ../web
+  # relative to its own entrypoint, which holds for out/ and resources/ alike.
+  - from: out/web
+    to: web
+    filter:
+      - "**/*"
+
   # Sense native helpers
   - from: out/daemon/bin/sense
     to: daemon/bin/sense

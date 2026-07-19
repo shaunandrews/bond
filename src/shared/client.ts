@@ -259,6 +259,12 @@ export class BondClient {
     return await this.call('pi.startOAuth', { provider }) as { url: string; instructions?: string; deviceCode?: string }
   }
 
+  // --- Remote access (LAN web server) ---
+
+  async remoteStatus(): Promise<{ running: boolean; port: number | null; token: string | null; urls: string[] }> {
+    return await this.call('remote.status') as { running: boolean; port: number | null; token: string | null; urls: string[] }
+  }
+
   // --- Continuous transcript ---
 
   async listTranscript(options: { beforeSeq?: number; limit?: number } = {}): Promise<TranscriptPage> {

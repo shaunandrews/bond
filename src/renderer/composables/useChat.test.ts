@@ -182,6 +182,80 @@ describe('useChat continuous transcript', () => {
     expect(chat.pendingApprovals.value).toHaveLength(0)
   })
 
+  // Live sync: a turn started on another client (e.g. the phone browser)
+  // must appear here with the sender's ids — same transcript rows, no dupes.
+  it('mirrors a turn started on another client, user bubble included', async () => {
+    ;(deps.getImages as ReturnType<typeof vi.fn>).mockResolvedValue([{ data: 'abc', mediaType: 'image/png' }])
+
+    handler({ kind: 'turn_start', turnId: 't1', userMessageId: 'u1', assistantMessageId: 'a1', activityMessageId: 'act1', text: 'from phone', imageIds: ['img-1'] })
+
+    expect(chat.busy.value).toBe(true)
+    expect(chat.messages.value[0]).toMatchObject({ id: 'u1', role: 'user', text: 'from phone', imageIds: ['img-1'] })
+    expect(chat.messages.value[1]).toMatchObject({ id: 'act1', role: 'meta', kind: 'activity', data: expect.objectContaining({ turnId: 't1', userMessageId: 'u1', assistantMessageId: 'a1' }) })
+    await vi.waitFor(() => expect(deps.getImages).toHaveBeenCalledWith(['img-1']))
+
+    handler({ kind: 'assistant_text', text: 'streamed everywhere', assistantMessageId: 'a1' })
+    expect(chat.messages.value.find(m => m.role === 'bond')).toMatchObject({ id: 'a1', text: 'streamed everywhere' })
+    // The activity row reused the sender's id — no duplicate was minted.
+    expect(chat.messages.value.filter(m => m.role === 'meta' && m.kind === 'activity')).toHaveLength(1)
+  })
+
+  it('ignores the turn_start echo for its own turn', async () => {
+    await chat.submit('hello')
+    const input = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    const before = chat.messages.value.length
+
+    handler({ kind: 'turn_start', turnId: input.turnId, userMessageId: input.userMessageId, assistantMessageId: input.assistantMessageId, activityMessageId: input.activityMessageId, text: 'hello' })
+
+    expect(chat.messages.value).toHaveLength(before)
+  })
+
+  it('flips a pending approval when another client resolves it', async () => {
+    await chat.submit('needs tool')
+    handler({ kind: 'tool_approval', requestId: 'req-9', toolName: 'Bash', input: { command: 'pwd' } })
+    expect(chat.pendingApprovals.value).toHaveLength(1)
+
+    handler({ kind: 'approval_resolved', requestId: 'req-9', approved: false })
+
+    expect(chat.pendingApprovals.value).toHaveLength(0)
+    expect(deps.respondToApproval).not.toHaveBeenCalled()
+    const activity = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
+    expect(activity && activity.role === 'meta' && activity.kind === 'activity' ? activity.data.events.at(-1) : undefined)
+      .toMatchObject({ type: 'approval', status: 'denied' })
+  })
+
+  // Regression: crypto.randomUUID only exists in secure contexts. The remote
+  // web client runs on plain http (LAN IP), where it's undefined — submit()
+  // threw before rendering anything: type, hit return, nothing happens.
+  it('submits without crypto.randomUUID (insecure-context LAN origin)', async () => {
+    Object.defineProperty(globalThis.crypto, 'randomUUID', { value: undefined, configurable: true })
+    try {
+      await chat.submit('from the phone')
+
+      expect(chat.messages.value[0]).toMatchObject({ role: 'user', text: 'from the phone' })
+      expect(deps.send).toHaveBeenCalledTimes(1)
+      const input = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      const V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      for (const id of [input.turnId, input.userMessageId, input.assistantMessageId, input.activityMessageId]) {
+        expect(id).toMatch(V4)
+      }
+    } finally {
+      delete (globalThis.crypto as { randomUUID?: unknown }).randomUUID
+    }
+  })
+
+  // Regression: submit awaited the global subscription before rendering the
+  // user message, so a dead transport (phone with a zombie socket) swallowed
+  // messages with zero feedback. The daemon subscribes senders itself.
+  it('still renders and sends the message when the subscription call fails', async () => {
+    ;(deps.subscribe as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Not connected'))
+
+    await chat.submit('hello?')
+
+    expect(chat.messages.value[0]).toMatchObject({ role: 'user', text: 'hello?' })
+    expect(deps.send).toHaveBeenCalledTimes(1)
+  })
+
   it('queues while busy and auto-sends the next message after query_end', async () => {
     await chat.submit('first')
     await chat.submit('second')

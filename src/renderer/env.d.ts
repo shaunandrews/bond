@@ -39,6 +39,7 @@ declare global {
       setEditMode: (editMode: import('../../shared/session').EditMode) => Promise<{ ok: boolean }>
       getPiStatus: () => Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }>
       startPiOAuth: (provider: 'anthropic' | 'openai-codex') => Promise<{ url: string; instructions?: string; deviceCode?: string }>
+      remoteStatus: () => Promise<{ running: boolean; port: number | null; token: string | null; urls: string[] }>
       onModelChanged: (fn: (model: string) => void) => () => void
       getSoul: () => Promise<string>
       saveSoul: (content: string) => Promise<boolean>

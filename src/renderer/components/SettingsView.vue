@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { PhTrash, PhPlus, PhEye, PhEyeSlash } from '@phosphor-icons/vue'
+import QRCode from 'qrcode'
 import { useAccentColor } from '../composables/useAccentColor'
 import type { ModelId } from '../../shared/models'
 import BondSelect from './BondSelect.vue'
 import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
+import CopyButton from './CopyButton.vue'
 
 interface SkillInfo { name: string; description: string; argumentHint: string }
 
@@ -94,6 +96,22 @@ async function loadWindowOpacity() {
   windowOpacity.value = await window.bond.getWindowOpacity()
 }
 
+// Remote access (LAN web server)
+const remoteRunning = ref(false)
+const remoteUrl = ref('')
+const remoteQr = ref('')
+
+async function loadRemoteStatus() {
+  try {
+    const status = await window.bond.remoteStatus()
+    remoteRunning.value = status.running
+    remoteUrl.value = status.urls[0] ?? ''
+    remoteQr.value = remoteUrl.value
+      ? await QRCode.toDataURL(remoteUrl.value, { margin: 1, width: 280 })
+      : ''
+  } catch { /* daemon without remote support */ }
+}
+
 async function loadPiStatus() {
   const status = await window.bond.getPiStatus()
   piConfigured.value = status.configured
@@ -147,7 +165,8 @@ onMounted(async () => {
     window.bond.listSkills(),
     loadWindowOpacity(),
     loadSenseStatus(),
-    loadPiStatus()
+    loadPiStatus(),
+    loadRemoteStatus()
   ])
   soul.value = s
   originalSoul.value = s
@@ -316,6 +335,35 @@ function handleModelChange(model: string) {
           <BondText size="xs" color="muted">{{ formatBytes(senseStorageBytes) }}</BondText>
           <button v-if="senseCaptureCount > 0" type="button" class="reset-btn" @click="clearSenseData">Clear data</button>
         </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="section-header">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-text-primary">Remote access</h2>
+            <div class="sense-state-badge" :class="{ armed: remoteRunning }">
+              {{ remoteRunning ? 'serving' : 'off' }}
+            </div>
+          </div>
+          <p class="text-xs text-muted mt-1">
+            Open Bond from another device on your network — scan the QR code or open the link in its browser.
+            The link carries this Mac's pairing token, so treat it like a password.
+          </p>
+        </div>
+
+        <div v-if="remoteRunning && remoteUrl" class="remote-row">
+          <img v-if="remoteQr" :src="remoteQr" class="remote-qr" alt="Pairing QR code" />
+          <div class="remote-link-col">
+            <code class="remote-url">{{ remoteUrl }}</code>
+            <div class="flex items-center gap-1">
+              <BondText size="xs" color="muted">Copy pairing link</BondText>
+              <CopyButton :value="remoteUrl" />
+            </div>
+          </div>
+        </div>
+        <p v-else class="text-xs text-muted">
+          The web server isn't running — restart the Bond daemon and check <code>~/.bond/daemon.log</code>.
+        </p>
       </section>
 
       <section class="settings-section">
@@ -659,6 +707,41 @@ function handleModelChange(model: string) {
   display: flex;
   align-items: center;
   gap: 1rem;
+}
+
+.remote-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.remote-qr {
+  width: 140px;
+  height: 140px;
+  flex-shrink: 0;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  /* QR must stay dark-on-white in dark mode or scanners choke. */
+  background: white;
+}
+
+.remote-link-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.remote-url {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-muted);
+  word-break: break-all;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
 }
 
 .skill-list {

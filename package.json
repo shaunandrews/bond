@@ -6,9 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "npm run build:daemon && electron-vite dev",
-    "build": "electron-vite build && npm run build:daemon && npm run build:native",
+    "build": "electron-vite build && npm run build:web && npm run build:daemon && npm run build:native",
     "build:native": "bash scripts/build-native-helpers.sh",
     "build:daemon": "node scripts/build.mjs daemon",
+    "build:web": "vite build --config vite.web.config.ts",
     "build:cli": "node scripts/build.mjs cli",
     "preview": "electron-vite preview",
     "pack": "npm run build && electron-builder --dir",
@@ -31,6 +32,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/dompurify": "^3.0.5",
     "@types/node": "^25.5.0",
+    "@types/qrcode": "^1.5.6",
     "@types/turndown": "^5.0.6",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.5",
@@ -58,6 +60,7 @@
     "@mozilla/readability": "^0.6.0",
     "linkedom": "^0.18.13",
     "pi-codex-image-gen": "^0.1.12",
+    "qrcode": "^1.5.4",
     "turndown": "^7.2.4",
     "ws": "^8.20.0"
   }

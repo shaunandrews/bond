@@ -28,6 +28,10 @@ export type BondStreamChunk =
   | { kind: 'show_panel'; panel: 'collections' | 'sense' | 'media' | 'memory' }
   /** Tool-generated image(s) persisted to the Bond image store (codex_generate_image). */
   | { kind: 'generated_image'; imageIds: string[]; alt?: string }
+  /** A turn began — carries the sender's message ids so other live viewers can mirror the user message and activity row instead of minting duplicates. */
+  | { kind: 'turn_start'; turnId: string; userMessageId: string; assistantMessageId: string; activityMessageId: string; text: string; imageIds?: string[] }
+  /** A pending tool approval was answered (possibly by another client). */
+  | { kind: 'approval_resolved'; requestId: string; approved: boolean }
 
 /** Chunk tagged with global turn/epoch metadata for renderer routing. */
 export type TaggedChunk = BondStreamChunk & {
