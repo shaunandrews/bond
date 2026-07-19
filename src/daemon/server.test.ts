@@ -388,3 +388,43 @@ describe('startup reconciliation', () => {
     expect(JSON.parse(activity.data).status).toBe('cancelled')
   })
 })
+
+describe('racing sends over the socket', () => {
+  it('serializes near-simultaneous sends from two clients without overlap', async () => {
+    let concurrent = 0
+    let maxConcurrent = 0
+    runBondQueryMock.mockImplementation((_prompt, options) => new Promise((resolve) => {
+      concurrent++
+      maxConcurrent = Math.max(maxConcurrent, concurrent)
+      let finished = false
+      const finish = (succeeded: boolean) => {
+        if (finished) return
+        finished = true
+        concurrent--
+        resolve({ succeeded, piSessionId: options.piSessionId })
+      }
+      if (options.abortSignal.aborted) return finish(false)
+      options.abortSignal.addEventListener('abort', () => finish(false), { once: true })
+      setTimeout(() => finish(true), 30)
+    }))
+
+    const client2 = new BondClient(socketPath)
+    await client2.connect()
+
+    const [first, second] = await Promise.all([
+      client.send({ text: 'from desktop', turnId: 'race-desktop', userMessageId: 'u1', assistantMessageId: 'a1', activityMessageId: 'm1' }),
+      client2.send({ text: 'from phone', turnId: 'race-phone', userMessageId: 'u2', assistantMessageId: 'a2', activityMessageId: 'm2' }),
+    ])
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+
+    await vi.waitFor(() => {
+      const statuses = (getDb().prepare('SELECT status FROM turns').all() as Array<{ status: string }>).map(t => t.status).sort()
+      expect(statuses).toEqual(['cancelled', 'done'])
+    })
+    expect(maxConcurrent).toBe(1)
+    const epochs = getDb().prepare('SELECT COUNT(*) AS n FROM epochs').get() as { n: number }
+    expect(epochs.n).toBe(1)
+    client2.close()
+  })
+})

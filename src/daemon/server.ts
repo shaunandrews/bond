@@ -1,6 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import { createServer, type Server as HttpServer } from 'node:http'
-import { randomUUID } from 'node:crypto'
 import { existsSync, unlinkSync, readFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { socketIdentity, socketLost, type DaemonHealth } from './lifecycle'
@@ -9,8 +8,7 @@ import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
 import { parseEditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
-import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, insertTurnStart, startTurn, completeTurn, getSourceMessages, getMaxMessageSeq, reconcileInterruptedTurns } from './transcript'
-import { ensureActiveEpoch } from './epochs'
+import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, getSourceMessages, reconcileInterruptedTurns } from './transcript'
 import type { ModelId } from '../shared/models'
 import {
   makeResponse,
@@ -25,14 +23,13 @@ import {
 } from '../shared/protocol'
 import { MODEL_IDS } from '../shared/models'
 import {
-  runBondQuery,
   getCachedSkills,
   refreshSkillsCache,
   buildSystemPromptPreview,
-  buildAgentContextEnvelope,
 } from './agent'
 import { getPiAuthStatus, startPiOAuth } from './pi/runtime'
-import { resolveApproval, clearTurnApprovals } from './approvals'
+import { resolveApproval } from './approvals'
+import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, abortActiveTurnForShutdown } from './turns'
 import { setRenderTransport, onRenderReady } from './web/broker'
 import { getRemoteStatus } from './remote'
 import type { WebRenderResult } from '../shared/web'
@@ -40,8 +37,6 @@ import { getDownloadsDir, ensureDownloadsDir } from './paths'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
 import {
-  GLOBAL_TRANSCRIPT_SESSION_ID,
-  ensureGlobalTranscriptSession,
   listSessions,
   createSession,
   getSession,
@@ -97,7 +92,6 @@ import {
   saveWindowOpacity
 } from './settings'
 import {
-  saveImages,
   getImage,
   getImages,
   listAllImages,
@@ -107,21 +101,12 @@ import {
 import { readCoreMemory, withCoreMemoryLock, writeCoreMemoryAtomic } from './memory/core-memory'
 import { getMemoryItem, getMemoryItemSourceIds, listRecentMemory, searchMemory, upsertMemoryItem } from './memory/store'
 import { createWorkingState } from './memory/working-state'
-import { finalObserverHook, memoryFlushHook, readWorkingMemoryState, scheduleEpochObservation, waitForMemoryQueue, writeWorkingMemoryState } from './memory/service'
+import { readWorkingMemoryState, waitForMemoryQueue, writeWorkingMemoryState } from './memory/service'
 import { beginFirstRun, getFirstRunStatus, skipFirstRun } from './onboarding'
 import { enterSandbox, exitSandbox, isSandboxed } from './sandbox'
 
 // --- State ---
 
-type ActiveQuery = {
-  sessionId: string
-  turnId: string
-  epochId: string
-  ac: AbortController
-  promise: Promise<boolean>
-}
-
-let activeQuery: ActiveQuery | null = null
 let currentModel: string = 'balanced'
 let serverWss: WebSocketServer | null = null
 
@@ -133,13 +118,7 @@ let serverWss: WebSocketServer | null = null
  * data set.
  */
 async function settleForDataSwap(): Promise<void> {
-  if (activeQuery) {
-    const existing = activeQuery
-    existing.ac.abort()
-    clearTurnApprovals(existing.turnId)
-    try { await existing.promise } catch { /* already handled */ }
-    if (activeQuery?.turnId === existing.turnId) activeQuery = null
-  }
+  try { await settleTurns() } catch { /* already handled */ }
   try { await waitForMemoryQueue() } catch { /* observer failures never block the swap */ }
   senseController?.suspend()
 }
@@ -335,146 +314,22 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
 
         subscribeTo(sessionId, ws)
 
-        if (activeQuery) {
-          const existing = activeQuery
-          existing.ac.abort()
-          clearTurnApprovals(existing.turnId)
-          try { await existing.promise } catch { /* already handled */ }
-          if (activeQuery?.turnId === existing.turnId) activeQuery = null
-        }
-
-        let imageIds: string[] | undefined
-        if (images?.length) {
-          if (!sessionId) ensureGlobalTranscriptSession()
-          imageIds = saveImages(sessionId ?? GLOBAL_TRANSCRIPT_SESSION_ID, images)
-          // Chat attachments land in the media library too — without this the
-          // Media panel sits on "No images uploaded yet" until an app restart.
-          broadcastImageChanged()
-        }
-
-        const cleanText = text.replace(/@\[([^\]]+)\]\(project:[a-f0-9-]+\)/g, '@$1')
-        const epochResult = await ensureActiveEpoch({
-          finalObserver: finalObserverHook,
-          memoryFlush: memoryFlushHook,
-          logger: console,
-        })
-        const epoch = epochResult.epoch
-        const turnId = typeof input.turnId === 'string' ? input.turnId : randomUUID()
-        const userMessageId = typeof input.userMessageId === 'string' ? input.userMessageId : randomUUID()
-        const assistantMessageId = typeof input.assistantMessageId === 'string' ? input.assistantMessageId : randomUUID()
-        const activityMessageId = typeof input.activityMessageId === 'string' ? input.activityMessageId : randomUUID()
-        const tags = { epochId: epoch.id, turnId, assistantMessageId }
-
-        insertTurnStart({
-          epochId: epoch.id,
-          turnId,
-          userMessageId,
-          assistantMessageId,
-          activityMessageId,
-          text: cleanText,
+        const result = await startBondTurn({
+          text,
+          sessionId,
+          images,
+          turnId: typeof input.turnId === 'string' ? input.turnId : undefined,
+          userMessageId: typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
+          assistantMessageId: typeof input.assistantMessageId === 'string' ? input.assistantMessageId : undefined,
+          activityMessageId: typeof input.activityMessageId === 'string' ? input.activityMessageId : undefined,
+          editMode: input.editMode ?? session?.editMode,
           model: currentModel,
-          imageIds,
-          activityData: { turnId, userMessageId, assistantMessageId, status: 'working', startedAt: Date.now(), events: [] },
         })
-        startTurn(turnId, epoch.id)
-
-        // Tell every other live viewer about this turn's user message and
-        // message ids. Without this, a second client (desktop vs. phone)
-        // streams the response but never shows the user bubble, and mints a
-        // duplicate activity row under its own id. The sender dedupes by id.
-        broadcastChunk(sessionId, {
-          kind: 'turn_start',
-          turnId,
-          userMessageId,
-          assistantMessageId,
-          activityMessageId,
-          text: cleanText,
-          imageIds,
-        }, tags)
-
-        const contextEnvelope = buildAgentContextEnvelope({
-          query: cleanText,
-          sessionId: sessionId ?? epoch.piSessionId,
-          excludeMessageIds: [userMessageId, assistantMessageId, activityMessageId],
-          previousEpoch: epochResult.previousEpoch,
-        })
-
-        const ac = new AbortController()
-        let assistantText = ''
-        const queryPromise = runBondQuery(cleanText, {
-          abortSignal: ac.signal,
-          turnId,
-          onChunk: (chunk) => {
-            if (chunk.kind === 'assistant_text') assistantText += chunk.text
-            // Generated images land in the media library too, like attachments.
-            if (chunk.kind === 'generated_image') broadcastImageChanged()
-            broadcastChunk(sessionId, chunk.kind === 'assistant_text' ? { ...chunk, assistantMessageId } : chunk, tags)
-          },
-          model: currentModel,
-          sessionId: sessionId ?? epoch.piSessionId,
-          piSessionId: epoch.piSessionId,
-          imageIds,
-          editMode: input.editMode ?? session?.editMode ?? parseEditMode(getSetting('edit_mode')),
-          contextEnvelope,
-          memorySourceMessageId: userMessageId,
-          onboardingHooks: {
-            // Lets the tour's enable_sense tool flip Sense on after explicit
-            // user consent — same path as the Settings toggle.
-            enableSense: () => {
-              const ctrl = getSenseController()
-              ctrl.enable()
-              persistSenseSettings(ctrl.getSettings())
-              return { enabled: ctrl.getSettings().enabled, state: ctrl.getState() }
-            },
-          },
-        }).then((result) => {
-          const succeeded = result.succeeded
-          if (assistantText.trim()) {
-            upsertTranscriptMessages([{ id: assistantMessageId, epochId: epoch.id, turnId, role: 'bond', text: assistantText }])
-          }
-          completeTurn({
-            turnId,
-            status: ac.signal.aborted ? 'cancelled' : succeeded ? 'done' : 'failed',
-            contextTokens: result.contextTokens,
-            contextWindow: result.contextWindow,
-          })
-          if (succeeded && !ac.signal.aborted) {
-            scheduleEpochObservation({
-              epochId: epoch.id,
-              toSeq: getMaxMessageSeq(),
-              sessionId: sessionId ?? epoch.piSessionId,
-              userText: cleanText,
-              logger: console,
-            })
-          }
-          return succeeded
-        }).catch((error) => {
-          completeTurn({ turnId, status: ac.signal.aborted ? 'cancelled' : 'failed' })
-          broadcastChunk(sessionId, { kind: 'raw_error', message: error instanceof Error ? error.message : String(error) }, tags)
-          return false
-        })
-
-        activeQuery = { sessionId: sessionId ?? '', turnId, epochId: epoch.id, ac, promise: queryPromise }
-        broadcastChunk(sessionId, { kind: 'query_start' }, tags)
-
-        queryPromise.then((succeeded) => {
-          if (activeQuery?.turnId === turnId) activeQuery = null
-          clearTurnApprovals(turnId)
-          broadcastChunk(sessionId, { kind: 'query_end', succeeded }, tags)
-        })
-
-        return JSON.stringify(makeResponse(id, { ok: true, queued: false, imageIds, turnId, epochId: epoch.id }))
+        return JSON.stringify(makeResponse(id, result))
       }
 
       case 'bond.cancel': {
-        const sessionId = getStringParam(p, 'sessionId')
-        const entry = activeQuery
-        if (entry && (!sessionId || entry.sessionId === sessionId)) {
-          entry.ac.abort()
-          clearTurnApprovals(entry.turnId)
-          try { await entry.promise } catch { /* already handled */ }
-          if (activeQuery?.turnId === entry.turnId) activeQuery = null
-        }
+        await cancelActiveTurn(getStringParam(p, 'sessionId'))
         return JSON.stringify(makeResponse(id, { ok: true }))
       }
 
@@ -1256,6 +1111,18 @@ export function startServer(socketPath: string, authToken?: string, health?: Dae
   // Eagerly initialize Sense controller so it auto-enables on daemon startup
   getSenseController()
 
+  // The turn runner broadcasts and touches Sense through this seam.
+  setTurnTransport({
+    broadcastChunk,
+    imagesChanged: broadcastImageChanged,
+    enableSense: () => {
+      const ctrl = getSenseController()
+      ctrl.enable()
+      persistSenseSettings(ctrl.getSettings())
+      return { enabled: ctrl.getSettings().enabled, state: ctrl.getState() }
+    },
+  })
+
   // Web tools ask connected app clients to render pages in a hidden browser
   // window. Delivery is a broadcast — only the Electron main process listens.
   setRenderTransport((request) => {
@@ -1300,12 +1167,8 @@ export function startServer(socketPath: string, authToken?: string, health?: Dae
   return {
     wss,
     close: () => new Promise<void>((resolve) => {
-      // Abort the active query
-      if (activeQuery) {
-        activeQuery.ac.abort()
-        clearTurnApprovals(activeQuery.turnId)
-        activeQuery = null
-      }
+      abortActiveTurnForShutdown()
+      setTurnTransport(null)
       globalSubscribers.clear()
 
       // Clean up sense controller
