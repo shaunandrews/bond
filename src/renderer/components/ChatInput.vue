@@ -297,13 +297,17 @@ const filteredIssueReferences = computed(() => {
 async function loadIssueReferences() {
   try {
     const collections = await window.bond.listCollections()
-    const issueCollections = collections.filter(collection => collection.issuePrefix)
+    // Keep the established Bond Issues tracker useful against a daemon that
+    // has not yet returned its migrated prefix. The daemon migration remains
+    // canonical; this is a deliberately narrow compatibility bridge.
+    const issueCollections = collections.filter(collection => collection.issuePrefix || collection.name === 'Bond Issues')
     const itemLists = await Promise.all(issueCollections.map(collection => window.bond.listCollectionItems(collection.id)))
     issueReferences.value = itemLists.flatMap((items, index) => {
       const collection = issueCollections[index]
+      const prefix = collection.issuePrefix || (collection.name === 'Bond Issues' ? 'BOND' : '')
       const primary = collection.schema.find(field => field.primary)
       return items.map(item => ({
-        key: `${collection.issuePrefix}-${item.displayNumber}`,
+        key: `${prefix}-${item.displayNumber}`,
         title: primary && item.data[primary.name] != null ? String(item.data[primary.name]) : item.id.slice(0, 8),
         collection,
         item,
@@ -313,11 +317,13 @@ async function loadIssueReferences() {
 }
 
 let unsubscribeCollections: (() => void) | undefined
-onMounted(async () => {
+onMounted(() => {
+  // References are independent of skills. Do not let a slow skill scan make
+  // BOND- look inert while the composer is otherwise ready.
+  void loadIssueReferences()
   try {
-    skills.value = await window.bond.listSkills()
-  } catch { /* skills not available yet */ }
-  await loadIssueReferences()
+    void window.bond.listSkills().then(result => { skills.value = result }).catch(() => { /* skills unavailable */ })
+  } catch { /* compatibility test surfaces may omit skills */ }
   try {
     unsubscribeCollections = window.bond.onCollectionsChanged(() => { void loadIssueReferences() })
   } catch { /* older test and compatibility surfaces may not expose events */ }
