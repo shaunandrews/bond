@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch, toRefs, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, toRefs, nextTick, onMounted, onUnmounted } from 'vue'
 import { PhArrowUp, PhCheck, PhPaperclip, PhSlidersHorizontal, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
-import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode, type ImageMediaType } from '../../shared/session'
+import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type Collection, type CollectionItem, type EditMode, type ImageMediaType } from '../../shared/session'
 import BondButton from './BondButton.vue'
 import BondFlyoutMenu from './BondFlyoutMenu.vue'
 import BondText from './BondText.vue'
@@ -50,6 +50,10 @@ function highlightMarkdownSyntax(text: string): string {
     // Strikethrough: ~~text~~
     esc = esc.replace(/(~~)((?:(?!~~).)+)(~~)/g,
       '<span class="md-syn">$1</span><span class="md-strike">$2</span><span class="md-syn">$3</span>')
+
+    // Issue references are rendered as compact tokens while retaining plain text
+    // in the textarea, so the exact key is what gets sent to the agent.
+    esc = esc.replace(/\b([A-Z]{4}-\d+)\b/g, '<span class="issue-token">$1</span>')
 
     return esc
   }).join('\n')
@@ -251,8 +255,19 @@ function handleImageKeyDown(e: KeyboardEvent) {
 }
 
 // --- Skill autocomplete ---
+interface IssueReference {
+  key: string
+  title: string
+  collection: Collection
+  item: CollectionItem
+}
+
 const skills = ref<SkillInfo[]>([])
+const issueReferences = ref<IssueReference[]>([])
 const showSkillMenu = ref(false)
+const showIssueMenu = ref(false)
+const issueMenuIndex = ref(0)
+const issueMatchStart = ref(0)
 const skillMenuIndex = ref(0)
 const skillFilter = ref('')
 
@@ -263,29 +278,76 @@ const filteredSkills = computed(() => {
 })
 
 
+const filteredIssueReferences = computed(() => {
+  const el = inputEl.value
+  if (!el) return []
+  const fragment = el.value.slice(issueMatchStart.value, el.selectionStart ?? el.value.length).toUpperCase()
+  const [prefix = '', number = ''] = fragment.split('-', 2)
+  return issueReferences.value.filter(issue => {
+    const [issuePrefix, issueNumber] = issue.key.split('-', 2)
+    return issuePrefix.startsWith(prefix) && (!fragment.includes('-') || issueNumber.startsWith(number) || issue.title.toLowerCase().includes(number.toLowerCase()))
+  }).slice(0, 8)
+})
+
+async function loadIssueReferences() {
+  try {
+    const collections = await window.bond.listCollections()
+    const issueCollections = collections.filter(collection => collection.issuePrefix)
+    const itemLists = await Promise.all(issueCollections.map(collection => window.bond.listCollectionItems(collection.id)))
+    issueReferences.value = itemLists.flatMap((items, index) => {
+      const collection = issueCollections[index]
+      const primary = collection.schema.find(field => field.primary)
+      return items.map(item => ({
+        key: `${collection.issuePrefix}-${item.displayNumber}`,
+        title: primary && item.data[primary.name] != null ? String(item.data[primary.name]) : item.id.slice(0, 8),
+        collection,
+        item,
+      }))
+    })
+  } catch { /* collections may be unavailable during startup */ }
+}
+
+let unsubscribeCollections: (() => void) | undefined
 onMounted(async () => {
   try {
     skills.value = await window.bond.listSkills()
   } catch { /* skills not available yet */ }
+  await loadIssueReferences()
+  try {
+    unsubscribeCollections = window.bond.onCollectionsChanged(() => { void loadIssueReferences() })
+  } catch { /* older test and compatibility surfaces may not expose events */ }
 })
 
-function updateSkillMenu() {
+onUnmounted(() => unsubscribeCollections?.())
+
+function updateAutocomplete() {
   const el = inputEl.value
   if (!el) return
   const text = el.value
   const cursor = el.selectionStart ?? text.length
 
-  // Only show menu when text starts with / and cursor is in the first word
+  // Only show menu when text starts with / and cursor is in the first word.
   if (text.startsWith('/') && (!text.includes(' ') || cursor <= text.indexOf(' ', 1))) {
     const partial = text.slice(1, cursor)
     if (/^[a-z0-9-]*$/.test(partial)) {
       skillFilter.value = partial
       skillMenuIndex.value = 0
       showSkillMenu.value = filteredSkills.value.length > 0
+      showIssueMenu.value = false
       return
     }
   }
   showSkillMenu.value = false
+
+  const beforeCursor = text.slice(0, cursor)
+  const match = beforeCursor.match(/(?:^|\s)([A-Za-z]{1,4}(?:-\d*)?)$/)
+  if (match && issueReferences.value.some(issue => issue.key.startsWith(match[1].toUpperCase().split('-')[0]))) {
+    issueMatchStart.value = cursor - match[1].length
+    issueMenuIndex.value = 0
+    showIssueMenu.value = filteredIssueReferences.value.length > 0
+    return
+  }
+  showIssueMenu.value = false
 }
 
 function selectSkill(skill: SkillInfo) {
@@ -298,7 +360,47 @@ function selectSkill(skill: SkillInfo) {
   nextTick(autoResize)
 }
 
+function selectIssueReference(issue: IssueReference) {
+  const el = inputEl.value
+  if (!el) return
+  const cursor = el.selectionStart ?? el.value.length
+  const after = el.value.slice(cursor)
+  const spacer = after && !/^\s/.test(after) ? ' ' : ''
+  el.value = `${el.value.slice(0, issueMatchStart.value)}${issue.key}${spacer}${after}`
+  inputText.value = el.value
+  const nextCursor = issueMatchStart.value + issue.key.length + spacer.length
+  showIssueMenu.value = false
+  el.focus()
+  nextTick(() => {
+    el.setSelectionRange(nextCursor, nextCursor)
+    autoResize()
+  })
+}
+
 function handleKeyDown(e: KeyboardEvent) {
+  if (showIssueMenu.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      issueMenuIndex.value = Math.min(issueMenuIndex.value + 1, filteredIssueReferences.value.length - 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      issueMenuIndex.value = Math.max(issueMenuIndex.value - 1, 0)
+      return
+    }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      e.preventDefault()
+      const issue = filteredIssueReferences.value[issueMenuIndex.value]
+      if (issue) selectIssueReference(issue)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      showIssueMenu.value = false
+      return
+    }
+  }
   if (showSkillMenu.value) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -332,6 +434,21 @@ function handleKeyDown(e: KeyboardEvent) {
 <template>
   <div class="pt-2 relative pb-5">
     <!-- Skill autocomplete menu -->
+    <div v-if="showIssueMenu" class="skill-menu issue-menu" role="listbox" aria-label="Issue references">
+      <button
+        v-for="(issue, i) in filteredIssueReferences"
+        :key="issue.item.id"
+        type="button"
+        class="skill-menu-item issue-menu-item"
+        :class="{ 'is-selected': i === issueMenuIndex }"
+        @mousedown.prevent="selectIssueReference(issue)"
+        @mouseenter="issueMenuIndex = i"
+      >
+        <span class="issue-key">{{ issue.key }}</span>
+        <span class="text-text-primary text-sm truncate">{{ issue.title }}</span>
+      </button>
+    </div>
+
     <div v-if="showSkillMenu" class="skill-menu">
       <button
         v-for="(skill, i) in filteredSkills"
@@ -390,7 +507,7 @@ function handleKeyDown(e: KeyboardEvent) {
           :placeholder="props.placeholder ?? 'Ask Bond something…'"
           :spellcheck="false"
           @keydown="handleKeyDown"
-          @input="autoResize(); updateSkillMenu(); updatePreview()"
+          @input="autoResize(); updateAutocomplete(); updatePreview()"
           @paste="handlePaste"
           @scroll="syncPreviewScroll"
           class="chat-textarea"
@@ -600,6 +717,16 @@ function handleKeyDown(e: KeyboardEvent) {
   text-decoration: line-through;
   opacity: 0.6;
 }
+.chat-highlight :deep(.issue-token) {
+  display: inline-block;
+  padding: 0 0.25em;
+  border-radius: 0.3em;
+  background: color-mix(in srgb, var(--color-accent) 24%, transparent);
+  color: var(--color-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+  font-weight: 700;
+}
 
 
 .image-strip {
@@ -644,6 +771,18 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 .skill-menu-item.is-selected {
   background: var(--color-tint);
+}
+
+.issue-menu-item {
+  gap: 0.6rem;
+}
+
+.issue-key {
+  flex: 0 0 auto;
+  color: var(--color-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 .composer-settings-section {
