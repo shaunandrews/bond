@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import WebSocket from 'ws'
 import { startServer, type BondServer } from './server'
 import { BondClient } from '../shared/client'
+import { PROTOCOL_VERSION } from '../shared/protocol'
 import { setDataDir } from './paths'
 import { getDb } from './db'
 import { listMessages as listTranscriptMessages } from './transcript'
@@ -427,6 +429,104 @@ describe('sense.search', () => {
 
     getDb().prepare("UPDATE sense_captures SET text_content = NULL WHERE id = 'c1'").run()
     expect(await client.senseSearch('zephyr')).toHaveLength(0)
+  })
+})
+
+// Raw-socket helpers for exercising attachConnection below BondClient's
+// handshake — the auth gate must be provoked with hand-built frames.
+// URL shape mirrors BondClient.connect(): `ws+unix://${socketPath}`.
+function rawConnect(path: string): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws+unix://${path}`)
+    ws.on('open', () => resolve(ws))
+    ws.on('error', reject)
+  })
+}
+
+function nextMessage(ws: WebSocket): Promise<Record<string, any>> {
+  return new Promise((resolve) => {
+    ws.once('message', (data) => resolve(JSON.parse(data.toString())))
+  })
+}
+
+function waitForClose(ws: WebSocket): Promise<void> {
+  if (ws.readyState === WebSocket.CLOSED) return Promise.resolve()
+  return new Promise((resolve) => ws.once('close', () => resolve()))
+}
+
+describe('auth gate', () => {
+  // The token-gated path is CLAUDE.md's declared security boundary for
+  // remote (LAN) access — exercised here on its own token-bearing server.
+  let authServer: BondServer
+  let authSocketPath: string
+
+  beforeEach(() => {
+    authSocketPath = join(tempDir, 'bond-auth.sock')
+    authServer = startServer(authSocketPath, 'test-token')
+  })
+
+  afterEach(async () => {
+    await authServer.close()
+  })
+
+  it('accepts a client presenting the valid token', async () => {
+    const authed = new BondClient(authSocketPath, 'test-token')
+    await authed.connect()
+    expect(await authed.listSessions()).toEqual([])
+    authed.close()
+  })
+
+  it('carries the protocol version in the auth success reply', async () => {
+    const ws = await rawConnect(authSocketPath)
+    const reply = nextMessage(ws)
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'bond.auth', params: { token: 'test-token' } }))
+    const resp = await reply
+    expect(resp.error).toBeUndefined()
+    expect(resp.result).toEqual({ ok: true, protocolVersion: PROTOCOL_VERSION })
+    ws.close()
+  })
+
+  it('rejects an invalid token and closes the socket', async () => {
+    const ws = await rawConnect(authSocketPath)
+    const reply = nextMessage(ws)
+    const closed = waitForClose(ws)
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'bond.auth', params: { token: 'wrong-token' } }))
+    const resp = await reply
+    expect(resp.error.code).toBe(-32600)
+    expect(resp.error.message).toContain('Invalid auth token')
+    await closed
+  })
+
+  it('rejects an unauthenticated first request and closes the socket', async () => {
+    const ws = await rawConnect(authSocketPath)
+    const reply = nextMessage(ws)
+    const closed = waitForClose(ws)
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'session.list' }))
+    const resp = await reply
+    expect(resp.error.code).toBe(-32600)
+    expect(resp.error.message).toContain('Authentication required')
+    await closed
+  })
+})
+
+describe('malformed JSON', () => {
+  it('answers with a parse error and keeps the socket usable', async () => {
+    // Default tokenless harness — pins the current non-fatal behavior:
+    // a parse error responds with -32700 but must not kill the connection.
+    const ws = await rawConnect(socketPath)
+    const errorReply = nextMessage(ws)
+    ws.send('not-json{')
+    const resp = await errorReply
+    expect(resp.id).toBe(0)
+    expect(resp.error).toMatchObject({ code: -32700, message: 'Parse error' })
+
+    const okReply = nextMessage(ws)
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'session.list' }))
+    const followUp = await okReply
+    expect(followUp.id).toBe(1)
+    expect(followUp.error).toBeUndefined()
+    expect(followUp.result).toEqual([])
+    ws.close()
   })
 })
 
