@@ -1,22 +1,8 @@
 import type { Session, SessionMessage, EditMode } from '../shared/session'
-import { DEFAULT_EDIT_MODE } from '../shared/session'
+import { DEFAULT_EDIT_MODE, parseEditMode } from '../shared/session'
 import type { TaggedChunk } from '../shared/stream'
 import { getDb } from './db'
 import { deleteSessionImages } from './images'
-
-function parseEditMode(raw: unknown): EditMode {
-  if (typeof raw !== 'string') return DEFAULT_EDIT_MODE
-  try {
-    const parsed = JSON.parse(raw)
-    if (parsed?.type === 'readonly') return { type: 'readonly' }
-    if (parsed?.type === 'scoped' && Array.isArray(parsed.allowedPaths)) {
-      return { type: 'scoped', allowedPaths: parsed.allowedPaths }
-    }
-    return DEFAULT_EDIT_MODE
-  } catch {
-    return DEFAULT_EDIT_MODE
-  }
-}
 
 function rowToSession(row: Record<string, unknown>): Session {
   return {

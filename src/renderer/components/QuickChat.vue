@@ -10,7 +10,6 @@ import ChatInput from './ChatInput.vue'
 const chat = useChat()
 const senseApps = ref<string[]>([])
 const selectedModel = ref<ModelId>('balanced')
-const editMode = ref<EditMode>({ type: 'full' })
 const ready = ref(false)
 const animateIn = ref(false)
 const animateOut = ref(false)
@@ -18,12 +17,14 @@ const animateOut = ref(false)
 const messagesRef = ref<HTMLElement | null>(null)
 const { scrollToBottom } = useAutoScroll(messagesRef)
 
-// Load model
+// Load model + global edit mode
 onMounted(async () => {
   try {
     const model = await window.bond.getModel()
     if (model) selectedModel.value = model as ModelId
-  } catch { /* use default */ }
+    const mode = await window.bond.getEditMode()
+    if (mode) chat.setEditMode(mode)
+  } catch { /* use defaults */ }
 })
 
 // Listen for init data from main process
@@ -78,6 +79,11 @@ function handleCancel() {
   chat.cancel()
 }
 
+function handleEditModeChange(mode: EditMode) {
+  chat.setEditMode(mode)
+  window.bond.setEditMode(mode)
+}
+
 function handleModelUpdate(model: ModelId) {
   selectedModel.value = model
   window.bond.setModel(model)
@@ -130,11 +136,12 @@ onUnmounted(() => {
         <ChatInput
           :busy="chat.busy.value"
           :model="selectedModel"
-          :edit-mode="editMode"
+          :edit-mode="chat.editMode.value"
           trim-bottom
           @submit="handleSend"
           @cancel="handleCancel"
           @update:model="handleModelUpdate"
+          @update:editMode="handleEditModeChange"
         />
       </div>
     </template>

@@ -20,7 +20,6 @@ const props = defineProps<{
 const chat = useChat()
 const accent = useAccentColor()
 const selectedModel = ref<ModelId>('balanced')
-const currentEditMode = ref<EditMode>({ type: 'full' })
 const connection = ref<ConnectionState>(props.client.state)
 const hasConnected = ref(false)
 
@@ -55,7 +54,7 @@ onMounted(async () => {
     const model = await window.bond.getModel()
     if (model) selectedModel.value = model as ModelId
     const mode = await window.bond.getEditMode()
-    if (mode) currentEditMode.value = mode
+    if (mode) chat.setEditMode(mode)
   } catch { /* defaults are fine */ }
 })
 
@@ -79,7 +78,9 @@ function handleModelChange(model: ModelId) {
 }
 
 function handleEditModeChange(mode: EditMode) {
-  currentEditMode.value = mode
+  // Apply to this device's next turn AND persist globally — the daemon
+  // broadcasts edit_mode_changed so every other client mirrors it.
+  chat.setEditMode(mode)
   window.bond.setEditMode(mode)
 }
 </script>
@@ -138,7 +139,7 @@ function handleEditModeChange(mode: EditMode) {
           <ChatInput
             :busy="chat.busy.value"
             :model="selectedModel"
-            :editMode="currentEditMode"
+            :editMode="chat.editMode.value"
             :contextUsage="chat.contextUsage.value"
             @submit="handleSend"
             @cancel="chat.cancel"

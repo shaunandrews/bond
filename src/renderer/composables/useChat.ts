@@ -265,6 +265,12 @@ export function useChat(deps: ChatDeps = window.bond) {
       return
     }
 
+    if (chunk.kind === 'edit_mode_changed') {
+      // One global mode across devices — mirror a change made anywhere.
+      editMode.value = chunk.editMode
+      return
+    }
+
     if (chunk.kind === 'query_start') {
       busy.value = true
       updateActivity(data => { data.status = 'working'; data.startedAt ||= Date.now() })

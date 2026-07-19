@@ -32,6 +32,8 @@ export type BondStreamChunk =
   | { kind: 'turn_start'; turnId: string; userMessageId: string; assistantMessageId: string; activityMessageId: string; text: string; imageIds?: string[] }
   /** A pending tool approval was answered (possibly by another client). */
   | { kind: 'approval_resolved'; requestId: string; approved: boolean }
+  /** The global edit mode setting changed (possibly on another device). */
+  | { kind: 'edit_mode_changed'; editMode: EditMode }
 
 /** Chunk tagged with global turn/epoch metadata for renderer routing. */
 export type TaggedChunk = BondStreamChunk & {

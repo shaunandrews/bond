@@ -302,3 +302,31 @@ describe('multiple clients', () => {
     client2.close()
   })
 })
+
+describe('edit mode setting', () => {
+  it('round-trips a scoped mode and degrades garbage to full', async () => {
+    await client.setEditMode({ type: 'scoped', allowedPaths: ['~/notes'] })
+    expect(await client.getEditMode()).toEqual({ type: 'scoped', allowedPaths: ['~/notes'] })
+
+    await client.setEditMode({ type: 'lasers' } as never)
+    expect(await client.getEditMode()).toEqual({ type: 'full' })
+  })
+
+  it('broadcasts edit_mode_changed to other live clients', async () => {
+    // One global mode: a change on the phone must reach the desktop live.
+    const client2 = new BondClient(socketPath)
+    await client2.connect()
+    await client2.subscribe()
+    const chunks2: any[] = []
+    client2.onChunk((chunk) => chunks2.push(chunk))
+
+    await client.setEditMode({ type: 'readonly' })
+
+    await vi.waitFor(() => {
+      expect(chunks2).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'edit_mode_changed', editMode: { type: 'readonly' } }),
+      ]))
+    })
+    client2.close()
+  })
+})

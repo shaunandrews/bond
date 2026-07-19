@@ -220,8 +220,6 @@ async function handleSubmit(text: string, images: AttachedImage[]) {
   await chat.submit(text, images?.length ? images : undefined)
 }
 
-const currentEditMode = ref<EditMode>({ type: 'full' })
-
 function approvalContext(): string | undefined {
   return undefined
 }
@@ -232,8 +230,8 @@ function handleModelChange(model: ModelId) {
 }
 
 function handleEditModeChange(mode: EditMode) {
-  currentEditMode.value = mode
   chat.setEditMode(mode)
+  window.bond.setEditMode(mode)
 }
 
 
@@ -338,6 +336,9 @@ onMounted(async () => {
   collections.load()
   const model = await window.bond.getModel()
   selectedModel.value = model as ModelId
+  try {
+    chat.setEditMode(await window.bond.getEditMode())
+  } catch { /* default full */ }
   if (chat.messages.value.length === 0) {
     await chat.init()
     // The localStorage stash is emergency recovery for the REAL transcript;
@@ -451,7 +452,7 @@ onUnmounted(() => {
                   'composer-entering': composerPhase === 'entering',
                 }"
               >
-                <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="currentEditMode" :contextUsage="chat.contextUsage.value" :placeholder="composerPlaceholder" @submit="handleSubmit" @cancel="handleCancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
+                <ChatInput ref="chatInputRef" :busy="chat.busy.value" :model="selectedModel" :editMode="chat.editMode.value" :contextUsage="chat.contextUsage.value" :placeholder="composerPlaceholder" @submit="handleSubmit" @cancel="handleCancel" @update:model="handleModelChange" @update:editMode="handleEditModeChange" />
               </div>
             </div>
           </div>

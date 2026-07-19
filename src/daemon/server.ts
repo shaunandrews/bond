@@ -7,6 +7,7 @@ import { socketIdentity, socketLost, type DaemonHealth } from './lifecycle'
 import type { BondSendInput, TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
+import { parseEditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
 import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, insertTurnStart, startTurn, completeTurn, getSourceMessages, getMaxMessageSeq } from './transcript'
 import { ensureActiveEpoch } from './epochs'
@@ -469,7 +470,7 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
           sessionId: sessionId ?? epoch.piSessionId,
           piSessionId: epoch.piSessionId,
           imageIds,
-          editMode: input.editMode ?? session?.editMode,
+          editMode: input.editMode ?? session?.editMode ?? parseEditMode(getSetting('edit_mode')),
           contextEnvelope,
           memorySourceMessageId: userMessageId,
           onboardingHooks: {
@@ -709,22 +710,19 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
       }
 
       // --- Settings ---
-      case 'settings.getEditMode': {
-        const raw = getSetting('edit_mode')
-        if (!raw) return JSON.stringify(makeResponse(id, { type: 'full' }))
-        try {
-          return JSON.stringify(makeResponse(id, JSON.parse(raw)))
-        } catch {
-          return JSON.stringify(makeResponse(id, { type: 'full' }))
-        }
-      }
+      case 'settings.getEditMode':
+        return JSON.stringify(makeResponse(id, parseEditMode(getSetting('edit_mode'))))
 
       case 'settings.setEditMode': {
-        const editMode = getParam(p, 'editMode') as EditMode | undefined
-        if (!editMode || typeof editMode !== 'object' || !('type' in editMode)) {
+        const raw = getParam(p, 'editMode')
+        if (!raw || typeof raw !== 'object' || !('type' in (raw as object))) {
           return JSON.stringify(makeErrorResponse(id, RPC_INVALID_PARAMS, 'editMode is required'))
         }
+        const editMode = parseEditMode(raw)
         setSetting('edit_mode', JSON.stringify(editMode))
+        // One global mode: every live client (desktop, phone, quick chat)
+        // mirrors the change immediately instead of drifting until reload.
+        broadcastChunk(undefined, { kind: 'edit_mode_changed', editMode })
         return JSON.stringify(makeResponse(id, { ok: true }))
       }
 

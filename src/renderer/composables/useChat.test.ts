@@ -40,6 +40,17 @@ describe('useChat continuous transcript', () => {
     handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
   })
 
+  it('mirrors edit_mode_changed into composer state and applies it to the next send', async () => {
+    // Regression: the web client persisted the mode but the composable kept
+    // sending its own stale 'full' ref — a permissions UI that did nothing.
+    handler({ kind: 'edit_mode_changed', editMode: { type: 'readonly' } })
+    expect(chat.editMode.value).toEqual({ type: 'readonly' })
+
+    await chat.submit('careful now')
+    const input = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(input.editMode).toEqual({ type: 'readonly' })
+  })
+
   it('dispatches show_panel chunks as a window event, not transcript content', () => {
     const seen: string[] = []
     const listener = (event: Event) => seen.push((event as CustomEvent<string>).detail)

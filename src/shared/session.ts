@@ -17,6 +17,29 @@ export type EditMode =
 
 export const DEFAULT_EDIT_MODE: EditMode = { type: 'full' }
 
+/**
+ * Validate an edit mode from any untrusted source — a JSON settings string, an
+ * RPC param, a DB column. Anything malformed degrades to the full default.
+ */
+export function parseEditMode(raw: unknown): EditMode {
+  let candidate: unknown = raw
+  if (typeof raw === 'string') {
+    try {
+      candidate = JSON.parse(raw)
+    } catch {
+      return DEFAULT_EDIT_MODE
+    }
+  }
+  if (candidate && typeof candidate === 'object') {
+    const mode = candidate as { type?: unknown; allowedPaths?: unknown }
+    if (mode.type === 'readonly') return { type: 'readonly' }
+    if (mode.type === 'scoped' && Array.isArray(mode.allowedPaths) && mode.allowedPaths.every((p) => typeof p === 'string')) {
+      return { type: 'scoped', allowedPaths: mode.allowedPaths }
+    }
+  }
+  return DEFAULT_EDIT_MODE
+}
+
 export interface Session {
   id: string
   title: string
