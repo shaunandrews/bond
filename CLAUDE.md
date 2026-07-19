@@ -68,14 +68,18 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | File | Purpose |
 |------|---------|
 | `main.ts` | Entry point — spawns process, writes PID, sets up signal handling |
-| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`) |
+| `server.ts` | WebSocket server with JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`, `web.*`) |
 | `agent.ts` / `pi/runtime.ts` | Builds Bond context, runs Pi sessions, streams chunks, handles tool approvals |
 | `pi/runtime.ts` | Pi session lifecycle, event streaming, edit-mode → tool/permission mapping, Bond memory tool registration, tier resolution, Pi OAuth |
 | `memory/service.ts` | Serialized automatic observer persistence + epoch observer/reflector hooks |
 | `memory/tools.ts` | Bond-owned Pi tools for memory status/search/recall/history and explicit remember/update/forget |
 | `memory/store.ts` | Searchable memory CRUD, FTS, and relational source-message provenance |
 | `memory/core-memory.ts` | Bounded persistent Core memory in `memory/core.json` |
-| `onboarding.ts` | First-run detection, transcript intro seeding, first-run system-prompt section, and the `complete_onboarding` Pi tool. The interview itself is the real agent — no scripted flow |
+| `web/tools.ts` | Bond-owned Pi tools `web_search` + `fetch_content` — keyless, zero-config web access with a 15-min cache and polite batch spacing |
+| `web/broker.ts` | Render broker — parks tool promises, sends `web.requestRender` to the app, resolves on `web.renderReady`; errors clearly when no app is connected |
+| `web/extract.ts` | DuckDuckGo SERP parsing (linkedom) and page → markdown extraction (Readability + Turndown) over app-rendered HTML |
+| `imagegen.ts` | Bond glue for the bundled `pi-codex-image-gen` Pi extension (`codex_generate_image` — gpt-image-2 via the ChatGPT/Codex subscription already connected in Pi, no API key). Gates the tool on an `openai-codex` OAuth credential, captures generated images into the Bond image store, emits `generated_image` stream chunks, and strips base64 from activity previews. The package's disk writes and install telemetry are disabled via env defaults in `main.ts` |
+| `onboarding.ts` | First-run detection, transcript intro seeding, and the staged interview → panel-tour flow (`pending` → `education` → `completed`). Serves stage-specific system-prompt sections and Pi tools: `complete_onboarding` (closes the interview, seeds the soul, returns the tour script), `complete_tour`, `show_panel` (opens a side panel via a `show_panel` stream chunk), and `enable_sense`. The interview and tour are the real agent — no scripted flow |
 | `sandbox.ts` | New-user sandbox: swaps the daemon's data dir to a fresh empty directory (and back) so the real app runs a genuine first-run without touching real data |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
 | `collections.ts` | Collections + items CRUD (SQLite) |
@@ -102,7 +106,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 
 ### Main Process (`src/main/`)
 
-Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. Builds the native application menu, including **Bond → Run/Exit New-User Simulation** (⌘⌥N) which toggles the daemon's sandbox data set and reloads the window — the real app then boots into a genuine first-run. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), tray indicator (`src/main/tray.ts`).
+Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. Builds the native application menu, including **Bond → Run/Exit New-User Simulation** (⌘⌥N) which toggles the daemon's sandbox data set and reloads the window — the real app then boots into a genuine first-run. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), the web render host (`src/main/web.ts` — a persistent hidden `BrowserWindow` that serves the daemon's `web.requestRender` requests so `web_search`/`fetch_content` get real-Chromium rendered HTML with no API keys), tray indicator (`src/main/tray.ts`).
 
 ### Preload (`src/preload/index.ts`)
 
@@ -118,6 +122,7 @@ Exposes `window.bond` via `contextBridge` — typed API for the continuous trans
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Collection, and media/collection types |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
 | `models.ts` | `ModelId` — provider-neutral capability tiers (`'high' | 'balanced' | 'fast'`); Pi maps them to concrete models |
+| `web.ts` | `WebRenderRequest`/`WebRenderResult` — the daemon ↔ app hidden-browser render round-trip |
 
 ### CLI (`bin/bond`)
 
@@ -145,10 +150,15 @@ src/
      pi/runtime.ts                    # Pi session, event, and permission bridge
     sessions.ts                      # Session CRUD (SQLite)
     images.ts                        # Image file storage + images table
+    imagegen.ts                      # Glue for the bundled codex_generate_image Pi tool
     db.ts                            # Database management + migrations
     settings.ts                      # Settings storage
     paths.ts                         # Data directory paths
     skills.ts                        # Skill scanning from ~/.bond/skills/
+    web/
+      tools.ts                       # web_search + fetch_content Pi tools (keyless, cached)
+      broker.ts                      # Render broker for the app's hidden browser window
+      extract.ts                     # DDG SERP parsing + Readability/Turndown markdown
     sense/
       controller.ts                  # State machine (disabled/armed/recording/idle/paused/suspended)
       presence.ts                    # Idle detection via ioreg
@@ -166,6 +176,7 @@ src/
     index.ts                         # Electron main process
     sense.ts                         # Sense capture coordinator (desktopCapturer)
     tray.ts                          # Menu bar tray icon for Sense state
+    web.ts                           # Hidden-browser render host for daemon web tools
   preload/index.ts                   # contextBridge API
   shared/
     protocol.ts                      # JSON-RPC 2.0 types
@@ -174,6 +185,7 @@ src/
     session.ts                       # Session, SessionMessage, Collection, CollectionItem, EditMode, AttachedImage types
     sense.ts                         # SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult types
     models.ts                        # ModelId type
+    web.ts                           # WebRenderRequest/WebRenderResult render round-trip types
   renderer/
     App.vue                          # Root shell — panel layout + view routing
     ViewerWindow.vue                 # Markdown file viewer window
@@ -316,7 +328,7 @@ Focused tool approval request stacked above ChatInput while leaving the normal c
 - **Events:** `respond(requestId: string, approved: boolean)`
 
 ### MessageBubble
-Renders all message variants based on the `Message` union type. Delegates markdown to MarkdownMessage and turn activity rows to TurnActivity. User messages render attached images above text.
+Renders all message variants based on the `Message` union type. Delegates markdown to MarkdownMessage and turn activity rows to TurnActivity. User messages render attached images above text. Generated images (`meta`/`image`) render start-aligned with a loading placeholder until their base64 resolves.
 - **Props:** `msg: Message` — role/kind determines which variant renders
 - **Events:** `approve(requestId: string, approved: boolean)` — emitted from approval controls inside turn activity
 
@@ -459,6 +471,7 @@ type Message =
   | { id, role: 'meta', kind: 'skill', name, args? }
   | { id, role: 'meta', kind: 'thinking', text, durationSec?, streaming: boolean } // legacy persisted rows only
   | { id, role: 'meta', kind: 'activity', data: TurnActivityData }
+  | { id, role: 'meta', kind: 'image', imageIds: string[], images?: AttachedImage[], alt? } // generated images (codex_generate_image)
   | { id, role: 'meta', kind: 'error', text }
   | { id, role: 'meta', kind: 'approval', requestId, toolName, input, title?, description?, status: 'pending' | 'approved' | 'denied' }
   | { id, role: 'meta', kind: 'system', text }
