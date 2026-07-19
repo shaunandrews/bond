@@ -21,6 +21,7 @@ interface ItemRow {
   data: string
   project_id: string | null
   sort_order: number
+  display_number: number
   created_at: string
   updated_at: string
 }
@@ -54,6 +55,7 @@ function rowToItem(r: ItemRow, comments?: ItemComment[]): CollectionItem {
     collectionId: r.collection_id,
     data: JSON.parse(r.data) as Record<string, unknown>,
     sortOrder: r.sort_order,
+    displayNumber: r.display_number,
     comments,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -73,7 +75,7 @@ function rowToComment(r: CommentRow): ItemComment {
 // --- Collection CRUD ---
 
 const COLLECTION_COLS = 'id, name, icon, schema, features, archived, created_at, updated_at'
-const ITEM_COLS = 'id, collection_id, data, project_id, sort_order, created_at, updated_at'
+const ITEM_COLS = 'id, collection_id, data, project_id, sort_order, display_number, created_at, updated_at'
 
 export function listCollections(): Collection[] {
   const db = getDb()
@@ -165,13 +167,15 @@ export function addItem(collectionId: string, data: Record<string, unknown>): Co
   const now = new Date().toISOString()
   const maxOrder = (db.prepare('SELECT COALESCE(MAX(sort_order), -1) as m FROM collection_items WHERE collection_id = ?').get(collectionId) as { m: number }).m
   const sortOrder = maxOrder + 1
-  db.prepare('INSERT INTO collection_items (id, collection_id, data, project_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(id, collectionId, JSON.stringify(data), null, sortOrder, now, now)
+  const maxDisplayNumber = (db.prepare('SELECT COALESCE(MAX(display_number), 0) as m FROM collection_items WHERE collection_id = ?').get(collectionId) as { m: number }).m
+  const displayNumber = maxDisplayNumber + 1
+  db.prepare('INSERT INTO collection_items (id, collection_id, data, project_id, sort_order, display_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, collectionId, JSON.stringify(data), null, sortOrder, displayNumber, now, now)
 
   // Touch collection updated_at
   db.prepare('UPDATE collections SET updated_at = ? WHERE id = ?').run(now, collectionId)
 
-  return { id, collectionId, data, sortOrder, createdAt: now, updatedAt: now }
+  return { id, collectionId, data, sortOrder, displayNumber, createdAt: now, updatedAt: now }
 }
 
 export function updateItem(id: string, data: Record<string, unknown>): CollectionItem | null {

@@ -51,6 +51,7 @@ export function getDb(): Database.Database {
   migrateAddCollectionFeatures(_db)
   migrateCreateCollectionItemCommentsTable(_db)
   migrateAddCollectionItemProjectId(_db)
+  migrateAddCollectionItemDisplayNumber(_db)
   retireLegacyJournalCollection(_db)
   migrateAddOperativeContextWindow(_db)
   migrateCreateSenseMemoryTables(_db)
@@ -583,6 +584,24 @@ function migrateAddCollectionItemProjectId(db: Database.Database): void {
   if (!columns.some(c => c.name === 'project_id')) {
     db.exec('ALTER TABLE collection_items ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL')
   }
+}
+
+/** Give every item a stable, collection-local reference number for human use. */
+function migrateAddCollectionItemDisplayNumber(db: Database.Database): void {
+  const columns = db.pragma('table_info(collection_items)') as { name: string }[]
+  if (!columns.some(c => c.name === 'display_number')) {
+    db.exec('ALTER TABLE collection_items ADD COLUMN display_number INTEGER NOT NULL DEFAULT 0')
+  }
+
+  const collections = db.prepare('SELECT id FROM collections').all() as { id: string }[]
+  const update = db.prepare('UPDATE collection_items SET display_number = ? WHERE id = ?')
+  const assign = db.transaction(() => {
+    for (const collection of collections) {
+      const items = db.prepare('SELECT id FROM collection_items WHERE collection_id = ? ORDER BY created_at ASC, id ASC').all(collection.id) as { id: string }[]
+      items.forEach((item, index) => update.run(index + 1, item.id))
+    }
+  })
+  assign()
 }
 
 function retireLegacyJournalCollection(db: Database.Database): void {

@@ -92,6 +92,8 @@ export interface CollectionItem {
   collectionId: string
   data: Record<string, unknown>
   sortOrder: number
+  /** Stable, collection-local display number (e.g. Bond#42). */
+  displayNumber: number
   comments?: ItemComment[]
   createdAt: string
   updatedAt: string
