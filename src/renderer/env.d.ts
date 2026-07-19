@@ -2,8 +2,8 @@ declare global {
   interface Window {
     bond: {
       send: {
-        (input: import('../../shared/stream').BondSendInput): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>
-        (text: string, sessionId?: string, images?: import('../../shared/session').AttachedImage[]): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>
+        (input: import('../../shared/stream').BondSendInput): Promise<import('../../shared/rpc-schema').BondSendResult>
+        (text: string, sessionId?: string, images?: import('../../shared/session').AttachedImage[]): Promise<import('../../shared/rpc-schema').BondSendResult>
       }
       cancel: (sessionId?: string) => Promise<{ ok: boolean }>
       respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>

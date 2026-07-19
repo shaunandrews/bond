@@ -1,5 +1,12 @@
 import { makeRequest, isResponse, isNotification, type JsonRpcMessage } from '../../shared/protocol'
 import type { TaggedChunk } from '../../shared/stream'
+import type {
+  DispatchableMethod,
+  RpcNotificationName,
+  RpcNotifications,
+  RpcParamsArg,
+  RpcResult,
+} from '../../shared/rpc-schema'
 
 /**
  * Browser counterpart of BondClient: the same JSON-RPC protocol over the
@@ -36,7 +43,7 @@ export class WebBondClient {
   private readonly options: WebBondClientOptions
   private nextId = 1
   private pending = new Map<string | number, { resolve: (value: unknown) => void; reject: (err: Error) => void }>()
-  private notificationListeners = new Map<string, Set<(params: unknown) => void>>()
+  private notificationListeners = new Map<RpcNotificationName, Set<(payload: never) => void>>()
   private stateListeners = new Set<(state: ConnectionState) => void>()
   private _state: ConnectionState = 'disconnected'
   private authed!: Promise<void>
@@ -140,8 +147,8 @@ export class WebBondClient {
         return
       }
       if (isNotification(msg)) {
-        const listeners = this.notificationListeners.get(msg.method)
-        if (listeners) for (const fn of listeners) fn(msg.params)
+        const listeners = this.notificationListeners.get(msg.method as RpcNotificationName)
+        if (listeners) for (const fn of listeners) fn(msg.params as never)
       }
     }
 
@@ -204,13 +211,19 @@ export class WebBondClient {
     }
   }
 
-  async call<T = unknown>(method: string, params?: unknown): Promise<T> {
+  /** Registry-typed RPC: method names, params, and results come from RpcMethods. */
+  call<M extends DispatchableMethod>(method: M, ...args: RpcParamsArg<M>): Promise<RpcResult<M>> {
+    return this.callRaw(method, (args as unknown[])[0]) as Promise<RpcResult<M>>
+  }
+
+  /** Untyped path — internal messages (bond.auth is consumed before dispatch). */
+  private async callRaw(method: string, params?: unknown): Promise<unknown> {
     if (method !== 'bond.auth') await this.authed
     const ws = this.ws
     if (!ws || ws.readyState !== ws.OPEN) throw new Error('Not connected')
     const id = this.nextId++
-    return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject })
+    return new Promise<unknown>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject })
       ws.send(JSON.stringify(makeRequest(id, method, params)))
     })
   }
@@ -220,18 +233,20 @@ export class WebBondClient {
     return await this.call('bond.subscribe', sessionId ? { sessionId } : undefined)
   }
 
-  onNotification(method: string, fn: (params: unknown) => void): () => void {
+  /** Subscribe to a daemon push notification. Payload types come from RpcNotifications. */
+  onNotification<K extends RpcNotificationName>(method: K, fn: (payload: RpcNotifications[K]) => void): () => void {
     let listeners = this.notificationListeners.get(method)
     if (!listeners) {
       listeners = new Set()
       this.notificationListeners.set(method, listeners)
     }
-    listeners.add(fn)
-    return () => listeners.delete(fn)
+    const set = listeners
+    set.add(fn)
+    return () => set.delete(fn)
   }
 
   onChunk(fn: (chunk: TaggedChunk) => void): () => void {
-    return this.onNotification('bond.chunk', (params) => fn(params as TaggedChunk))
+    return this.onNotification('bond.chunk', fn)
   }
 }
 

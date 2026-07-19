@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { ref, computed } from 'vue'
 import type { BondSendInput, TaggedChunk } from '../../shared/stream'
+import type { BondSendResult } from '../../shared/rpc-schema'
 import type { AttachedImage, EditMode, SessionMessage } from '../../shared/session'
 import type { TranscriptMessage, TranscriptPage } from '../../shared/transcript'
 import type { Message } from '../types/message'
@@ -17,7 +18,7 @@ export interface QueuedMessage {
 }
 
 export interface ChatDeps {
-  send: ((input: BondSendInput) => Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>) & ((text: string, sessionId?: string, images?: AttachedImage[]) => Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>)
+  send: ((input: BondSendInput) => Promise<BondSendResult>) & ((text: string, sessionId?: string, images?: AttachedImage[]) => Promise<BondSendResult>)
   cancel: (sessionId?: string) => Promise<{ ok: boolean }>
   onChunk: (fn: (chunk: TaggedChunk) => void) => () => void
   respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
@@ -498,15 +499,6 @@ export function useChat(deps: ChatDeps = window.bond) {
           if (m.role === 'user' && m.id === userMessageId) { m.imageIds = res.imageIds; break }
         }
         await upsertMessage(messages.value.find(m => m.id === userMessageId)!)
-      }
-      if (!res.ok && res.error) {
-        addMessage({ id: uid(), role: 'meta', kind: 'error', text: res.error })
-        busy.value = false
-        activeTurnId.value = null
-        updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: res.error! }) })
-        activeActivityId.value = null
-        endStreaming()
-        await persistMessages()
       }
     } catch (error) {
       busy.value = false

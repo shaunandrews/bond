@@ -5,7 +5,7 @@ import type { TaggedChunk } from '../../shared/stream'
 
 function mockDeps(): ChatDeps {
   return {
-    send: vi.fn().mockResolvedValue({ ok: true }),
+    send: vi.fn().mockResolvedValue({ ok: true, queued: false, turnId: 't', epochId: 'e' }),
     cancel: vi.fn().mockResolvedValue({ ok: true }),
     onChunk: vi.fn().mockReturnValue(vi.fn()),
     respondToApproval: vi.fn().mockResolvedValue({ ok: true }),
@@ -182,7 +182,7 @@ describe('useChat continuous transcript', () => {
   })
 
   it('lets the daemon insert canonical turn rows before renderer upserts', async () => {
-    let resolveSend!: (value: { ok: boolean }) => void
+    let resolveSend!: (value: { ok: true; queued: boolean; turnId: string; epochId: string }) => void
     ;(deps.send as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(resolve => { resolveSend = resolve }))
 
     const submitting = chat.submit('hello')
@@ -197,7 +197,7 @@ describe('useChat continuous transcript', () => {
     expect(input.userMessageId).toEqual(chat.messages.value[0].id)
     expect(input.activityMessageId).toEqual(chat.messages.value[1].id)
 
-    resolveSend({ ok: true })
+    resolveSend({ ok: true, queued: false, turnId: 't', epochId: 'e' })
     await submitting
   })
 
@@ -300,6 +300,24 @@ describe('useChat continuous transcript', () => {
     expect(deps.send).toHaveBeenCalledTimes(1)
   })
 
+  // The daemon never returns an error field on a bond.send result — failures
+  // arrive as thrown JSON-RPC errors, and the catch path must fail the turn.
+  it('marks the turn failed when send rejects', async () => {
+    ;(deps.send as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('daemon exploded'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await chat.submit('boom')
+    } finally {
+      errSpy.mockRestore()
+    }
+
+    expect(chat.busy.value).toBe(false)
+    const activity = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
+    if (!activity || activity.role !== 'meta' || activity.kind !== 'activity') throw new Error('no activity row')
+    expect(activity.data).toMatchObject({ status: 'failed', expanded: true })
+    expect(activity.data.events.at(-1)).toMatchObject({ type: 'error', text: 'daemon exploded' })
+  })
+
   it('queues while busy and auto-sends the next message after query_end', async () => {
     await chat.submit('first')
     await chat.submit('second')
@@ -318,7 +336,7 @@ describe('useChat continuous transcript', () => {
   it('sends IPC-cloneable payloads instead of Vue reactive proxies', async () => {
     ;(deps.send as ReturnType<typeof vi.fn>).mockImplementation(async input => {
       expect(() => structuredClone(input)).not.toThrow()
-      return { ok: true }
+      return { ok: true, queued: false, turnId: 't', epochId: 'e' }
     })
     chat.setEditMode({ type: 'scoped', allowedPaths: ['/tmp/project'] })
     await chat.submit('scoped work', [{ data: 'abc', mediaType: 'image/png' }])

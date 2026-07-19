@@ -1,25 +1,28 @@
 import WebSocket from 'ws'
 import type { BondSendInput, TaggedChunk } from './stream'
-import type { Session, SessionMessage, AttachedImage, ImageRecord, Collection, CollectionItem, FieldDef, ItemComment, EditMode } from './session'
-import type { TranscriptMessage, TranscriptPage } from './transcript'
-import type { SenseStatus, SenseSettings, SenseCapture, SessionDebrief } from './sense'
-import type { CoreMemory, MemoryItem, MemoryItemInput, MemorySourcesResult, RetrievedMemory, WorkingState } from './memory'
-import type { OnboardingFirstRunState, SandboxStatus } from './onboarding'
-import type { WebRenderRequest, WebRenderResult } from './web'
+import type { AttachedImage, EditMode, FieldDef, SessionMessage } from './session'
+import type { ImageMediaType } from './session'
+import type { TranscriptMessage } from './transcript'
+import type { SenseSettings } from './sense'
+import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
+import type { WebRenderResult } from './web'
+import type { ModelId } from './models'
+import type {
+  BondSendResult,
+  CollectionUpdates,
+  DispatchableMethod,
+  RpcNotificationName,
+  RpcNotifications,
+  RpcParamsArg,
+  RpcResult,
+  SessionUpdates,
+} from './rpc-schema'
 import {
   makeRequest,
   isResponse,
   isNotification,
-  type JsonRpcResponse,
   type JsonRpcMessage
 } from './protocol'
-
-type ChunkListener = (chunk: TaggedChunk) => void
-type CollectionChangeListener = () => void
-type ImageChangeListener = () => void
-type SenseRequestCaptureListener = (payload: { captureDir: string; captureId: string }) => void
-type SenseStateChangedListener = (payload: { state: string }) => void
-type WebRequestRenderListener = (payload: WebRenderRequest) => void
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -30,12 +33,7 @@ export class BondClient {
   private ws: WebSocket | null = null
   private nextId = 1
   private pending = new Map<string | number, PendingRequest>()
-  private chunkListeners = new Set<ChunkListener>()
-  private collectionChangeListeners = new Set<CollectionChangeListener>()
-  private imageChangeListeners = new Set<ImageChangeListener>()
-  private senseRequestCaptureListeners = new Set<SenseRequestCaptureListener>()
-  private senseStateChangedListeners = new Set<SenseStateChangedListener>()
-  private webRequestRenderListeners = new Set<WebRequestRenderListener>()
+  private notificationListeners = new Map<RpcNotificationName, Set<(payload: never) => void>>()
   private disconnectListeners = new Set<() => void>()
   private socketPath: string
   private tokenProvider: () => string | undefined
@@ -132,35 +130,9 @@ export class BondClient {
           }
         }
       } else if (isNotification(msg)) {
-        if (msg.method === 'bond.chunk' && msg.params) {
-          const chunk = msg.params as TaggedChunk
-          for (const fn of this.chunkListeners) {
-            fn(chunk)
-          }
-        } else if (msg.method === 'collection.changed') {
-          for (const fn of this.collectionChangeListeners) {
-            fn()
-          }
-        } else if (msg.method === 'image.changed') {
-          for (const fn of this.imageChangeListeners) {
-            fn()
-          }
-        } else if (msg.method === 'sense.requestCapture' && msg.params) {
-          const payload = msg.params as { captureDir: string; captureId: string }
-          for (const fn of this.senseRequestCaptureListeners) {
-            fn(payload)
-          }
-        } else if (msg.method === 'sense.stateChanged' && msg.params) {
-          const payload = msg.params as { state: string }
-          for (const fn of this.senseStateChangedListeners) {
-            fn(payload)
-          }
-        } else if (msg.method === 'web.requestRender' && msg.params) {
-          const payload = msg.params as unknown as WebRenderRequest
-          for (const fn of this.webRequestRenderListeners) {
-            fn(payload)
-          }
-        }
+        const listeners = this.notificationListeners.get(msg.method as RpcNotificationName)
+        if (!listeners) return
+        for (const fn of listeners) fn(msg.params as never)
       }
     })
   }
@@ -188,7 +160,12 @@ export class BondClient {
     return () => this.disconnectListeners.delete(fn)
   }
 
-  private call(method: string, params?: unknown): Promise<unknown> {
+  /** Registry-typed RPC: method names, params, and results come from RpcMethods. */
+  call<M extends DispatchableMethod>(method: M, ...args: RpcParamsArg<M>): Promise<RpcResult<M>> {
+    return this.callRaw(method, (args as unknown[])[0]) as Promise<RpcResult<M>>
+  }
+
+  private callRaw(method: string, params?: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         return reject(new Error('Not connected'))
@@ -200,446 +177,440 @@ export class BondClient {
     })
   }
 
+  /** Subscribe to a daemon push notification. Payload types come from RpcNotifications. */
+  onNotification<K extends RpcNotificationName>(method: K, fn: (payload: RpcNotifications[K]) => void): () => void {
+    let listeners = this.notificationListeners.get(method)
+    if (!listeners) {
+      listeners = new Set()
+      this.notificationListeners.set(method, listeners)
+    }
+    const set = listeners
+    set.add(fn)
+    return () => set.delete(fn)
+  }
+
   // --- Chat ---
 
-  async send(input: BondSendInput): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>
-  async send(text: string, sessionId?: string, images?: AttachedImage[]): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }>
-  async send(inputOrText: BondSendInput | string, sessionId?: string, images?: AttachedImage[]): Promise<{ ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }> {
+  async send(input: BondSendInput): Promise<BondSendResult>
+  /** @deprecated Positional form kept for legacy callers — pass a BondSendInput object. */
+  async send(text: string, sessionId?: string, images?: AttachedImage[]): Promise<BondSendResult>
+  async send(inputOrText: BondSendInput | string, sessionId?: string, images?: AttachedImage[]): Promise<BondSendResult> {
     const params = typeof inputOrText === 'string'
       ? { text: inputOrText, sessionId, images }
       : inputOrText
-    return await this.call('bond.send', params) as { ok: boolean; queued?: boolean; error?: string; imageIds?: string[] }
+    return this.call('bond.send', params)
   }
 
-  async cancel(): Promise<{ ok: boolean }>
-  async cancel(sessionId?: string): Promise<{ ok: boolean }>
-  async cancel(sessionId?: string): Promise<{ ok: boolean }> {
-    return await this.call('bond.cancel', sessionId ? { sessionId } : undefined) as { ok: boolean }
+  async cancel(sessionId?: string): Promise<RpcResult<'bond.cancel'>> {
+    return this.call('bond.cancel', sessionId ? { sessionId } : undefined)
   }
 
-  async respondToApproval(requestId: string, approved: boolean): Promise<{ ok: boolean }> {
-    return await this.call('bond.approvalResponse', { requestId, approved }) as { ok: boolean }
+  async respondToApproval(requestId: string, approved: boolean): Promise<RpcResult<'bond.approvalResponse'>> {
+    return this.call('bond.approvalResponse', { requestId, approved })
   }
 
-  onChunk(fn: ChunkListener): () => void {
-    this.chunkListeners.add(fn)
-    return () => this.chunkListeners.delete(fn)
+  onChunk(fn: (chunk: TaggedChunk) => void): () => void {
+    return this.onNotification('bond.chunk', fn)
   }
 
   // --- Subscriptions ---
 
-  async subscribe(sessionId?: string): Promise<{ ok: boolean }> {
-    return await this.call('bond.subscribe', sessionId ? { sessionId } : undefined) as { ok: boolean }
+  async subscribe(sessionId?: string): Promise<RpcResult<'bond.subscribe'>> {
+    return this.call('bond.subscribe', sessionId ? { sessionId } : undefined)
   }
 
-  async unsubscribe(sessionId?: string): Promise<{ ok: boolean }> {
-    return await this.call('bond.unsubscribe', sessionId ? { sessionId } : undefined) as { ok: boolean }
+  async unsubscribe(sessionId?: string): Promise<RpcResult<'bond.unsubscribe'>> {
+    return this.call('bond.unsubscribe', sessionId ? { sessionId } : undefined)
   }
 
   // --- Model ---
 
-  async setModel(model: string): Promise<{ ok: boolean }> {
-    return await this.call('bond.setModel', { model }) as { ok: boolean }
+  async setModel(model: string): Promise<RpcResult<'bond.setModel'>> {
+    return this.call('bond.setModel', { model: model as ModelId })
   }
 
-  async getModel(): Promise<string> {
-    return await this.call('bond.getModel') as string
+  async getModel(): Promise<RpcResult<'bond.getModel'>> {
+    return this.call('bond.getModel')
   }
 
-  async getEditMode(): Promise<EditMode> {
-    return await this.call('settings.getEditMode') as EditMode
+  async getEditMode(): Promise<RpcResult<'settings.getEditMode'>> {
+    return this.call('settings.getEditMode')
   }
 
-  async setEditMode(editMode: EditMode): Promise<{ ok: boolean }> {
-    return await this.call('settings.setEditMode', { editMode }) as { ok: boolean }
+  async setEditMode(editMode: EditMode): Promise<RpcResult<'settings.setEditMode'>> {
+    return this.call('settings.setEditMode', { editMode })
   }
 
-  async getPiStatus(): Promise<{ configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }> {
-    return await this.call('pi.status') as { configured: boolean; providers: Array<{ providerId: string; type: 'api_key' | 'oauth' }> }
+  async getPiStatus(): Promise<RpcResult<'pi.status'>> {
+    return this.call('pi.status')
   }
 
-  async startPiOAuth(provider: 'anthropic' | 'openai-codex'): Promise<{ url: string; instructions?: string; deviceCode?: string }> {
-    return await this.call('pi.startOAuth', { provider }) as { url: string; instructions?: string; deviceCode?: string }
+  async startPiOAuth(provider: 'anthropic' | 'openai-codex'): Promise<RpcResult<'pi.startOAuth'>> {
+    return this.call('pi.startOAuth', { provider })
   }
 
   // --- Remote access (LAN web server) ---
 
-  async remoteStatus(): Promise<{ running: boolean; port: number | null; token: string | null; urls: string[] }> {
-    return await this.call('remote.status') as { running: boolean; port: number | null; token: string | null; urls: string[] }
+  async remoteStatus(): Promise<RpcResult<'remote.status'>> {
+    return this.call('remote.status')
   }
 
   // --- Continuous transcript ---
 
-  async listTranscript(options: { beforeSeq?: number; limit?: number } = {}): Promise<TranscriptPage> {
-    return await this.call('transcript.list', options) as TranscriptPage
+  async listTranscript(options: { beforeSeq?: number; limit?: number } = {}): Promise<RpcResult<'transcript.list'>> {
+    return this.call('transcript.list', options)
   }
 
-  async upsertTranscript(messages: TranscriptMessage[]): Promise<{ ok: boolean }> {
-    return await this.call('transcript.upsert', { messages }) as { ok: boolean }
+  async upsertTranscript(messages: TranscriptMessage[]): Promise<RpcResult<'transcript.upsert'>> {
+    return this.call('transcript.upsert', { messages })
   }
 
-  async searchTranscript(query: string, limit?: number): Promise<{ messages: TranscriptMessage[] }> {
-    return await this.call('transcript.search', { query, limit }) as { messages: TranscriptMessage[] }
+  async searchTranscript(query: string, limit?: number): Promise<RpcResult<'transcript.search'>> {
+    return this.call('transcript.search', { query, limit })
   }
 
   // --- Sessions ---
 
-  async listSessions(): Promise<Session[]> {
-    return await this.call('session.list') as Session[]
+  async listSessions(): Promise<RpcResult<'session.list'>> {
+    return this.call('session.list')
   }
 
-  async createSession(options?: { title?: string }): Promise<Session> {
-    return await this.call('session.create', options) as Session
+  async createSession(options?: { title?: string }): Promise<RpcResult<'session.create'>> {
+    return this.call('session.create', options)
   }
 
-  async getSession(id: string): Promise<Session | null> {
-    return await this.call('session.get', { id }) as Session | null
+  async getSession(id: string): Promise<RpcResult<'session.get'>> {
+    return this.call('session.get', { id })
   }
 
-  async updateSession(id: string, updates: Partial<Pick<Session, 'title' | 'summary' | 'archived' | 'favorited' | 'quick' | 'iconSeed' | 'editMode'>>): Promise<Session | null> {
-    return await this.call('session.update', { id, updates }) as Session | null
+  async updateSession(id: string, updates: SessionUpdates): Promise<RpcResult<'session.update'>> {
+    return this.call('session.update', { id, updates })
   }
 
-  async deleteSession(id: string): Promise<boolean> {
-    return await this.call('session.delete', { id }) as boolean
+  async deleteSession(id: string): Promise<RpcResult<'session.delete'>> {
+    return this.call('session.delete', { id })
   }
 
-  async deleteArchivedSessions(): Promise<{ ok: boolean; count: number }> {
-    return await this.call('session.deleteArchived') as { ok: boolean; count: number }
+  async deleteArchivedSessions(): Promise<RpcResult<'session.deleteArchived'>> {
+    return this.call('session.deleteArchived')
   }
 
-  async getMessages(sessionId: string): Promise<SessionMessage[]> {
-    return await this.call('session.getMessages', { sessionId }) as SessionMessage[]
+  async getMessages(sessionId: string): Promise<RpcResult<'session.getMessages'>> {
+    return this.call('session.getMessages', { sessionId })
   }
 
-  async saveMessages(sessionId: string, messages: SessionMessage[]): Promise<boolean> {
-    return await this.call('session.saveMessages', { sessionId, messages }) as boolean
+  async saveMessages(sessionId: string, messages: SessionMessage[]): Promise<RpcResult<'session.saveMessages'>> {
+    return this.call('session.saveMessages', { sessionId, messages })
   }
 
   // --- Images ---
 
-  async listImages(): Promise<ImageRecord[]> {
-    return await this.call('image.list') as ImageRecord[]
+  async listImages(): Promise<RpcResult<'image.list'>> {
+    return this.call('image.list')
   }
 
-  async getImage(imageId: string): Promise<AttachedImage | null> {
-    return await this.call('image.get', { id: imageId }) as AttachedImage | null
+  async getImage(imageId: string): Promise<RpcResult<'image.get'>> {
+    return this.call('image.get', { id: imageId })
   }
 
-  async getImages(ids: string[]): Promise<(AttachedImage | null)[]> {
-    return await this.call('image.getMultiple', { ids }) as (AttachedImage | null)[]
+  async getImages(ids: string[]): Promise<RpcResult<'image.getMultiple'>> {
+    return this.call('image.getMultiple', { ids })
   }
 
-  async importImage(data: string, mediaType: string): Promise<ImageRecord> {
-    return await this.call('image.import', { data, mediaType }) as ImageRecord
+  async importImage(data: string, mediaType: string): Promise<RpcResult<'image.import'>> {
+    return this.call('image.import', { data, mediaType: mediaType as ImageMediaType })
   }
 
-  async deleteImage(imageId: string): Promise<boolean> {
-    return await this.call('image.delete', { id: imageId }) as boolean
+  async deleteImage(imageId: string): Promise<RpcResult<'image.delete'>> {
+    return this.call('image.delete', { id: imageId })
   }
 
   // --- Skills ---
 
-  async listSkills(): Promise<{ name: string; description: string; argumentHint: string }[]> {
-    return await this.call('skills.list') as { name: string; description: string; argumentHint: string }[]
+  async listSkills(): Promise<RpcResult<'skills.list'>> {
+    return this.call('skills.list')
   }
 
-  async refreshSkills(): Promise<{ name: string; description: string; argumentHint: string }[]> {
-    return await this.call('skills.refresh') as { name: string; description: string; argumentHint: string }[]
+  async refreshSkills(): Promise<RpcResult<'skills.refresh'>> {
+    return this.call('skills.refresh')
   }
 
-  async removeSkill(name: string): Promise<{ ok: boolean }> {
-    return await this.call('skills.remove', { name }) as { ok: boolean }
+  async removeSkill(name: string): Promise<RpcResult<'skills.remove'>> {
+    return this.call('skills.remove', { name })
   }
 
   // --- Collections ---
 
-  async listCollections(): Promise<Collection[]> {
-    return await this.call('collection.list') as Collection[]
+  async listCollections(): Promise<RpcResult<'collection.list'>> {
+    return this.call('collection.list')
   }
 
-  async getCollection(id: string): Promise<Collection | null> {
-    return await this.call('collection.get', { id }) as Collection | null
+  async getCollection(id: string): Promise<RpcResult<'collection.get'>> {
+    return this.call('collection.get', { id })
   }
 
-  async createCollection(name: string, schema: FieldDef[], icon?: string): Promise<Collection> {
-    return await this.call('collection.create', { name, schema, icon }) as Collection
+  async createCollection(name: string, schema: FieldDef[], icon?: string): Promise<RpcResult<'collection.create'>> {
+    return this.call('collection.create', { name, schema, icon })
   }
 
-  async updateCollection(id: string, updates: Partial<Pick<Collection, 'name' | 'icon' | 'schema' | 'archived'>>): Promise<Collection | null> {
-    return await this.call('collection.update', { id, updates }) as Collection | null
+  async updateCollection(id: string, updates: CollectionUpdates): Promise<RpcResult<'collection.update'>> {
+    return this.call('collection.update', { id, updates })
   }
 
-  async deleteCollection(id: string): Promise<boolean> {
-    return await this.call('collection.delete', { id }) as boolean
+  async deleteCollection(id: string): Promise<RpcResult<'collection.delete'>> {
+    return this.call('collection.delete', { id })
   }
 
-  async renameCollectionField(id: string, oldName: string, newName: string): Promise<boolean> {
-    return await this.call('collection.renameField', { id, oldName, newName }) as boolean
+  async renameCollectionField(id: string, oldName: string, newName: string): Promise<RpcResult<'collection.renameField'>> {
+    return this.call('collection.renameField', { id, oldName, newName })
   }
 
-  async listCollectionItems(collectionId: string): Promise<CollectionItem[]> {
-    return await this.call('collection.listItems', { collectionId }) as CollectionItem[]
+  async listCollectionItems(collectionId: string): Promise<RpcResult<'collection.listItems'>> {
+    return this.call('collection.listItems', { collectionId })
   }
 
-  async getCollectionItem(id: string): Promise<CollectionItem | null> {
-    return await this.call('collection.getItem', { id }) as CollectionItem | null
+  async getCollectionItem(id: string): Promise<RpcResult<'collection.getItem'>> {
+    return this.call('collection.getItem', { id })
   }
 
-  async addCollectionItem(collectionId: string, data: Record<string, unknown>): Promise<CollectionItem> {
-    return await this.call('collection.addItem', { collectionId, data }) as CollectionItem
+  async addCollectionItem(collectionId: string, data: Record<string, unknown>): Promise<RpcResult<'collection.addItem'>> {
+    return this.call('collection.addItem', { collectionId, data })
   }
 
-  async updateCollectionItem(id: string, data: Record<string, unknown>): Promise<CollectionItem | null> {
-    return await this.call('collection.updateItem', { id, data }) as CollectionItem | null
+  async updateCollectionItem(id: string, data: Record<string, unknown>): Promise<RpcResult<'collection.updateItem'>> {
+    return this.call('collection.updateItem', { id, data })
   }
 
-  async deleteCollectionItem(id: string): Promise<boolean> {
-    return await this.call('collection.deleteItem', { id }) as boolean
+  async deleteCollectionItem(id: string): Promise<RpcResult<'collection.deleteItem'>> {
+    return this.call('collection.deleteItem', { id })
   }
 
-  async reorderCollectionItems(ids: string[]): Promise<boolean> {
-    return await this.call('collection.reorderItems', { ids }) as boolean
+  async reorderCollectionItems(ids: string[]): Promise<RpcResult<'collection.reorderItems'>> {
+    return this.call('collection.reorderItems', { ids })
   }
 
-  onCollectionsChanged(fn: CollectionChangeListener): () => void {
-    this.collectionChangeListeners.add(fn)
-    return () => this.collectionChangeListeners.delete(fn)
+  onCollectionsChanged(fn: () => void): () => void {
+    return this.onNotification('collection.changed', fn)
   }
 
-  onImageChanged(fn: ImageChangeListener): () => void {
-    this.imageChangeListeners.add(fn)
-    return () => this.imageChangeListeners.delete(fn)
+  onImageChanged(fn: () => void): () => void {
+    return this.onNotification('image.changed', fn)
   }
 
   // --- Collection item comments ---
 
-  async addItemComment(itemId: string, author: 'user' | 'bond', body: string): Promise<ItemComment> {
-    return await this.call('collection.addItemComment', { itemId, author, body }) as ItemComment
+  async addItemComment(itemId: string, author: 'user' | 'bond', body: string): Promise<RpcResult<'collection.addItemComment'>> {
+    return this.call('collection.addItemComment', { itemId, author, body })
   }
 
-  async deleteItemComment(id: string): Promise<boolean> {
-    return await this.call('collection.deleteItemComment', { id }) as boolean
+  async deleteItemComment(id: string): Promise<RpcResult<'collection.deleteItemComment'>> {
+    return this.call('collection.deleteItemComment', { id })
   }
 
-  async listItemComments(itemId: string): Promise<ItemComment[]> {
-    return await this.call('collection.listItemComments', { itemId }) as ItemComment[]
+  async listItemComments(itemId: string): Promise<RpcResult<'collection.listItemComments'>> {
+    return this.call('collection.listItemComments', { itemId })
   }
 
-  async searchCollectionItems(collectionId: string, query: string): Promise<CollectionItem[]> {
-    return await this.call('collection.searchItems', { collectionId, query }) as CollectionItem[]
+  async searchCollectionItems(collectionId: string, query: string): Promise<RpcResult<'collection.searchItems'>> {
+    return this.call('collection.searchItems', { collectionId, query })
   }
 
-  async getCollectionByName(name: string): Promise<Collection | null> {
-    return await this.call('collection.getByName', { name }) as Collection | null
+  async getCollectionByName(name: string): Promise<RpcResult<'collection.getByName'>> {
+    return this.call('collection.getByName', { name })
   }
 
   // --- Sense ---
 
-  async senseStatus(): Promise<SenseStatus> {
-    return await this.call('sense.status') as SenseStatus
+  async senseStatus(): Promise<RpcResult<'sense.status'>> {
+    return this.call('sense.status')
   }
 
-  async senseEnable(): Promise<{ ok: boolean }> {
-    return await this.call('sense.enable') as { ok: boolean }
+  async senseEnable(): Promise<RpcResult<'sense.enable'>> {
+    return this.call('sense.enable')
   }
 
-  async senseDisable(): Promise<{ ok: boolean }> {
-    return await this.call('sense.disable') as { ok: boolean }
+  async senseDisable(): Promise<RpcResult<'sense.disable'>> {
+    return this.call('sense.disable')
   }
 
-  async sensePause(minutes?: number): Promise<{ ok: boolean; resumeAt: string }> {
-    return await this.call('sense.pause', { minutes }) as { ok: boolean; resumeAt: string }
+  async sensePause(minutes?: number): Promise<RpcResult<'sense.pause'>> {
+    return this.call('sense.pause', { minutes })
   }
 
-  async senseResume(): Promise<{ ok: boolean }> {
-    return await this.call('sense.resume') as { ok: boolean }
+  async senseResume(): Promise<RpcResult<'sense.resume'>> {
+    return this.call('sense.resume')
   }
 
-  async senseCaptureReady(captureId: string, imagePath: string): Promise<{ ok: boolean }> {
-    return await this.call('sense.captureReady', { captureId, imagePath }) as { ok: boolean }
+  async senseCaptureReady(captureId: string, imagePath: string): Promise<RpcResult<'sense.captureReady'>> {
+    return this.call('sense.captureReady', { captureId, imagePath })
   }
 
-  async webRenderReady(result: WebRenderResult): Promise<{ ok: boolean }> {
-    return await this.call('web.renderReady', { ...result }) as { ok: boolean }
+  async webRenderReady(result: WebRenderResult): Promise<RpcResult<'web.renderReady'>> {
+    return this.call('web.renderReady', { ...result })
   }
 
-  async sensePermissionChanged(screen: boolean, accessibility: boolean): Promise<{ ok: boolean }> {
-    return await this.call('sense.permissionChanged', { screen, accessibility }) as { ok: boolean }
+  async senseNow(): Promise<RpcResult<'sense.now'>> {
+    return this.call('sense.now')
   }
 
-  async senseNow(): Promise<unknown> {
-    return await this.call('sense.now')
+  async senseToday(): Promise<RpcResult<'sense.today'>> {
+    return this.call('sense.today')
   }
 
-  async senseToday(): Promise<unknown> {
-    return await this.call('sense.today')
+  async senseSearch(query: string, limit?: number): Promise<RpcResult<'sense.search'>> {
+    return this.call('sense.search', { query, limit })
   }
 
-  async senseSearch(query: string, limit?: number): Promise<SenseCapture[]> {
-    return await this.call('sense.search', { query, limit }) as SenseCapture[]
+  async senseApps(range?: string): Promise<RpcResult<'sense.apps'>> {
+    return this.call('sense.apps', { range: range as 'today' | 'week' | undefined })
   }
 
-  async senseApps(range?: string): Promise<unknown> {
-    return await this.call('sense.apps', { range })
+  async senseTimeline(from?: string, to?: string, limit?: number): Promise<RpcResult<'sense.timeline'>> {
+    return this.call('sense.timeline', { from, to, limit })
   }
 
-  async senseTimeline(from?: string, to?: string, limit?: number): Promise<SenseCapture[]> {
-    return await this.call('sense.timeline', { from, to, limit }) as SenseCapture[]
+  async senseCapture(id: string): Promise<RpcResult<'sense.capture'>> {
+    return this.call('sense.capture', { id })
   }
 
-  async senseCapture(id: string): Promise<{ capture: SenseCapture; image: string | null }> {
-    return await this.call('sense.capture', { id }) as { capture: SenseCapture; image: string | null }
+  async senseSessions(from?: string, to?: string): Promise<RpcResult<'sense.sessions'>> {
+    return this.call('sense.sessions', { from, to })
   }
 
-  async senseSessions(from?: string, to?: string): Promise<import('./sense').SenseSession[]> {
-    return await this.call('sense.sessions', { from, to }) as import('./sense').SenseSession[]
+  async senseSettings(): Promise<RpcResult<'sense.settings'>> {
+    return this.call('sense.settings')
   }
 
-  async senseSettings(): Promise<SenseSettings> {
-    return await this.call('sense.settings') as SenseSettings
+  async senseUpdateSettings(updates: Partial<SenseSettings>): Promise<RpcResult<'sense.updateSettings'>> {
+    return this.call('sense.updateSettings', { updates })
   }
 
-  async senseUpdateSettings(updates: Partial<SenseSettings>): Promise<SenseSettings> {
-    return await this.call('sense.updateSettings', { updates }) as SenseSettings
+  async senseClear(range?: { from?: string; to?: string }): Promise<RpcResult<'sense.clear'>> {
+    return this.call('sense.clear', { range })
   }
 
-  async senseClear(range?: { from?: string; to?: string }): Promise<{ deletedCount: number }> {
-    return await this.call('sense.clear', { range }) as { deletedCount: number }
-  }
-
-  async senseStats(): Promise<{ storageBytes: number; captureCount: number; sessionCount: number; oldestCapture: string | null }> {
-    return await this.call('sense.stats') as { storageBytes: number; captureCount: number; sessionCount: number; oldestCapture: string | null }
+  async senseStats(): Promise<RpcResult<'sense.stats'>> {
+    return this.call('sense.stats')
   }
 
   // --- Onboarding ---
 
-  async onboardingStatus(): Promise<OnboardingFirstRunState> {
-    return await this.call('onboarding.status') as OnboardingFirstRunState
+  async onboardingStatus(): Promise<RpcResult<'onboarding.status'>> {
+    return this.call('onboarding.status')
   }
 
-  async onboardingBegin(): Promise<OnboardingFirstRunState> {
-    return await this.call('onboarding.begin') as OnboardingFirstRunState
+  async onboardingBegin(): Promise<RpcResult<'onboarding.begin'>> {
+    return this.call('onboarding.begin')
   }
 
-  async onboardingSkip(): Promise<OnboardingFirstRunState> {
-    return await this.call('onboarding.skip') as OnboardingFirstRunState
+  async onboardingSkip(): Promise<RpcResult<'onboarding.skip'>> {
+    return this.call('onboarding.skip')
   }
 
   // --- New-user sandbox ---
 
-  async sandboxStatus(): Promise<SandboxStatus> {
-    return await this.call('sandbox.status') as SandboxStatus
+  async sandboxStatus(): Promise<RpcResult<'sandbox.status'>> {
+    return this.call('sandbox.status')
   }
 
-  async sandboxEnter(): Promise<SandboxStatus> {
-    return await this.call('sandbox.enter') as SandboxStatus
+  async sandboxEnter(): Promise<RpcResult<'sandbox.enter'>> {
+    return this.call('sandbox.enter')
   }
 
-  async sandboxExit(): Promise<SandboxStatus> {
-    return await this.call('sandbox.exit') as SandboxStatus
+  async sandboxExit(): Promise<RpcResult<'sandbox.exit'>> {
+    return this.call('sandbox.exit')
   }
 
   // --- Memory ---
 
-  async memoryCore(): Promise<CoreMemory> {
-    return await this.call('memory.core') as CoreMemory
+  async memoryCore(): Promise<RpcResult<'memory.core'>> {
+    return this.call('memory.core')
   }
 
-  async memoryUpdateCore(core: CoreMemory): Promise<CoreMemory> {
-    return await this.call('memory.updateCore', { core }) as CoreMemory
+  async memoryUpdateCore(core: CoreMemory): Promise<RpcResult<'memory.updateCore'>> {
+    return this.call('memory.updateCore', { core })
   }
 
-  async memoryWorking(): Promise<WorkingState> {
-    return await this.call('memory.working') as WorkingState
+  async memoryWorking(): Promise<RpcResult<'memory.working'>> {
+    return this.call('memory.working')
   }
 
-  async memoryUpdateWorking(working: WorkingState): Promise<WorkingState> {
-    return await this.call('memory.updateWorking', { working }) as WorkingState
+  async memoryUpdateWorking(working: WorkingState): Promise<RpcResult<'memory.updateWorking'>> {
+    return this.call('memory.updateWorking', { working })
   }
 
-  async memoryClearWorking(): Promise<WorkingState> {
-    return await this.call('memory.clearWorking') as WorkingState
+  async memoryClearWorking(): Promise<RpcResult<'memory.clearWorking'>> {
+    return this.call('memory.clearWorking')
   }
 
-  async memorySearch(query: string, limit?: number): Promise<{ results: RetrievedMemory[] }> {
-    return await this.call('memory.search', { query, limit }) as { results: RetrievedMemory[] }
+  async memorySearch(query: string, limit?: number): Promise<RpcResult<'memory.search'>> {
+    return this.call('memory.search', { query, limit })
   }
 
-  async memoryUpsert(item: MemoryItemInput): Promise<MemoryItem> {
-    return await this.call('memory.upsert', { item }) as MemoryItem
+  async memoryUpsert(item: MemoryItemInput): Promise<RpcResult<'memory.upsert'>> {
+    return this.call('memory.upsert', { item })
   }
 
-  async memoryDelete(id: string): Promise<{ ok: boolean }> {
-    return await this.call('memory.delete', { id }) as { ok: boolean }
+  async memoryDelete(id: string): Promise<RpcResult<'memory.delete'>> {
+    return this.call('memory.delete', { id })
   }
 
-  async memorySources(id: string): Promise<MemorySourcesResult> {
-    return await this.call('memory.sources', { id }) as MemorySourcesResult
+  async memorySources(id: string): Promise<RpcResult<'memory.sources'>> {
+    return this.call('memory.sources', { id })
   }
 
-  async senseMemory(limit?: number): Promise<{ debriefs: SessionDebrief[] }> {
-    return await this.call('sense.memory', { limit }) as { debriefs: SessionDebrief[] }
+  async senseMemory(limit?: number): Promise<RpcResult<'sense.memory'>> {
+    return this.call('sense.memory', { limit })
   }
 
-  async senseDebrief(id?: string, sessionId?: string): Promise<SessionDebrief | null> {
-    return await this.call('sense.debrief', { id, sessionId }) as SessionDebrief | null
+  async senseDebrief(id?: string, sessionId?: string): Promise<RpcResult<'sense.debrief'>> {
+    return this.call('sense.debrief', { id, sessionId })
   }
 
-  async senseDeleteDebrief(id: string): Promise<{ ok: boolean }> {
-    return await this.call('sense.deleteDebrief', { id }) as { ok: boolean }
+  async senseDeleteDebrief(id: string): Promise<RpcResult<'sense.deleteDebrief'>> {
+    return this.call('sense.deleteDebrief', { id })
   }
 
-  async senseSystemPromptPreview(editMode?: EditMode): Promise<{ prompt: string }> {
-    return await this.call('sense.systemPromptPreview', { editMode }) as { prompt: string }
+  async senseSystemPromptPreview(editMode?: EditMode): Promise<RpcResult<'sense.systemPromptPreview'>> {
+    return this.call('sense.systemPromptPreview', { editMode })
   }
 
-  onSenseRequestCapture(fn: SenseRequestCaptureListener): () => void {
-    this.senseRequestCaptureListeners.add(fn)
-    return () => this.senseRequestCaptureListeners.delete(fn)
+  onSenseRequestCapture(fn: (payload: RpcNotifications['sense.requestCapture']) => void): () => void {
+    return this.onNotification('sense.requestCapture', fn)
   }
 
-  onSenseStateChanged(fn: SenseStateChangedListener): () => void {
-    this.senseStateChangedListeners.add(fn)
-    return () => this.senseStateChangedListeners.delete(fn)
+  onSenseStateChanged(fn: (payload: RpcNotifications['sense.stateChanged']) => void): () => void {
+    return this.onNotification('sense.stateChanged', fn)
   }
 
-  onWebRequestRender(fn: WebRequestRenderListener): () => void {
-    this.webRequestRenderListeners.add(fn)
-    return () => this.webRequestRenderListeners.delete(fn)
-  }
-
-  // --- Shell (client-side only, not proxied through daemon) ---
-
-  async openExternal(_url: string): Promise<void> {
-    // This stays client-side — each client handles shell.openExternal locally
-    throw new Error('openExternal must be handled by the client, not the daemon')
+  onWebRequestRender(fn: (payload: RpcNotifications['web.requestRender']) => void): () => void {
+    return this.onNotification('web.requestRender', fn)
   }
 
   // --- Settings ---
 
-  async getSoul(): Promise<string> {
-    return await this.call('settings.getSoul') as string
+  async getSoul(): Promise<RpcResult<'settings.getSoul'>> {
+    return this.call('settings.getSoul')
   }
 
-  async saveSoul(content: string): Promise<boolean> {
-    return await this.call('settings.saveSoul', { content }) as boolean
+  async saveSoul(content: string): Promise<RpcResult<'settings.saveSoul'>> {
+    return this.call('settings.saveSoul', { content })
   }
 
-  async getAccentColor(): Promise<string> {
-    return await this.call('settings.getAccentColor') as string
+  async getAccentColor(): Promise<RpcResult<'settings.getAccentColor'>> {
+    return this.call('settings.getAccentColor')
   }
 
-  async saveAccentColor(hex: string): Promise<boolean> {
-    return await this.call('settings.saveAccentColor', { hex }) as boolean
+  async saveAccentColor(hex: string): Promise<RpcResult<'settings.saveAccentColor'>> {
+    return this.call('settings.saveAccentColor', { hex })
   }
 
-  async getWindowOpacity(): Promise<number> {
-    return await this.call('settings.getWindowOpacity') as number
+  async getWindowOpacity(): Promise<RpcResult<'settings.getWindowOpacity'>> {
+    return this.call('settings.getWindowOpacity')
   }
 
-  async saveWindowOpacity(opacity: number): Promise<boolean> {
-    return await this.call('settings.saveWindowOpacity', { opacity }) as boolean
+  async saveWindowOpacity(opacity: number): Promise<RpcResult<'settings.saveWindowOpacity'>> {
+    return this.call('settings.saveWindowOpacity', { opacity })
   }
 
 }

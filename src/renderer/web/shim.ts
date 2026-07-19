@@ -1,6 +1,8 @@
 import type { WebBondClient } from './client'
 import type { BondSendInput } from '../../shared/stream'
-import type { AttachedImage, EditMode } from '../../shared/session'
+import type { AttachedImage, EditMode, ImageMediaType } from '../../shared/session'
+import type { SenseCapture, SenseSession, SenseSettings } from '../../shared/sense'
+import type { ModelId } from '../../shared/models'
 
 /**
  * Builds a `window.bond` for the browser on top of WebBondClient, so the
@@ -35,7 +37,7 @@ export function buildBondShim(client: WebBondClient): Window['bond'] {
     listImages: () => client.call('image.list'),
     getImage: (imageId) => client.call('image.get', { id: imageId }),
     getImages: (ids) => client.call('image.getMultiple', { ids }),
-    importImage: (data, mediaType) => client.call('image.import', { data, mediaType }),
+    importImage: (data, mediaType) => client.call('image.import', { data, mediaType: mediaType as ImageMediaType }),
     deleteImage: (imageId) => client.call('image.delete', { id: imageId }),
     onImageChanged: (fn) => client.onNotification('image.changed', () => fn()),
 
@@ -56,7 +58,7 @@ export function buildBondShim(client: WebBondClient): Window['bond'] {
     onCreateSkill: noopDisposer,
 
     setModel: async (model) => {
-      const result = await client.call<{ ok: boolean }>('bond.setModel', { model })
+      const result = await client.call('bond.setModel', { model: model as ModelId })
       for (const fn of modelListeners) fn(model)
       return result
     },
@@ -75,7 +77,7 @@ export function buildBondShim(client: WebBondClient): Window['bond'] {
     saveSoul: (content) => client.call('settings.saveSoul', { content }),
     getAccentColor: () => client.call('settings.getAccentColor'),
     saveAccentColor: async (hex) => {
-      const result = await client.call<boolean>('settings.saveAccentColor', { hex })
+      const result = await client.call('settings.saveAccentColor', { hex })
       for (const fn of accentListeners) fn(hex)
       return result
     },
@@ -85,7 +87,7 @@ export function buildBondShim(client: WebBondClient): Window['bond'] {
     },
     getWindowOpacity: () => client.call('settings.getWindowOpacity'),
     saveWindowOpacity: async (opacity) => {
-      const result = await client.call<boolean>('settings.saveWindowOpacity', { opacity })
+      const result = await client.call('settings.saveWindowOpacity', { opacity })
       for (const fn of opacityListeners) fn(opacity)
       return result
     },
@@ -117,13 +119,16 @@ export function buildBondShim(client: WebBondClient): Window['bond'] {
     senseResume: () => client.call('sense.resume'),
     senseNow: () => client.call('sense.now'),
     senseToday: () => client.call('sense.today'),
-    senseSearch: (query, limit) => client.call('sense.search', { query, limit }),
-    senseApps: (range) => client.call('sense.apps', { range }),
-    senseTimeline: (from, to, limit) => client.call('sense.timeline', { from, to, limit }),
-    senseCapture: (id) => client.call('sense.capture', { id }),
-    senseSessions: (from, to) => client.call('sense.sessions', { from, to }),
+    // The daemon's sense.* query methods return raw snake_case rows (see
+    // rpc-schema). window.bond still declares the camelCase shapes — the
+    // casts bridge that until the preload surface collapses onto the registry.
+    senseSearch: (query, limit) => client.call('sense.search', { query, limit }) as unknown as Promise<SenseCapture[]>,
+    senseApps: (range) => client.call('sense.apps', { range: range as 'today' | 'week' | undefined }),
+    senseTimeline: (from, to, limit) => client.call('sense.timeline', { from, to, limit }) as unknown as Promise<SenseCapture[]>,
+    senseCapture: (id) => client.call('sense.capture', { id }) as unknown as Promise<{ capture: SenseCapture; image: string | null }>,
+    senseSessions: (from, to) => client.call('sense.sessions', { from, to }) as unknown as Promise<SenseSession[]>,
     senseSettings: () => client.call('sense.settings'),
-    senseUpdateSettings: (updates) => client.call('sense.updateSettings', { updates }),
+    senseUpdateSettings: (updates) => client.call('sense.updateSettings', { updates: updates as Partial<SenseSettings> }),
     senseClear: (range) => client.call('sense.clear', { range }),
     senseStats: () => client.call('sense.stats'),
     hasScreenRecordingPermission: async () => false,
