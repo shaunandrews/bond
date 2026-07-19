@@ -6,7 +6,7 @@ import { runBondQuery, buildAgentContextEnvelope } from './agent'
 import { clearTurnApprovals } from './approvals'
 import { ensureActiveEpoch } from './epochs'
 import { saveImages } from './images'
-import { finalObserverHook, memoryFlushHook, scheduleEpochObservation } from './memory/service'
+import { enqueueMemoryTask, finalObserverHook, memoryFlushHook, scheduleEpochObservation } from './memory/service'
 import { GLOBAL_TRANSCRIPT_SESSION_ID, ensureGlobalTranscriptSession } from './sessions'
 import { getSetting } from './settings'
 import { completeTurn, getMaxMessageSeq, insertTurnStart, startTurn, upsertMessages } from './transcript'
@@ -129,6 +129,9 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       const epochResult = await ensureActiveEpoch({
         finalObserver: finalObserverHook,
         memoryFlush: memoryFlushHook,
+        // Rollover observer/reflector work runs on the memory queue instead
+        // of blocking this send behind LLM round-trips.
+        deferHookWork: (task) => enqueueMemoryTask(task, console),
         logger: console,
       })
       const epoch = epochResult.epoch

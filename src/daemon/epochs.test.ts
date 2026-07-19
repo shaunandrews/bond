@@ -124,3 +124,60 @@ describe('epoch store', () => {
     expect(closed.reflectedThroughSeq).toBe(0)
   })
 })
+
+describe('deferred rollover hook work', () => {
+  it('swaps epochs immediately and defers hook work when deferHookWork is provided', async () => {
+    createEpoch({ id: 'epoch-1', piSessionId: 'pi-1' })
+    insertTurnStart({ epochId: 'epoch-1', turnId: 'turn-1', userMessageId: 'u1', assistantMessageId: 'b1', activityMessageId: 'a1', text: 'alpha' })
+
+    const finalObserver = vi.fn()
+    const memoryFlush = vi.fn()
+    const deferred: Array<() => Promise<void>> = []
+
+    const result = await ensureActiveEpoch({
+      contextTokens: 900,
+      contextWindow: 1_000,
+      piSessionId: 'pi-2',
+      finalObserver,
+      memoryFlush,
+      deferHookWork: (task) => deferred.push(task),
+    })
+
+    // Swap already happened; hooks have not run and markers are untouched.
+    expect(result.rolledOver).toBe(true)
+    expect(result.epoch.piSessionId).toBe('pi-2')
+    expect(findActiveEpoch()!.piSessionId).toBe('pi-2')
+    expect(deferred).toHaveLength(1)
+    expect(finalObserver).not.toHaveBeenCalled()
+    expect(memoryFlush).not.toHaveBeenCalled()
+    expect(findEpoch('epoch-1')!.observedThroughSeq).toBe(0)
+
+    await deferred[0]()
+
+    expect(finalObserver).toHaveBeenCalledWith(expect.objectContaining({ epoch: expect.objectContaining({ id: 'epoch-1' }), fromSeq: 1, toSeq: 3 }))
+    expect(memoryFlush).toHaveBeenCalledWith(expect.objectContaining({ fromSeq: 1, toSeq: 3 }))
+    const closed = findEpoch('epoch-1')!
+    expect(closed.observedThroughSeq).toBe(3)
+    expect(closed.reflectedThroughSeq).toBe(3)
+  })
+
+  it('deferred hook work re-reads markers advanced since scheduling', async () => {
+    createEpoch({ id: 'epoch-1', piSessionId: 'pi-1' })
+    insertTurnStart({ epochId: 'epoch-1', turnId: 'turn-1', userMessageId: 'u1', assistantMessageId: 'b1', activityMessageId: 'a1', text: 'alpha' })
+
+    const finalObserver = vi.fn()
+    const deferred: Array<() => Promise<void>> = []
+    await ensureActiveEpoch({
+      contextTokens: 900,
+      contextWindow: 1_000,
+      finalObserver,
+      deferHookWork: (task) => deferred.push(task),
+    })
+
+    // A background observation advanced the marker between swap and run.
+    getDb().prepare('UPDATE epochs SET observed_through_seq = 2 WHERE id = ?').run('epoch-1')
+    await deferred[0]()
+
+    expect(finalObserver).toHaveBeenCalledWith(expect.objectContaining({ fromSeq: 3, toSeq: 3 }))
+  })
+})

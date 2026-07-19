@@ -151,10 +151,22 @@ export async function waitForMemoryQueue(): Promise<void> {
   await observationQueue
 }
 
+/**
+ * Run arbitrary deferred memory work on the serialized queue (epoch-rollover
+ * hook work rides here so it never blocks the user's send).
+ */
+export function enqueueMemoryTask(task: () => Promise<void>, logger?: Pick<Console, 'warn'>): void {
+  observationQueue = observationQueue
+    .then(task)
+    .catch(error => logger?.warn?.(`[bond] deferred memory task failed: ${error instanceof Error ? error.message : String(error)}`))
+}
+
 export const finalObserverHook: EpochHook = async ({ epoch, toSeq }) => {
-  await waitForMemoryQueue()
-  // The background queue may have advanced the marker while we waited. Re-read
-  // it instead of replaying the stale range captured by ensureActiveEpoch().
+  // This hook runs ON the observation queue (via deferHookWork), so awaiting
+  // the queue here would deadlock on itself. Ordering after earlier
+  // background observations is guaranteed by queue position, and
+  // observeEpochThrough re-reads the marker rather than trusting the range
+  // captured at scheduling time.
   await observeEpochThrough({ epochId: epoch.id, toSeq, sessionId: epoch.piSessionId })
 }
 

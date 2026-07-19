@@ -58,6 +58,14 @@ export interface EnsureActiveEpochOptions {
   memoryFlush?: EpochHook
   /** Alias kept for call-sites that name the hook as a verb. */
   flushMemory?: EpochHook
+  /**
+   * When provided, rollover hook work (observer + reflector — real LLM
+   * round-trips) is scheduled here instead of awaited inline, so the epoch
+   * swap itself is just two synchronous writes. Marker advancement moves
+   * INTO the scheduled task, which re-reads the observed/reflected markers
+   * at run time (the background queue may have advanced them since).
+   */
+  deferHookWork?: (task: () => Promise<void>) => void
   logger?: Pick<Console, 'warn'>
 }
 
@@ -205,6 +213,38 @@ async function runHook(
   }
 }
 
+/**
+ * The observer/reflector work owed to a closing epoch. Markers are re-read
+ * at run time and advanced here on success — the background queue may have
+ * observed further since this work was scheduled, and `runHook` with an
+ * undefined hook reports success, so advancing markers before the work runs
+ * would make the re-reading observer skip everything.
+ */
+async function runRolloverHookWork(
+  epochId: string,
+  toSeq: number,
+  options: EnsureActiveEpochOptions,
+  warnings: string[],
+  db?: Database.Database,
+): Promise<void> {
+  const actual = dbOrDefault(db)
+  const epoch = findEpoch(epochId, actual)
+  if (!epoch) return
+
+  const observedFrom = epoch.observedThroughSeq + 1
+  const observedOk = await runHook('finalObserver', options.finalObserver, epoch, observedFrom, toSeq, actual, warnings, options.logger)
+  if (observedOk && toSeq >= observedFrom) {
+    actual.prepare('UPDATE epochs SET observed_through_seq = ? WHERE id = ?').run(toSeq, epoch.id)
+  }
+
+  const reflectedFrom = epoch.reflectedThroughSeq + 1
+  const flush = options.memoryFlush ?? options.flushMemory
+  const reflectedOk = await runHook('memoryFlush', flush, epoch, reflectedFrom, toSeq, actual, warnings, options.logger)
+  if (reflectedOk && toSeq >= reflectedFrom) {
+    actual.prepare('UPDATE epochs SET reflected_through_seq = ? WHERE id = ?').run(toSeq, epoch.id)
+  }
+}
+
 export async function ensureActiveEpoch(options: EnsureActiveEpochOptions = {}, db?: Database.Database): Promise<EnsureActiveEpochResult> {
   const actual = dbOrDefault(db)
   let active = findActiveEpoch(actual)
@@ -226,18 +266,24 @@ export async function ensureActiveEpoch(options: EnsureActiveEpochOptions = {}, 
   const warnings: string[] = []
   const toSeq = maxMessageSeq(actual)
 
-  const observedFrom = active.observedThroughSeq + 1
-  const observedOk = await runHook('finalObserver', options.finalObserver, active, observedFrom, toSeq, actual, warnings, options.logger)
-  if (observedOk && toSeq >= observedFrom) {
-    actual.prepare('UPDATE epochs SET observed_through_seq = ? WHERE id = ?').run(toSeq, active.id)
+  if (options.deferHookWork) {
+    // Swap now, observe later: the turn that crosses the soft limit used to
+    // block behind one or two model round-trips with zero UI feedback.
+    // toSeq is captured at swap time — later messages belong to the new epoch.
+    const closedId = active.id
+    const closed = closeEpoch({ id: closedId, reason: options.rolloverReason ?? 'context_soft_limit', now: options.now }, actual) ?? active
+    const epoch = createEpoch({
+      piSessionId: options.piSessionId,
+      piSessionFile: options.piSessionFile,
+      now: options.now,
+    }, actual)
+    // The task resolves the db handle at run time — the captured one could
+    // be closed by a sandbox data swap before the queue drains.
+    options.deferHookWork(() => runRolloverHookWork(closedId, toSeq, options, []))
+    return { epoch, rolledOver: true, previousEpoch: closed, softLimit, warnings }
   }
 
-  const reflectedFrom = active.reflectedThroughSeq + 1
-  const flush = options.memoryFlush ?? options.flushMemory
-  const reflectedOk = await runHook('memoryFlush', flush, active, reflectedFrom, toSeq, actual, warnings, options.logger)
-  if (reflectedOk && toSeq >= reflectedFrom) {
-    actual.prepare('UPDATE epochs SET reflected_through_seq = ? WHERE id = ?').run(toSeq, active.id)
-  }
+  await runRolloverHookWork(active.id, toSeq, options, warnings, actual)
 
   const closed = closeEpoch({ id: active.id, reason: options.rolloverReason ?? 'context_soft_limit', now: options.now }, actual) ?? active
   const epoch = createEpoch({
