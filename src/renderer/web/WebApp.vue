@@ -179,8 +179,11 @@ function handleEditModeChange(mode: EditMode) {
   flex-shrink: 0;
   height: var(--toolbar-height);
   padding-inline: 16px;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
   padding-top: env(safe-area-inset-top);
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
 }
 
 .conn-banner {
@@ -212,7 +215,11 @@ function handleEditModeChange(mode: EditMode) {
 
 .input-area {
   flex-shrink: 0;
+  padding-top: 10px;
   padding-bottom: max(8px, env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--color-bg) 78%, transparent) 28%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .queued-list {

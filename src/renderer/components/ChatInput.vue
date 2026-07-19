@@ -428,7 +428,7 @@ function handleKeyDown(e: KeyboardEvent) {
             type="file"
             accept="image/jpeg,image/png,image/gif,image/webp"
             multiple
-            class="hidden"
+            class="file-input"
             @change="handleFileChange"
           />
         </div>
@@ -520,18 +520,23 @@ function handleKeyDown(e: KeyboardEvent) {
 
 <style scoped>
 .chat-box {
-  /* border-top: 1px solid rgba(255,255,255,0.1); */
-  /* box-shadow: 0 1px 0 rgba(255,255,255,0.15); */
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
   border-radius: 18px 18px 22px 12px;
   padding: 6px;
-  background: var(--color-tint);
-  backdrop-filter: blur(24px);
-  transition: all var(--transition-fast);
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--color-bg) 58%, transparent), inset 0 1px 0 rgba(255,255,255,0.08);
+  backdrop-filter: blur(28px) saturate(1.2);
+  -webkit-backdrop-filter: blur(28px) saturate(1.2);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
 }
 .chat-box:focus-within {
-  /* border-color: var(--color-accent); */
-  box-shadow: 0 0 0 2px var(--color-accent);
-  background: var(--color-surface);
+  border-color: color-mix(in srgb, var(--color-accent) 72%, var(--color-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 48%, transparent), 0 8px 28px color-mix(in srgb, var(--color-bg) 58%, transparent), inset 0 1px 0 rgba(255,255,255,0.1);
+  background: color-mix(in srgb, var(--color-surface) 64%, transparent);
+}
+
+.file-input {
+  display: none;
 }
 
 .chat-textarea-wrapper {
