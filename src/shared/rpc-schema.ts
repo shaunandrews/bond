@@ -100,7 +100,7 @@ export type SessionUpdates = Partial<
 >
 
 export type CollectionUpdates = Partial<
-  Pick<Collection, 'name' | 'icon' | 'schema' | 'archived' | 'features'>
+  Pick<Collection, 'name' | 'icon' | 'schema' | 'archived' | 'features' | 'issuePrefix'>
 >
 
 // --- The method registry ---

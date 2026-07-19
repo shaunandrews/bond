@@ -10,6 +10,7 @@ interface CollectionRow {
   icon: string
   schema: string
   features: string
+  issue_prefix: string
   archived: number
   created_at: string
   updated_at: string
@@ -43,6 +44,7 @@ function rowToCollection(r: CollectionRow): Collection {
     icon: r.icon,
     schema: JSON.parse(r.schema) as FieldDef[],
     features,
+    issuePrefix: r.issue_prefix || undefined,
     archived: r.archived === 1,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -74,7 +76,7 @@ function rowToComment(r: CommentRow): ItemComment {
 
 // --- Collection CRUD ---
 
-const COLLECTION_COLS = 'id, name, icon, schema, features, archived, created_at, updated_at'
+const COLLECTION_COLS = 'id, name, icon, schema, features, issue_prefix, archived, created_at, updated_at'
 const ITEM_COLS = 'id, collection_id, data, project_id, sort_order, display_number, created_at, updated_at'
 
 export function listCollections(): Collection[] {
@@ -105,14 +107,15 @@ export function createCollection(name: string, schema: FieldDef[], icon = '', fe
   const db = getDb()
   const id = randomUUID()
   const now = new Date().toISOString()
-  db.prepare('INSERT INTO collections (id, name, icon, schema, features, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)')
-    .run(id, name, icon, JSON.stringify(schema), JSON.stringify(features), now, now)
-  return { id, name, icon, schema, features, archived: false, createdAt: now, updatedAt: now }
+  const issuePrefix = name === 'Bond Issues' ? 'BOND' : ''
+  db.prepare('INSERT INTO collections (id, name, icon, schema, features, issue_prefix, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)')
+    .run(id, name, icon, JSON.stringify(schema), JSON.stringify(features), issuePrefix, now, now)
+  return { id, name, icon, schema, features, issuePrefix: issuePrefix || undefined, archived: false, createdAt: now, updatedAt: now }
 }
 
 export function updateCollection(
   id: string,
-  updates: Partial<Pick<Collection, 'name' | 'icon' | 'schema' | 'archived' | 'features'>>
+  updates: Partial<Pick<Collection, 'name' | 'icon' | 'schema' | 'archived' | 'features' | 'issuePrefix'>>
 ): Collection | null {
   const db = getDb()
   const sets: string[] = []
@@ -122,6 +125,7 @@ export function updateCollection(
   if (updates.icon !== undefined) { sets.push('icon = ?'); values.push(updates.icon) }
   if (updates.schema !== undefined) { sets.push('schema = ?'); values.push(JSON.stringify(updates.schema)) }
   if (updates.features !== undefined) { sets.push('features = ?'); values.push(JSON.stringify(updates.features)) }
+  if (updates.issuePrefix !== undefined) { sets.push('issue_prefix = ?'); values.push(updates.issuePrefix.toUpperCase()) }
   if (updates.archived !== undefined) { sets.push('archived = ?'); values.push(updates.archived ? 1 : 0) }
   if (sets.length === 0) return getCollection(id)
 

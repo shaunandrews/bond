@@ -38,14 +38,13 @@ const orderedFields = computed(() => {
 })
 const visibleFields = computed(() => orderedFields.value.filter(field => !hiddenColumns.value.includes(field.name)))
 const selectFields = computed(() => schema.value.filter(f => f.type === 'select'))
-const isBondIssues = computed(() => props.collection.name === 'Bond Issues')
 
 function openExternalLink(url: string) {
   void window.bond.openExternal(url)
 }
 
 function itemReference(item: CollectionItem): string | null {
-  return isBondIssues.value ? `Bond#${item.displayNumber}` : null
+  return props.collection.issuePrefix ? `${props.collection.issuePrefix}-${item.displayNumber}` : null
 }
 
 const sortedItems = computed(() => {

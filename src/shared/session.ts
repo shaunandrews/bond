@@ -97,6 +97,8 @@ export interface Collection {
   icon: string
   schema: FieldDef[]
   features: string[]   // e.g. ['comments', 'projectLink']
+  /** Optional tracker-style key prefix, e.g. BOND or WPST. */
+  issuePrefix?: string
   archived: boolean
   createdAt: string
   updatedAt: string

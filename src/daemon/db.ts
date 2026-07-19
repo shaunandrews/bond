@@ -42,6 +42,7 @@ export function getDb(): Database.Database {
   migrateRebuildSenseFts(_db)
   migrateAddQuickColumn(_db)
   migrateAddCollectionFeatures(_db)
+  migrateAddCollectionIssuePrefix(_db)
   migrateCreateCollectionItemCommentsTable(_db)
   migrateAddCollectionItemProjectId(_db)
   migrateAddCollectionItemDisplayNumber(_db)
@@ -325,6 +326,7 @@ function migrateCreateCollectionsTable(db: Database.Database): void {
       name TEXT NOT NULL,
       icon TEXT NOT NULL DEFAULT '',
       schema TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(schema)),
+      issue_prefix TEXT NOT NULL DEFAULT '',
       archived INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -478,6 +480,14 @@ function migrateAddCollectionFeatures(db: Database.Database): void {
   if (!columns.some(c => c.name === 'features')) {
     db.exec("ALTER TABLE collections ADD COLUMN features TEXT NOT NULL DEFAULT '[]'")
   }
+}
+
+function migrateAddCollectionIssuePrefix(db: Database.Database): void {
+  const columns = db.pragma('table_info(collections)') as { name: string }[]
+  if (!columns.some(c => c.name === 'issue_prefix')) {
+    db.exec("ALTER TABLE collections ADD COLUMN issue_prefix TEXT NOT NULL DEFAULT ''")
+  }
+  db.prepare("UPDATE collections SET issue_prefix = 'BOND' WHERE name = 'Bond Issues' AND issue_prefix = ''").run()
 }
 
 function migrateCreateCollectionItemCommentsTable(db: Database.Database): void {
