@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { copyToClipboard } from '../lib/clipboard'
 
 const props = defineProps<{
   content: string
@@ -123,7 +124,7 @@ function handleMessage(e: MessageEvent) {
       break
     case 'bond:copyText':
       if (typeof data.text === 'string') {
-        navigator.clipboard.writeText(data.text)
+        void copyToClipboard(data.text)
       }
       break
   }

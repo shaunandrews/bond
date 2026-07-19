@@ -3,6 +3,7 @@ import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import hljs from '../lib/highlight'
+import { copyToClipboard } from '../lib/clipboard'
 
 const props = defineProps<{ text: string; streaming: boolean }>()
 
@@ -115,7 +116,7 @@ function handleClick(e: MouseEvent) {
   const btn = target.closest('.code-block-copy') as HTMLElement | null
   if (!btn) return
   const code = btn.dataset.code ?? ''
-  navigator.clipboard.writeText(code)
+  void copyToClipboard(code)
   btn.textContent = 'Copied!'
   setTimeout(() => { btn.textContent = 'Copy' }, 1500)
 }

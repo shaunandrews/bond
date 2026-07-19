@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { PhCopy, PhCheck } from '@phosphor-icons/vue'
 import { ref } from 'vue'
+import { copyToClipboard } from '../lib/clipboard'
 
 const props = defineProps<{
   value: string
@@ -10,7 +11,7 @@ const copied = ref(false)
 let timeout: ReturnType<typeof setTimeout> | null = null
 
 function copy() {
-  navigator.clipboard.writeText(props.value)
+  void copyToClipboard(props.value)
   copied.value = true
   if (timeout) clearTimeout(timeout)
   timeout = setTimeout(() => { copied.value = false }, 1500)

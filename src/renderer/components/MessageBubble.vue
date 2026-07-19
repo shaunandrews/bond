@@ -8,6 +8,7 @@ import MarkdownMessage from './MarkdownMessage.vue'
 import ArtifactFrame from './ArtifactFrame.vue'
 import EmbedRenderer from './EmbedRenderer.vue'
 import { parseArtifacts, hasRichContent } from '../lib/parseArtifacts'
+import { copyToClipboard } from '../lib/clipboard'
 import TurnActivity from './TurnActivity.vue'
 
 function renderUserMarkdown(text: string): string {
@@ -37,7 +38,7 @@ function copyText(msg: Message, event: MouseEvent) {
   else if (msg.kind === 'error' || msg.kind === 'system') text = msg.text
   else return
   if (!text) return
-  navigator.clipboard.writeText(text)
+  void copyToClipboard(text)
   window.getSelection()?.removeAllRanges()
   clearTimeout(toastTimer)
   toast.value = { x: event.clientX, y: event.clientY - 8, visible: true }
