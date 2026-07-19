@@ -169,8 +169,41 @@ function extractSchemaFlags(args: string[], schema: FieldDef[]): { restArgs: str
   return { restArgs, data }
 }
 
+function printUsage(): void {
+  console.log(`Usage: bond collection <subcommand> [args...]
+
+Collections:
+  bond collection                                        List all collections
+  bond collection create <name> --icon 🎬 --schema '<json>'   Create a collection
+  bond collection show <name|id>                         Show collection details
+  bond collection schema <name|id>                       Print schema as JSON
+  bond collection edit <name|id> --name <n> | --icon <i> Rename / change icon
+  bond collection archive|unarchive <name|id>            Archive / unarchive
+  bond collection rm <name|id>                           Delete a collection
+
+Items:
+  bond collection ls <name|id> [--<field> <value>]       List / filter items
+  bond collection add <name|id> --<field> <value> ...    Add an item
+  bond collection update <name|id> <item> --<field> <v>  Update item fields
+  bond collection done <name|id> <item>                  Mark status-like field done
+  bond collection info <name|id> <item>                  Show full item details
+  bond collection rm <name|id> <item>                    Delete an item
+
+Schema JSON is an array of fields:
+  [{"name":"title","type":"text","primary":true},
+   {"name":"status","type":"select","options":["todo","doing","done"]},
+   {"name":"due","type":"date"}]
+Field types: text, longtext, number, date, boolean, select, multiselect, rating, url, tags, image`)
+}
+
 async function main() {
   const args = process.argv.slice(2)
+  // Answer any help request before touching the daemon — `create --help` once
+  // created a collection literally named "--help".
+  if (args.includes('--help') || args.includes('-h') || args[0] === 'help') {
+    printUsage()
+    process.exit(0)
+  }
   const sub = args[0] || 'list'
 
   let ws: WebSocket
@@ -208,7 +241,8 @@ async function main() {
 
       case 'create': {
         const name = args[1]
-        if (!name) { console.error(`${R}Usage:${N} bond collection create <name> --icon <emoji> --schema '<json>'`); process.exit(1) }
+        // A leading dash is a mistyped flag, never a collection name.
+        if (!name || name.startsWith('-')) { console.error(`${R}Usage:${N} bond collection create <name> --icon <emoji> --schema '<json>'`); process.exit(1) }
         let icon = ''
         let schemaJson = '[]'
         for (let i = 2; i < args.length; i++) {
@@ -442,8 +476,8 @@ async function main() {
       }
 
       default:
-        console.error(`${R}Unknown subcommand:${N} ${sub}`)
-        console.log(`\nUsage: bond collection [list|create|show|schema|edit|archive|unarchive|ls|add|update|done|info|rm] [args...]`)
+        console.error(`${R}Unknown subcommand:${N} ${sub}\n`)
+        printUsage()
         process.exit(1)
     }
   } finally {
