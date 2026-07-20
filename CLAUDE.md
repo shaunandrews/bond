@@ -97,14 +97,18 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `mcp/tools.ts` | The `mcp` proxy Pi tool (`search`/`describe`/`call`) plus any user-promoted tools registered as first-class `mcp__server__tool` Pi tools. Both paths run through `decideMcpCall` |
 | `mcp/content.ts` | MCP result → text: content-block flattening, 20k truncation cap, image/audio/binary-resource placeholders |
 | `remote.ts` | Remote (LAN) access server — TCP listener on `0.0.0.0:3113` serving the `out/web` bundle + WebSocket RPC gated by the persistent pairing token (`remote.token`), same-origin upgrade check, `remote.status` RPC |
-| `pi/model.ts` | Capability-tier → concrete-model resolution (`pickModel`/`selectModel`) shared by the main turn and standalone sessions (extracted so Felix doesn't import runtime.ts) |
-| `design/tools.ts` | The `consult_designer` Pi tool — Bond's doorway to Felix (verbs: critique/define/refine/migrate). Does the deterministic prep (context docs, detector, migration inventory) and hands it to an isolated Felix session; available in every edit mode |
-| `design/felix.ts` | Felix's session runner — isolated read-only Pi session (`read`/`grep`/`find`/`ls`, in-memory persistence, SSE, parent-abort wired); returns only the final report text |
-| `design/doctrine.ts` | Felix's design doctrine as prompt string constants — governance mechanics (drift taxonomy, design-system lock, register split), mechanical rules, ban lists, DESIGN.md contract. Distilled from Impeccable (Apache-2.0, attributed) |
-| `design/prompt.ts` | Assembles Felix's system prompt per verb/register and the per-consultation user prompt (brief → scope → context docs → machine evidence last, anti-anchoring) |
-| `design/context-docs.ts` | PRODUCT.md/DESIGN.md resolution for target paths (root → `.agents/context/` → `docs/`, stops at git root/home) — mirrors Impeccable's convention |
-| `design/detector.ts` | Pinned `npx impeccable detect --json` wrapper — optional deterministic evidence with honest degradation (unavailable/timeout/error) |
-| `design/migrate.ts` | Migration inventory — scans literals in style contexts, clusters near-duplicates, maps clusters onto tokens (DESIGN.md frontmatter + CSS custom props) into exact/near/none buckets with Impeccable's tolerances |
+| `pi/model.ts` | Capability-tier → concrete-model resolution (`pickModel`/`selectModel`) shared by the main turn and standalone agent sessions (extracted so agents don't import runtime.ts) |
+| `agents/tools.ts` | The `consult_agent` Pi tool — Bond's doorway to the specialist roster — plus `buildAgentRosterPrompt` (the "Available agents" system-prompt section, generated per turn so a new definition needs no runtime wiring). Available in every edit mode because agents are read-only |
+| `agents/definition.ts` | AGENT.md parsing — frontmatter (scalars, inline lists, one-level maps), `## verb:` section splitting, validation. Bundled agents go through this exact parser, so built-in and user definitions can't diverge |
+| `agents/registry.ts` | The roster — bundled definitions plus `~/.bond/agents/<name>/AGENT.md` (a user file overrides a bundled agent of the same name). Invalid definitions surface as `problems`, never silent drops |
+| `agents/run-agent.ts` | Generic agent session runner — isolated read-only Pi session (`read`/`grep`/`find`/`ls` + granted web tools), in-memory persistence, SSE, `thinkingLevel`, leash timer + parent-abort; returns only the final report text |
+| `agents/prompt.ts` | The shared agent spine (read-only rules, evidence-last anti-anchoring, report contract) + doctrine + the invoked verb's workflow + user instructions |
+| `agents/evidence.ts` | Evidence runners — `native` (Bond code, bundled-only) and `shell` (definition commands). Shell commands run only after one-time user approval keyed by command hash; a failed/denied/timed-out runner is evidence, never a consult failure |
+| `agents/context-docs.ts` | Resolution for an agent's declared context docs (root → `.agents/context/` → `docs/`, stops at git root/home) — mirrors Impeccable's convention, doc names come from the definition |
+| `agents/service.ts` | RPC-facing roster service — `agents.list`/`agents.updateSettings`/`agents.revokeRunner` |
+| `agents/builtin/` | Bundled definitions as AGENT.md strings: `felix.ts` (design consultant; doctrine distilled from Impeccable, Apache-2.0, attributed) and `q.ts` (coding consultant; shell evidence runners + patch contract) |
+| `design/detector.ts` | Pinned `npx impeccable detect --json` wrapper — Felix's native detector runner, with honest degradation (unavailable/timeout/error) |
+| `design/migrate.ts` | Migration inventory — Felix's native migrate runner: scans literals in style contexts, clusters near-duplicates, maps clusters onto tokens (DESIGN.md frontmatter + CSS custom props) into exact/near/none buckets with Impeccable's tolerances |
 | `imagegen.ts` | Bond glue for the bundled `pi-codex-image-gen` Pi extension (`codex_generate_image` — gpt-image-2 via the ChatGPT/Codex subscription already connected in Pi, no API key). Gates the tool on an `openai-codex` OAuth credential, captures generated images into the Bond image store, emits `generated_image` stream chunks, and strips base64 from activity previews. The package's disk writes and install telemetry are disabled via env defaults in `main.ts` |
 | `onboarding.ts` | First-run detection, transcript intro seeding, and the staged interview → panel-tour flow (`pending` → `education` → `completed`). Serves stage-specific system-prompt sections and Pi tools: `complete_onboarding` (closes the interview, seeds the soul, returns the tour script), `complete_tour`, `show_panel` (opens a side panel via a `show_panel` stream chunk), and `enable_sense`. The interview and tour are the real agent — no scripted flow |
 | `sandbox.ts` | New-user sandbox: swaps the daemon's data dir to a fresh empty directory (and back) so the real app runs a genuine first-run without touching real data |
@@ -152,6 +156,7 @@ Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from
 | `client.ts` | `BondClient` WebSocket client class — registry-typed `call`, token provider, reconnect-in-place, `daemonProtocolVersion` |
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Collection, FieldDef/FieldOption/FieldDefInput, and media/collection types |
 | `fields.ts` | **Field-type registry** — per-type `coerce`/`validate`/`format`/`compare`/`defaultValue` for every `FieldType`, plus `normalizeSchema` (legacy `string[]` options → canonical `FieldOption[]`), `validateSchema`, `coerceItemData` (the single item write gate), `isDoneValue`, and the issue-key regexes (`ISSUE_PREFIX_RE`, `ISSUE_KEY_RE`). Shared by daemon (enforcement), renderer (render/edit/sort), and CLI (parse/format) — add a `FieldType` without a registry entry and the compiler objects |
+| `agents.ts` | Agent roster types — `AgentSettings` (model/thinking/report/policy/leash/instructions/tools), `AgentSummary`, `GRANTABLE_AGENT_TOOLS` (read-only tools only), `normalizeAgentSettings`. Every agent is read-only and artifact-producing; Bond applies changes through its own approvals |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
 | `library.ts` | `AssetKind`, `AssetFormat`, `LibraryAsset`, `AssetReference`, `AssetBacklink` — the Library asset model shared by daemon, renderer, and CLI |
 | `models.ts` | `ModelId` — provider-neutral capability tiers (`'high' | 'balanced' | 'fast'`); Pi maps them to concrete models |
@@ -208,14 +213,20 @@ src/
       tools.ts                       # web_search + fetch_content Pi tools (keyless, cached)
       broker.ts                      # Render broker for the app's hidden browser window
       extract.ts                     # DDG SERP parsing + Readability/Turndown markdown
+    agents/
+      tools.ts                       # consult_agent Pi tool + roster prompt section
+      definition.ts                  # AGENT.md parsing + validation
+      registry.ts                    # Bundled + ~/.bond/agents roster (user overrides builtin)
+      run-agent.ts                   # Isolated read-only agent session runner
+      prompt.ts                      # Agent spine + doctrine + verb workflow assembly
+      evidence.ts                    # Native + approved-shell evidence runners
+      context-docs.ts                # Declared context-doc resolution
+      service.ts                     # agents.* RPC service
+      builtin/felix.ts               # Felix — design consultant (bundled AGENT.md)
+      builtin/q.ts                   # Q — coding consultant (bundled AGENT.md)
     design/
-      tools.ts                       # consult_designer Pi tool (Felix's doorway)
-      felix.ts                       # Isolated read-only Felix session runner
-      doctrine.ts                    # Felix's design doctrine (prompt constants)
-      prompt.ts                      # System/user prompt assembly per verb/register
-      context-docs.ts                # PRODUCT.md/DESIGN.md resolution
-      detector.ts                    # Pinned impeccable detect --json wrapper
-      migrate.ts                     # Literal inventory → cluster → token mapping
+      detector.ts                    # Pinned impeccable detect --json wrapper (Felix native runner)
+      migrate.ts                     # Literal inventory → cluster → token mapping (Felix native runner)
     sense/
       controller.ts                  # State machine (disabled/armed/recording/idle/paused/suspended)
       presence.ts                    # Idle detection via ioreg
@@ -292,7 +303,7 @@ src/
       CopyButton.vue                 # Inline copy-to-clipboard button
       MissionBriefing.vue            # Empty transcript welcome screen
       SettingsView.vue               # Accent color, model, personality settings
-      AgentsView.vue                 # Settings-window Agents tab (Felix roster card)
+      AgentsView.vue                 # Settings-window Agents tab (roster + per-agent settings)
       AboutView.vue                  # Architecture, tools, data paths, CLI reference
       DesignSystemView.vue           # Live design token browser
       SenseView.vue                  # Sense timeline main view (day nav + detail + timeline dock)
@@ -440,7 +451,7 @@ Inline copy-to-clipboard button with checkmark confirmation feedback.
 Settings panel with accent color picker (8 presets + custom), default model selector, and personality/soul text editor. No props — reads/writes via `window.bond` directly.
 
 ### AgentsView
-Settings-window Agents tab — a presentational roster of Bond's specialist agents (currently Felix, the design consultant): identity card, the four verbs, how he works, and an example ask. Static content, no props or events.
+Settings-window Agents tab — the specialist roster, driven by `agents.list`. Each agent card shows identity, verbs, and its evidence runners (with approve/revoke state), plus editable settings: model tier, thinking level, report depth, consult policy, time limit (leash), extra tool grants, and per-agent instructions. Invalid definitions surface in a problems banner. No props — reads/writes via `window.bond` directly.
 
 ### McpSettings
 Settings section for MCP (Model Context Protocol) connections. Joins saved config (`mcp.list`) with live connection state (`mcp.status`) per row: status dot, tool count, endpoint (command line or url), Keychain badge, last error. Enable/disable toggle, reconnect, two-click remove, one-click preset connect, and an "Add from JSON" paste form. Expanding a row connects the server on demand and shows its trust selector plus, per tool, one three-state permission control (Ask / Read / Write) and a pin toggle. A proxy tool's **reach** — the providers hidden inside its description — renders as chips, one click each for the full text (see `lib/toolCatalog.ts`); an always-ask flag set from the CLI shows as a chip that clears in one click. For http servers there's a token field that writes straight to the Keychain and stores only a `keychain:<ref>` in the config. Reloads on the `mcp.changed` push so a second window stays in sync. No props or events — talks to `window.bond` directly.

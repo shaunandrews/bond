@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { normalizeModelTier, type ModelId } from '../shared/models'
+import type { AgentSettings } from '../shared/agents'
 import { DEFAULT_SENSE_SETTINGS, type SenseSettings } from '../shared/sense'
 import { getDb } from './db'
 
@@ -64,6 +65,50 @@ export function getSenseSettings(): SenseSettings {
 
 export function setSenseSettings(settings: SenseSettings): void {
   setSetting('sense', JSON.stringify(settings))
+}
+
+/**
+ * Per-agent settings overrides, layered over the definition's frontmatter
+ * defaults by `effectiveAgentSettings`. Stored one JSON blob per agent so an
+ * agent that disappears leaves no stray keys behind.
+ */
+export function getAgentSettingsOverride(name: string): Partial<AgentSettings> {
+  try {
+    const raw = getSetting(`agents.${name}`)
+    if (raw) return JSON.parse(raw) as Partial<AgentSettings>
+  } catch { /* fall through to definition defaults */ }
+  return {}
+}
+
+export function setAgentSettingsOverride(name: string, settings: AgentSettings): void {
+  setSetting(`agents.${name}`, JSON.stringify(settings))
+}
+
+/**
+ * Approved evidence-runner commands, keyed by command hash. Runners execute
+ * outside the per-turn approval flow, and Bond can author agent definition
+ * files — so a command runs only after the user has approved that exact
+ * string once.
+ */
+export function getApprovedRunnerHashes(): string[] {
+  try {
+    const raw = getSetting('agents.runnerApprovals')
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed.filter((entry): entry is string => typeof entry === 'string')
+    }
+  } catch { /* treat unreadable approvals as none approved */ }
+  return []
+}
+
+export function approveRunnerHash(hash: string): void {
+  const approved = new Set(getApprovedRunnerHashes())
+  approved.add(hash)
+  setSetting('agents.runnerApprovals', JSON.stringify([...approved]))
+}
+
+export function revokeRunnerHash(hash: string): void {
+  setSetting('agents.runnerApprovals', JSON.stringify(getApprovedRunnerHashes().filter(entry => entry !== hash)))
 }
 
 // Reserved via Port Keeper (`portman list`) so local dev servers don't collide.

@@ -98,7 +98,19 @@ Storage: existing key-value `settings.ts`, one JSON blob per agent (`agents.feli
 - **Eyes** (screenshot/render tool) — separate track; becomes a grantable tool when it exists.
 - **Marketplace/sharing** of agent definitions — they're just directories; sharing is copying. Nothing to build.
 
-## Build plan
+## Build record (shipped 2026-07-20)
+
+All three phases landed in one pass. Deltas from the spec above, all deliberate:
+
+- **`thinking` is wired, not reserved.** Pi's `createAgentSession` takes a `thinkingLevel` (`minimal|low|medium|high|xhigh|max`, default medium); Bond exposes `default|low|medium|high|max` where `default` omits the option.
+- **Evidence-runner approval rides the normal tool-approval flow**, not a bespoke chat ask — `consult_agent` receives `turnId`/`onChunk` from the runtime (the MCP pattern), so a first-time command surfaces as an ordinary approval prompt. Denied or unapproved runners produce a `status="skipped"` evidence block telling the agent to report that the check did not run.
+- **Evidence runners are verb-scoped** via a trailing bracket list (`tests: npm run test:run [review, patch]`) — Felix's detector doesn't run for `define`, Q's tests don't run for `plan`.
+- **`register` is not a tool parameter.** Both registers live in Felix's doctrine and he infers/states which applies; Bond passes it in the brief when known. Keeps the tool generic.
+- **Native runners are bundled-only**: a user definition naming `builtin:*` is a validation error, so a Bond-authored agent file can't grant itself Bond internals.
+- **Registry scan directory is injectable** (`loadAgentRoster({ dir })`) so tests never mock `homedir`.
+- **Verb workflows are per-invocation**: only the invoked verb's section enters the system prompt, so `critique` no longer pays for the DESIGN.md authoring contract.
+
+## Build plan (original estimate, kept for the record)
 
 **Phase 1 — registry + generic runner (~a day):** `agents.ts` scanner/registry with the extended frontmatter parser, `run-agent.ts`, `consult_agent`, roster prompt section, Felix migrated to a bundled definition with his native runners. `consult_designer` removed. Tests: parser, registry validation, runner, tool routing.
 

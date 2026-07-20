@@ -682,11 +682,11 @@ function handleKeyDown(e: KeyboardEvent) {
 </template>
 
 <style scoped>
-.chat-composer {
-  /* Extend the surface to the conversation gutter; textarea padding then puts
-     its text exactly on the same left edge as assistant messages. */
-  margin-inline: -0.75rem;
-}
+.chat-highlight {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  padding: 0.625rem 0 0.375rem;
 
 .chat-box {
   border: 0;
@@ -732,7 +732,7 @@ function handleKeyDown(e: KeyboardEvent) {
   resize: none;
   max-height: 12rem;
   overflow-y: auto;
-  padding: 0.625rem 0.75rem 0.375rem;
+  padding: 0.625rem 0 0.375rem;
   border-radius: var(--radius-xl);
   color: var(--color-text-primary);
   font: inherit;

@@ -54,6 +54,7 @@ import { policyFor as mcpPolicyFor, reconnectMcpServer, searchCatalog as searchM
 import { getRemoteStatus } from './remote'
 import { createPairingCode, listDevices, revokeAllDevices, revokeDevice } from './pairing'
 import { removeSkill } from './skills'
+import { listAgents, revokeAgentRunner, updateAgentSettings } from './agents/service'
 import { getDb, closeDb } from './db'
 import { buildMatchQuery } from './fts'
 import {
@@ -770,6 +771,23 @@ const handlers: RpcHandlers = {
   },
 
   'mcp.listSecrets': async () => ({ refs: await listMcpSecretRefs() }),
+
+  // --- Agents ---
+  'agents.list': () => listAgents(),
+
+  'agents.updateSettings': (params) => {
+    const name = getStringParam(raw(params), 'name')
+    if (!name) throw new RpcError(RPC_INVALID_PARAMS, 'name is required')
+    const settings = (raw(params) as { settings?: unknown }).settings
+    if (!settings || typeof settings !== 'object') throw new RpcError(RPC_INVALID_PARAMS, 'settings object is required')
+    return updateAgentSettings(name, settings)
+  },
+
+  'agents.revokeRunner': (params) => {
+    const command = getStringParam(raw(params), 'command')
+    if (!command) throw new RpcError(RPC_INVALID_PARAMS, 'command is required')
+    return revokeAgentRunner(command)
+  },
 
   // --- Skills ---
   'skills.list': () => getCachedSkills(),

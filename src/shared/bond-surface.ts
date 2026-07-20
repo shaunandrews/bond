@@ -24,6 +24,7 @@ import type { TranscriptMessage } from './transcript'
 import type { SenseSettings } from './sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
 import type { AssetKind, LibraryAddDocumentInput } from './library'
+import type { AgentSettings } from './agents'
 
 /** How a runtime reaches the daemon. Params/results are registry-typed. */
 export type RpcInvoker = <M extends DispatchableMethod>(
@@ -131,6 +132,11 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     mcpSetSecret: (ref: string, value: string) => invoke('mcp.setSecret', { ref, value }),
     mcpDeleteSecret: (ref: string) => invoke('mcp.deleteSecret', { ref }),
     mcpListSecrets: () => invoke('mcp.listSecrets'),
+
+    // --- Agents ---
+    listAgents: () => invoke('agents.list'),
+    updateAgentSettings: (name: string, settings: Partial<AgentSettings>) => invoke('agents.updateSettings', { name, settings }),
+    revokeAgentRunner: (command: string) => invoke('agents.revokeRunner', { command }),
 
     // --- Skills ---
     listSkills: () => invoke('skills.list'),

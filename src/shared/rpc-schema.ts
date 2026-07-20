@@ -35,6 +35,7 @@ import type { OnboardingFirstRunState, SandboxStatus } from './onboarding'
 import type { WebRenderRequest, WebRenderResult } from './web'
 import type { ModelId } from './models'
 import type { AssetBacklink, AssetKind, AssetReference, LibraryAddDocumentInput, LibraryAsset } from './library'
+import type { AgentRosterResult, AgentSettings, AgentSummary } from './agents'
 
 // --- Named wire shapes ---
 
@@ -276,6 +277,11 @@ export interface RpcMethods {
   'mcp.deleteSecret': { params: { ref: string }; result: { ok: boolean } }
   'mcp.listSecrets': { params: void; result: { refs: string[] } }
 
+  // Agents (specialist consultant roster)
+  'agents.list': { params: void; result: AgentRosterResult }
+  'agents.updateSettings': { params: { name: string; settings: Partial<AgentSettings> }; result: AgentSummary }
+  'agents.revokeRunner': { params: { command: string }; result: AgentRosterResult }
+
   // Skills
   'skills.list': { params: void; result: SkillInfo[] }
   'skills.refresh': { params: void; result: SkillInfo[] }
@@ -449,6 +455,9 @@ export const RPC_METHOD_NAMES = [
   'mcp.setSecret',
   'mcp.deleteSecret',
   'mcp.listSecrets',
+  'agents.list',
+  'agents.updateSettings',
+  'agents.revokeRunner',
   'skills.list',
   'skills.refresh',
   'skills.remove',

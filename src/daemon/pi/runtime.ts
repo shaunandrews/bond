@@ -17,7 +17,7 @@ import { getImagePaths } from '../images'
 import { codexImageGenExtension, extractRevisedPrompt, IMAGEGEN_TOOL_NAMES, imageGenAvailable, saveGeneratedImages, stripResultImageData } from '../imagegen'
 import { createMemoryExtensionFactory, MEMORY_TOOL_NAMES } from '../memory/tools'
 import { createWebExtensionFactory, WEB_TOOL_NAMES } from '../web/tools'
-import { createDesignExtensionFactory, DESIGN_TOOL_NAMES } from '../design/tools'
+import { createAgentExtensionFactory, AGENT_TOOL_NAMES } from '../agents/tools'
 import { createMcpExtensionFactory, MCP_TOOL_NAMES } from '../mcp/tools'
 import { mcpProxyAvailable } from '../mcp/config'
 import { promotedToolInfos } from '../mcp/manager'
@@ -311,8 +311,9 @@ export function toolsForEditMode(
   // no workspace files, so they stay available in every edit mode.
   // The Codex image tool likewise only feeds Bond's own image store, but it
   // needs the ChatGPT/Codex subscription login, so it's gated on that.
-  // Felix (consult_designer) runs an isolated read-only session, so design
-  // consultation stays available even in readonly mode.
+  // Specialist agents (consult_agent) run isolated read-only sessions and
+  // return artifacts Bond applies itself, so consultation stays available
+  // even in readonly mode.
   const imageGenTools = options.imageGen ? IMAGEGEN_TOOL_NAMES : []
   // MCP servers are third-party code Bond cannot classify on its own, so a
   // readonly session only sees the proxy when a human has confirmed at least
@@ -321,7 +322,7 @@ export function toolsForEditMode(
   // policy in mcp/tools.ts decides what runs silently and what prompts.
   const mcpProxy = options.mcpProxy === false ? [] : MCP_TOOL_NAMES
   const mcpTools = [...mcpProxy, ...(options.promotedMcpTools ?? [])]
-  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...DESIGN_TOOL_NAMES, ...mcpTools, ...imageGenTools, ...onboardingTools]
+  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...AGENT_TOOL_NAMES, ...mcpTools, ...imageGenTools, ...onboardingTools]
 }
 
 /**
@@ -335,7 +336,7 @@ export function toolsForEditMode(
 export const REQUIRED_BOND_TOOL_NAMES: string[] = [
   ...MEMORY_TOOL_NAMES,
   ...WEB_TOOL_NAMES,
-  ...DESIGN_TOOL_NAMES,
+  ...AGENT_TOOL_NAMES,
   ...IMAGEGEN_TOOL_NAMES,
   ...Object.values(ONBOARDING_STAGE_TOOLS).flat(),
 ]
@@ -381,7 +382,12 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     extensionFactories: [
       createMemoryExtensionFactory({ sourceMessageId: options.memorySourceMessageId }),
       createWebExtensionFactory(),
-      createDesignExtensionFactory({ model: options.model }),
+      createAgentExtensionFactory({
+        model: options.model,
+        turnId: options.turnId,
+        onChunk: options.onChunk,
+        abortSignal: options.abortSignal,
+      }),
       createMcpExtensionFactory({
         turnId: options.turnId,
         onChunk: options.onChunk,
