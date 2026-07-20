@@ -453,7 +453,7 @@ function handleKeyDown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="pt-2 relative pb-5">
+  <div class="chat-composer pt-1 relative pb-2">
     <!-- Skill autocomplete menu -->
     <BondFlyoutMenu
       :open="showIssueMenu"
@@ -534,7 +534,7 @@ function handleKeyDown(e: KeyboardEvent) {
         />
         <textarea
           ref="inputEl"
-          rows="2"
+          rows="1"
           :placeholder="props.placeholder ?? 'Ask Bond something…'"
           :spellcheck="false"
           @keydown="handleKeyDown"
@@ -573,7 +573,7 @@ function handleKeyDown(e: KeyboardEvent) {
       </div>
 
       <!-- Toolbar -->
-      <div class="flex items-center justify-between pt-1">
+      <div class="composer-toolbar flex items-center justify-between pt-1">
         <!-- self-end: the 26px ghost button otherwise centers against the 32px
              send button and its bottom edge floats 3px high. -->
         <div class="flex items-center gap-s self-end">
@@ -682,20 +682,26 @@ function handleKeyDown(e: KeyboardEvent) {
 </template>
 
 <style scoped>
-.chat-box {
-  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
-  border-radius: 18px 18px 22px 12px;
-  padding: 6px;
-  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
-  box-shadow: 0 8px 28px color-mix(in srgb, var(--color-bg) 58%, transparent), inset 0 1px 0 rgba(255,255,255,0.08);
-  backdrop-filter: blur(28px) saturate(1.2);
-  -webkit-backdrop-filter: blur(28px) saturate(1.2);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+.chat-composer {
+  /* Extend the surface to the conversation gutter; textarea padding then puts
+     its text exactly on the same left edge as assistant messages. */
+  margin-inline: -0.75rem;
 }
+
+.chat-box {
+  border: 0;
+  border-radius: 16px;
+  background: var(--color-surface);
+  transition: outline-color var(--transition-fast);
+}
+
 .chat-box:focus-within {
-  border-color: color-mix(in srgb, var(--color-accent) 72%, var(--color-border));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 48%, transparent), 0 8px 28px color-mix(in srgb, var(--color-bg) 58%, transparent), inset 0 1px 0 rgba(255,255,255,0.1);
-  background: color-mix(in srgb, var(--color-surface) 64%, transparent);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.composer-toolbar {
+  padding: 0 0.5rem 0.25rem;
 }
 
 .file-input {
@@ -710,7 +716,7 @@ function handleKeyDown(e: KeyboardEvent) {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  padding: 0.75rem 0.75rem 0.5rem;
+  padding: 0.625rem 0.75rem 0.375rem;
   font: inherit;
   font-size: 1rem;
   color: var(--color-text-primary);
@@ -726,7 +732,7 @@ function handleKeyDown(e: KeyboardEvent) {
   resize: none;
   max-height: 12rem;
   overflow-y: auto;
-  padding: 0.75rem 0.75rem 0.5rem;
+  padding: 0.625rem 0.75rem 0.375rem;
   border-radius: var(--radius-xl);
   color: var(--color-text-primary);
   font: inherit;

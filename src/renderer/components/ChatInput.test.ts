@@ -25,6 +25,11 @@ describe('ChatInput', () => {
     expect(wrapper.find('textarea').attributes('placeholder')).toBe('Your name…')
   })
 
+  it('starts as a compact single-line composer', () => {
+    const wrapper = createWrapper()
+    expect(wrapper.find('textarea').attributes('rows')).toBe('1')
+  })
+
   it('emits submit with text on Enter', async () => {
     const wrapper = createWrapper()
     const textarea = wrapper.find('textarea')
