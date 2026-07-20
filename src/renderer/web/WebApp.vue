@@ -62,9 +62,16 @@ async function submitPairingCode() {
 }
 
 const messagesRef = ref<HTMLElement | null>(null)
+const inputAreaRef = ref<HTMLElement | null>(null)
 const { scrollToBottom } = useAutoScroll(messagesRef)
 
 let disposeState: (() => void) | undefined
+let composerResizeObserver: ResizeObserver | undefined
+
+function syncComposerHeight() {
+  const height = inputAreaRef.value?.offsetHeight ?? 0
+  document.documentElement.style.setProperty('--mobile-composer-height', `${height}px`)
+}
 
 onMounted(async () => {
   disposeState = props.client.onStateChange(async (state) => {
@@ -85,7 +92,14 @@ onMounted(async () => {
   chat.subscribe()
   await chat.init().catch(() => {})
   if (props.client.state === 'connected') hasConnected.value = true
-  nextTick(() => scrollToBottom())
+  nextTick(() => {
+    syncComposerHeight()
+    if (inputAreaRef.value && typeof ResizeObserver !== 'undefined') {
+      composerResizeObserver = new ResizeObserver(syncComposerHeight)
+      composerResizeObserver.observe(inputAreaRef.value)
+    }
+    scrollToBottom()
+  })
   accent.load().catch(() => {})
   try {
     const model = await window.bond.getModel()
@@ -98,6 +112,8 @@ onMounted(async () => {
 onUnmounted(() => {
   chat.unsubscribe()
   disposeState?.()
+  composerResizeObserver?.disconnect()
+  document.documentElement.style.removeProperty('--mobile-composer-height')
 })
 
 watch(() => chat.messages.value.length, () => {
@@ -198,7 +214,12 @@ function handleEditModeChange(mode: EditMode) {
         </div>
       </div>
 
-      <div class="input-area">
+      <!-- These sit above the scrolling transcript. Their masks make the blur
+           dissolve rather than ending in two hard, frosted bands. -->
+      <div class="transcript-fade transcript-fade--top" aria-hidden="true" />
+      <div class="transcript-fade transcript-fade--bottom" aria-hidden="true" />
+
+      <div ref="inputAreaRef" class="input-area">
         <div class="chat-column">
           <div v-if="chat.currentQueue.value.length" class="queued-list">
             <div v-for="msg in chat.currentQueue.value" :key="msg.id" class="queued-item">
@@ -249,6 +270,7 @@ function handleEditModeChange(mode: EditMode) {
 .web-app {
   display: flex;
   flex-direction: column;
+  position: relative;
   /* dvh, not vh — mobile browser chrome overlaps 100vh layouts. */
   height: 100dvh;
   min-height: 0;
@@ -336,7 +358,10 @@ function handleEditModeChange(mode: EditMode) {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding-block: 16px 40px;
+  /* The input floats over this scroller. Its live height covers expanded
+     text, attachment strips, queues, and approval prompts. */
+  padding-top: 16px;
+  padding-bottom: calc(var(--mobile-composer-height, 112px) + 48px);
 }
 
 /* The authored turn is a single quiet surface. Bond replies deliberately
@@ -363,13 +388,43 @@ function handleEditModeChange(mode: EditMode) {
   box-shadow: none;
 }
 
+.transcript-fade {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 72px;
+  pointer-events: none;
+  backdrop-filter: blur(9px);
+  -webkit-backdrop-filter: blur(9px);
+}
+
+.transcript-fade--top {
+  top: 0;
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--color-bg) 82%, transparent), transparent);
+  mask-image: linear-gradient(to bottom, black, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, black, transparent);
+}
+
+.transcript-fade--bottom {
+  bottom: var(--mobile-composer-height, 112px);
+  background: linear-gradient(to top, color-mix(in srgb, var(--color-bg) 68%, transparent), transparent);
+  mask-image: linear-gradient(to top, black, transparent);
+  -webkit-mask-image: linear-gradient(to top, black, transparent);
+}
+
 .input-area {
-  flex-shrink: 0;
-  padding-top: 10px;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  padding-top: 16px;
   padding-bottom: max(8px, env(safe-area-inset-bottom));
-  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--color-bg) 78%, transparent) 28%);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--color-bg) 84%, transparent) 36%, var(--color-bg));
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
 }
 
 .queued-list {
