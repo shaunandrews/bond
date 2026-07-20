@@ -60,6 +60,7 @@
     "@earendil-works/pi-agent-core": "^0.80.10",
     "@earendil-works/pi-ai": "^0.80.10",
     "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "linkedom": "^0.18.13",
     "pi-codex-image-gen": "^0.1.12",

@@ -18,6 +18,9 @@ import { codexImageGenExtension, extractRevisedPrompt, IMAGEGEN_TOOL_NAMES, imag
 import { createMemoryExtensionFactory, MEMORY_TOOL_NAMES } from '../memory/tools'
 import { createWebExtensionFactory, WEB_TOOL_NAMES } from '../web/tools'
 import { createDesignExtensionFactory, DESIGN_TOOL_NAMES } from '../design/tools'
+import { createMcpExtensionFactory, MCP_TOOL_NAMES } from '../mcp/tools'
+import { mcpProxyAvailable } from '../mcp/config'
+import { promotedToolInfos } from '../mcp/manager'
 import { createOnboardingExtensionFactory, getFirstRunStatus, ONBOARDING_STAGE_TOOLS, type BondPanelId, type OnboardingToolHooks } from '../onboarding'
 import type { OnboardingFirstRunStatus } from '../../shared/onboarding'
 import { getDataDir } from '../paths'
@@ -283,7 +286,11 @@ export function shouldFlushDeferredPanel(deferred: BondPanelId | null, narrated:
   return deferred && narrated && !aborted ? deferred : null
 }
 
-export function toolsForEditMode(editMode: EditMode, onboardingStatus: OnboardingFirstRunStatus = 'completed', options: { imageGen?: boolean } = {}): string[] {
+export function toolsForEditMode(
+  editMode: EditMode,
+  onboardingStatus: OnboardingFirstRunStatus = 'completed',
+  options: { imageGen?: boolean; mcpProxy?: boolean; promotedMcpTools?: string[] } = {},
+): string[] {
   const workspaceTools = editMode.type === 'readonly'
     ? ['read', 'grep', 'find', 'ls']
     : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash']
@@ -307,8 +314,31 @@ export function toolsForEditMode(editMode: EditMode, onboardingStatus: Onboardin
   // Felix (consult_designer) runs an isolated read-only session, so design
   // consultation stays available even in readonly mode.
   const imageGenTools = options.imageGen ? IMAGEGEN_TOOL_NAMES : []
-  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...DESIGN_TOOL_NAMES, ...imageGenTools, ...onboardingTools]
+  // MCP servers are third-party code Bond cannot classify on its own, so a
+  // readonly session only sees the proxy when a human has confirmed at least
+  // one read-only tool (mcpProxy) — and only ever sees promoted tools that
+  // pass the same gate. Elsewhere the proxy is always available; the per-call
+  // policy in mcp/tools.ts decides what runs silently and what prompts.
+  const mcpProxy = options.mcpProxy === false ? [] : MCP_TOOL_NAMES
+  const mcpTools = [...mcpProxy, ...(options.promotedMcpTools ?? [])]
+  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...DESIGN_TOOL_NAMES, ...mcpTools, ...imageGenTools, ...onboardingTools]
 }
+
+/**
+ * Bond-owned tools whose absence means an extension silently failed to
+ * register — a hard failure, not a degraded feature.
+ *
+ * MCP tools (the `mcp` proxy and any promoted `mcp__*`) are deliberately
+ * absent: a third-party server that won't start must degrade to "the tool
+ * reports the server is unavailable", never kill the turn.
+ */
+export const REQUIRED_BOND_TOOL_NAMES: string[] = [
+  ...MEMORY_TOOL_NAMES,
+  ...WEB_TOOL_NAMES,
+  ...DESIGN_TOOL_NAMES,
+  ...IMAGEGEN_TOOL_NAMES,
+  ...Object.values(ONBOARDING_STAGE_TOOLS).flat(),
+]
 
 /** Run one Bond turn through Pi and persist it in Bond-owned Pi JSONL storage. */
 export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions): Promise<PiBondQueryResult> {
@@ -322,7 +352,16 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     options.onChunk({ kind: 'raw_error', message: 'Pi is not connected. Open Settings → Pi connection and add an Anthropic API key.' })
     return failedPiResult(piSessionId)
   }
-  const tools = toolsForEditMode(editMode, getFirstRunStatus().status, { imageGen: imageGenAvailable(auth.providers) })
+  // Promoted MCP tools need real schemas in the prompt, so their servers are
+  // contacted before the model runs. This is the one non-lazy MCP path; it is
+  // gated on an explicit user pin, bounded by a timeout inside the manager,
+  // and returns [] rather than throwing when a server is unreachable.
+  const promotedMcpTools = await promotedToolInfos(editMode)
+  const tools = toolsForEditMode(editMode, getFirstRunStatus().status, {
+    imageGen: imageGenAvailable(auth.providers),
+    mcpProxy: mcpProxyAvailable(editMode),
+    promotedMcpTools: promotedMcpTools.map((promoted) => promoted.piName),
+  })
 
   // Set once assistant prose streams in this turn. show_panel calls that land
   // before it (models front-load their tool batch) are deferred and flushed
@@ -343,6 +382,13 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
       createMemoryExtensionFactory({ sourceMessageId: options.memorySourceMessageId }),
       createWebExtensionFactory(),
       createDesignExtensionFactory({ model: options.model }),
+      createMcpExtensionFactory({
+        turnId: options.turnId,
+        onChunk: options.onChunk,
+        abortSignal: options.abortSignal,
+        editMode,
+        promoted: promotedMcpTools,
+      }),
       codexImageGenExtension,
       createOnboardingExtensionFactory({
         // show_panel rides the normal chunk stream to the renderer.
@@ -407,7 +453,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
   // the allowlist with no registered tool means an extension silently failed
   // (or vice versa: a registered tool missing from the allowlist would have
   // been deactivated by activateRequestedTools above).
-  const requiredBondTools = [...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...DESIGN_TOOL_NAMES, ...IMAGEGEN_TOOL_NAMES, ...Object.values(ONBOARDING_STAGE_TOOLS).flat()].filter(name => tools.includes(name))
+  const requiredBondTools = REQUIRED_BOND_TOOL_NAMES.filter(name => tools.includes(name))
   const missingBondTools = requiredBondTools.filter(name => !activeTools.includes(name))
   if (missingBondTools.length) {
     session.dispose()

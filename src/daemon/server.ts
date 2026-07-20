@@ -34,6 +34,23 @@ import { getPiAuthStatus, startPiOAuth } from './pi/runtime'
 import { resolveApproval } from './approvals'
 import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, abortActiveTurnForShutdown } from './turns'
 import { setRenderTransport, onRenderReady } from './web/broker'
+import {
+  MCP_PRESETS,
+  McpConfigError,
+  addMcpServer,
+  classifyMcpTool,
+  getMcpServers,
+  getPreset,
+  promoteMcpTool,
+  removeMcpServer,
+  setMcpAlwaysAsk,
+  updateMcpPolicy,
+  updateMcpServer,
+  type McpServerConfig,
+} from './mcp/config'
+import { listSecretRefs as listMcpSecretRefs, removeSecret as removeMcpSecret, setSecret as setMcpSecret } from './mcp/keychain'
+import { classifyTool as classifyMcpToolClass, suggestToolClass as suggestMcpToolClass } from './mcp/policy'
+import { policyFor as mcpPolicyFor, reconnectMcpServer, searchCatalog as searchMcpCatalog, serverStatuses as mcpServerStatuses } from './mcp/manager'
 import { getRemoteStatus } from './remote'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
@@ -213,6 +230,18 @@ function broadcastImageChanged(): void {
 function broadcastCollectionsChanged(): void {
   const msg = JSON.stringify(makeNotification('collection.changed', {}))
   eachOpenClient(client => client.send(msg))
+}
+
+function broadcastMcpChanged(): void {
+  const msg = JSON.stringify(makeNotification('mcp.changed', {}))
+  eachOpenClient(client => client.send(msg))
+}
+
+/** Every MCP policy write shares this shape: unknown id → invalid params, change → broadcast. */
+function requireMcpServer(server: McpServerConfig | null, id: string): McpServerConfig {
+  if (!server) throw new RpcError(RPC_INVALID_PARAMS, `No MCP server called "${id}"`)
+  broadcastMcpChanged()
+  return server
 }
 
 
@@ -537,6 +566,160 @@ const handlers: RpcHandlers = {
     if (typeof opacity !== 'number') throw new RpcError(RPC_INVALID_PARAMS, 'opacity is required')
     return saveWindowOpacity(opacity)
   },
+
+  // --- MCP connections ---
+  'mcp.list': () => ({ servers: getMcpServers(), presets: MCP_PRESETS }),
+
+  'mcp.add': (params) => {
+    const p = raw(params)
+    const presetId = getStringParam(p, 'preset')
+    const input = presetId
+      ? (() => {
+          const preset = getPreset(presetId)
+          if (!preset) throw new RpcError(RPC_INVALID_PARAMS, `No MCP preset called "${presetId}"`)
+          const { description: _description, ...config } = preset
+          return { ...config, enabled: true }
+        })()
+      : getParam(p, 'server')
+    try {
+      const server = addMcpServer(input)
+      broadcastMcpChanged()
+      return server
+    } catch (error) {
+      if (error instanceof McpConfigError) throw new RpcError(RPC_INVALID_PARAMS, error.message)
+      throw error
+    }
+  },
+
+  'mcp.update': (params) => {
+    const p = raw(params)
+    const id = getStringParam(p, 'id')
+    const updates = getParam(p, 'updates')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    if (!updates || typeof updates !== 'object') throw new RpcError(RPC_INVALID_PARAMS, 'updates is required')
+    try {
+      const server = updateMcpServer(id, updates as Parameters<typeof updateMcpServer>[1])
+      if (!server) throw new RpcError(RPC_INVALID_PARAMS, `No MCP server called "${id}"`)
+      // The manager reconciles config on its own, but an explicit drop makes a
+      // toggle take effect immediately instead of at the next catalog read.
+      reconnectMcpServer(id)
+      broadcastMcpChanged()
+      return server
+    } catch (error) {
+      if (error instanceof McpConfigError) throw new RpcError(RPC_INVALID_PARAMS, error.message)
+      throw error
+    }
+  },
+
+  'mcp.remove': (params) => {
+    const id = getStringParam(raw(params), 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const removed = removeMcpServer(id)
+    if (removed) {
+      reconnectMcpServer(id)
+      broadcastMcpChanged()
+    }
+    return { ok: removed }
+  },
+
+  'mcp.status': () => ({ servers: mcpServerStatuses() }),
+
+  'mcp.listTools': async (params) => {
+    const p = raw(params)
+    const result = await searchMcpCatalog(getStringParam(p, 'query'), getStringParam(p, 'server'))
+    // Join each protocol tool with the human-owned policy the gate actually
+    // uses, so the UI never has to reimplement classification.
+    return {
+      tools: result.tools.map((tool) => {
+        const policy = mcpPolicyFor(tool.server)
+        return {
+          ...tool,
+          toolClass: classifyMcpToolClass(policy, tool.name),
+          suggestedClass: suggestMcpToolClass(tool.annotations),
+          alwaysAsk: policy.alwaysAsk.includes(tool.name),
+          promoted: policy.promoted.includes(tool.name),
+        }
+      }),
+      errors: result.errors,
+    }
+  },
+
+  'mcp.reconnect': (params) => {
+    const id = getStringParam(raw(params), 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    reconnectMcpServer(id)
+    broadcastMcpChanged()
+    return { ok: true }
+  },
+
+  // --- MCP trust policy (the gate every call passes through) ---
+  'mcp.setTrust': (params) => {
+    const p = raw(params)
+    const id = getStringParam(p, 'id')
+    const trust = getStringParam(p, 'trust')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    if (trust !== 'ask' && trust !== 'trusted' && trust !== 'disabled') {
+      throw new RpcError(RPC_INVALID_PARAMS, 'trust must be ask, trusted, or disabled')
+    }
+    return requireMcpServer(updateMcpPolicy(id, { trust }), id)
+  },
+
+  'mcp.classifyTool': (params) => {
+    const p = raw(params)
+    const id = getStringParam(p, 'id')
+    const tool = getStringParam(p, 'tool')
+    const toolClass = getStringParam(p, 'toolClass')
+    if (!id || !tool) throw new RpcError(RPC_INVALID_PARAMS, 'id and tool are required')
+    if (toolClass !== 'read' && toolClass !== 'write' && toolClass !== 'unknown') {
+      throw new RpcError(RPC_INVALID_PARAMS, 'toolClass must be read, write, or unknown')
+    }
+    return requireMcpServer(classifyMcpTool(id, tool, toolClass), id)
+  },
+
+  'mcp.promoteTool': (params) => {
+    const p = raw(params)
+    const id = getStringParam(p, 'id')
+    const tool = getStringParam(p, 'tool')
+    const promoted = getBoolParam(p, 'promoted')
+    if (!id || !tool) throw new RpcError(RPC_INVALID_PARAMS, 'id and tool are required')
+    if (promoted === undefined) throw new RpcError(RPC_INVALID_PARAMS, 'promoted is required')
+    return requireMcpServer(promoteMcpTool(id, tool, promoted), id)
+  },
+
+  'mcp.setAlwaysAsk': (params) => {
+    const p = raw(params)
+    const id = getStringParam(p, 'id')
+    const tool = getStringParam(p, 'tool')
+    const alwaysAsk = getBoolParam(p, 'alwaysAsk')
+    if (!id || !tool) throw new RpcError(RPC_INVALID_PARAMS, 'id and tool are required')
+    if (alwaysAsk === undefined) throw new RpcError(RPC_INVALID_PARAMS, 'alwaysAsk is required')
+    return requireMcpServer(setMcpAlwaysAsk(id, tool, alwaysAsk), id)
+  },
+
+  // --- MCP secrets (Keychain; write-only over the wire) ---
+  'mcp.setSecret': async (params) => {
+    const p = raw(params)
+    const ref = getStringParam(p, 'ref')
+    const value = getStringParam(p, 'value')
+    if (!ref || !value) throw new RpcError(RPC_INVALID_PARAMS, 'ref and value are required')
+    try {
+      await setMcpSecret(ref, value)
+    } catch (error) {
+      throw new RpcError(RPC_INVALID_PARAMS, error instanceof Error ? error.message : 'Keychain rejected the secret')
+    }
+    broadcastMcpChanged()
+    return { ok: true, ref }
+  },
+
+  'mcp.deleteSecret': async (params) => {
+    const ref = getStringParam(raw(params), 'ref')
+    if (!ref) throw new RpcError(RPC_INVALID_PARAMS, 'ref is required')
+    const ok = await removeMcpSecret(ref)
+    if (ok) broadcastMcpChanged()
+    return { ok }
+  },
+
+  'mcp.listSecrets': async () => ({ refs: await listMcpSecretRefs() }),
 
   // --- Skills ---
   'skills.list': () => getCachedSkills(),

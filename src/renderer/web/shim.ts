@@ -29,6 +29,7 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     onChunk: (fn) => client.onChunk(fn),
     onCollectionsChanged: (fn) => client.onNotification('collection.changed', () => fn()),
     onImageChanged: (fn) => client.onNotification('image.changed', () => fn()),
+    onMcpChanged: (fn) => client.onNotification('mcp.changed', () => fn()),
     onConnectionLost: (fn) => client.onStateChange((state) => { if (state === 'disconnected') fn() }),
     onConnectionRestored: (fn) => {
       let wasLost = false

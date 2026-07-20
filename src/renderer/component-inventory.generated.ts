@@ -647,6 +647,12 @@ export const componentInventory = [
     "events": []
   },
   {
+    "name": "McpSettings",
+    "file": "components/McpSettings.vue",
+    "props": [],
+    "events": []
+  },
+  {
     "name": "MediaView",
     "file": "components/MediaView.vue",
     "props": [],

@@ -359,6 +359,11 @@ cmd_soul() {
   node "$PROJECT_DIR/out/cli/soul.js" "$@"
 }
 
+cmd_mcp() {
+  _ensure_cli
+  node "$PROJECT_DIR/out/cli/mcp.js" "$@"
+}
+
 _ensure_cli() {
   # Rebuild bundled CLI subcommands only when a source is newer than its output.
   # scripts/build.mjs owns the entry list so it can't drift from build:cli.
@@ -384,6 +389,7 @@ cmd_help() {
   echo -e "  ${G}log${N}                Tail daemon log"
   echo -e "  ${G}soul${N}               Read/write Bond's personality (show, set, append, clear)"
   echo -e "  ${G}media${N}              Manage media (list, add, info, open, rm, purge)"
+  echo -e "  ${G}mcp${N}                Manage MCP servers (list, status, add, enable, tools)"
   echo -e "  ${G}screenshot${N}         Capture Bond window to /tmp/bond-screenshot.png"
   echo -e "  ${G}test${N}               Run tests"
   echo -e "  ${G}help${N}               This message"
@@ -403,6 +409,7 @@ case "${1:-help}" in
   collection) shift; cmd_collection "$@" ;;
   soul)    shift; cmd_soul "$@" ;;
   sense)   shift; cmd_sense "$@" ;;
+  mcp)     shift; cmd_mcp "$@" ;;
   screenshot|ss) cmd_screenshot "${2:-/tmp/bond-screenshot.png}" ;;
   test)    cmd_test ;;
   help|-h|--help) cmd_help ;;

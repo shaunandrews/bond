@@ -290,6 +290,7 @@ function createWindow(): void {
   // Broadcast entity change events to all windows
   client.onCollectionsChanged(() => broadcast('bond:collectionsChanged'))
   client.onImageChanged(() => broadcast('bond:imageChanged'))
+  client.onMcpChanged(() => broadcast('bond:mcpChanged'))
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
     void mainWindow.loadURL(devUrl)

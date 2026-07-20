@@ -1,5 +1,18 @@
 # MCP implementation plan
 
+> **Status (2026-07-20): M1–M5 are implemented.** M6 (resources, prompts, MCP Apps, sampling, elicitation) is untouched — it was always "later, blocks nothing".
+>
+> Deltas from the plan as written:
+> - RPCs beyond the six listed for M2: `mcp.reconnect`, the `mcp.changed` notification M3 needs, and the M4/M5 writes (`mcp.setTrust`, `mcp.classifyTool`, `mcp.promoteTool`, `mcp.setAlwaysAsk`, `mcp.setSecret`, `mcp.deleteSecret`, `mcp.listSecrets`).
+> - `PROTOCOL_VERSION` 2 → 3.
+> - Open item resolved: Pi's `execute` **does** receive a per-call `AbortSignal` (3rd arg), so MCP tools use it and fall back to the turn signal.
+> - Preset pinned at `@automattic/mcp-context-a8c@0.4.0` — verify that version before relying on it.
+> - M5 changed M1's decision 3: readonly no longer excludes MCP unconditionally. It exposes the proxy only once a human has confirmed a read-only tool, and only those tools run. The default policy (`trust: 'ask'`, nothing classified) reproduces M1's prompt-everything behaviour exactly, so nothing changes until someone opts in.
+> - Promoted tools are the one non-lazy MCP path: their schemas must be in the prompt, so their servers are contacted at turn start. Gated on an explicit pin, 5s timeout, `[]` on failure.
+> - Two bugs caught by smoke-testing rather than by tests, both fixed with regression tests:
+>   1. A server that fails to spawn closes its transport *before* `connect()` resolves, so the `onClose` hook ran against a `const` still in its temporal dead zone. The ReferenceError escaped an event handler and killed the daemon — exactly the failure mode decision 4 exists to prevent.
+>   2. The first version of the Keychain test mocked `node:child_process`; the mock silently failed to apply and the suite wrote real items into the login keychain. The `security` runner is now injected, so a test cannot reach the real keychain even if a mock misfires.
+
 Companion to `mcp-strategy.md`. That doc decided **what** (Bond-native manager, one `mcp` proxy tool, approvals from day one). This doc is the **how** — milestones, files, seams, and tests, grounded in the actual code.
 
 ## Architecture (one paragraph)

@@ -29,6 +29,16 @@ describe('formatToolLabel', () => {
     expect(formatToolLabel('Read')).toBe('Read')
     expect(formatToolLabel('Read', '')).toBe('Read')
   })
+
+  // Every MCP call arrives as the same `mcp` tool name — the identity is in
+  // the input, so an unlabelled row would read "mcp {server: …}".
+  it('names the MCP server and tool instead of the proxy tool', () => {
+    expect(formatToolLabel('mcp', undefined, { action: 'call', server: 'context-a8c', tool: 'search_p2' }))
+      .toBe('context-a8c: search_p2')
+    expect(formatToolLabel('mcp', undefined, { action: 'search', query: 'p2' })).toBe('Searched MCP tools')
+    expect(formatToolLabel('mcp', undefined, { action: 'describe', server: 'context-a8c' })).toBe('MCP: context-a8c')
+    expect(formatToolLabel('mcp')).toBe('MCP')
+  })
 })
 
 describe('formatDuration', () => {
@@ -47,6 +57,17 @@ describe('formatDuration', () => {
 
   it('drops the seconds part on exact minutes', () => {
     expect(formatDuration(120)).toBe('2m')
+  })
+})
+
+describe('formatApprovalInput — MCP calls', () => {
+  it('leads with the server and tool, then the arguments', () => {
+    expect(formatApprovalInput({ server: 'context-a8c', tool: 'search_p2', arguments: { query: 'design' } }))
+      .toBe('context-a8c: search_p2\n{\n  "query": "design"\n}')
+  })
+
+  it('handles a call with no arguments', () => {
+    expect(formatApprovalInput({ server: 'a8c', tool: 'whoami' })).toBe('a8c: whoami\n{}')
   })
 })
 

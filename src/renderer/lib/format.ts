@@ -19,8 +19,22 @@ const TOOL_VERBS: Record<string, string> = {
 // Prompt-driven tools carry paragraph-length input summaries — verb only.
 const VERB_ONLY_TOOLS = ['Bash', 'Glob', 'WebSearch', 'codex_generate_image']
 
-/** Human label for a tool call, e.g. "Read useChat.ts" or "Ran command". */
-export function formatToolLabel(name: string, summary?: string): string {
+/**
+ * The MCP proxy tool's identity lives in its input, not its name — every call
+ * is `mcp`, so an unlabelled row would read "mcp {server: …}".
+ */
+function formatMcpLabel(input?: Record<string, unknown>): string {
+  const server = typeof input?.server === 'string' ? input.server : ''
+  const tool = typeof input?.tool === 'string' ? input.tool : ''
+  const action = typeof input?.action === 'string' ? input.action : ''
+  if (server && tool) return `${server}: ${tool}`
+  if (action === 'search') return 'Searched MCP tools'
+  return server ? `MCP: ${server}` : 'MCP'
+}
+
+/** Human label for a tool call, e.g. "Read useChat.ts" or "context-a8c: search_p2". */
+export function formatToolLabel(name: string, summary?: string, input?: Record<string, unknown>): string {
+  if (name === 'mcp') return formatMcpLabel(input)
   const filename = summary?.split('/').pop() || summary
   const verb = TOOL_VERBS[name] ?? name
   return filename && !VERB_ONLY_TOOLS.includes(name) ? `${verb} ${filename}` : verb
@@ -41,6 +55,15 @@ export function formatApprovalInput(input: Record<string, unknown>): string {
   if (typeof command === 'string') return command
   const path = input.file_path ?? input.path
   if (typeof path === 'string') return path
+  // MCP calls: the server/tool pair is the headline, the arguments the body.
+  if (typeof input.server === 'string' && typeof input.tool === 'string') {
+    const args = input.arguments && typeof input.arguments === 'object' ? input.arguments : {}
+    try {
+      return `${input.server}: ${input.tool}\n${JSON.stringify(args, null, 2)}`.slice(0, 300)
+    } catch {
+      return `${input.server}: ${input.tool}`
+    }
+  }
   try {
     return JSON.stringify(input, null, 2).slice(0, 300)
   } catch {

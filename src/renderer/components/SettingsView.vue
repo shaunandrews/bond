@@ -8,6 +8,7 @@ import BondSelect from './BondSelect.vue'
 import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
 import CopyButton from './CopyButton.vue'
+import McpSettings from './McpSettings.vue'
 
 interface SkillInfo { name: string; description: string; argumentHint: string }
 
@@ -397,6 +398,8 @@ function handleModelChange(model: string) {
         <p v-if="piSetupError" class="text-xs text-err mt-2">{{ piSetupError }}</p>
         <p class="text-xs text-muted mt-2">Pi stores and refreshes the OAuth token in its credential store.</p>
       </section>
+
+      <McpSettings />
 
       <section class="settings-section">
         <div class="section-header">

@@ -414,6 +414,10 @@ export class BondClient {
     return this.onNotification('image.changed', fn)
   }
 
+  onMcpChanged(fn: () => void): () => void {
+    return this.onNotification('mcp.changed', fn)
+  }
+
   // --- Collection item comments ---
 
   async addItemComment(itemId: string, author: 'user' | 'bond', body: string): Promise<RpcResult<'collection.addItemComment'>> {

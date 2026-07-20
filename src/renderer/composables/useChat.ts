@@ -363,7 +363,7 @@ export function useChat(deps: ChatDeps = window.bond) {
         break
       }
       case 'assistant_tool':
-        updateActivity(data => { finalizeOpenActivityEvents(data); data.status = 'working'; data.events.push({ id: uid(), type: 'tool', label: formatToolLabel(chunk.name, chunk.summary), ts: Date.now(), toolUseId: chunk.toolUseId, toolName: chunk.name, input: chunk.input }) })
+        updateActivity(data => { finalizeOpenActivityEvents(data); data.status = 'working'; data.events.push({ id: uid(), type: 'tool', label: formatToolLabel(chunk.name, chunk.summary, chunk.input), ts: Date.now(), toolUseId: chunk.toolUseId, toolName: chunk.name, input: chunk.input }) })
         break
       case 'tool_result':
         updateActivity(data => {

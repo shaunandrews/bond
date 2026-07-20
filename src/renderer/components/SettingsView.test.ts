@@ -13,6 +13,9 @@ describe('SettingsView', () => {
       senseSettings: vi.fn().mockResolvedValue({ autoContextInChat: false, captureIntervalSeconds: 15 }),
       hasScreenRecordingPermission: vi.fn().mockResolvedValue(false),
       getPiStatus: vi.fn().mockResolvedValue({ configured: true, providers: [] }),
+      mcpList: vi.fn().mockResolvedValue({ servers: [], presets: [] }),
+      mcpStatus: vi.fn().mockResolvedValue({ servers: [] }),
+      onMcpChanged: vi.fn(() => () => {}),
     }
   })
 

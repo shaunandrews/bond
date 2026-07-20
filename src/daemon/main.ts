@@ -18,6 +18,7 @@ import { installWireToolLogging, installWireWebSocketLogging } from './wire-debu
 import { startServer, attachConnection, registerBroadcastServer } from './server'
 import { startRemoteServer, type RemoteServer } from './remote'
 import { getRemotePort, getOrCreateRemoteToken } from './settings'
+import { shutdownMcp } from './mcp/manager'
 
 const runtimeDir = join(homedir(), '.bond')
 const socketPath = join(runtimeDir, 'bond.sock')
@@ -126,7 +127,10 @@ async function main(): Promise<void> {
       removeToken(authToken)
       process.exit(exitCode || 1)
     }, 5000).unref()
-    const closeRemote = remote ? remote.close() : Promise.resolve()
+    // MCP stdio servers are our child processes — they die with us or not at
+    // all, so they close before the sockets do.
+    const closeMcp = shutdownMcp().catch(() => { /* nothing left to kill */ })
+    const closeRemote = closeMcp.then(() => (remote ? remote.close() : Promise.resolve()))
     closeRemote.then(() => server.close()).then(() => {
       removePid()
       removeToken(authToken)

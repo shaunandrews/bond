@@ -89,6 +89,13 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `web/tools.ts` | Bond-owned Pi tools `web_search` + `fetch_content` — keyless, zero-config web access with a 15-min cache and polite batch spacing |
 | `web/broker.ts` | Render broker — parks tool promises, sends `web.requestRender` to the app, resolves on `web.renderReady`; errors clearly when no app is connected |
 | `web/extract.ts` | DuckDuckGo SERP parsing (linkedom) and page → markdown extraction (Readability + Turndown) over app-rendered HTML |
+| `mcp/manager.ts` | Daemon-lifetime MCP connection registry — lazy connect, warm client reuse across turns, `tools/list` cache (invalidated by `list_changed` and on reconnect), idle disconnect, per-server error containment, promoted-tool schema prefetch (timeout-bounded), `shutdownMcp()` on the daemon exit path |
+| `mcp/client.ts` | One MCP server connection over the official `@modelcontextprotocol/sdk` — StdioClientTransport or StreamableHTTPClientTransport; resolves `keychain:` references just before connecting; keeps the last 4k of stderr (where a stdio server reports auth trouble) |
+| `mcp/config.ts` | `McpServerConfig` CRUD over the settings KV row `mcp.servers` (stdio + http, never a secret) + policy writes + the Context A8C preset |
+| `mcp/policy.ts` | The trust policy and `decideMcpCall` — the ONE gate both the proxy and promoted tools pass through (allow / ask / block per trust × edit mode × human-confirmed tool class). Server `readOnlyHint`/`destructiveHint` annotations only pre-fill a suggestion; they are supplied by the same third party being judged, so they never classify anything themselves |
+| `mcp/keychain.ts` | macOS Keychain secret store via the `security` CLI (injected runner, never a shell). Config holds `keychain:<ref>` references; values resolve at connect time and are never returned over RPC |
+| `mcp/tools.ts` | The `mcp` proxy Pi tool (`search`/`describe`/`call`) plus any user-promoted tools registered as first-class `mcp__server__tool` Pi tools. Both paths run through `decideMcpCall` |
+| `mcp/content.ts` | MCP result → text: content-block flattening, 20k truncation cap, image/audio/binary-resource placeholders |
 | `remote.ts` | Remote (LAN) access server — TCP listener on `0.0.0.0:3113` serving the `out/web` bundle + WebSocket RPC gated by the persistent pairing token (`remote.token`), same-origin upgrade check, `remote.status` RPC |
 | `pi/model.ts` | Capability-tier → concrete-model resolution (`pickModel`/`selectModel`) shared by the main turn and standalone sessions (extracted so Felix doesn't import runtime.ts) |
 | `design/tools.ts` | The `consult_designer` Pi tool — Bond's doorway to Felix (verbs: critique/define/refine/migrate). Does the deterministic prep (context docs, detector, migration inventory) and hands it to an isolated Felix session; available in every edit mode |
@@ -150,7 +157,7 @@ Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from
 
 ### CLI (`bin/bond`)
 
-`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow). See the "Commands" section above for the common daemon workflows.
+`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`, `mcp`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow). See the "Commands" section above for the common daemon workflows.
 
 ## Project Structure
 
@@ -162,6 +169,7 @@ src/
   cli/
     media.ts                         # bond media — CLI for media management
     screenshot.ts                    # bond screenshot — capture Bond window
+    mcp.ts                           # bond mcp — servers, trust policy, tool classification, Keychain secrets
     sense.ts                         # bond sense — CLI for Sense ambient awareness
   native/
     window-helper.m                  # CGWindowList native helper (Obj-C)
@@ -183,6 +191,14 @@ src/
     skills.ts                        # Skill scanning from ~/.bond/skills/
     fts.ts                           # Safe FTS5 MATCH query construction
     remote.ts                        # Remote (LAN) access — static bundle + WebSocket RPC on TCP 3113
+    mcp/
+      manager.ts                     # Daemon-lifetime MCP connection registry (lazy, warm, contained)
+      client.ts                      # One server connection over the MCP SDK (stdio + streamable http)
+      config.ts                      # McpServerConfig + policy CRUD over the mcp.servers setting
+      policy.ts                      # Trust policy + decideMcpCall — the single approval gate
+      keychain.ts                    # macOS Keychain secrets behind keychain:<ref> config references
+      tools.ts                       # The `mcp` proxy tool + promoted mcp__server__tool Pi tools
+      content.ts                     # MCP result → text (flatten, truncate, placeholders)
     web/
       tools.ts                       # web_search + fetch_content Pi tools (keyless, cached)
       broker.ts                      # Render broker for the app's hidden browser window
@@ -418,6 +434,9 @@ Settings panel with accent color picker (8 presets + custom), default model sele
 ### AgentsView
 Settings-window Agents tab — a presentational roster of Bond's specialist agents (currently Felix, the design consultant): identity card, the four verbs, how he works, and an example ask. Static content, no props or events.
 
+### McpSettings
+Settings section for MCP (Model Context Protocol) connections. Joins saved config (`mcp.list`) with live connection state (`mcp.status`) per row: status dot, tool count, endpoint (command line or url), Keychain badge, last error. Enable/disable toggle, reconnect, two-click remove, one-click preset connect, and an "Add from JSON" paste form. Expanding a row connects the server on demand and shows its trust selector plus per-tool controls — classify read/write, always-ask, pin as a first-class tool — and, for http servers, a token field that writes straight to the Keychain and stores only a `keychain:<ref>` in the config. Reloads on the `mcp.changed` push so a second window stays in sync. No props or events — talks to `window.bond` directly.
+
 ### DesignSystemView
 Interactive design token showcase. Displays color swatches, typography, radius, shadows, transitions, and spacing values. Reads computed styles from `:root`. No props.
 
@@ -558,6 +577,8 @@ type EditMode =
   | { type: 'readonly' }                           // Read, Glob, Grep only
   | { type: 'scoped', allowedPaths: string[] }     // Read/write restricted to specific paths
 ```
+
+MCP tools are the one exception to per-mode tool lists being about workspace files. Availability and approval are decided by the per-server **trust policy** (`src/daemon/mcp/policy.ts`), not the edit mode alone: a new server defaults to `trust: 'ask'` with nothing classified, which prompts for every call in every mode. Marking a server **trusted** auto-runs the tools a human confirmed read-only (and, in `full` only, confirmed writes); `readonly` sessions see only confirmed read-only tools and the proxy disappears entirely until at least one exists. `alwaysAsk` outranks trust, and `disabled` blocks the server outright. Promoted tools (`mcp__server__tool`) pass through the same gate.
 
 Edit mode is **one global, daemon-persisted setting** (`edit_mode`, validated through `parseEditMode` in `shared/session.ts`): loaded into the composer at boot on every surface (desktop, web, quick chat), applied per-turn via `BondSendInput.editMode`, and mirrored live to all clients through the `edit_mode_changed` chunk when any device changes it. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
 

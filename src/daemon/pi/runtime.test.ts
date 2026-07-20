@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { ONBOARDING_STAGE_TOOLS } from '../onboarding'
-import { activateRequestedTools, composePromptWithContext, contextUsageFromSession, piEventToChunks, piResultFromState, shouldFlushDeferredPanel, textBlockSeparator, toolsForEditMode } from './runtime'
+import { REQUIRED_BOND_TOOL_NAMES, activateRequestedTools, composePromptWithContext, contextUsageFromSession, piEventToChunks, piResultFromState, shouldFlushDeferredPanel, textBlockSeparator, toolsForEditMode } from './runtime'
 import { IMAGEGEN_TOOL_NAMES } from '../imagegen'
 import { MEMORY_TOOL_NAMES } from '../memory/tools'
 import { WEB_TOOL_NAMES } from '../web/tools'
+import { MCP_TOOL_NAMES } from '../mcp/tools'
 
 describe('piEventToChunks', () => {
   it('preserves renderer text and thinking chunks', () => {
@@ -97,6 +98,31 @@ describe('toolsForEditMode', () => {
     for (const mode of [{ type: 'full' as const }, { type: 'readonly' as const }, { type: 'scoped' as const, allowedPaths: ['/tmp'] }]) {
       expect(toolsForEditMode(mode)).toEqual(expect.arrayContaining([...WEB_TOOL_NAMES]))
     }
+  })
+
+  // MCP servers are third-party code Bond can't classify per tool. The proxy
+  // is always available outside readonly; in readonly the caller passes
+  // mcpProxy: false until a human has confirmed a read-only tool.
+  it('exposes the MCP proxy tool by default and hides it when the caller says so', () => {
+    expect(toolsForEditMode({ type: 'full' })).toEqual(expect.arrayContaining([...MCP_TOOL_NAMES]))
+    expect(toolsForEditMode({ type: 'scoped', allowedPaths: ['/tmp'] })).toEqual(expect.arrayContaining([...MCP_TOOL_NAMES]))
+    for (const tool of MCP_TOOL_NAMES) {
+      expect(toolsForEditMode({ type: 'readonly' }, 'completed', { mcpProxy: false })).not.toContain(tool)
+    }
+    expect(toolsForEditMode({ type: 'readonly' }, 'completed', { mcpProxy: true })).toEqual(expect.arrayContaining([...MCP_TOOL_NAMES]))
+  })
+
+  it('allowlists promoted MCP tools passed by the caller', () => {
+    const tools = toolsForEditMode({ type: 'full' }, 'completed', { promotedMcpTools: ['mcp__a8c__search_p2'] })
+    expect(tools).toContain('mcp__a8c__search_p2')
+    expect(toolsForEditMode({ type: 'full' })).not.toContain('mcp__a8c__search_p2')
+  })
+
+  // Decision 4: a down MCP server degrades to a tool error, never a dead turn,
+  // so no MCP tool may ever join the hard-fail registration check.
+  it('keeps MCP tools out of the required-Bond-tool set', () => {
+    expect(REQUIRED_BOND_TOOL_NAMES).not.toContain('mcp')
+    expect(REQUIRED_BOND_TOOL_NAMES.some((name) => name.startsWith('mcp__'))).toBe(false)
   })
 
   it('allowlists the Codex image tool in every mode, but only with a connected subscription', () => {

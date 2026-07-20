@@ -24,6 +24,7 @@ const electronLocalMethods: ElectronBondSurface = {
   onModelChanged: (fn) => listen('bond:modelChanged', fn),
   onCollectionsChanged: (fn) => listen('bond:collectionsChanged', fn),
   onImageChanged: (fn) => listen('bond:imageChanged', fn),
+  onMcpChanged: (fn) => listen('bond:mcpChanged', fn),
   onViewerFile: (fn) => listen('bond:viewerFile', fn),
   onCreateSkill: (fn) => listen('bond:createSkill', fn),
   onFullscreenChanged: (fn) => listen('bond:fullscreenChanged', fn),

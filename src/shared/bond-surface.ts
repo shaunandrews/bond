@@ -17,7 +17,7 @@
  * main process broadcasts a change event to all windows after the daemon call,
  * so they keep their hand-written per-method IPC channels.
  */
-import type { DispatchableMethod, RpcParams, RpcResult, CollectionUpdates } from './rpc-schema'
+import type { DispatchableMethod, RpcParams, RpcResult, CollectionUpdates, McpPolicyWire, McpServerConfigWire } from './rpc-schema'
 import type { BondSendInput, TaggedChunk } from './stream'
 import type { AttachedImage, EditMode, FieldDefInput, ImageMediaType } from './session'
 import type { TranscriptMessage } from './transcript'
@@ -95,6 +95,26 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
       invoke('image.import', { data, mediaType: mediaType as ImageMediaType }),
     deleteImage: (imageId: string) => invoke('image.delete', { id: imageId }),
 
+    // --- MCP connections ---
+    mcpList: () => invoke('mcp.list'),
+    mcpAdd: (server: Partial<McpServerConfigWire>) => invoke('mcp.add', { server }),
+    mcpAddPreset: (preset: string) => invoke('mcp.add', { preset }),
+    mcpUpdate: (id: string, updates: Partial<Omit<McpServerConfigWire, 'id' | 'transport'>>) =>
+      invoke('mcp.update', { id, updates }),
+    mcpRemove: (id: string) => invoke('mcp.remove', { id }),
+    mcpStatus: () => invoke('mcp.status'),
+    mcpListTools: (server?: string, query?: string) => invoke('mcp.listTools', { server, query }),
+    mcpReconnect: (id: string) => invoke('mcp.reconnect', { id }),
+    mcpSetTrust: (id: string, trust: McpPolicyWire['trust']) => invoke('mcp.setTrust', { id, trust }),
+    mcpClassifyTool: (id: string, tool: string, toolClass: 'read' | 'write' | 'unknown') =>
+      invoke('mcp.classifyTool', { id, tool, toolClass }),
+    mcpPromoteTool: (id: string, tool: string, promoted: boolean) => invoke('mcp.promoteTool', { id, tool, promoted }),
+    mcpSetAlwaysAsk: (id: string, tool: string, alwaysAsk: boolean) => invoke('mcp.setAlwaysAsk', { id, tool, alwaysAsk }),
+    /** Write-only: the daemon never hands a stored secret back. */
+    mcpSetSecret: (ref: string, value: string) => invoke('mcp.setSecret', { ref, value }),
+    mcpDeleteSecret: (ref: string) => invoke('mcp.deleteSecret', { ref }),
+    mcpListSecrets: () => invoke('mcp.listSecrets'),
+
     // --- Skills ---
     listSkills: () => invoke('skills.list'),
     refreshSkills: () => invoke('skills.refresh'),
@@ -164,6 +184,7 @@ export interface ElectronBondSurface {
   onModelChanged(fn: (model: string) => void): () => void
   onCollectionsChanged(fn: () => void): () => void
   onImageChanged(fn: () => void): () => void
+  onMcpChanged(fn: () => void): () => void
   onViewerFile(fn: (filePath: string) => void): () => void
   onCreateSkill(fn: (description: string) => void): () => void
   onFullscreenChanged(fn: (isFullScreen: boolean) => void): () => void

@@ -74,6 +74,69 @@ export interface PiOAuthStartResult {
   deviceCode?: string
 }
 
+/** Mirrors src/daemon/mcp/policy.ts McpPolicy (shared cannot import daemon). */
+export interface McpPolicyWire {
+  trust: 'ask' | 'trusted' | 'disabled'
+  read: string[]
+  write: string[]
+  alwaysAsk: string[]
+  promoted: string[]
+}
+
+/**
+ * Mirrors src/daemon/mcp/config.ts McpServerConfig (shared cannot import
+ * daemon). Header/env values may be `keychain:<ref>` references — a real
+ * secret never crosses this wire in either direction.
+ */
+export interface McpServerConfigWire {
+  id: string
+  name: string
+  transport: 'stdio' | 'http'
+  command: string
+  args: string[]
+  env?: Record<string, string>
+  url?: string
+  headers?: Record<string, string>
+  enabled: boolean
+  policy: McpPolicyWire
+}
+
+/** Mirrors src/daemon/mcp/manager.ts McpServerStatus. */
+export interface McpServerStatusWire {
+  id: string
+  name: string
+  enabled: boolean
+  transport: 'stdio' | 'http'
+  state: 'disabled' | 'disconnected' | 'connecting' | 'connected' | 'error'
+  toolCount: number
+  trust: McpPolicyWire['trust']
+  /** Keychain reference names only. */
+  secretRefs: string[]
+  error?: string
+  stderr?: string
+}
+
+/** Mirrors src/daemon/mcp/manager.ts McpToolInfo, joined with its policy classification. */
+export interface McpToolInfoWire {
+  server: string
+  serverName: string
+  name: string
+  description: string
+  inputSchema: unknown
+  annotations?: Record<string, unknown>
+  /** Human-confirmed classification driving the approval gate. */
+  toolClass: 'read' | 'write' | 'unknown'
+  /** What the server's own annotations suggest — never authoritative. */
+  suggestedClass: 'read' | 'write' | 'unknown'
+  alwaysAsk: boolean
+  promoted: boolean
+}
+
+/** Mirrors src/daemon/mcp/config.ts McpServerPreset. */
+export interface McpServerPresetWire extends Omit<McpServerConfigWire, 'enabled' | 'policy'> {
+  description: string
+}
+
 /** Mirrors src/daemon/sense/storage.ts getStats() return shape. */
 export interface SenseStatsResult {
   storageBytes: number
@@ -169,6 +232,23 @@ export interface RpcMethods {
   'settings.saveAccentColor': { params: { hex: string }; result: boolean }
   'settings.getWindowOpacity': { params: void; result: number }
   'settings.saveWindowOpacity': { params: { opacity: number }; result: boolean }
+
+  // MCP connections
+  'mcp.list': { params: void; result: { servers: McpServerConfigWire[]; presets: McpServerPresetWire[] } }
+  'mcp.add': { params: { server?: Partial<McpServerConfigWire>; preset?: string }; result: McpServerConfigWire }
+  'mcp.update': { params: { id: string; updates: Partial<Omit<McpServerConfigWire, 'id' | 'transport'>> }; result: McpServerConfigWire }
+  'mcp.remove': { params: { id: string }; result: { ok: boolean } }
+  'mcp.status': { params: void; result: { servers: McpServerStatusWire[] } }
+  'mcp.listTools': { params: { server?: string; query?: string } | void; result: { tools: McpToolInfoWire[]; errors: Array<{ server: string; error: string }> } }
+  'mcp.reconnect': { params: { id: string }; result: { ok: true } }
+  'mcp.setTrust': { params: { id: string; trust: McpPolicyWire['trust'] }; result: McpServerConfigWire }
+  'mcp.classifyTool': { params: { id: string; tool: string; toolClass: 'read' | 'write' | 'unknown' }; result: McpServerConfigWire }
+  'mcp.promoteTool': { params: { id: string; tool: string; promoted: boolean }; result: McpServerConfigWire }
+  'mcp.setAlwaysAsk': { params: { id: string; tool: string; alwaysAsk: boolean }; result: McpServerConfigWire }
+  /** Writes a secret into the macOS Keychain. The value is write-only — no RPC ever reads it back. */
+  'mcp.setSecret': { params: { ref: string; value: string }; result: { ok: true; ref: string } }
+  'mcp.deleteSecret': { params: { ref: string }; result: { ok: boolean } }
+  'mcp.listSecrets': { params: void; result: { refs: string[] } }
 
   // Skills
   'skills.list': { params: void; result: SkillInfo[] }
@@ -271,6 +351,7 @@ export interface RpcNotifications {
   'bond.chunk': TaggedChunk
   'collection.changed': Record<string, never>
   'image.changed': Record<string, never>
+  'mcp.changed': Record<string, never>
   'sense.stateChanged': { state: SenseState }
   'sense.requestCapture': { captureDir: string; captureId: string }
   'web.requestRender': WebRenderRequest
@@ -312,6 +393,20 @@ export const RPC_METHOD_NAMES = [
   'settings.saveAccentColor',
   'settings.getWindowOpacity',
   'settings.saveWindowOpacity',
+  'mcp.list',
+  'mcp.add',
+  'mcp.update',
+  'mcp.remove',
+  'mcp.status',
+  'mcp.listTools',
+  'mcp.reconnect',
+  'mcp.setTrust',
+  'mcp.classifyTool',
+  'mcp.promoteTool',
+  'mcp.setAlwaysAsk',
+  'mcp.setSecret',
+  'mcp.deleteSecret',
+  'mcp.listSecrets',
   'skills.list',
   'skills.refresh',
   'skills.remove',
