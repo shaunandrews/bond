@@ -686,12 +686,13 @@ function handleKeyDown(e: KeyboardEvent) {
   border: 0;
   border-radius: var(--radius-xl);
   background: var(--color-surface);
-  transition: outline-color var(--transition-fast);
+  transition: box-shadow var(--transition-fast);
 }
 
 .chat-box:focus-within {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  /* A shadow ring follows the box radius precisely; outline does not reliably
+     produce concentric rounded corners in Chromium. */
+  box-shadow: 0 0 0 2px var(--color-accent);
 }
 
 .composer-toolbar {
@@ -710,7 +711,7 @@ function handleKeyDown(e: KeyboardEvent) {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  padding: 0.625rem 0 0.375rem;
+  padding: 0.625rem 0.5rem 0.375rem;
   font: inherit;
   font-size: 1rem;
   color: var(--color-text-primary);
@@ -726,7 +727,7 @@ function handleKeyDown(e: KeyboardEvent) {
   resize: none;
   max-height: 12rem;
   overflow-y: auto;
-  padding: 0.625rem 0 0.375rem;
+  padding: 0.625rem 0.5rem 0.375rem;
   border-radius: var(--radius-xl);
   color: var(--color-text-primary);
   font: inherit;
@@ -828,7 +829,7 @@ function handleKeyDown(e: KeyboardEvent) {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  margin-left: 0.75rem;
+  margin-left: 0.5rem;
   margin-bottom: 0.5rem;
   outline: none;
 }
