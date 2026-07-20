@@ -453,7 +453,7 @@ function handleKeyDown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="chat-composer pt-1 relative pb-2">
+  <div class="pt-1 relative pb-2">
     <!-- Skill autocomplete menu -->
     <BondFlyoutMenu
       :open="showIssueMenu"
@@ -682,12 +682,6 @@ function handleKeyDown(e: KeyboardEvent) {
 </template>
 
 <style scoped>
-.chat-highlight {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  padding: 0.625rem 0 0.375rem;
-
 .chat-box {
   border: 0;
   border-radius: 16px;
@@ -716,7 +710,7 @@ function handleKeyDown(e: KeyboardEvent) {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  padding: 0.625rem 0.75rem 0.375rem;
+  padding: 0.625rem 0 0.375rem;
   font: inherit;
   font-size: 1rem;
   color: var(--color-text-primary);
