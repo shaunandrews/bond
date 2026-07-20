@@ -358,9 +358,11 @@ function handleEditModeChange(mode: EditMode) {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* Keep the first turn clear of the status controls while still allowing the
+     transcript to run underneath the top fade. */
+  padding-top: max(16px, calc(env(safe-area-inset-top) + 16px));
   /* The input floats over this scroller. Its live height covers expanded
      text, attachment strips, queues, and approval prompts. */
-  padding-top: 16px;
   padding-bottom: calc(var(--mobile-composer-height, 112px) + 48px);
 }
 
@@ -401,16 +403,20 @@ function handleEditModeChange(mode: EditMode) {
 
 .transcript-fade--top {
   top: 0;
-  background: linear-gradient(to bottom, color-mix(in srgb, var(--color-bg) 82%, transparent), transparent);
+  height: max(80px, calc(env(safe-area-inset-top) + 28px));
+  background: linear-gradient(to bottom, var(--color-bg), color-mix(in srgb, var(--color-bg) 70%, transparent) 46%, transparent);
   mask-image: linear-gradient(to bottom, black, transparent);
   -webkit-mask-image: linear-gradient(to bottom, black, transparent);
 }
 
 .transcript-fade--bottom {
-  bottom: var(--mobile-composer-height, 112px);
-  background: linear-gradient(to top, color-mix(in srgb, var(--color-bg) 68%, transparent), transparent);
-  mask-image: linear-gradient(to top, black, transparent);
-  -webkit-mask-image: linear-gradient(to top, black, transparent);
+  /* One continuous fade reaches the physical bottom of the viewport. The
+     composer sits inside it rather than being wrapped by a frosted panel. */
+  bottom: 0;
+  height: calc(var(--mobile-composer-height, 112px) + 88px);
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--color-bg) 72%, transparent) 44%, var(--color-bg));
+  mask-image: linear-gradient(to bottom, transparent, black 42%, black);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 42%, black);
 }
 
 .input-area {
@@ -421,10 +427,10 @@ function handleEditModeChange(mode: EditMode) {
   z-index: 3;
   padding-top: 16px;
   padding-bottom: max(8px, env(safe-area-inset-bottom));
-  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--color-bg) 84%, transparent) 36%, var(--color-bg));
-  border-top: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
-  backdrop-filter: blur(18px) saturate(1.15);
-  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  /* Deliberately only a positioning wrapper. It must never read as a second,
+     bordered surface around the composer. */
+  background: transparent;
+  border: 0;
 }
 
 .queued-list {

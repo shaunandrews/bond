@@ -715,6 +715,13 @@ function handleKeyDown(e: KeyboardEvent) {
   padding: 0 0 max(2px, env(safe-area-inset-bottom));
 }
 
+/* On mobile the field itself is the glass. There is no outer glass tray. */
+.mobile-composer .chat-box {
+  background: color-mix(in srgb, var(--color-surface) 76%, transparent);
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+}
+
 .mobile-composer .composer-toolbar,
 .mobile-composer .composer-toolbar > div {
   display: flex;
