@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./design-system.generated.css";
 
 /* Register colors for Tailwind utility generation only — no CSS output.
    Actual values live in :root / @media blocks below so dark mode works. */

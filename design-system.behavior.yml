@@ -1,0 +1,32 @@
+# Theme-specific and behavioral roles that do not belong in DESIGN.md token frontmatter.
+themes:
+  light:
+    on-accent: "#ffffff"
+    focus: "#1e5aa8"
+    error-text: "#a33737"
+    success-text: "#2d6a3a"
+    interaction-hover: "rgba(0, 0, 0, 0.06)"
+    interaction-selected: "rgba(0, 0, 0, 0.08)"
+    overlay-default: "rgba(0, 0, 0, 0.4)"
+    overlay-strong: "rgba(0, 0, 0, 0.8)"
+  dark:
+    on-accent: "#1a1c1f"
+    focus: "#90b6ec"
+    error-text: "#ef9a9a"
+    success-text: "#a5d6a7"
+    interaction-hover: "rgba(255, 255, 255, 0.08)"
+    interaction-selected: "rgba(255, 255, 255, 0.10)"
+    overlay-default: "rgba(0, 0, 0, 0.6)"
+    overlay-strong: "rgba(0, 0, 0, 0.85)"
+layers:
+  sticky: "10"
+  dropdown: "50"
+  modal-backdrop: "100"
+  modal: "110"
+  toast: "120"
+  tooltip: "130"
+motion:
+  fast: "150ms"
+  standard: "200ms"
+  exit: "150ms"
+  ease-out: "cubic-bezier(0.16, 1, 0.3, 1)"
