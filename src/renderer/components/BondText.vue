@@ -58,8 +58,9 @@ const classes = computed(() => {
     c.push(alignMap[props.align])
   }
 
-  // Truncate
-  if (props.truncate) c.push('truncate')
+  // Truncate. `block` comes along because text-overflow needs a block box —
+  // the default `span` is inline, where overflow/ellipsis simply do nothing.
+  if (props.truncate) c.push('truncate', 'block')
 
   // Mono
   if (props.mono) c.push('font-mono')
@@ -69,7 +70,13 @@ const classes = computed(() => {
 </script>
 
 <template>
-  <component :is="tag" :class="classes" style="text-wrap: pretty;">
+  <!--
+    `text-wrap: pretty` is applied ONLY when not truncating. As an inline style
+    it outranks the .truncate class, and because `text-wrap` and `white-space`
+    share the text-wrap-mode longhand it silently reset nowrap back to wrap —
+    which made the truncate prop a no-op everywhere it was used.
+  -->
+  <component :is="tag" :class="classes" :style="truncate ? undefined : 'text-wrap: pretty;'">
     <slot />
   </component>
 </template>

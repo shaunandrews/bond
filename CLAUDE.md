@@ -306,6 +306,7 @@ src/
       fields/FieldValue.vue          # Per-type display for collection field values (single display dispatch)
       fields/FieldEditor.vue         # Per-type input with canonical-value v-model
     lib/highlight.ts                 # highlight.js language registration
+    lib/toolCatalog.ts               # Parses proxy-tool descriptions (a bulleted provider catalog) into structure
     lib/clipboard.ts                 # copyToClipboard with insecure-context fallback
     lib/format.ts                    # Shared formatters (tool labels, durations, approval previews)
     lib/fieldColors.ts               # FieldColor palette key → CSS custom property (--field-*)
@@ -442,7 +443,7 @@ Settings panel with accent color picker (8 presets + custom), default model sele
 Settings-window Agents tab — a presentational roster of Bond's specialist agents (currently Felix, the design consultant): identity card, the four verbs, how he works, and an example ask. Static content, no props or events.
 
 ### McpSettings
-Settings section for MCP (Model Context Protocol) connections. Joins saved config (`mcp.list`) with live connection state (`mcp.status`) per row: status dot, tool count, endpoint (command line or url), Keychain badge, last error. Enable/disable toggle, reconnect, two-click remove, one-click preset connect, and an "Add from JSON" paste form. Expanding a row connects the server on demand and shows its trust selector plus per-tool controls — classify read/write, always-ask, pin as a first-class tool — and, for http servers, a token field that writes straight to the Keychain and stores only a `keychain:<ref>` in the config. Reloads on the `mcp.changed` push so a second window stays in sync. No props or events — talks to `window.bond` directly.
+Settings section for MCP (Model Context Protocol) connections. Joins saved config (`mcp.list`) with live connection state (`mcp.status`) per row: status dot, tool count, endpoint (command line or url), Keychain badge, last error. Enable/disable toggle, reconnect, two-click remove, one-click preset connect, and an "Add from JSON" paste form. Expanding a row connects the server on demand and shows its trust selector plus, per tool, one three-state permission control (Ask / Read / Write) and a pin toggle. A proxy tool's **reach** — the providers hidden inside its description — renders as chips, one click each for the full text (see `lib/toolCatalog.ts`); an always-ask flag set from the CLI shows as a chip that clears in one click. For http servers there's a token field that writes straight to the Keychain and stores only a `keychain:<ref>` in the config. Reloads on the `mcp.changed` push so a second window stays in sync. No props or events — talks to `window.bond` directly.
 
 ### DesignSystemView
 Interactive design token showcase. Displays color swatches, typography, radius, shadows, transitions, and spacing values. Reads computed styles from `:root`. No props.
