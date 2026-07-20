@@ -10,7 +10,7 @@ import ChatInput from '../components/ChatInput.vue'
 import ApprovalPrompt from '../components/ApprovalPrompt.vue'
 import BondText from '../components/BondText.vue'
 import BondButton from '../components/BondButton.vue'
-import { PhX } from '@phosphor-icons/vue'
+import { PhArrowDown, PhX } from '@phosphor-icons/vue'
 import type { WebBondClient, ConnectionState, PairingError } from './client'
 import { clearDeviceCredential, exchangePairingCode, isStandaloneDisplay } from './client'
 
@@ -63,7 +63,8 @@ async function submitPairingCode() {
 
 const messagesRef = ref<HTMLElement | null>(null)
 const inputAreaRef = ref<HTMLElement | null>(null)
-const { scrollToBottom } = useAutoScroll(messagesRef)
+const hasScrollableMessages = ref(false)
+const { isAtBottom, scrollToBottom } = useAutoScroll(messagesRef)
 
 let disposeState: (() => void) | undefined
 let composerResizeObserver: ResizeObserver | undefined
@@ -71,6 +72,16 @@ let composerResizeObserver: ResizeObserver | undefined
 function syncComposerHeight() {
   const height = inputAreaRef.value?.offsetHeight ?? 0
   document.documentElement.style.setProperty('--mobile-composer-height', `${height}px`)
+}
+
+function syncTranscriptOverflow() {
+  const el = messagesRef.value
+  hasScrollableMessages.value = !!el && el.scrollHeight > el.clientHeight + 1
+}
+
+function goToLatestMessage() {
+  scrollToBottom()
+  syncTranscriptOverflow()
 }
 
 onMounted(async () => {
@@ -99,6 +110,7 @@ onMounted(async () => {
       composerResizeObserver.observe(inputAreaRef.value)
     }
     scrollToBottom()
+    syncTranscriptOverflow()
   })
   accent.load().catch(() => {})
   try {
@@ -117,7 +129,10 @@ onUnmounted(() => {
 })
 
 watch(() => chat.messages.value.length, () => {
-  nextTick(() => scrollToBottom())
+  nextTick(() => {
+    scrollToBottom()
+    syncTranscriptOverflow()
+  })
 })
 
 function handleSend(text: string, images: AttachedImage[]) {
@@ -203,7 +218,7 @@ function handleEditModeChange(mode: EditMode) {
         </BondText>
       </header>
 
-      <div ref="messagesRef" class="messages">
+      <div ref="messagesRef" class="messages" @scroll="syncTranscriptOverflow">
         <div class="chat-column messages-column">
           <MessageBubble
             v-for="msg in chat.messages.value"
@@ -213,6 +228,17 @@ function handleEditModeChange(mode: EditMode) {
           />
         </div>
       </div>
+
+      <button
+        v-if="hasScrollableMessages && !isAtBottom"
+        type="button"
+        class="go-to-latest"
+        aria-label="Go to latest message"
+        title="Go to latest message"
+        @click="goToLatestMessage"
+      >
+        <PhArrowDown :size="18" weight="bold" />
+      </button>
 
       <!-- These sit above the scrolling transcript. Their masks make the blur
            dissolve rather than ending in two hard, frosted bands. -->
@@ -404,7 +430,9 @@ function handleEditModeChange(mode: EditMode) {
 .transcript-fade--top {
   top: 0;
   height: max(80px, calc(env(safe-area-inset-top) + 28px));
-  background: linear-gradient(to bottom, var(--color-bg), color-mix(in srgb, var(--color-bg) 70%, transparent) 46%, transparent);
+  /* iOS owns the status-bar pixels. Start from that exact black/white edge,
+     then dissolve into the app rather than exposing a colour seam. */
+  background: linear-gradient(to bottom, var(--mobile-system-edge), color-mix(in srgb, var(--color-bg) 70%, transparent) 46%, transparent);
   mask-image: linear-gradient(to bottom, black, transparent);
   -webkit-mask-image: linear-gradient(to bottom, black, transparent);
 }
@@ -431,6 +459,30 @@ function handleEditModeChange(mode: EditMode) {
      bordered surface around the composer. */
   background: transparent;
   border: 0;
+}
+
+.go-to-latest {
+  position: absolute;
+  right: 16px;
+  bottom: calc(var(--mobile-composer-height, 112px) + 16px);
+  z-index: 4;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-surface) 76%, transparent);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.go-to-latest:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .queued-list {

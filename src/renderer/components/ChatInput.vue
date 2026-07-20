@@ -740,9 +740,21 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 
 .mobile-composer .send-button {
+  /* The web bundle does not generate Tailwind's rounded-full reliably. Make
+     the control's geometry explicit so it cannot regress into a blue square. */
+  display: grid;
   width: 40px;
   height: 40px;
   flex: 0 0 40px;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  line-height: 1;
+}
+
+.mobile-composer .send-button svg {
+  display: block;
+  margin: 0;
 }
 
 .mobile-composer .image-strip {

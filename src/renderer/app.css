@@ -57,6 +57,8 @@
   --overlay-heavy: rgba(0, 0, 0, 0.8);
 
   --window-bg-opacity: 100%;
+  /* iOS status bars are system white in light appearance, not --color-bg. */
+  --mobile-system-edge: #fff;
 
   /* Field option palette — named keys stored in collection schemas (FieldColor) */
   --field-red: #c94f4f;
@@ -93,6 +95,8 @@
 
     --overlay: rgba(0, 0, 0, 0.6);
     --overlay-heavy: rgba(0, 0, 0, 0.85);
+    /* Match the actual dark iOS status-bar surface for a seamless top fade. */
+    --mobile-system-edge: #000;
 
     --field-red: #ef9a9a;
     --field-orange: #efb27f;
