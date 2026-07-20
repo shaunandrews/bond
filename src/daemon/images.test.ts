@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { setDataDir } from './paths'
 import { getDb, closeDb } from './db'
-import { saveImage, saveImages, getImage, getImages, getImagePath, getImagePaths, deleteSessionImages, getImagesDir } from './images'
+import { saveImage, saveImages, getImage, getImages, getImagePath, getImagePaths, deleteSessionImages, deleteImage, getImagesDir } from './images'
 import { GLOBAL_TRANSCRIPT_SESSION_ID, ensureGlobalTranscriptSession } from './sessions'
 
 let testDir: string
@@ -174,6 +174,72 @@ describe('images module', () => {
       deleteSessionImages('s1')
 
       expect(getImage(s2Ids[0])).not.toBeNull()
+    })
+  })
+
+  describe('assets mirror', () => {
+    it('saveImage creates a mirrored media-kind asset with the same id', () => {
+      createTestSession('s1')
+      const record = saveImage('s1', TINY_PNG, 'image/png')
+
+      const asset = getDb().prepare('SELECT * FROM assets WHERE id = ?').get(record.id) as any
+      expect(asset).toBeTruthy()
+      expect(asset.kind).toBe('media')
+      expect(asset.format).toBe('image')
+      expect(asset.filename).toBe(record.filename)
+      expect(asset.media_type).toBe('image/png')
+      expect(asset.size_bytes).toBe(record.sizeBytes)
+    })
+
+    it('deleteImage removes both the images row and its asset mirror', () => {
+      createTestSession('s1')
+      const record = saveImage('s1', TINY_PNG, 'image/png')
+
+      deleteImage(record.id)
+
+      expect(getDb().prepare('SELECT * FROM images WHERE id = ?').get(record.id)).toBeUndefined()
+      expect(getDb().prepare('SELECT * FROM assets WHERE id = ?').get(record.id)).toBeUndefined()
+    })
+
+    it('deleteImage cascades any asset_references for that asset', () => {
+      createTestSession('s1')
+      const record = saveImage('s1', TINY_PNG, 'image/png')
+      const db = getDb()
+      const now = new Date().toISOString()
+      db.prepare('INSERT INTO collections (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)').run('col1', 'Tracker', now, now)
+      db.prepare('INSERT INTO collection_items (id, collection_id, created_at, updated_at) VALUES (?, ?, ?, ?)').run('item1', 'col1', now, now)
+      db.prepare('INSERT INTO asset_references (id, asset_id, collection_id, item_id, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run('ref1', record.id, 'col1', 'item1', now)
+
+      deleteImage(record.id)
+
+      expect(db.prepare('SELECT * FROM asset_references WHERE id = ?').get('ref1')).toBeUndefined()
+    })
+
+    it('deleteSessionImages removes asset mirrors for every image in the session', () => {
+      createTestSession('s1')
+      const ids = saveImages('s1', [
+        { data: TINY_PNG, mediaType: 'image/png' },
+        { data: TINY_PNG, mediaType: 'image/png' },
+      ])
+
+      deleteSessionImages('s1')
+
+      const db = getDb()
+      for (const id of ids) {
+        expect(db.prepare('SELECT * FROM assets WHERE id = ?').get(id)).toBeUndefined()
+      }
+    })
+
+    it('deleteSessionImages does not touch other sessions\' asset mirrors', () => {
+      createTestSession('s1')
+      createTestSession('s2')
+      saveImages('s1', [{ data: TINY_PNG, mediaType: 'image/png' }])
+      const s2Ids = saveImages('s2', [{ data: TINY_PNG, mediaType: 'image/png' }])
+
+      deleteSessionImages('s1')
+
+      expect(getDb().prepare('SELECT * FROM assets WHERE id = ?').get(s2Ids[0])).toBeTruthy()
     })
   })
 

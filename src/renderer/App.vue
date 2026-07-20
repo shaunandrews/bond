@@ -7,14 +7,14 @@ import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhImages, PhBrain } from '@phosphor-icons/vue'
+import { PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhBooks, PhBrain } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import MissionBriefing from './components/MissionBriefing.vue'
 import ChatInput from './components/ChatInput.vue'
 import ApprovalPrompt from './components/ApprovalPrompt.vue'
-import MediaView from './components/MediaView.vue'
+import LibraryView from './components/LibraryView.vue'
 import CollectionsView from './components/CollectionsView.vue'
 import SensePanelView from './components/SensePanelView.vue'
 import MemoryView from './components/MemoryView.vue'
@@ -43,7 +43,7 @@ async function loadWindowOpacity() {
   } catch { /* use CSS default */ }
 }
 const selectedModel = ref<ModelId>('balanced')
-const mediaCount = ref(0)
+const libraryCount = ref(0)
 const fieldManualOpen = ref(false)
 // True while the daemon is serving the isolated new-user sandbox data set.
 // The app behaves identically — this only drives persistence guards.
@@ -119,10 +119,10 @@ watch(() => chat.busy.value, async (busy) => {
   } catch { /* keep the current placeholder */ }
 })
 
-async function refreshMediaCount() {
+async function refreshLibraryCount() {
   try {
-    const images = await window.bond.listImages()
-    mediaCount.value = images.length
+    const assets = await window.bond.libraryList()
+    libraryCount.value = assets.length
   } catch { /* ignore */ }
 }
 
@@ -130,8 +130,8 @@ const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
 const isFullScreen = ref(false)
 
-type RightPanelContent = 'collections' | 'sense' | 'media' | 'memory'
-const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'media', 'memory']
+type RightPanelContent = 'collections' | 'sense' | 'library' | 'memory'
+const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'library', 'memory']
 function savedRightPanelContent(): RightPanelContent {
   const saved = localStorage.getItem('bond:right-panel-content') as RightPanelContent | null
   return saved && validRightPanels.includes(saved) ? saved : 'collections'
@@ -168,6 +168,14 @@ function handleShowPanel(event: Event) {
   rightPanelCollapsed.value = false
   localStorage.setItem('bond:right-panel', panel)
   localStorage.setItem('bond:right-panel-content', panel)
+}
+
+// A Library reference's "Show in conversation" action → scroll the source
+// message into view if it's in the currently-loaded transcript page.
+function handleScrollToMessage(event: Event) {
+  const messageId = (event as CustomEvent<string>).detail
+  const el = document.getElementById(`msg-${messageId}`)
+  el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 function toggleRightPanel(panel?: RightPanelContent) {
@@ -208,7 +216,7 @@ const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
 const { isAtBottom, scrollToBottom } = useAutoScroll(scrollEl)
 
 chat.onQueryEnd(() => {
-  refreshMediaCount()
+  refreshLibraryCount()
 })
 
 function handleCancel() {
@@ -286,6 +294,7 @@ onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('beforeunload', handleBeforeUnload)
   window.addEventListener('bond:show-panel', handleShowPanel)
+  window.addEventListener('bond:scroll-to-message', handleScrollToMessage)
   removeCreateSkillListener = window.bond.onCreateSkill(handleCreateSkill)
   removeOpacityListener = window.bond.onWindowOpacity(applyWindowOpacity)
   removeAccentListener = window.bond.onAccentColor(applyExternalAccent)
@@ -332,7 +341,7 @@ onMounted(async () => {
   bootStatusKnown.value = true
   loadAccent()
   loadWindowOpacity()
-  refreshMediaCount()
+  refreshLibraryCount()
   collections.load()
   const model = await window.bond.getModel()
   selectedModel.value = model as ModelId
@@ -369,6 +378,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('bond:show-panel', handleShowPanel)
+  window.removeEventListener('bond:scroll-to-message', handleScrollToMessage)
   removeCreateSkillListener?.()
   removeOpacityListener?.()
   removeAccentListener?.()
@@ -404,6 +414,7 @@ onUnmounted(() => {
           <template v-else>
             <MessageBubble
               v-for="msg in displayMessages"
+              :id="`msg-${msg.id}`"
               :key="msg.id"
               :msg="msg"
               @approve="chat.respondToApproval"
@@ -476,11 +487,11 @@ onUnmounted(() => {
       />
       <SensePanelView v-else-if="rightPanelContent === 'sense'" />
       <MemoryView v-else-if="rightPanelContent === 'memory'" />
-      <MediaView v-else-if="rightPanelContent === 'media'" />
+      <LibraryView v-else-if="rightPanelContent === 'library'" />
     </BondPanel>
   </BondPanelGroup>
 
-  <!-- Order mirrors the onboarding tour: Sense, Media, Memory, Collections. -->
+  <!-- Order mirrors the onboarding tour: Sense, Library, Memory, Collections. -->
   <nav class="right-panel-controls no-drag" aria-label="Panel views">
     <BondButton
       variant="ghost"
@@ -497,12 +508,12 @@ onUnmounted(() => {
       variant="ghost"
       size="sm"
       icon
-      :aria-label="rightPanelOpen && rightPanelContent === 'media' ? 'Close Media panel' : 'Open Media panel'"
-      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'media' }"
-      @click.stop="toggleRightPanel('media')"
-      v-tooltip="rightPanelOpen && rightPanelContent === 'media' ? 'Close Media' : `Media${mediaCount ? ` (${mediaCount})` : ''}`"
+      :aria-label="rightPanelOpen && rightPanelContent === 'library' ? 'Close Library panel' : 'Open Library panel'"
+      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'library' }"
+      @click.stop="toggleRightPanel('library')"
+      v-tooltip="rightPanelOpen && rightPanelContent === 'library' ? 'Close Library' : `Library${libraryCount ? ` (${libraryCount})` : ''}`"
     >
-      <PhImages :size="16" weight="bold" />
+      <PhBooks :size="16" weight="bold" />
     </BondButton>
     <BondButton
       variant="ghost"

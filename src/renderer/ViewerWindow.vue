@@ -6,16 +6,18 @@ import BondToolbar from './components/BondToolbar.vue'
 
 const filePath = ref('')
 const fileName = ref('')
+const format = ref<'markdown' | 'plaintext'>('markdown')
 const content = ref('')
 const loading = ref(true)
 const error = ref('')
 
 let removeListener: (() => void) | null = null
 
-async function loadFile(path: string) {
+async function loadFile(path: string, fileFormat?: 'markdown' | 'plaintext', title?: string) {
   const isRefresh = filePath.value === path && content.value !== ''
   filePath.value = path
-  fileName.value = path.split('/').pop() ?? 'File'
+  fileName.value = title ?? path.split('/').pop() ?? 'File'
+  format.value = fileFormat ?? 'markdown'
   if (!isRefresh) {
     loading.value = true
     error.value = ''
@@ -36,7 +38,7 @@ async function loadFile(path: string) {
 }
 
 onMounted(() => {
-  removeListener = window.bond.onViewerFile((path) => loadFile(path))
+  removeListener = window.bond.onViewerFile((path, fileFormat, title) => loadFile(path, fileFormat, title))
 })
 
 onUnmounted(() => {
@@ -58,6 +60,9 @@ onUnmounted(() => {
       </div>
       <div v-else-if="error" class="viewer-status">
         <BondText size="sm" color="err">{{ error }}</BondText>
+      </div>
+      <div v-else-if="format === 'plaintext'" class="viewer-body">
+        <pre class="plaintext-body">{{ content }}</pre>
       </div>
       <div v-else class="viewer-body">
         <MarkdownMessage :text="content" :streaming="false" />
@@ -91,5 +96,14 @@ onUnmounted(() => {
   padding: 1.5rem 2rem 3rem;
   max-width: 720px;
   margin-inline: auto;
+}
+
+.plaintext-body {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
 }
 </style>

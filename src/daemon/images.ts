@@ -36,7 +36,34 @@ export function saveImage(sessionId: string, data: string, mediaType: ImageMedia
     'INSERT INTO images (id, session_id, filename, media_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(id, sessionId, filename, mediaType, buf.length, now)
 
-  return { id, sessionId, filename, mediaType, sizeBytes: buf.length, createdAt: now }
+  const record = { id, sessionId, filename, mediaType, sizeBytes: buf.length, createdAt: now }
+  upsertAssetMirror(record)
+  return record
+}
+
+/**
+ * Library's `assets` table mirrors every image as a media-kind asset, sharing
+ * the same id. `images` stays the sole byte/id authority (chat rendering, the
+ * Pi image bridge, and inline `<embed>` markdown all resolve through it
+ * directly) — this mirror only feeds Library's listing/metadata surface.
+ */
+function upsertAssetMirror(record: ImageRecord): void {
+  const db = getDb()
+  const title = record.filename.replace(/\.[^.]+$/, '')
+  db.prepare(`
+    INSERT INTO assets (id, kind, format, title, filename, media_type, size_bytes, managed_path, created_at, updated_at)
+    VALUES (?, 'media', 'image', ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      filename = excluded.filename,
+      media_type = excluded.media_type,
+      size_bytes = excluded.size_bytes,
+      managed_path = excluded.managed_path,
+      updated_at = excluded.updated_at
+  `).run(record.id, title, record.filename, record.mediaType, record.sizeBytes, join(getImagesDir(), record.filename), record.createdAt, record.createdAt)
+}
+
+function deleteAssetMirror(id: string): void {
+  getDb().prepare('DELETE FROM assets WHERE id = ?').run(id) // cascades any asset_references
 }
 
 export function saveImages(sessionId: string, images: AttachedImage[]): string[] {
@@ -123,13 +150,14 @@ export function deleteImage(imageId: string): boolean {
   } catch { /* file may already be gone */ }
 
   db.prepare('DELETE FROM images WHERE id = ?').run(imageId)
+  deleteAssetMirror(imageId)
   return true
 }
 
 export function deleteSessionImages(sessionId: string): void {
   const db = getDb()
-  const rows = db.prepare('SELECT filename FROM images WHERE session_id = ?').all(sessionId) as
-    { filename: string }[]
+  const rows = db.prepare('SELECT id, filename FROM images WHERE session_id = ?').all(sessionId) as
+    { id: string; filename: string }[]
 
   const dir = getImagesDir()
   for (const row of rows) {
@@ -139,4 +167,7 @@ export function deleteSessionImages(sessionId: string): void {
   }
 
   db.prepare('DELETE FROM images WHERE session_id = ?').run(sessionId)
+  // No FK from assets back to sessions — mirror rows must be cleaned up here
+  // explicitly, or a whole-session delete would leave them stranded.
+  for (const row of rows) deleteAssetMirror(row.id)
 }

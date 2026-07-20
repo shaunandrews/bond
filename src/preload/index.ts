@@ -24,6 +24,7 @@ const electronLocalMethods: ElectronBondSurface = {
   onModelChanged: (fn) => listen('bond:modelChanged', fn),
   onCollectionsChanged: (fn) => listen('bond:collectionsChanged', fn),
   onImageChanged: (fn) => listen('bond:imageChanged', fn),
+  onLibraryChanged: (fn) => listen('bond:libraryChanged', fn),
   onMcpChanged: (fn) => listen('bond:mcpChanged', fn),
   onViewerFile: (fn) => listen('bond:viewerFile', fn),
   onCreateSkill: (fn) => listen('bond:createSkill', fn),
@@ -43,7 +44,7 @@ const electronLocalMethods: ElectronBondSurface = {
   // Native UI + windows
   showContextMenu: (items) => ipcRenderer.invoke('context-menu:show', items),
   openSettings: () => ipcRenderer.invoke('window:openSettings'),
-  openViewer: (filePath) => ipcRenderer.invoke('viewer:open', filePath),
+  openViewer: (filePath, format, title) => ipcRenderer.invoke('viewer:open', filePath, format, title),
   createSkillViaChat: (description) => ipcRenderer.invoke('settings:createSkillViaChat', description),
   quickChatDismissed: () => ipcRenderer.invoke('quickChat:dismiss'),
 
@@ -53,6 +54,7 @@ const electronLocalMethods: ElectronBondSurface = {
   captureScreenshot: (outputPath) => ipcRenderer.invoke('dev:captureScreenshot', outputPath),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   openPath: (filePath) => ipcRenderer.invoke('shell:openPath', filePath),
+  revealInFinder: (filePath) => ipcRenderer.invoke('shell:revealInFinder', filePath),
 
   // Permissions
   hasScreenRecordingPermission: () => ipcRenderer.invoke('sense:hasPermission'),

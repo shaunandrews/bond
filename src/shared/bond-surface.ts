@@ -23,6 +23,7 @@ import type { AttachedImage, EditMode, FieldDefInput, ImageMediaType } from './s
 import type { TranscriptMessage } from './transcript'
 import type { SenseSettings } from './sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
+import type { AssetKind, LibraryAddDocumentInput } from './library'
 
 /** How a runtime reaches the daemon. Params/results are registry-typed. */
 export type RpcInvoker = <M extends DispatchableMethod>(
@@ -94,6 +95,18 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     importImage: (data: string, mediaType: string) =>
       invoke('image.import', { data, mediaType: mediaType as ImageMediaType }),
     deleteImage: (imageId: string) => invoke('image.delete', { id: imageId }),
+
+    // --- Library ---
+    libraryList: (kind?: AssetKind, query?: string) => invoke('library.list', { kind, query }),
+    libraryGet: (id: string) => invoke('library.get', { id }),
+    libraryAddDocument: (input: LibraryAddDocumentInput) => invoke('library.addDocument', input),
+    libraryUpdateMetadata: (id: string, updates: { title?: string; sourceUrl?: string }) =>
+      invoke('library.updateMetadata', { id, updates }),
+    libraryDelete: (id: string) => invoke('library.delete', { id }),
+    libraryAddReference: (assetId: string, itemId: string) => invoke('library.addReference', { assetId, itemId }),
+    libraryRemoveReference: (assetId: string, itemId: string) => invoke('library.removeReference', { assetId, itemId }),
+    libraryListReferencesForItem: (itemId: string) => invoke('library.listReferencesForItem', { itemId }),
+    libraryListBacklinksForAsset: (assetId: string) => invoke('library.listBacklinksForAsset', { assetId }),
 
     // --- MCP connections ---
     mcpList: () => invoke('mcp.list'),
@@ -184,8 +197,9 @@ export interface ElectronBondSurface {
   onModelChanged(fn: (model: string) => void): () => void
   onCollectionsChanged(fn: () => void): () => void
   onImageChanged(fn: () => void): () => void
+  onLibraryChanged(fn: () => void): () => void
   onMcpChanged(fn: () => void): () => void
-  onViewerFile(fn: (filePath: string) => void): () => void
+  onViewerFile(fn: (filePath: string, format?: 'markdown' | 'plaintext', title?: string) => void): () => void
   onCreateSkill(fn: (description: string) => void): () => void
   onFullscreenChanged(fn: (isFullScreen: boolean) => void): () => void
   onConnectionLost(fn: () => void): () => void
@@ -204,7 +218,7 @@ export interface ElectronBondSurface {
   // Native UI + windows
   showContextMenu(items: { id: string; label: string; type?: string }[]): Promise<string | null>
   openSettings(): Promise<void>
-  openViewer(filePath: string): Promise<void>
+  openViewer(filePath: string, format?: 'markdown' | 'plaintext', title?: string): Promise<void>
   createSkillViaChat(description: string): Promise<void>
   quickChatDismissed(): Promise<void>
 
@@ -214,6 +228,7 @@ export interface ElectronBondSurface {
   captureScreenshot(outputPath: string): Promise<string>
   openExternal(url: string): Promise<void>
   openPath(filePath: string): Promise<string>
+  revealInFinder(filePath: string): Promise<void>
 
   // Permissions
   hasScreenRecordingPermission(): Promise<boolean>

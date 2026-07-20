@@ -29,6 +29,7 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     onChunk: (fn) => client.onChunk(fn),
     onCollectionsChanged: (fn) => client.onNotification('collection.changed', () => fn()),
     onImageChanged: (fn) => client.onNotification('image.changed', () => fn()),
+    onLibraryChanged: (fn) => client.onNotification('library.changed', () => fn()),
     onMcpChanged: (fn) => client.onNotification('mcp.changed', () => fn()),
     onConnectionLost: (fn) => client.onStateChange((state) => { if (state === 'disconnected') fn() }),
     onConnectionRestored: (fn) => {
@@ -85,6 +86,10 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     captureScreenshot: async () => '',
     openExternal: async (url) => { window.open(url, '_blank', 'noopener') },
     openPath: async () => '',
+    // No-op: the remote LAN client's host machine differs from Bond's — a
+    // local file path here doesn't correspond to anything the browser can
+    // reveal.
+    revealInFinder: async () => {},
     hasScreenRecordingPermission: async () => false,
   }
 

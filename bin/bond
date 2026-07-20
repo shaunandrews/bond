@@ -344,6 +344,11 @@ cmd_media() {
   node "$PROJECT_DIR/out/cli/media.js" "$@"
 }
 
+cmd_library() {
+  _ensure_cli
+  node "$PROJECT_DIR/out/cli/library.js" "$@"
+}
+
 cmd_collection() {
   _ensure_cli
   node "$PROJECT_DIR/out/cli/collection.js" "$@"
@@ -389,6 +394,7 @@ cmd_help() {
   echo -e "  ${G}log${N}                Tail daemon log"
   echo -e "  ${G}soul${N}               Read/write Bond's personality (show, set, append, clear)"
   echo -e "  ${G}media${N}              Manage media (list, add, info, open, rm, purge)"
+  echo -e "  ${G}library${N}            Manage Library assets (list, add, open, reveal, rm, ref)"
   echo -e "  ${G}mcp${N}                Manage MCP servers (list, status, add, enable, tools)"
   echo -e "  ${G}screenshot${N}         Capture Bond window to /tmp/bond-screenshot.png"
   echo -e "  ${G}test${N}               Run tests"
@@ -406,6 +412,7 @@ case "${1:-help}" in
   rebuild) cmd_rebuild "${2:-daemon}" ;;
   log)     cmd_log ;;
   media)   shift; cmd_media "$@" ;;
+  library) shift; cmd_library "$@" ;;
   collection) shift; cmd_collection "$@" ;;
   soul)    shift; cmd_soul "$@" ;;
   sense)   shift; cmd_sense "$@" ;;

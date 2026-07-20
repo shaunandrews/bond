@@ -47,6 +47,8 @@ export function getDb(): Database.Database {
   migrateAddCollectionItemProjectId(_db)
   migrateAddCollectionItemDisplayNumber(_db)
   migrateAddCollectionNextDisplayNumber(_db)
+  migrateCreateAssetsTable(_db)
+  migrateBackfillMediaAssets(_db)
   retireLegacyJournalCollection(_db)
   migrateCreateSenseMemoryTables(_db)
   migrateDropRetiredTables(_db)
@@ -550,6 +552,77 @@ function migrateAddCollectionNextDisplayNumber(db: Database.Database): void {
     `)
   })
   seed()
+}
+
+/**
+ * Library's canonical asset table. Media-kind rows share their id with a row
+ * in `images` (see images.ts's upsertAssetMirror/deleteAssetMirror) — that
+ * table stays the sole byte/id authority since chat rendering, the Pi image
+ * bridge, and inline `<embed>` markdown all resolve image ids through it
+ * directly. Document-kind rows are the only ones with no `images` counterpart.
+ */
+function migrateCreateAssetsTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS assets (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      format TEXT NOT NULL,
+      title TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      managed_path TEXT NOT NULL,
+      source_url TEXT,
+      source_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+      preview_text TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_assets_kind ON assets(kind, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_assets_source_message ON assets(source_message_id);
+
+    CREATE TABLE IF NOT EXISTS asset_references (
+      id TEXT PRIMARY KEY,
+      asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+      collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+      item_id TEXT NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      UNIQUE(asset_id, item_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_asset_references_item ON asset_references(item_id);
+    CREATE INDEX IF NOT EXISTS idx_asset_references_asset ON asset_references(asset_id, created_at DESC);
+  `)
+}
+
+/**
+ * One-time backfill: mirror every existing `images` row into `assets` with
+ * the SAME id (kind='media'). Ids must stay unchanged — they're embedded
+ * verbatim in already-persisted message text (MediaEmbed's
+ * `<embed ids="...">`), so an id-rewriting migration would silently break
+ * those references. Guarded exactly like `images_migrated`.
+ */
+function migrateBackfillMediaAssets(db: Database.Database): void {
+  const flag = db.prepare('SELECT value FROM settings WHERE key = ?').get('assets_media_backfilled') as { value: string } | undefined
+  if (flag?.value === '1') return
+
+  const rows = db.prepare('SELECT id, filename, media_type, size_bytes, created_at FROM images').all() as
+    { id: string; filename: string; media_type: string; size_bytes: number; created_at: string }[]
+
+  const imagesDir = join(getDataDir(), 'images')
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO assets (id, kind, format, title, filename, media_type, size_bytes, managed_path, created_at, updated_at)
+    VALUES (?, 'media', 'image', ?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  const migrate = db.transaction(() => {
+    for (const row of rows) {
+      const title = row.filename.replace(/\.[^.]+$/, '')
+      insert.run(row.id, title, row.filename, row.media_type, row.size_bytes, join(imagesDir, row.filename), row.created_at, row.created_at)
+    }
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('assets_media_backfilled', '1')
+  })
+  migrate()
 }
 
 function retireLegacyJournalCollection(db: Database.Database): void {

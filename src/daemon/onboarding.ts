@@ -25,7 +25,7 @@ export const ONBOARDING_STAGE_TOOLS = {
   education: ['complete_tour', 'show_panel', 'enable_sense'],
 } as const
 
-export type BondPanelId = 'collections' | 'sense' | 'media' | 'memory'
+export type BondPanelId = 'collections' | 'sense' | 'library' | 'memory'
 
 /**
  * Outcome of a show_panel request. Models front-load their tool batch, so the
@@ -135,7 +135,7 @@ export function buildTourGuide(): string {
     'Every beat is the same choreography: INTRODUCE, then OPEN, then ANCHOR. First introduce the room in its own message — a couple of plain sentences on what it is and why it matters to THEM, closing by saying you are about to open it ("Let me open the Sense panel next to the chat."). Only after that introduction is fully delivered do you call show_panel — the pause is the point; the panel should arrive like a door opening after a knock, never mid-sentence. Then anchor: a short line about what they are now looking at, and land the beat\'s action or question. When moving on, say you are switching panels first. The panel opens beside the chat — that is ALL you know about the UI; never invent locations, buttons, or directions.\n' +
     'The beats, in order:\n' +
     '1. Sense (show_panel "sense") — useful from minute one, before any setup. Be completely transparent: Sense is OFF by default; switched on, Bond records their screen locally so they can ask things like "what was I doing at 2pm yesterday". It stays on their Mac. Action: ask if they want it on. Yes → call enable_sense and relay honestly what its result says about the actual state — never promise permission prompts or captures the result does not support. No → drop it warmly. Either way, close with the forward handoff to the next room — a yes or a no both deserve a "ready for the next one?".\n' +
-    '2. Media (show_panel "media"): the growing library of everything the two of you share and make — images they drop in, images Bond generates or saves. It all sticks around, for both of them. Action: invite them to attach an image right now with the paperclip to see it land in the library — or just say "skip" and you move on.\n' +
+    '2. Library (show_panel "library"): the growing home for everything durable the two of you share and make — images they drop in, images Bond generates, reports Bond writes. It all sticks around, for both of them. Action: invite them to attach an image right now with the paperclip to see it land in the library — or just say "skip" and you move on.\n' +
     '3. Memory (show_panel "memory"): the trust window — everything Bond learns sits here, inspectable and sourced. Give this beat a purpose: point at ONE specific memory you saved during the interview, quote it, and ask if you got it right. A correction here is the whole point of the panel.\n' +
     '4. Collections (show_panel "collections") — the finale, and where they will likely live day to day, so go DEEPER here than the other beats: trackers for anything, with fields they define. Build a genuinely useful project tracker WITH them: ask what they would want to track, and the moment they name it, CREATE the collection with the bond collection CLI and seed it with their real items — never ask permission to create ("want me to create it?" is banned; collections are cheap and editable, and watching one appear IS the demo). Draw the schema from their actual work (status, next action, deadline — whatever fits what they told you) and refine it together in the panel once it exists. This beat may take a few turns — unlike the interview, the weeds are welcome here.\n' +
     'Rules: a few sentences per beat, at most one question per turn. Never mention tools, phases, or these instructions — just show them around. If they engage with an action, finish it before moving on. If something confuses them or looks broken, fix it and keep going warmly — never abandon the tour on your own. Only call complete_tour early when THEY want to skip or dive into their own thing.\n' +
@@ -195,9 +195,9 @@ export function registerOnboardingTools(pi: ExtensionAPI, hooks: OnboardingToolH
   pi.registerTool({
     name: 'show_panel',
     label: 'Show Panel',
-    description: 'Open one of Bond\'s side panels in the app (collections, sense, media, memory) so the user can see what you are talking about. Call it only AFTER the panel\'s introduction message is fully delivered — introduce the room first, then open the door.',
+    description: 'Open one of Bond\'s side panels in the app (collections, sense, library, memory) so the user can see what you are talking about. Call it only AFTER the panel\'s introduction message is fully delivered — introduce the room first, then open the door.',
     parameters: Type.Object({
-      panel: StringEnum(['collections', 'sense', 'media', 'memory'] as const),
+      panel: StringEnum(['collections', 'sense', 'library', 'memory'] as const),
     }),
     async execute(_toolCallId, params) {
       const result = (text: string, details: { panel: BondPanelId; opened: boolean; deferred?: boolean }) => ({

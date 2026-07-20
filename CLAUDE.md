@@ -112,7 +112,8 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `collections.ts` | Collections + items CRUD (SQLite). All writes are validated through the shared field registry (`shared/fields.ts`): schemas via `validateSchema` on create/update, item data via `coerceItemData` (add applies defaults + requires primary; update touches only incoming keys, `null` clears). Failures throw `CollectionValidationError` → `RPC_VALIDATION_ERROR` (-32000) with `data.errors` and a message naming the field + allowed values. Item display numbers come from a per-collection `next_display_number` counter (never reused, transactional); `issue_prefix` (2-6 uppercase letters) makes items referenceable as `PREFIX-n`; `listReferences()` serves the whole reference index in one call |
 | `debriefs.ts` | Session debrief storage (SQLite) |
 | `generate-debrief.ts` | Auto-generates session debriefs (summary + topics) |
-| `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
+| `images.ts` | Image storage — save/get/delete files + `images` table CRUD. Every save/delete also upserts/deletes a mirror row in `assets` (kind `'media'`, same id) so Library stays in sync — `images` remains the sole byte/id authority; nothing else writes to it |
+| `library.ts` | Library data layer — the `assets` table (documents + a media mirror of `images`) and the `asset_references` join table linking assets to collection items. Documents own their bytes under `getLibraryDir()` (`library/<id><ext>`, mirrors `images/` exactly); `deleteAsset` deletes the file itself for documents or delegates to `images.ts`'s `deleteImage` for media, whose cascade (`ON DELETE CASCADE` on `asset_references`) is what keeps reference integrity a SQL-level guarantee rather than app-level cleanup |
 | `db.ts` | Database init, migrations, WAL mode; an UNREADABLE db is quarantined (renamed `.corrupt-<ts>`, Pi sessions/images untouched) — only a readable stale-version db takes the clean-cutover wipe. `transcript.ts` owns the `messages` table shape; `APP_SCHEMA_VERSION` stays pinned (bumping it IS the wipe) — schema evolves via in-version migrations |
 | `fts.ts` | `buildMatchQuery` — safe FTS5 MATCH construction (token extraction, quote-doubling, optional prefix) shared by transcript search and `sense.search` |
 | `settings.ts` | Key-value settings storage (soul, model, accent color) + typed accessors (`getSenseSettings`/`setSenseSettings`) |
@@ -146,18 +147,19 @@ Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from
 |------|---------|
 | `protocol.ts` | JSON-RPC 2.0 types and helpers + `PROTOCOL_VERSION` (bump on any breaking rpc-schema change; equality = compatibility) |
 | `rpc-schema.ts` | **Single source of truth for the RPC contract** — `RpcMethods` (per-method params/result), `RpcNotifications`, `RPC_METHOD_NAMES`; server handlers, both clients, preload, and the shim all derive from it, so contract drift is a compile error |
-| `bond-surface.ts` | The `window.bond` surface builder — `buildDaemonSurface(invoke)` generates the ~74 daemon proxies from the registry; `ElectronBondSurface` declares the 27 main-process-local members the shim must explicitly stub |
+| `bond-surface.ts` | The `window.bond` surface builder — `buildDaemonSurface(invoke)` generates the ~99 daemon proxies from the registry; `ElectronBondSurface` declares the 30 main-process-local members the shim must explicitly stub |
 | `stream.ts` | `BondStreamChunk` union type (text, thinking, tool, approval, error, system) |
 | `client.ts` | `BondClient` WebSocket client class — registry-typed `call`, token provider, reconnect-in-place, `daemonProtocolVersion` |
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Collection, FieldDef/FieldOption/FieldDefInput, and media/collection types |
 | `fields.ts` | **Field-type registry** — per-type `coerce`/`validate`/`format`/`compare`/`defaultValue` for every `FieldType`, plus `normalizeSchema` (legacy `string[]` options → canonical `FieldOption[]`), `validateSchema`, `coerceItemData` (the single item write gate), `isDoneValue`, and the issue-key regexes (`ISSUE_PREFIX_RE`, `ISSUE_KEY_RE`). Shared by daemon (enforcement), renderer (render/edit/sort), and CLI (parse/format) — add a `FieldType` without a registry entry and the compiler objects |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
+| `library.ts` | `AssetKind`, `AssetFormat`, `LibraryAsset`, `AssetReference`, `AssetBacklink` — the Library asset model shared by daemon, renderer, and CLI |
 | `models.ts` | `ModelId` — provider-neutral capability tiers (`'high' | 'balanced' | 'fast'`); Pi maps them to concrete models |
 | `web.ts` | `WebRenderRequest`/`WebRenderResult` — the daemon ↔ app hidden-browser render round-trip |
 
 ### CLI (`bin/bond`)
 
-`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`, `mcp`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow). See the "Commands" section above for the common daemon workflows.
+`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`, `mcp`, `library`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow; `library-helpers.ts` holds `library.ts`'s pure logic — id/number resolution, format detection — split out so it's unit-testable without triggering the CLI's `main()` on import). See the "Commands" section above for the common daemon workflows.
 
 ## Project Structure
 
@@ -168,6 +170,8 @@ scripts/
 src/
   cli/
     media.ts                         # bond media — CLI for media management
+    library.ts                       # bond library — CLI for Library assets + collection references
+    library-helpers.ts               # Pure library.ts logic (id/number resolution, format detection)
     screenshot.ts                    # bond screenshot — capture Bond window
     mcp.ts                           # bond mcp — servers, trust policy, tool classification, Keychain secrets
     sense.ts                         # bond sense — CLI for Sense ambient awareness
@@ -183,7 +187,8 @@ src/
     agent.ts                         # Bond prompt and Pi runtime entrypoint
      pi/runtime.ts                    # Pi session, event, and permission bridge
     sessions.ts                      # Session CRUD (SQLite)
-    images.ts                        # Image file storage + images table
+    images.ts                        # Image file storage + images table (mirrors into assets)
+    library.ts                       # Library data layer — assets table + asset_references join table
     imagegen.ts                      # Glue for the bundled codex_generate_image Pi tool
     db.ts                            # Database management + migrations
     settings.ts                      # Settings storage
@@ -239,6 +244,7 @@ src/
     session.ts                       # Session, SessionMessage, Collection, CollectionItem, EditMode, AttachedImage types
     fields.ts                        # Field-type registry (coerce/validate/format/compare), schema normalization/validation, issue-key regexes
     sense.ts                         # SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult types
+    library.ts                       # AssetKind, AssetFormat, LibraryAsset, AssetReference, AssetBacklink types
     models.ts                        # ModelId type
     web.ts                           # WebRenderRequest/WebRenderResult render round-trip types
   renderer/
@@ -249,7 +255,7 @@ src/
       WebApp.vue                     # Single-column phone-friendly chat (reuses MessageBubble/ChatInput/ApprovalPrompt)
       client.ts                      # WebBondClient — JSON-RPC over native WebSocket, pairing token, reconnect
       shim.ts                        # window.bond built on WebBondClient; Electron-only methods become no-ops
-    ViewerWindow.vue                 # Markdown file viewer window
+    ViewerWindow.vue                 # Markdown/plaintext file viewer window (Library documents)
     app.css                          # Tailwind v4 theme tokens
     types/message.ts                 # Message union type
     types/webview.d.ts               # Electron webview element types
@@ -259,6 +265,7 @@ src/
       useAccentColor.ts              # Dynamic accent color theming
       useSense.ts                    # Sense timeline state, day loading, capture selection, search
       useIssueReferences.ts          # Singleton PREFIX-n reference index (one collection.listReferences RPC)
+      useLibrary.ts                  # Library asset list state — filter/search/load/delete
     directives/
       tooltip.ts                     # v-tooltip directive (singleton, positioned tooltips)
     components/
@@ -281,7 +288,7 @@ src/
       TurnActivity.vue               # Unified in-chat turn activity timeline
       MarkdownMessage.vue            # Markdown with syntax highlighting + copy
       ThinkingIndicator.vue          # Standalone "Bond is working..." dots (unused, kept for reference)
-      MediaView.vue                  # Image gallery view
+      LibraryView.vue                # Library grid — documents + media, filter/search, two-click delete
       CopyButton.vue                 # Inline copy-to-clipboard button
       MissionBriefing.vue            # Empty transcript welcome screen
       SettingsView.vue               # Accent color, model, personality settings
@@ -514,6 +521,11 @@ Singleton PREFIX-n issue reference index. One `collection.listReferences` RPC fe
 - **State:** `references` (CollectionReference[]), `byKey` (Map by "BOND-12"), `knownPrefixes` (Set)
 - **Methods:** `load()` (coalesces concurrent calls)
 - **Test helper:** `resetIssueReferencesForTest()`
+
+### useLibrary()
+Per-instance Library asset list state backing `LibraryView`. Loads via `library.list` with an optional kind filter (`'document' | 'media' | 'all'`) and search query.
+- **State:** `assets` (LibraryAsset[]), `kindFilter`, `query`, `loading`
+- **Methods:** `load()`, `deleteAsset(id)`
 
 ### Props (all optional)
 - **size**: `number | string` — width & height (default: `24`)

@@ -117,6 +117,17 @@ import {
   deleteImage,
   importImage
 } from './images'
+import {
+  getAsset,
+  listAssets,
+  addDocument,
+  updateAssetMetadata,
+  deleteAsset,
+  addReference as addAssetReference,
+  removeReference as removeAssetReference,
+  listReferencesForItem,
+  listBacklinksForAsset,
+} from './library'
 import { readCoreMemory, withCoreMemoryLock, writeCoreMemoryAtomic } from './memory/core-memory'
 import { getMemoryItem, getMemoryItemSourceIds, listRecentMemory, searchMemory, upsertMemoryItem } from './memory/store'
 import { createWorkingState } from './memory/working-state'
@@ -229,6 +240,11 @@ function broadcastImageChanged(): void {
 
 function broadcastCollectionsChanged(): void {
   const msg = JSON.stringify(makeNotification('collection.changed', {}))
+  eachOpenClient(client => client.send(msg))
+}
+
+function broadcastLibraryChanged(): void {
+  const msg = JSON.stringify(makeNotification('library.changed', {}))
   eachOpenClient(client => client.send(msg))
 }
 
@@ -756,6 +772,7 @@ const handlers: RpcHandlers = {
     if (!data || !mediaType) throw new RpcError(RPC_INVALID_PARAMS, 'data and mediaType are required')
     const image = importImage(data, mediaType as any)
     broadcastImageChanged()
+    broadcastLibraryChanged()
     return image
   },
 
@@ -763,7 +780,10 @@ const handlers: RpcHandlers = {
     const imageId = getStringParam(raw(params), 'id')
     if (!imageId) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
     const deleted = deleteImage(imageId)
-    if (deleted) broadcastImageChanged()
+    if (deleted) {
+      broadcastImageChanged()
+      broadcastLibraryChanged()
+    }
     return deleted
   },
 
@@ -909,6 +929,100 @@ const handlers: RpcHandlers = {
     const name = getStringParam(raw(params), 'name')
     if (!name) throw new RpcError(RPC_INVALID_PARAMS, 'name is required')
     return getCollectionByName(name)
+  },
+
+  // --- Library ---
+  'library.list': (params) => {
+    const p = raw(params)
+    const kind = getStringParam(p, 'kind') as 'document' | 'media' | undefined
+    const query = getStringParam(p, 'query')
+    return listAssets({ kind, query })
+  },
+
+  'library.get': (params) => {
+    const id = getStringParam(raw(params), 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return getAsset(id)
+  },
+
+  'library.addDocument': (params) => {
+    const p = raw(params)
+    const filename = getStringParam(p, 'filename')
+    const mediaType = getStringParam(p, 'mediaType')
+    const format = getStringParam(p, 'format')
+    const data = getStringParam(p, 'data')
+    if (!filename || !mediaType || !format || !data) {
+      throw new RpcError(RPC_INVALID_PARAMS, 'filename, mediaType, format, and data are required')
+    }
+    const asset = addDocument({
+      title: getStringParam(p, 'title'),
+      filename,
+      mediaType,
+      format: format as any,
+      data,
+      sourceUrl: getStringParam(p, 'sourceUrl'),
+      sourceSessionId: getStringParam(p, 'sourceSessionId'),
+      sourceMessageId: getStringParam(p, 'sourceMessageId'),
+    })
+    broadcastLibraryChanged()
+    return asset
+  },
+
+  'library.updateMetadata': (params) => {
+    const p = raw(params)
+    const id = getStringParam(p, 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const updates = getParam(p, 'updates') as { title?: string; sourceUrl?: string } | undefined
+    const updated = updateAssetMetadata(id, updates ?? {})
+    broadcastLibraryChanged()
+    return updated
+  },
+
+  'library.delete': (params) => {
+    const id = getStringParam(raw(params), 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    const ok = deleteAsset(id)
+    if (ok) {
+      broadcastLibraryChanged()
+      broadcastCollectionsChanged() // any asset_references on this asset just vanished
+    }
+    return { ok }
+  },
+
+  'library.addReference': (params) => {
+    const p = raw(params)
+    const assetId = getStringParam(p, 'assetId')
+    const itemId = getStringParam(p, 'itemId')
+    if (!assetId || !itemId) throw new RpcError(RPC_INVALID_PARAMS, 'assetId and itemId are required')
+    const ref = addAssetReference(assetId, itemId)
+    broadcastLibraryChanged()
+    broadcastCollectionsChanged()
+    return ref
+  },
+
+  'library.removeReference': (params) => {
+    const p = raw(params)
+    const assetId = getStringParam(p, 'assetId')
+    const itemId = getStringParam(p, 'itemId')
+    if (!assetId || !itemId) throw new RpcError(RPC_INVALID_PARAMS, 'assetId and itemId are required')
+    const ok = removeAssetReference(assetId, itemId)
+    if (ok) {
+      broadcastLibraryChanged()
+      broadcastCollectionsChanged()
+    }
+    return { ok }
+  },
+
+  'library.listReferencesForItem': (params) => {
+    const itemId = getStringParam(raw(params), 'itemId')
+    if (!itemId) throw new RpcError(RPC_INVALID_PARAMS, 'itemId is required')
+    return listReferencesForItem(itemId)
+  },
+
+  'library.listBacklinksForAsset': (params) => {
+    const assetId = getStringParam(raw(params), 'assetId')
+    if (!assetId) throw new RpcError(RPC_INVALID_PARAMS, 'assetId is required')
+    return listBacklinksForAsset(assetId)
   },
 
   // --- Sense ---

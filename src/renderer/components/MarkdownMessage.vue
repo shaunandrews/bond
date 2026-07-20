@@ -5,7 +5,10 @@ import DOMPurify from 'dompurify'
 import hljs from '../lib/highlight'
 import { copyToClipboard } from '../lib/clipboard'
 
-const props = defineProps<{ text: string; streaming: boolean }>()
+// The template is multi-root (this div plus a trailing lightbox Teleport),
+// so `id` must be declared and bound explicitly — automatic fallthrough
+// can't reach a single root that doesn't exist.
+const props = defineProps<{ text: string; streaming: boolean; id?: string }>()
 
 function escapeAttr(str: string): string {
   return str
@@ -146,7 +149,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="rootEl" class="bond-message" v-html="sanitizedHtml" />
+  <div :id="id" ref="rootEl" class="bond-message" v-html="sanitizedHtml" />
   <Teleport to="body">
     <Transition name="lightbox">
       <div v-if="lightboxSrc" class="lightbox-overlay" @click="closeLightbox">

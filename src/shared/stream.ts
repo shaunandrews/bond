@@ -25,7 +25,7 @@ export type BondStreamChunk =
   | { kind: 'query_end'; succeeded: boolean }
   | { kind: 'queue_update'; queuedTurnIds: string[]; turns: Array<{ turnId: string; text: string; imageIds?: string[] }> }
   /** UI side-effect: open a side panel (onboarding tour's show_panel tool). */
-  | { kind: 'show_panel'; panel: 'collections' | 'sense' | 'media' | 'memory' }
+  | { kind: 'show_panel'; panel: 'collections' | 'sense' | 'library' | 'memory' }
   /** Tool-generated image(s) persisted to the Bond image store (codex_generate_image). */
   | { kind: 'generated_image'; imageIds: string[]; alt?: string }
   /** A turn began — carries the sender's message ids so other live viewers can mirror the user message and activity row instead of minting duplicates. */

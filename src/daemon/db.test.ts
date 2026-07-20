@@ -181,6 +181,13 @@ describe('db module', () => {
       expect(tables).toHaveLength(1)
     })
 
+    it('creates assets and asset_references tables', () => {
+      const db = getDb()
+      const names = tableNames(db)
+      expect(names).toContain('assets')
+      expect(names).toContain('asset_references')
+    })
+
     it('drops populated retired tables on upgrade while live data survives', () => {
       // A current-version DB carrying retired-feature data: the tables go,
       // the journal is exported, and NOTHING routes through the cutover wipe.
@@ -397,6 +404,57 @@ describe('schema reset vs quarantine', () => {
     const rows = db2.prepare("SELECT title FROM sessions WHERE id = 's1'").all() as { title: string }[]
     expect(rows).toHaveLength(1)
     expect(rows[0].title).toBe('Keep me')
+  })
+})
+
+describe('assets media backfill', () => {
+  it('mirrors pre-existing images rows into assets with unchanged ids', () => {
+    let db = getDb()
+    const now = new Date().toISOString()
+    db.prepare('INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)')
+      .run('s1', 'Screenshots', now, now)
+    db.prepare('INSERT INTO images (id, session_id, filename, media_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('img-1', 's1', 'img-1.png', 'image/png', 1234, now)
+
+    // Simulate a pre-Library database, then reopen to re-run migrations.
+    db.prepare("DELETE FROM settings WHERE key = 'assets_media_backfilled'").run()
+    db.exec('DELETE FROM assets')
+    closeDb()
+    db = getDb()
+
+    const asset = db.prepare('SELECT * FROM assets WHERE id = ?').get('img-1') as Record<string, unknown>
+    expect(asset).toMatchObject({
+      id: 'img-1',
+      kind: 'media',
+      format: 'image',
+      filename: 'img-1.png',
+      media_type: 'image/png',
+      size_bytes: 1234,
+    })
+  })
+
+  it('is idempotent — does not duplicate rows on a second open', () => {
+    let db = getDb()
+    const now = new Date().toISOString()
+    db.prepare('INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)')
+      .run('s1', 'Screenshots', now, now)
+    db.prepare('INSERT INTO images (id, session_id, filename, media_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('img-1', 's1', 'img-1.png', 'image/png', 1234, now)
+    // The initial getDb() already ran the backfill against an empty images
+    // table and set the flag — reset both to simulate a genuine pre-migration
+    // database with this row present.
+    db.prepare("DELETE FROM settings WHERE key = 'assets_media_backfilled'").run()
+    db.exec('DELETE FROM assets')
+    closeDb()
+    db = getDb() // first real backfill runs here
+
+    const count1 = (db.prepare('SELECT COUNT(*) as n FROM assets WHERE id = ?').get('img-1') as { n: number }).n
+    closeDb()
+    db = getDb() // flag is set — must not re-run
+
+    const count2 = (db.prepare('SELECT COUNT(*) as n FROM assets WHERE id = ?').get('img-1') as { n: number }).n
+    expect(count1).toBe(1)
+    expect(count2).toBe(1)
   })
 })
 

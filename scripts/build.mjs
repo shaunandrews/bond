@@ -19,7 +19,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 // CLI subcommands that get their own bundled entry point in out/cli/.
 // (connect.ts is a shared helper, bundled transitively — not an entry.)
-const CLI_ENTRIES = ['media', 'screenshot', 'soul', 'sense', 'collection', 'mcp']
+const CLI_ENTRIES = ['media', 'screenshot', 'soul', 'sense', 'collection', 'mcp', 'library']
 
 // esbuild ESM output has no CommonJS `require`; recreate it for externalized deps.
 const requireBanner =

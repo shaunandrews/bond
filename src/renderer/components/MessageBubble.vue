@@ -27,7 +27,10 @@ function renderUserMarkdown(text: string): string {
   )
 }
 
-const props = defineProps<{ msg: Message }>()
+// MessageBubble's template always has more than one root (the active v-if
+// branch plus a trailing copy-toast Teleport), so Vue can never auto-inherit
+// `id` onto a branch root — it must be declared and bound explicitly.
+const props = defineProps<{ msg: Message; id?: string }>()
 const issueHover = ref<{ key: string; title: string; x: number; y: number } | null>(null)
 const userHtml = computed(() => renderUserMarkdown(props.msg.role === 'user' ? props.msg.text : ''))
 
@@ -83,7 +86,7 @@ function formatTime(ts: number | undefined): string {
 
 <template>
   <!-- User message -->
-  <div v-if="msg.role === 'user'" class="message-bubble message-bubble--user self-end max-w-[92%] flex flex-col items-end gap-1.5" @dblclick="copyText(msg, $event)" @mousemove="updateIssueHover" @mouseleave="issueHover = null">
+  <div :id="id" v-if="msg.role === 'user'" class="message-bubble message-bubble--user self-end max-w-[92%] flex flex-col items-end gap-1.5" @dblclick="copyText(msg, $event)" @mousemove="updateIssueHover" @mouseleave="issueHover = null">
     <div v-if="msg.images?.length" class="flex flex-wrap justify-end gap-1.5">
       <img
         v-for="(img, i) in msg.images"
@@ -108,6 +111,7 @@ function formatTime(ts: number | undefined): string {
 
   <!-- Bond message: with artifacts -->
   <div
+    :id="id"
     v-else-if="msg.role === 'bond' && segments"
     class="message-bubble message-bubble--bond self-start w-full text-sm leading-relaxed"
     @dblclick="copyText(msg, $event)"
@@ -138,6 +142,7 @@ function formatTime(ts: number | undefined): string {
 
   <!-- Bond message: plain markdown -->
   <MarkdownMessage
+    :id="id"
     v-else-if="msg.role === 'bond'"
     :text="msg.text"
     :streaming="msg.streaming"
@@ -147,6 +152,7 @@ function formatTime(ts: number | undefined): string {
 
   <!-- Turn activity -->
   <TurnActivity
+    :id="id"
     v-else-if="msg.kind === 'activity'"
     :data="msg.data"
     @approve="(requestId, approved) => $emit('approve', requestId, approved)"
@@ -154,6 +160,7 @@ function formatTime(ts: number | undefined): string {
 
   <!-- Tool approval -->
   <div
+    :id="id"
     v-else-if="msg.kind === 'approval'"
     class="self-center max-w-[96%] px-3.5 py-2.5 rounded-[10px] text-xs border"
     :class="msg.status === 'pending' ? 'border-accent' : 'border-dashed border-border'"
@@ -180,6 +187,7 @@ function formatTime(ts: number | undefined): string {
 
   <!-- Generated image -->
   <div
+    :id="id"
     v-else-if="msg.kind === 'image'"
     class="self-start max-w-[92%] flex flex-col items-start gap-1.5 px-3.5"
   >
@@ -202,6 +210,7 @@ function formatTime(ts: number | undefined): string {
   <!-- Streaming thinking renders nothing — swallowed so it doesn't hit the v-else catch-all -->
   <template v-else-if="msg.kind === 'thinking' && (msg.streaming || !msg.text)" />
   <span
+    :id="id"
     v-else-if="msg.kind === 'thinking'"
     class="activity-summary"
     @click="$emit('openActivity')"
@@ -209,6 +218,7 @@ function formatTime(ts: number | undefined): string {
 
   <!-- Skill invocation -->
   <div
+    :id="id"
     v-else-if="msg.kind === 'skill'"
     class="self-center max-w-[96%] px-3.5 py-2.5 rounded-[10px] text-xs text-muted border border-dashed border-accent/40"
   >
@@ -218,6 +228,7 @@ function formatTime(ts: number | undefined): string {
 
   <!-- Tool call — minimal summary -->
   <span
+    :id="id"
     v-else-if="msg.kind === 'tool'"
     class="activity-summary"
     @click="$emit('openActivity')"
@@ -225,6 +236,7 @@ function formatTime(ts: number | undefined): string {
 
   <!-- Error -->
   <div
+    :id="id"
     v-else-if="msg.kind === 'error'"
     class="self-center max-w-[96%] px-3.5 py-2.5 rounded-[10px] text-xs text-err border border-dashed border-border"
     @dblclick="copyText(msg, $event)"
@@ -234,6 +246,7 @@ function formatTime(ts: number | undefined): string {
 
   <!-- System / other meta -->
   <div
+    :id="id"
     v-else
     class="self-center max-w-[96%] px-3.5 py-2.5 rounded-[10px] text-xs text-muted border border-dashed border-border"
     @dblclick="copyText(msg, $event)"

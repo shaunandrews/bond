@@ -315,7 +315,7 @@ describe('tour prompt section', () => {
     expect(section).toContain('ONBOARDING TOUR')
     // The four beats in tour order — Sense first (useful before any setup),
     // Collections last as the deep finale.
-    const positions = ['sense', 'media', 'memory', 'collections'].map(panel => section.indexOf(`show_panel "${panel}"`))
+    const positions = ['sense', 'library', 'memory', 'collections'].map(panel => section.indexOf(`show_panel "${panel}"`))
     for (const pos of positions) expect(pos).toBeGreaterThan(-1)
     expect([...positions].sort((a, b) => a - b)).toEqual(positions)
     // Collections goes into the weeds; the interview's no-weeds rule is lifted.

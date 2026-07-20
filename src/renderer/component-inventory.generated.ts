@@ -630,6 +630,12 @@ export const componentInventory = [
     "events": []
   },
   {
+    "name": "LibraryView",
+    "file": "components/LibraryView.vue",
+    "props": [],
+    "events": []
+  },
+  {
     "name": "MarkdownMessage",
     "file": "components/MarkdownMessage.vue",
     "props": [],
@@ -653,12 +659,6 @@ export const componentInventory = [
     "events": []
   },
   {
-    "name": "MediaView",
-    "file": "components/MediaView.vue",
-    "props": [],
-    "events": []
-  },
-  {
     "name": "MemoryView",
     "file": "components/MemoryView.vue",
     "props": [],
@@ -667,12 +667,7 @@ export const componentInventory = [
   {
     "name": "MessageBubble",
     "file": "components/MessageBubble.vue",
-    "props": [
-      {
-        "name": "msg",
-        "type": "Message"
-      }
-    ],
+    "props": [],
     "events": [
       {
         "name": "approve",

@@ -6,7 +6,7 @@
  * already connected in Pi — no API key. Bond disables the package's own disk
  * writes and install telemetry (env defaults in daemon main.ts) and instead
  * persists generated images itself into the Bond image store, so they show
- * up in the transcript and MediaView like any other image.
+ * up in the transcript and Library like any other image.
  *
  * The package's npm `exports` map only exposes its telemetry helper; the
  * extension entry is the root index.ts, loaded by file path the same way

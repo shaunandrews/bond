@@ -290,6 +290,7 @@ function createWindow(): void {
   // Broadcast entity change events to all windows
   client.onCollectionsChanged(() => broadcast('bond:collectionsChanged'))
   client.onImageChanged(() => broadcast('bond:imageChanged'))
+  client.onLibraryChanged(() => broadcast('bond:libraryChanged'))
   client.onMcpChanged(() => broadcast('bond:mcpChanged'))
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
@@ -476,7 +477,7 @@ function createSettingsWindow(): void {
   }
 }
 
-function createViewerWindow(filePath: string): void {
+function createViewerWindow(filePath: string, format?: 'markdown' | 'plaintext', title?: string): void {
   // Reuse existing viewer for the same file
   const existing = viewerWindows.get(filePath)
   if (existing && !existing.isDestroyed()) {
@@ -491,7 +492,7 @@ function createViewerWindow(filePath: string): void {
   const { x: dx, y: dy, width: dw, height: dh } = display.workArea
   const vw = 700, vh = 600
 
-  const filename = filePath.split('/').pop() ?? 'Viewer'
+  const windowTitle = title ?? filePath.split('/').pop() ?? 'Viewer'
 
   const win = new BrowserWindow({
     width: vw,
@@ -502,7 +503,7 @@ function createViewerWindow(filePath: string): void {
     minHeight: 300,
     show: false,
     autoHideMenuBar: true,
-    title: filename,
+    title: windowTitle,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 16, y: 14 },
     webPreferences: {
@@ -516,7 +517,7 @@ function createViewerWindow(filePath: string): void {
 
   win.on('ready-to-show', () => {
     win.show()
-    win.webContents.send('bond:viewerFile', filePath)
+    win.webContents.send('bond:viewerFile', filePath, format, windowTitle)
 
     // Watch the file for changes and push updates to the viewer.
     // Some editors do atomic saves (write tmp + rename), which fires 'rename'
@@ -526,13 +527,13 @@ function createViewerWindow(filePath: string): void {
         const watcher = watch(filePath, { persistent: false }, (eventType) => {
           if (win.isDestroyed()) return
           if (eventType === 'change') {
-            win.webContents.send('bond:viewerFile', filePath)
+            win.webContents.send('bond:viewerFile', filePath, format, windowTitle)
           } else if (eventType === 'rename') {
             watcher.close()
             viewerWatchers.delete(filePath)
             // Re-read immediately (file was replaced)
             if (existsSync(filePath)) {
-              win.webContents.send('bond:viewerFile', filePath)
+              win.webContents.send('bond:viewerFile', filePath, format, windowTitle)
               setTimeout(startWatching, 100)
             }
           }
@@ -685,9 +686,15 @@ app.whenReady().then(async () => {
     }
   })
 
-  ipcMain.handle('viewer:open', (_e, filePath: string) => {
+  ipcMain.handle('viewer:open', (_e, filePath: string, format?: 'markdown' | 'plaintext', title?: string) => {
     if (typeof filePath === 'string') {
-      createViewerWindow(filePath)
+      createViewerWindow(filePath, format, title)
+    }
+  })
+
+  ipcMain.handle('shell:revealInFinder', (_e, filePath: string) => {
+    if (typeof filePath === 'string') {
+      shell.showItemInFolder(filePath)
     }
   })
 

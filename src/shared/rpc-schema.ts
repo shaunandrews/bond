@@ -34,6 +34,7 @@ import type {
 import type { OnboardingFirstRunState, SandboxStatus } from './onboarding'
 import type { WebRenderRequest, WebRenderResult } from './web'
 import type { ModelId } from './models'
+import type { AssetBacklink, AssetKind, AssetReference, LibraryAddDocumentInput, LibraryAsset } from './library'
 
 // --- Named wire shapes ---
 
@@ -282,6 +283,17 @@ export interface RpcMethods {
   'collection.getByName': { params: { name: string }; result: Collection | null }
   'collection.listReferences': { params: void; result: CollectionReference[] }
 
+  // Library
+  'library.list': { params: { kind?: AssetKind; query?: string } | void; result: LibraryAsset[] }
+  'library.get': { params: { id: string }; result: LibraryAsset | null }
+  'library.addDocument': { params: LibraryAddDocumentInput; result: LibraryAsset }
+  'library.updateMetadata': { params: { id: string; updates: { title?: string; sourceUrl?: string } }; result: LibraryAsset | null }
+  'library.delete': { params: { id: string }; result: { ok: boolean } }
+  'library.addReference': { params: { assetId: string; itemId: string }; result: AssetReference }
+  'library.removeReference': { params: { assetId: string; itemId: string }; result: { ok: boolean } }
+  'library.listReferencesForItem': { params: { itemId: string }; result: LibraryAsset[] }
+  'library.listBacklinksForAsset': { params: { assetId: string }; result: AssetBacklink[] }
+
   // Sense
   'sense.status': { params: void; result: { enabled: boolean; state: SenseState } & SenseStatsResult }
   'sense.enable': { params: void; result: { ok: true } }
@@ -351,6 +363,7 @@ export interface RpcNotifications {
   'bond.chunk': TaggedChunk
   'collection.changed': Record<string, never>
   'image.changed': Record<string, never>
+  'library.changed': Record<string, never>
   'mcp.changed': Record<string, never>
   'sense.stateChanged': { state: SenseState }
   'sense.requestCapture': { captureDir: string; captureId: string }
@@ -433,6 +446,15 @@ export const RPC_METHOD_NAMES = [
   'collection.searchItems',
   'collection.getByName',
   'collection.listReferences',
+  'library.list',
+  'library.get',
+  'library.addDocument',
+  'library.updateMetadata',
+  'library.delete',
+  'library.addReference',
+  'library.removeReference',
+  'library.listReferencesForItem',
+  'library.listBacklinksForAsset',
   'sense.status',
   'sense.enable',
   'sense.disable',

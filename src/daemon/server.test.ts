@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import WebSocket from 'ws'
 import { startServer, type BondServer } from './server'
 import { BondClient, RpcCallError } from '../shared/client'
-import { PROTOCOL_VERSION, RPC_VALIDATION_ERROR } from '../shared/protocol'
+import { PROTOCOL_VERSION, RPC_VALIDATION_ERROR, RPC_INVALID_PARAMS } from '../shared/protocol'
 import { setDataDir } from './paths'
 import { getDb } from './db'
 import { listMessages as listTranscriptMessages } from './transcript'
@@ -311,6 +311,83 @@ describe('error handling', () => {
   it('rejects invalid schemas at collection.create', async () => {
     await expect(client.createCollection('Bad', [{ name: 'sel', type: 'select' }]))
       .rejects.toMatchObject({ code: RPC_VALIDATION_ERROR })
+  })
+})
+
+describe('library RPC', () => {
+  const TEXT_B64 = Buffer.from('# Report\n\nBody text').toString('base64')
+  const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+
+  it('adds a document, lists it, and gets it by id', async () => {
+    const asset = await client.call('library.addDocument', {
+      title: 'Studio catch-up', filename: 'catchup.md', mediaType: 'text/markdown', format: 'markdown', data: TEXT_B64,
+    })
+    expect(asset.kind).toBe('document')
+    expect(asset.title).toBe('Studio catch-up')
+
+    const list = await client.call('library.list')
+    expect(list.map((a: any) => a.id)).toContain(asset.id)
+
+    const fetched = await client.call('library.get', { id: asset.id })
+    expect(fetched?.id).toBe(asset.id)
+  })
+
+  it('filters library.list by kind', async () => {
+    await client.call('library.addDocument', { filename: 'a.md', mediaType: 'text/markdown', format: 'markdown', data: TEXT_B64 })
+    await client.importImage(TINY_PNG, 'image/png')
+
+    const docs = await client.call('library.list', { kind: 'document' })
+    const media = await client.call('library.list', { kind: 'media' })
+    expect(docs.every((a: any) => a.kind === 'document')).toBe(true)
+    expect(media.every((a: any) => a.kind === 'media')).toBe(true)
+    expect(media.length).toBeGreaterThan(0)
+  })
+
+  it('rejects library.addDocument missing required params', async () => {
+    await expect(client.call('library.addDocument', { filename: 'a.md' } as any))
+      .rejects.toMatchObject({ code: RPC_INVALID_PARAMS })
+  })
+
+  it('deletes a media-kind asset by delegating through images.ts', async () => {
+    const image = await client.importImage(TINY_PNG, 'image/png')
+    const asset = await client.call('library.get', { id: image.id })
+    expect(asset?.kind).toBe('media')
+
+    const result = await client.call('library.delete', { id: image.id })
+    expect(result.ok).toBe(true)
+
+    expect(await client.call('library.get', { id: image.id })).toBeNull()
+    const images = await client.listImages()
+    expect(images.find((i) => i.id === image.id)).toBeUndefined()
+  })
+
+  it('broadcasts library.changed on mutation', async () => {
+    const changed = vi.fn()
+    const unsub = client.onLibraryChanged(changed)
+    await client.call('library.addDocument', { filename: 'a.md', mediaType: 'text/markdown', format: 'markdown', data: TEXT_B64 })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(changed).toHaveBeenCalled()
+    unsub()
+  })
+
+  it('adds, lists, and removes a reference between an asset and a collection item, without affecting other references', async () => {
+    const collection = await client.createCollection('Tracker', [{ name: 'title', type: 'text', primary: true }])
+    const item1 = await client.addCollectionItem(collection.id, { title: 'Item one' })
+    const item2 = await client.addCollectionItem(collection.id, { title: 'Item two' })
+    const asset = await client.call('library.addDocument', { filename: 'a.md', mediaType: 'text/markdown', format: 'markdown', data: TEXT_B64 })
+
+    await client.call('library.addReference', { assetId: asset.id, itemId: item1.id })
+    await client.call('library.addReference', { assetId: asset.id, itemId: item2.id })
+
+    expect((await client.call('library.listReferencesForItem', { itemId: item1.id })).map((a: any) => a.id)).toEqual([asset.id])
+
+    const backlinks = await client.call('library.listBacklinksForAsset', { assetId: asset.id })
+    expect(backlinks).toHaveLength(2)
+
+    const removed = await client.call('library.removeReference', { assetId: asset.id, itemId: item1.id })
+    expect(removed.ok).toBe(true)
+    expect(await client.call('library.listReferencesForItem', { itemId: item1.id })).toEqual([])
+    expect(await client.call('library.listReferencesForItem', { itemId: item2.id })).toHaveLength(1)
   })
 })
 
