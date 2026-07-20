@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { PhTrash, PhStar, PhPlus, PhSortAscending, PhSortDescending, PhEye } from '@phosphor-icons/vue'
+import { PhTrash, PhStar, PhPlus, PhSortAscending, PhSortDescending, PhSlidersHorizontal } from '@phosphor-icons/vue'
 import type { Collection, CollectionItem, FieldDef } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
@@ -277,15 +277,32 @@ function formatValue(value: unknown, field: FieldDef): string {
       <div class="detail-toolbar">
         <BondTab
           :tabs="[{ id: 'table', label: 'Table' }, { id: 'list', label: 'List' }, { id: 'cards', label: 'Cards' }]"
+          size="sm"
           :model-value="viewMode"
           @update:model-value="setViewMode"
         />
-        <div class="columns-control">
-          <BondButton variant="secondary" size="sm" icon :aria-expanded="columnMenuOpen" @click="columnMenuOpen = !columnMenuOpen" v-tooltip="'Columns'">
-            <PhEye :size="15" weight="bold" />
+        <div class="detail-toolbar-spacer" />
+        <div class="view-settings-control">
+          <BondButton variant="ghost" size="sm" icon :aria-expanded="columnMenuOpen" @click="columnMenuOpen = !columnMenuOpen" v-tooltip="'View settings'">
+            <PhSlidersHorizontal :size="16" weight="bold" />
           </BondButton>
-          <div v-if="columnMenuOpen" class="columns-menu">
-            <div class="columns-menu-label">Drag to reorder · toggle visibility</div>
+          <div v-if="columnMenuOpen" class="view-settings-menu">
+            <template v-if="selectFields.length">
+              <BondText as="div" size="xs" weight="medium" color="muted" class="view-settings-label">Group by</BondText>
+              <BondButton
+                v-for="f in selectFields"
+                :key="f.name"
+                variant="secondary"
+                size="sm"
+                class="group-chip"
+                :class="{ active: groupByField === f.name }"
+                @click="toggleGroup(f.name)"
+              >
+                {{ f.name }}
+              </BondButton>
+            </template>
+            <BondText as="div" size="xs" weight="medium" color="muted" class="view-settings-label">Columns</BondText>
+            <BondText as="div" size="xs" color="muted" class="view-settings-hint">Drag to reorder · toggle visibility</BondText>
             <label
               v-for="field in orderedFields"
               :key="field.name"
@@ -301,20 +318,6 @@ function formatValue(value: unknown, field: FieldDef): string {
             </label>
           </div>
         </div>
-        <template v-if="selectFields.length">
-        <BondText size="xs" color="muted">Group by:</BondText>
-        <BondButton
-          v-for="f in selectFields"
-          :key="f.name"
-          variant="secondary"
-          size="sm"
-          class="group-chip"
-          :class="{ active: groupByField === f.name }"
-          @click="toggleGroup(f.name)"
-        >
-          {{ f.name }}
-        </BondButton>
-        </template>
       </div>
 
       <!-- Empty state -->
@@ -470,20 +473,23 @@ function formatValue(value: unknown, field: FieldDef): string {
   gap: 0.5rem;
   margin-bottom: 1rem;
 }
-.columns-control { position: relative; }
-.columns-menu {
+.detail-toolbar-spacer { flex: 1; }
+.view-settings-control { position: relative; }
+.view-settings-menu {
   position: absolute;
   z-index: 5;
   top: calc(100% + 5px);
-  left: 0;
-  min-width: 190px;
-  padding: 0.35rem;
+  right: 0;
+  min-width: 210px;
+  padding: 0.45rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
   box-shadow: var(--shadow-lg);
 }
-.columns-menu-label { padding: 0.2rem 0.35rem 0.35rem; color: var(--color-muted); font-size: 0.68rem; }
+.view-settings-label { padding: 0.3rem 0.35rem 0.25rem; }
+.view-settings-hint { padding: 0 0.35rem 0.35rem; }
+.view-settings-menu .group-chip { margin: 0 0.2rem 0.45rem 0; }
 .column-option { display: flex; align-items: center; gap: 0.45rem; padding: 0.35rem; border-radius: var(--radius-sm); color: var(--color-text-primary); font-size: 0.78rem; cursor: grab; }
 .column-option:hover { background: var(--color-tint); }
 .column-grip { color: var(--color-muted); font-size: 0.9rem; letter-spacing: -0.2em; }

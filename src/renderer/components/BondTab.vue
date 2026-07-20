@@ -4,6 +4,7 @@ import { ref, watch, onMounted, nextTick } from 'vue'
 const props = defineProps<{
   tabs: { id: string; label: string }[]
   modelValue?: string
+  size?: 'sm' | 'md'
 }>()
 
 const emit = defineEmits<{
@@ -41,7 +42,7 @@ onMounted(updateIndicator)
 </script>
 
 <template>
-  <div ref="containerRef" class="bond-tabs">
+  <div ref="containerRef" class="bond-tabs" :class="`bond-tabs--${size ?? 'md'}`">
     <div class="bond-tab-indicator" :style="indicatorStyle" />
     <button
       v-for="tab in tabs"
@@ -91,6 +92,19 @@ onMounted(updateIndicator)
   color: var(--color-muted);
   border-radius: var(--radius-md);
   transition: color var(--transition-base);
+}
+
+.bond-tabs--sm {
+  padding: 0.125rem;
+  border-radius: var(--radius-md);
+}
+.bond-tabs--sm .bond-tab-indicator {
+  top: 0.125rem;
+  height: calc(100% - 0.25rem);
+}
+.bond-tabs--sm .bond-tab {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
 }
 
 .bond-tab:hover:not(.active) {
