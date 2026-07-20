@@ -684,7 +684,7 @@ function handleKeyDown(e: KeyboardEvent) {
 <style scoped>
 .chat-box {
   border: 0;
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--color-surface);
   transition: outline-color var(--transition-fast);
 }
@@ -828,7 +828,7 @@ function handleKeyDown(e: KeyboardEvent) {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  margin-left: 1px;
+  margin-left: 0.75rem;
   margin-bottom: 0.5rem;
   outline: none;
 }

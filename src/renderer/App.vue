@@ -406,7 +406,7 @@ onUnmounted(() => {
         title="Bond"
         :insetStart="!isFullScreen"
       >
-        <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
+        <div class="chat-content-wrap px-3 pb-10 flex flex-col gap-2.5 flex-1">
           <!-- revealText !== null means the first-run entrance owns the screen:
                MissionBriefing must never mount during it. Its 100vh-tall exit
                transition shoves the streaming intro below the fold. -->
@@ -423,7 +423,7 @@ onUnmounted(() => {
         </div>
 
         <template #footer>
-          <div class="chat-content-wrap px-5 relative">
+          <div class="chat-content-wrap px-3 relative">
             <Transition name="scroll-btn">
               <div v-if="!isAtBottom" class="scroll-to-bottom-wrap" @click="scrollToBottom">
                 <BondButton variant="ghost" size="sm">
