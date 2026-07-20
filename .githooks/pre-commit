@@ -3,5 +3,6 @@
 # which the "prepare" npm script wires up automatically on `npm install`.
 set -e
 root="$(git rev-parse --show-toplevel)"
+npm run design-system:check --prefix "$root"
 npm run typecheck --prefix "$root"
 npm run test:run --prefix "$root"
