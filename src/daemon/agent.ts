@@ -22,7 +22,7 @@ const BOND_BASE_PROMPT =
   'When the user says "your UI", "your app", "your settings", or similar, they mean the Bond app they are using right now — not Claude\'s UI or any Anthropic product. ' +
   'The Bond app\'s source code lives at ~/Developer/Projects/bond if you need to inspect or modify it.\n\n' +
   'You can read files with read, search with grep/find/ls, edit files with edit/write, and run shell commands with bash. ' +
-  'Write operations require user approval before they execute. Stay concise. ' +
+  'Stay concise. ' +
   'When the user gives a path, resolve it relative to their home or as an absolute path if they provide one. ' +
   'For bash commands containing user-written prose, JSON, markdown, or multiline text, never hand-escape inline shell quotes. Prefer a structured tool or API. If bash is unavoidable, encode prose as base64 and decode it into a variable; do not use nested shell heredocs because the execution transport may wrap command text. Verify the command completed before reporting success.\n\n' +
   'WEB ACCESS:\n' +
@@ -257,7 +257,7 @@ function buildEditModeSuffix(editMode: EditMode): string {
   if (editMode.type === 'scoped') {
     return `\n\nThis session is in SCOPED WRITE mode. Write operations (edit, write) are restricted to the following folders:\n${editMode.allowedPaths.map(p => `- ${p}`).join('\n')}\nbash commands still require user approval. Do not attempt to write to files outside these folders.`
   }
-  return ''
+  return '\n\nThis session is in FULL ACCESS mode. Writes, edits, and bash commands run without approval — Bond surfaces its own approval UI when one is needed, so never ask the user to approve an action in prose. Just do the work and report what you did.'
 }
 
 export function buildSystemPrompt(options?: { editMode?: EditMode }): string {

@@ -56,6 +56,23 @@ describe('agent prompt/context integration', () => {
     expect(prompt).toContain('Never claim that you lack memory')
   })
 
+  it('never tells full-access sessions that writes need approval', () => {
+    // Regression: the base prompt claimed "Write operations require user approval"
+    // unconditionally, so in full mode — where runtime.ts gates nothing — Bond
+    // asked for approval in prose instead of just writing the file.
+    const prompt = buildSystemPromptPreview({ editMode: { type: 'full' } })
+    expect(prompt).not.toMatch(/write operations require user approval/i)
+    expect(prompt).toContain('FULL ACCESS mode')
+    expect(prompt).toContain('never ask the user to approve an action in prose')
+  })
+
+  it('still states the approval boundary in scoped and read-only modes', () => {
+    expect(buildSystemPromptPreview({ editMode: { type: 'scoped', allowedPaths: ['~/Downloads'] } }))
+      .toContain('bash commands still require user approval')
+    expect(buildSystemPromptPreview({ editMode: { type: 'readonly' } }))
+      .toContain('READ-ONLY workspace mode')
+  })
+
   it('builds a bounded escaped context envelope from memory, transcript recall, screen context, and epoch handoff', () => {
     writeCoreMemoryAtomic({ version: 1, facts: ['Core fact <unsafe>'], preferences: [], decisions: [], updatedAt: '2026-01-01T00:00:00.000Z' })
     setSetting('memory.working', JSON.stringify(createWorkingState({ goal: 'Ship context envelope' })))
