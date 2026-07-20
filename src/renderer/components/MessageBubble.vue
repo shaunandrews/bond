@@ -265,7 +265,11 @@ function formatTime(ts: number | undefined): string {
 }
 
 .msg-timestamp {
+  display: block;
+  flex: none;
+  white-space: nowrap;
   font-size: 0.625rem;
+  line-height: 1;
   color: var(--color-muted);
   opacity: 0.6;
   font-variant-numeric: tabular-nums;

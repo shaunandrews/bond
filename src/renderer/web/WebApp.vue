@@ -227,6 +227,8 @@ function handleEditModeChange(mode: EditMode) {
 /* The authored turn is a single quiet surface. Bond replies deliberately
    remain full-width and unframed so longer responses read as prose. */
 :deep(.message-bubble--user) {
+  align-self: flex-end;
+  width: fit-content;
   max-width: 84%;
 }
 
