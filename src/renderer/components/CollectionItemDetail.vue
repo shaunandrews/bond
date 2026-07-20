@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { PhArrowLeft, PhStar, PhTrash, PhPencilSimple, PhCheck, PhX, PhPaperPlaneTilt } from '@phosphor-icons/vue'
+import { PhArrowLeft, PhTrash, PhPencilSimple, PhCheck, PhX, PhPaperPlaneTilt } from '@phosphor-icons/vue'
 import type { Collection, CollectionItem, FieldDef, ItemComment } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
+import FieldValue from './fields/FieldValue.vue'
+import FieldEditor from './fields/FieldEditor.vue'
 
 const props = defineProps<{
   collection: Collection
@@ -18,7 +20,9 @@ const emit = defineEmits<{
 const item = ref<CollectionItem | null>(null)
 const loading = ref(true)
 const editing = ref(false)
-const editData = ref<Record<string, string>>({})
+// Canonical values straight from FieldEditor — sent to the daemon unparsed.
+const editData = ref<Record<string, unknown>>({})
+const editError = ref<string | null>(null)
 const commentText = ref('')
 const commentInputRef = ref<HTMLTextAreaElement | null>(null)
 
@@ -30,6 +34,12 @@ const itemLabel = computed(() => {
   if (!item.value || !primaryField.value) return ''
   const val = item.value.data[primaryField.value.name]
   return val != null ? String(val) : item.value.id.slice(0, 8)
+})
+
+/** Tracker key (e.g. BOND-12) when the collection has an issue prefix. */
+const itemKey = computed(() => {
+  if (!item.value || !props.collection.issuePrefix) return null
+  return `${props.collection.issuePrefix}-${item.value.displayNumber}`
 })
 
 const comments = computed(() => item.value?.comments ?? [])
@@ -56,52 +66,41 @@ onUnmounted(() => {
 function startEditing() {
   if (!item.value) return
   editing.value = true
+  editError.value = null
   editData.value = {}
   for (const field of schema.value) {
     const val = item.value.data[field.name]
-    if (val != null) {
-      editData.value[field.name] = Array.isArray(val) ? val.join(', ') : String(val)
-    } else {
-      editData.value[field.name] = ''
-    }
+    if (val !== undefined && val !== null) editData.value[field.name] = val
   }
 }
 
 function cancelEditing() {
   editing.value = false
   editData.value = {}
-}
-
-function parseValue(raw: string, field: FieldDef): unknown {
-  if (raw === '') return undefined
-  switch (field.type) {
-    case 'number':
-    case 'rating':
-      return Number(raw)
-    case 'boolean':
-      return raw === 'true' || raw === 'yes' || raw === '1'
-    case 'multiselect':
-    case 'tags':
-      return raw.split(',').map(s => s.trim()).filter(Boolean)
-    default:
-      return raw
-  }
+  editError.value = null
 }
 
 async function saveEdit() {
   if (!item.value) return
   const data: Record<string, unknown> = {}
   for (const field of schema.value) {
-    const raw = editData.value[field.name]
-    if (raw == null) continue
-    const parsed = parseValue(raw, field)
-    if (parsed !== undefined) {
-      data[field.name] = parsed
+    const value = editData.value[field.name]
+    if (value === undefined || value === '') {
+      // Explicit null clears a previously set field on the daemon
+      if (item.value.data[field.name] != null) data[field.name] = null
+      continue
     }
+    data[field.name] = value
   }
-  await window.bond.updateCollectionItem(item.value.id, data)
-  editing.value = false
-  editData.value = {}
+  try {
+    await window.bond.updateCollectionItem(item.value.id, data)
+    editing.value = false
+    editData.value = {}
+    editError.value = null
+  } catch (e) {
+    // The daemon names the offending field and its allowed values
+    editError.value = e instanceof Error ? e.message : String(e)
+  }
 }
 
 async function deleteItem() {
@@ -117,16 +116,6 @@ async function submitComment() {
   await refresh()
 }
 
-function formatValue(value: unknown, field: FieldDef): string {
-  if (value == null) return '—'
-  switch (field.type) {
-    case 'number': return `${field.prefix ?? ''}${value}${field.suffix ?? ''}`
-    case 'boolean': return value ? 'Yes' : 'No'
-    case 'date': return String(value)
-    default: return Array.isArray(value) ? value.join(', ') : String(value)
-  }
-}
-
 function formatCommentDate(iso: string): string {
   const d = new Date(iso)
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
@@ -135,10 +124,6 @@ function formatCommentDate(iso: string): string {
 
 function isLongContent(value: unknown, field: FieldDef): boolean {
   return field.type === 'longtext' || (field.type === 'text' && String(value ?? '').length > 80)
-}
-
-function openUrl(url: string) {
-  window.bond.openExternal(url)
 }
 
 function handleCommentKeydown(e: KeyboardEvent) {
@@ -166,6 +151,7 @@ function handleCommentKeydown(e: KeyboardEvent) {
           <PhArrowLeft :size="16" weight="bold" />
         </BondButton>
         <div class="item-header-title">
+          <span v-if="itemKey" class="item-key">{{ itemKey }}</span>
           <BondText size="lg" weight="semibold">{{ itemLabel }}</BondText>
         </div>
         <div class="item-header-actions">
@@ -193,64 +179,24 @@ function handleCommentKeydown(e: KeyboardEvent) {
 
           <!-- Edit mode -->
           <template v-if="editing">
-            <select
-              v-if="field.type === 'select' && field.options"
-              :value="editData[field.name] ?? ''"
-              class="field-input"
-              @change="editData[field.name] = ($event.target as HTMLSelectElement).value"
-            >
-              <option value="">—</option>
-              <option v-for="opt in field.options" :key="opt" :value="opt">{{ opt }}</option>
-            </select>
-            <textarea
-              v-else-if="field.type === 'longtext'"
-              :value="editData[field.name] ?? ''"
-              class="field-input field-textarea"
-              rows="4"
-              @input="editData[field.name] = ($event.target as HTMLTextAreaElement).value"
-            />
-            <input
-              v-else
-              :type="field.type === 'number' || field.type === 'rating' ? 'number' : field.type === 'date' ? 'date' : 'text'"
-              :value="editData[field.name] ?? ''"
-              class="field-input"
-              @input="editData[field.name] = ($event.target as HTMLInputElement).value"
+            <FieldEditor
+              :def="field"
+              :model-value="editData[field.name]"
+              @update:model-value="editData[field.name] = $event"
             />
           </template>
 
           <!-- Display mode -->
           <template v-else>
-            <div v-if="field.type === 'rating'" class="field-value">
-              <span class="rating">
-                <template v-for="n in (field.max ?? 5)" :key="n">
-                  <PhStar v-if="n <= (item.data[field.name] as number ?? 0)" :size="14" weight="fill" class="star--filled" />
-                  <PhStar v-else :size="14" class="star--empty" />
-                </template>
-              </span>
-            </div>
-            <div v-else-if="field.type === 'url' && item.data[field.name]" class="field-value">
-              <a class="value-link" @click.prevent="openUrl(String(item.data[field.name]))">
-                {{ String(item.data[field.name]) }}
-              </a>
-            </div>
-            <div v-else-if="field.type === 'select'" class="field-value">
-              <span v-if="item.data[field.name]" class="value-badge">{{ item.data[field.name] }}</span>
-              <span v-else class="value-empty">—</span>
-            </div>
-            <div v-else-if="field.type === 'tags' || field.type === 'multiselect'" class="field-value">
-              <template v-if="Array.isArray(item.data[field.name]) && (item.data[field.name] as unknown[]).length">
-                <span v-for="tag in (item.data[field.name] as string[])" :key="tag" class="value-tag">{{ tag }}</span>
-              </template>
-              <span v-else class="value-empty">—</span>
-            </div>
-            <div v-else-if="isLongContent(item.data[field.name], field)" class="field-value field-value--long">
+            <div v-if="isLongContent(item.data[field.name], field)" class="field-value field-value--long">
               {{ item.data[field.name] ?? '—' }}
             </div>
             <div v-else class="field-value">
-              {{ formatValue(item.data[field.name], field) }}
+              <FieldValue :value="item.data[field.name]" :def="field" />
             </div>
           </template>
         </div>
+        <BondText v-if="editing && editError" as="div" size="xs" color="err" class="edit-error">{{ editError }}</BondText>
       </div>
 
       <!-- Timestamps -->
@@ -329,6 +275,17 @@ function handleCommentKeydown(e: KeyboardEvent) {
 .item-header-title {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.item-key {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 500;
+  flex-shrink: 0;
 }
 
 .item-header-actions {
@@ -383,71 +340,8 @@ function handleCommentKeydown(e: KeyboardEvent) {
   line-height: 1.55;
 }
 
-.value-empty {
-  color: var(--color-muted);
-}
-
-.value-link {
-  color: var(--color-accent);
-  cursor: pointer;
-  text-decoration: underline;
-  word-break: break-all;
-}
-
-.value-badge {
-  font-size: 0.75rem;
-  color: var(--color-muted);
-  background: var(--color-tint);
-  padding: 0.15rem 0.5rem;
-  border-radius: var(--radius-sm);
-}
-
-.value-tag {
-  display: inline-block;
-  font-size: 0.7rem;
-  color: var(--color-muted);
-  background: var(--color-tint);
-  padding: 0.1rem 0.4rem;
-  border-radius: var(--radius-sm);
-  margin-right: 0.25rem;
-}
-
-.rating {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.star--filled {
-  color: var(--color-accent);
-}
-
-.star--empty {
-  color: var(--color-muted);
-  opacity: 0.3;
-}
-
-/* Edit inputs */
-.field-input {
-  flex: 1;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 0.3rem 0.5rem;
-  font: inherit;
-  font-size: 0.8125rem;
-  color: var(--color-text-primary);
-  outline: none;
-  transition: border-color var(--transition-fast);
-}
-.field-input:focus {
-  border-color: var(--color-accent);
-}
-
-.field-textarea {
-  resize: vertical;
-  min-height: 4rem;
-  line-height: 1.5;
+.edit-error {
+  padding: 0.25rem 0;
 }
 
 /* Meta */

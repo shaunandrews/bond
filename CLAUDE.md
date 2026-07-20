@@ -94,7 +94,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `onboarding.ts` | First-run detection, transcript intro seeding, and the staged interview → panel-tour flow (`pending` → `education` → `completed`). Serves stage-specific system-prompt sections and Pi tools: `complete_onboarding` (closes the interview, seeds the soul, returns the tour script), `complete_tour`, `show_panel` (opens a side panel via a `show_panel` stream chunk), and `enable_sense`. The interview and tour are the real agent — no scripted flow |
 | `sandbox.ts` | New-user sandbox: swaps the daemon's data dir to a fresh empty directory (and back) so the real app runs a genuine first-run without touching real data |
 | `sessions.ts` | SQLite CRUD for sessions and messages |
-| `collections.ts` | Collections + items CRUD (SQLite) |
+| `collections.ts` | Collections + items CRUD (SQLite). All writes are validated through the shared field registry (`shared/fields.ts`): schemas via `validateSchema` on create/update, item data via `coerceItemData` (add applies defaults + requires primary; update touches only incoming keys, `null` clears). Failures throw `CollectionValidationError` → `RPC_VALIDATION_ERROR` (-32000) with `data.errors` and a message naming the field + allowed values. Item display numbers come from a per-collection `next_display_number` counter (never reused, transactional); `issue_prefix` (2-6 uppercase letters) makes items referenceable as `PREFIX-n`; `listReferences()` serves the whole reference index in one call |
 | `debriefs.ts` | Session debrief storage (SQLite) |
 | `generate-debrief.ts` | Auto-generates session debriefs (summary + topics) |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD |
@@ -134,7 +134,8 @@ Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from
 | `bond-surface.ts` | The `window.bond` surface builder — `buildDaemonSurface(invoke)` generates the ~74 daemon proxies from the registry; `ElectronBondSurface` declares the 27 main-process-local members the shim must explicitly stub |
 | `stream.ts` | `BondStreamChunk` union type (text, thinking, tool, approval, error, system) |
 | `client.ts` | `BondClient` WebSocket client class — registry-typed `call`, token provider, reconnect-in-place, `daemonProtocolVersion` |
-| `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Collection, and media/collection types |
+| `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Collection, FieldDef/FieldOption/FieldDefInput, and media/collection types |
+| `fields.ts` | **Field-type registry** — per-type `coerce`/`validate`/`format`/`compare`/`defaultValue` for every `FieldType`, plus `normalizeSchema` (legacy `string[]` options → canonical `FieldOption[]`), `validateSchema`, `coerceItemData` (the single item write gate), `isDoneValue`, and the issue-key regexes (`ISSUE_PREFIX_RE`, `ISSUE_KEY_RE`). Shared by daemon (enforcement), renderer (render/edit/sort), and CLI (parse/format) — add a `FieldType` without a registry entry and the compiler objects |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
 | `models.ts` | `ModelId` — provider-neutral capability tiers (`'high' | 'balanced' | 'fast'`); Pi maps them to concrete models |
 | `web.ts` | `WebRenderRequest`/`WebRenderResult` — the daemon ↔ app hidden-browser render round-trip |
@@ -204,6 +205,7 @@ src/
     stream.ts                        # BondStreamChunk types (incl. thinking_text)
     client.ts                        # BondClient WebSocket client
     session.ts                       # Session, SessionMessage, Collection, CollectionItem, EditMode, AttachedImage types
+    fields.ts                        # Field-type registry (coerce/validate/format/compare), schema normalization/validation, issue-key regexes
     sense.ts                         # SenseSession, SenseCapture, SenseSettings, DetectedWindow, OcrResult types
     models.ts                        # ModelId type
     web.ts                           # WebRenderRequest/WebRenderResult render round-trip types
@@ -224,6 +226,7 @@ src/
       useAutoScroll.ts               # Smart scroll-to-bottom
       useAccentColor.ts              # Dynamic accent color theming
       useSense.ts                    # Sense timeline state, day loading, capture selection, search
+      useIssueReferences.ts          # Singleton PREFIX-n reference index (one collection.listReferences RPC)
     directives/
       tooltip.ts                     # v-tooltip directive (singleton, positioned tooltips)
     components/
@@ -260,9 +263,12 @@ src/
       SenseSearch.vue                # Inline search with results flyout
       MemoryView.vue                 # Core/working/search/source memory panel
       DevComponents.vue              # Dev-only component catalog
+      fields/FieldValue.vue          # Per-type display for collection field values (single display dispatch)
+      fields/FieldEditor.vue         # Per-type input with canonical-value v-model
     lib/highlight.ts                 # highlight.js language registration
     lib/clipboard.ts                 # copyToClipboard with insecure-context fallback
     lib/format.ts                    # Shared formatters (tool labels, durations, approval previews)
+    lib/fieldColors.ts               # FieldColor palette key → CSS custom property (--field-*)
 electron.vite.config.ts                  # Build config (main, preload, renderer)
 vite.web.config.ts                       # Browser bundle build for remote access → out/web
 electron-builder.yml                     # Packaging config (macOS DMG, extraResources for daemon)
@@ -303,8 +309,17 @@ Multi-line textarea with v-model support.
 
 ### BondSelect
 Dropdown select with custom chevron.
-- **Props:** `modelValue?: string`, `options: { value, label }[]`, `disabled?: boolean`, `placement?: 'top' | 'bottom'`, `variant?: 'default' | 'minimal'` (minimal removes background and border), `size?: 'sm' | 'md'` (default: `'md'`)
+- **Props:** `modelValue?: string`, `options: { value, label, color? }[]` (`color` is any CSS color rendered as a dot before the label), `disabled?: boolean`, `placement?: 'top' | 'bottom'`, `variant?: 'default' | 'minimal'` (minimal removes background and border), `size?: 'sm' | 'md'` (default: `'md'`)
 - **Events:** `update:modelValue(value: string)`
+
+### FieldValue
+Per-type display for collection field values — the single display dispatch shared by CollectionDetail (table/list/cards), CollectionItemDetail, and CollectionEmbed. Rating stars, colored status/priority chips (palette via `lib/fieldColors.ts` → `--field-*` tokens), select badges, tag chips, url links (opens via `window.bond.openExternal`, stops row-click propagation), boolean check, registry `format` text otherwise. Total over garbage values — never throws.
+- **Props:** `value: unknown`, `def: FieldDef`
+
+### FieldEditor
+Per-type input for collection fields with a **canonical-value** v-model — numbers for number/rating, booleans, `string[]` for tags/multiselect, `undefined` for "not set"; callers pass the model straight to `collection.addItem`/`updateItem` with no string re-parsing. Clickable star rating with arrow-key support, switch toggle for booleans, BondSelect with color dots for select/status/priority (empty option ↔ `undefined`), toggle chips for multiselect options, free chip input for tags, BondInput/BondTextarea/native date otherwise.
+- **Props:** `def: FieldDef`, `modelValue: unknown`
+- **Events:** `update:modelValue(value: unknown)`
 
 ### BondFlyoutMenu
 Teleported flyout menu primitive. Renders via `<Teleport to="body">` with fixed positioning relative to an anchor element. Auto-flips when the menu would overflow the viewport, clamps horizontally, and repositions on scroll/resize. Used by BondSelect and similar anchored menus.
@@ -454,6 +469,12 @@ Singleton Sense timeline state. Loads a day's captures and sessions, selects ind
 - **State:** `date`, `captures`, `sessions`, `activeCapture`, `activeCaptureImage`, `searchQuery`, `searchResults`, `appFilter`, `apps`, `loading`, `loadingImage`, `filteredCaptures`, `isToday`
 - **Methods:** `loadDay(dateStr)`, `selectCapture(id)`, `search(query)`, `setAppFilter(bundleId?)`, `nextDay()`, `prevDay()`, `jumpToCapture(capture)`
 - **Exports:** `appHue(identifier)`, `appColor(identifier, isDark?)` — deterministic HSL color from bundle ID
+
+### useIssueReferences()
+Singleton PREFIX-n issue reference index. One `collection.listReferences` RPC feeds composer autocomplete (ChatInput), message chips + hover cards (MessageBubble), reloading on `collections.changed`. Consumers MUST gate key decoration on `knownPrefixes`/`byKey` — the bare `[A-Z]{2,6}-\d+` pattern also matches prose like "UTF-8".
+- **State:** `references` (CollectionReference[]), `byKey` (Map by "BOND-12"), `knownPrefixes` (Set)
+- **Methods:** `load()` (coalesces concurrent calls)
+- **Test helper:** `resetIssueReferencesForTest()`
 
 ### Props (all optional)
 - **size**: `number | string` — width & height (default: `24`)

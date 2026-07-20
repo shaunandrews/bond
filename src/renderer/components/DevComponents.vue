@@ -131,7 +131,7 @@ const components = [
     description: 'Dropdown select with custom chevron. Uses BondFlyoutMenu for viewport-aware positioning.',
     props: [
       { name: 'modelValue', type: 'string', description: 'Bound value (v-model)' },
-      { name: 'options', type: '{ value, label }[]', description: 'Options to display' },
+      { name: 'options', type: '{ value, label, color? }[]', description: 'Options to display; color renders a dot before the label' },
       { name: 'disabled', type: 'boolean', description: 'Disables the select' },
       { name: 'placement', type: "'top' | 'bottom'", description: 'Menu placement (default: bottom)' },
       { name: 'variant', type: "'default' | 'minimal'", description: 'Minimal removes background/border' },
@@ -139,6 +139,30 @@ const components = [
     ],
     events: [
       { name: 'update:modelValue', payload: 'value: string', description: 'Fired on selection change' },
+    ],
+  },
+  {
+    name: 'FieldValue',
+    file: 'components/fields/FieldValue.vue',
+    category: 'Primitives',
+    description: 'Per-type display for collection field values: rating stars, colored status/priority chips, select badges, tag chips, url links, boolean check, registry text otherwise. The single display dispatch shared by table, list, cards, item detail, and chat embeds.',
+    props: [
+      { name: 'value', type: 'unknown', description: 'The stored field value' },
+      { name: 'def', type: 'FieldDef', description: 'The schema field definition (type, options, max, prefix/suffix)' },
+    ],
+    events: [],
+  },
+  {
+    name: 'FieldEditor',
+    file: 'components/fields/FieldEditor.vue',
+    category: 'Primitives',
+    description: 'Per-type input for collection fields with a canonical-value v-model (numbers, booleans, string arrays — not strings). Clickable star rating, toggle for booleans, BondSelect with color dots for select/status/priority, chip toggles for multiselect, free chip input for tags.',
+    props: [
+      { name: 'def', type: 'FieldDef', description: 'The schema field definition' },
+      { name: 'modelValue', type: 'unknown', description: 'Canonical value (v-model); undefined = not set' },
+    ],
+    events: [
+      { name: 'update:modelValue', payload: 'value: unknown', description: 'Canonical value, or undefined when cleared' },
     ],
   },
   {

@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { PhTrash, PhStar, PhPlus, PhSortAscending, PhSortDescending, PhSlidersHorizontal } from '@phosphor-icons/vue'
+import { PhTrash, PhPlus, PhSortAscending, PhSortDescending, PhSlidersHorizontal } from '@phosphor-icons/vue'
 import type { Collection, CollectionItem, FieldDef } from '../../shared/session'
+import { compareFieldValues, formatFieldValue, isOptionedType, optionLabel } from '../../shared/fields'
+import { fieldColorVar } from '../lib/fieldColors'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
 import BondTab from './BondTab.vue'
 import BondSelect from './BondSelect.vue'
 import CollectionItemDetail from './CollectionItemDetail.vue'
+import FieldValue from './fields/FieldValue.vue'
+import FieldEditor from './fields/FieldEditor.vue'
 
 const props = defineProps<{
   collection: Collection
@@ -15,7 +19,8 @@ const props = defineProps<{
 const items = ref<CollectionItem[]>([])
 const loading = ref(true)
 const addingItem = ref(false)
-const newItemData = ref<Record<string, string>>({})
+// Canonical values straight from FieldEditor — sent to the daemon unparsed.
+const newItemData = ref<Record<string, unknown>>({})
 const selectedItemId = ref<string | null>(null)
 
 // Sorting
@@ -40,11 +45,8 @@ const orderedFields = computed(() => {
   return [...ordered, ...nonPrimaryFields.value.filter(field => !columnOrder.value.includes(field.name))]
 })
 const visibleFields = computed(() => orderedFields.value.filter(field => !hiddenColumns.value.includes(field.name)))
-const selectFields = computed(() => schema.value.filter(f => f.type === 'select'))
-
-function openExternalLink(url: string) {
-  void window.bond.openExternal(url)
-}
+/** Single-value optioned fields (select/status/priority) — the filter and group-by axes. */
+const optionFields = computed(() => schema.value.filter(f => isOptionedType(f.type) && f.type !== 'multiselect'))
 
 function itemReference(item: CollectionItem): string | null {
   return props.collection.issuePrefix ? `${props.collection.issuePrefix}-${item.displayNumber}` : null
@@ -58,21 +60,11 @@ const sortedItems = computed(() => {
       list.sort((a, b) => {
         const av = a.data[field.name]
         const bv = b.data[field.name]
+        // Empty values sort last regardless of direction
         if (av == null && bv == null) return 0
         if (av == null) return 1
         if (bv == null) return -1
-        let cmp = 0
-        if (field.type === 'number' || field.type === 'rating') {
-          cmp = (av as number) - (bv as number)
-        } else if (field.type === 'date') {
-          cmp = String(av).localeCompare(String(bv))
-        } else if (field.type === 'boolean') {
-          cmp = (av ? 1 : 0) - (bv ? 1 : 0)
-        } else if (field.type === 'select' && field.options) {
-          cmp = field.options.indexOf(String(av)) - field.options.indexOf(String(bv))
-        } else {
-          cmp = String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' })
-        }
+        const cmp = compareFieldValues(av, bv, field)
         return sortAsc.value ? cmp : -cmp
       })
     }
@@ -82,6 +74,7 @@ const sortedItems = computed(() => {
 
 interface GroupedItems {
   label: string
+  color?: string | null
   items: CollectionItem[]
 }
 
@@ -91,15 +84,17 @@ const filteredItems = computed(() => sortedItems.value.filter(item =>
 
 const groupedItems = computed((): GroupedItems[] => {
   if (!groupByField.value) return [{ label: '', items: filteredItems.value }]
-  const field = schema.value.find(f => f.name === groupByField.value)
-  if (!field || field.type !== 'select' || !field.options) return [{ label: '', items: filteredItems.value }]
+  const field = optionFields.value.find(f => f.name === groupByField.value)
+  if (!field?.options) return [{ label: '', items: filteredItems.value }]
+  // Groups follow option order — the workflow/rank order for status and priority
   const groups: GroupedItems[] = field.options.map(opt => ({
-    label: opt,
-    items: filteredItems.value.filter(i => i.data[field.name] === opt)
+    label: optionLabel(opt),
+    color: fieldColorVar(opt.color),
+    items: filteredItems.value.filter(i => i.data[field.name] === opt.value)
   }))
   const ungrouped = filteredItems.value.filter(i => {
     const val = i.data[field.name]
-    return val == null || !field.options!.includes(String(val))
+    return val == null || !field.options!.some(o => o.value === String(val))
   })
   if (ungrouped.length) groups.push({ label: 'Other', items: ungrouped })
   return groups.filter(g => g.items.length > 0)
@@ -124,7 +119,10 @@ function setViewMode(value: string) {
 }
 
 function filterOptions(field: FieldDef) {
-  return [{ value: '', label: `All ${field.name}` }, ...(field.options ?? []).map(value => ({ value, label: value }))]
+  return [
+    { value: '', label: `All ${field.name}` },
+    ...(field.options ?? []).map(o => ({ value: o.value, label: optionLabel(o), color: fieldColorVar(o.color) ?? undefined })),
+  ]
 }
 
 const sortOptions = computed(() => [
@@ -159,7 +157,7 @@ type CollectionViewSettings = {
 function loadCollectionSettings() {
   const fields = nonPrimaryFields.value.map(field => field.name)
   const schemaFields = schema.value.map(field => field.name)
-  const groupFields = selectFields.value.map(field => field.name)
+  const groupFields = optionFields.value.map(field => field.name)
   try {
     const saved = JSON.parse(localStorage.getItem(collectionSettingsKey()) ?? '{}') as CollectionViewSettings
     columnOrder.value = [...(saved.order ?? []).filter(name => fields.includes(name)), ...fields.filter(name => !(saved.order ?? []).includes(name))]
@@ -170,8 +168,8 @@ function loadCollectionSettings() {
     if (saved.groupByField && groupFields.includes(saved.groupByField)) groupByField.value = saved.groupByField
     if (saved.filters) {
       filters.value = Object.fromEntries(Object.entries(saved.filters).filter(([name, value]) => {
-        const field = selectFields.value.find(candidate => candidate.name === name)
-        return typeof value === 'string' && field?.options?.includes(value)
+        const field = optionFields.value.find(candidate => candidate.name === name)
+        return typeof value === 'string' && field?.options?.some(o => o.value === value)
       }))
     }
   } catch {
@@ -247,46 +245,30 @@ async function deleteItem(id: string) {
   await window.bond.deleteCollectionItem(id)
 }
 
+const addError = ref<string | null>(null)
+
 async function submitNewItem() {
   const data: Record<string, unknown> = {}
   for (const field of schema.value) {
-    const raw = newItemData.value[field.name]
-    if (raw == null || raw === '') continue
-    data[field.name] = parseValue(raw, field)
+    const value = newItemData.value[field.name]
+    if (value === undefined || value === null || value === '') continue
+    data[field.name] = value
   }
   if (Object.keys(data).length === 0) return
-  await window.bond.addCollectionItem(props.collection.id, data)
-  newItemData.value = {}
-  addingItem.value = false
-}
-
-function parseValue(raw: string, field: FieldDef): unknown {
-  switch (field.type) {
-    case 'number':
-    case 'rating':
-      return Number(raw)
-    case 'boolean':
-      return raw === 'true' || raw === 'yes' || raw === '1'
-    case 'multiselect':
-    case 'tags':
-      return raw.split(',').map(s => s.trim())
-    default:
-      return raw
+  try {
+    await window.bond.addCollectionItem(props.collection.id, data)
+    newItemData.value = {}
+    addingItem.value = false
+    addError.value = null
+  } catch (e) {
+    // The daemon names the offending field and its allowed values
+    addError.value = e instanceof Error ? e.message : String(e)
   }
 }
 
 async function toggleBoolean(item: CollectionItem, fieldName: string) {
   const current = item.data[fieldName]
   await window.bond.updateCollectionItem(item.id, { [fieldName]: !current })
-}
-
-function formatValue(value: unknown, field: FieldDef): string {
-  if (value == null) return ''
-  switch (field.type) {
-    case 'number': return `${field.prefix ?? ''}${value}${field.suffix ?? ''}`
-    case 'boolean': return value ? 'Yes' : 'No'
-    default: return Array.isArray(value) ? value.join(', ') : String(value)
-  }
 }
 </script>
 
@@ -320,9 +302,9 @@ function formatValue(value: unknown, field: FieldDef): string {
             <PhSlidersHorizontal :size="16" weight="bold" />
           </BondButton>
           <div v-if="columnMenuOpen" class="view-settings-menu">
-            <template v-if="selectFields.length">
+            <template v-if="optionFields.length">
               <BondText as="div" size="xs" weight="medium" color="muted" class="view-settings-label">Filter</BondText>
-              <div v-for="field in selectFields" :key="field.name" class="filter-row">
+              <div v-for="field in optionFields" :key="field.name" class="filter-row">
                 <BondText size="xs" color="muted">{{ field.name }}</BondText>
                 <BondSelect
                   :model-value="filters[field.name] ?? ''"
@@ -354,7 +336,7 @@ function formatValue(value: unknown, field: FieldDef): string {
               </div>
               <BondText as="div" size="xs" weight="medium" color="muted" class="view-settings-label">Group by</BondText>
               <BondButton
-                v-for="f in selectFields"
+                v-for="f in optionFields"
                 :key="f.name"
                 variant="secondary"
                 size="sm"
@@ -401,6 +383,7 @@ function formatValue(value: unknown, field: FieldDef): string {
       <template v-else>
         <div v-for="group in groupedItems" :key="group.label" class="item-group">
           <BondText v-if="group.label" as="div" size="xs" weight="semibold" color="muted" class="group-header">
+            <span v-if="group.color" class="group-dot" :style="{ background: group.color }" />
             {{ group.label }} ({{ group.items.length }})
           </BondText>
 
@@ -436,28 +419,10 @@ function formatValue(value: unknown, field: FieldDef): string {
                 {{ getItemLabel(item) }}
               </div>
               <div v-for="f in visibleFields" :key="f.name" class="td">
-                <template v-if="f.type === 'rating'">
-                  <span class="rating">
-                    <template v-for="n in (f.max ?? 5)" :key="n">
-                      <PhStar v-if="n <= (item.data[f.name] as number ?? 0)" :size="12" weight="fill" class="star--filled" />
-                      <PhStar v-else :size="12" class="star--empty" />
-                    </template>
-                  </span>
-                </template>
-                <template v-else-if="f.type === 'boolean'">
-                  <button class="bool-toggle" @click.stop="toggleBoolean(item, f.name)">
-                    {{ item.data[f.name] ? '✓' : '—' }}
-                  </button>
-                </template>
-                <template v-else-if="f.type === 'select'">
-                  <span class="field-badge">{{ item.data[f.name] ?? '' }}</span>
-                </template>
-                <template v-else-if="f.type === 'url' && item.data[f.name]">
-                  <a class="field-link" @click.prevent.stop="openExternalLink(String(item.data[f.name]))">link</a>
-                </template>
-                <template v-else>
-                  {{ formatValue(item.data[f.name], f) }}
-                </template>
+                <button v-if="f.type === 'boolean'" class="bool-toggle" @click.stop="toggleBoolean(item, f.name)">
+                  <FieldValue :value="item.data[f.name]" :def="f" />
+                </button>
+                <FieldValue v-else :value="item.data[f.name]" :def="f" />
               </div>
               <div class="td td-actions">
                 <BondButton variant="ghost" size="sm" icon @click.stop="deleteItem(item.id)" v-tooltip="'Delete'">
@@ -470,14 +435,14 @@ function formatValue(value: unknown, field: FieldDef): string {
           <div v-else-if="viewMode === 'list'" class="items-list">
             <button v-for="item in group.items" :key="item.id" class="list-item" @click="selectedItemId = item.id">
               <div class="list-item-title"><span v-if="itemReference(item)" class="item-reference">{{ itemReference(item) }}</span>{{ getItemLabel(item) }}</div>
-              <div class="list-item-meta"><span v-for="f in visibleFields.filter(f => item.data[f.name] != null).slice(0, 3)" :key="f.name">{{ f.name }}: {{ formatValue(item.data[f.name], f) }}</span></div>
+              <div class="list-item-meta"><span v-for="f in visibleFields.filter(f => item.data[f.name] != null).slice(0, 3)" :key="f.name">{{ f.name }}: {{ formatFieldValue(item.data[f.name], f) }}</span></div>
             </button>
           </div>
 
           <div v-else class="items-cards">
             <button v-for="item in group.items" :key="item.id" class="item-card" @click="selectedItemId = item.id">
               <div class="list-item-title"><span v-if="itemReference(item)" class="item-reference">{{ itemReference(item) }}</span>{{ getItemLabel(item) }}</div>
-              <div class="card-details">{{ visibleFields.map(f => formatValue(item.data[f.name], f)).filter(Boolean).join(' · ') }}</div>
+              <div class="card-details">{{ visibleFields.map(f => item.data[f.name] == null ? '' : formatFieldValue(item.data[f.name], f)).filter(Boolean).join(' · ') }}</div>
             </button>
           </div>
         </div>
@@ -493,27 +458,15 @@ function formatValue(value: unknown, field: FieldDef): string {
         <BondText as="div" size="xs" weight="semibold" color="muted" class="add-form-title">New item</BondText>
         <div v-for="f in schema" :key="f.name" class="add-field">
           <label class="add-label">{{ f.name }}</label>
-          <select
-            v-if="f.type === 'select' && f.options"
-            :value="newItemData[f.name] ?? ''"
-            class="add-input"
-            @change="newItemData[f.name] = ($event.target as HTMLSelectElement).value"
-          >
-            <option value="">—</option>
-            <option v-for="opt in f.options" :key="opt" :value="opt">{{ opt }}</option>
-          </select>
-          <input
-            v-else
-            :type="f.type === 'number' || f.type === 'rating' ? 'number' : f.type === 'date' ? 'date' : 'text'"
-            :value="newItemData[f.name] ?? ''"
-            :placeholder="f.name"
-            class="add-input"
-            @input="newItemData[f.name] = ($event.target as HTMLInputElement).value"
-            @keydown.enter="submitNewItem"
+          <FieldEditor
+            :def="f"
+            :model-value="newItemData[f.name]"
+            @update:model-value="newItemData[f.name] = $event"
           />
         </div>
+        <BondText v-if="addError" as="div" size="xs" color="err" class="add-error">{{ addError }}</BondText>
         <div class="add-actions">
-          <BondButton variant="ghost" size="sm" @click="addingItem = false; newItemData = {}">Cancel</BondButton>
+          <BondButton variant="ghost" size="sm" @click="addingItem = false; newItemData = {}; addError = null">Cancel</BondButton>
           <BondButton variant="primary" size="sm" @click="submitNewItem">Add</BondButton>
         </div>
       </div>
@@ -588,9 +541,23 @@ function formatValue(value: unknown, field: FieldDef): string {
 }
 
 .group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   margin-bottom: 0.5rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.group-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.add-error {
+  padding: 0.25rem 0;
 }
 
 .items-table {
@@ -711,36 +678,6 @@ function formatValue(value: unknown, field: FieldDef): string {
 }
 .table-row:hover .td-actions {
   opacity: 1;
-}
-
-.rating {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-}
-
-.star--filled {
-  color: var(--color-accent);
-}
-
-.star--empty {
-  color: var(--color-muted);
-  opacity: 0.3;
-}
-
-.field-badge {
-  font-size: 0.7rem;
-  color: var(--color-muted);
-  background: var(--color-tint);
-  padding: 0.1rem 0.4rem;
-  border-radius: var(--radius-sm);
-}
-
-.field-link {
-  color: var(--color-accent);
-  font-size: 0.8rem;
-  cursor: pointer;
-  text-decoration: underline;
 }
 
 .bool-toggle {

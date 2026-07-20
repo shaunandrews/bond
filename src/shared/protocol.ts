@@ -40,7 +40,7 @@ export type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotificat
 // --- Protocol version ---
 
 /** Bump on ANY breaking change to RpcMethods/RpcNotifications (rpc-schema.ts). Equality = compatibility. */
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 // --- Error codes ---
 
@@ -49,6 +49,8 @@ export const RPC_INVALID_REQUEST = -32600
 export const RPC_METHOD_NOT_FOUND = -32601
 export const RPC_INVALID_PARAMS = -32602
 export const RPC_INTERNAL_ERROR = -32603
+/** Schema/data validation failure; error.data carries { errors: { field, message }[] }. */
+export const RPC_VALIDATION_ERROR = -32000
 
 // --- Helpers ---
 

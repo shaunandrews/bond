@@ -19,7 +19,7 @@
  */
 import type { DispatchableMethod, RpcParams, RpcResult, CollectionUpdates } from './rpc-schema'
 import type { BondSendInput, TaggedChunk } from './stream'
-import type { AttachedImage, EditMode, FieldDef, ImageMediaType } from './session'
+import type { AttachedImage, EditMode, FieldDefInput, ImageMediaType } from './session'
 import type { TranscriptMessage } from './transcript'
 import type { SenseSettings } from './sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
@@ -68,7 +68,8 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     // --- Collections ---
     listCollections: () => invoke('collection.list'),
     getCollection: (id: string) => invoke('collection.get', { id }),
-    createCollection: (name: string, schema: FieldDef[], icon?: string) =>
+    listCollectionReferences: () => invoke('collection.listReferences'),
+    createCollection: (name: string, schema: FieldDefInput[], icon?: string) =>
       invoke('collection.create', { name, schema, icon }),
     updateCollection: (id: string, updates: CollectionUpdates) => invoke('collection.update', { id, updates }),
     deleteCollection: (id: string) => invoke('collection.delete', { id }),

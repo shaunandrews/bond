@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { ref, computed, watch, toRefs, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, toRefs, nextTick, onMounted } from 'vue'
 import { PhArrowUp, PhCheck, PhPaperclip, PhSlidersHorizontal, PhX } from '@phosphor-icons/vue'
 import { MODEL_IDS, type ModelId } from '../../shared/models'
-import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type Collection, type CollectionItem, type EditMode, type ImageMediaType } from '../../shared/session'
+import { ACCEPTED_IMAGE_TYPES, imageDataUri, type AttachedImage, type EditMode, type ImageMediaType } from '../../shared/session'
+import { ISSUE_KEY_RE } from '../../shared/fields'
+import type { CollectionReference } from '../../shared/rpc-schema'
+import { useIssueReferences } from '../composables/useIssueReferences'
 import BondButton from './BondButton.vue'
 import BondFlyoutMenu from './BondFlyoutMenu.vue'
 import BondText from './BondText.vue'
 import ContextGauge from './ContextGauge.vue'
 
-function highlightMarkdownSyntax(text: string): string {
+const ISSUE_TOKEN_RE = new RegExp(ISSUE_KEY_RE.source, 'g')
+
+function highlightMarkdownSyntax(text: string, knownKeys: ReadonlyMap<string, CollectionReference>): string {
   if (!text) return ''
   let result = text.split('\n').map(line => {
     let esc = line
@@ -52,8 +57,9 @@ function highlightMarkdownSyntax(text: string): string {
       '<span class="md-syn">$1</span><span class="md-strike">$2</span><span class="md-syn">$3</span>')
 
     // Issue references are rendered as compact tokens while retaining plain text
-    // in the textarea, so the exact key is what gets sent to the agent.
-    esc = esc.replace(/\b([A-Z]{4}-\d+)\b/g, '<span class="issue-token">$1</span>')
+    // in the textarea, so the exact key is what gets sent to the agent. Only
+    // known keys are decorated — "UTF-8"-style prose must stay plain.
+    esc = esc.replace(ISSUE_TOKEN_RE, m => (knownKeys.has(m) ? `<span class="issue-token">${m}</span>` : m))
 
     return esc
   }).join('\n')
@@ -135,7 +141,7 @@ const fileInputEl = ref<HTMLInputElement | null>(null)
 const attachedImages = ref<AttachedImage[]>([])
 const inputText = ref('')
 
-const inputHighlightHtml = computed(() => highlightMarkdownSyntax(inputText.value))
+const inputHighlightHtml = computed(() => highlightMarkdownSyntax(inputText.value, issueRefsByKey.value))
 
 function updatePreview() {
   inputText.value = inputEl.value?.value ?? ''
@@ -255,15 +261,9 @@ function handleImageKeyDown(e: KeyboardEvent) {
 }
 
 // --- Skill autocomplete ---
-interface IssueReference {
-  key: string
-  title: string
-  collection: Collection
-  item: CollectionItem
-}
-
 const skills = ref<SkillInfo[]>([])
-const issueReferences = ref<IssueReference[]>([])
+// Singleton reference index — shared with MessageBubble, one RPC for all consumers.
+const { references: issueReferences, byKey: issueRefsByKey, knownPrefixes: issuePrefixes } = useIssueReferences()
 const showSkillMenu = ref(false)
 const showIssueMenu = ref(false)
 const issueMenuIndex = ref(0)
@@ -279,8 +279,16 @@ const filteredSkills = computed(() => {
 
 
 const selectedIssueReferences = computed(() => {
-  const text = inputText.value
-  return issueReferences.value.filter(issue => new RegExp(`\\b${issue.key}\\b`, 'i').test(text))
+  const seen = new Set<string>()
+  const selected: CollectionReference[] = []
+  for (const match of inputText.value.matchAll(ISSUE_TOKEN_RE)) {
+    const ref = issueRefsByKey.value.get(match[0])
+    if (ref && !seen.has(ref.key)) {
+      seen.add(ref.key)
+      selected.push(ref)
+    }
+  }
+  return selected
 })
 
 const filteredIssueReferences = computed(() => {
@@ -289,47 +297,16 @@ const filteredIssueReferences = computed(() => {
   const fragment = el.value.slice(issueMatchStart.value, el.selectionStart ?? el.value.length).toUpperCase()
   const [prefix = '', number = ''] = fragment.split('-', 2)
   return issueReferences.value.filter(issue => {
-    const [issuePrefix, issueNumber] = issue.key.split('-', 2)
-    return issuePrefix.startsWith(prefix) && (!fragment.includes('-') || issueNumber.startsWith(number) || issue.title.toLowerCase().includes(number.toLowerCase()))
+    return issue.prefix.startsWith(prefix) &&
+      (!fragment.includes('-') || String(issue.displayNumber).startsWith(number) || issue.title.toLowerCase().includes(number.toLowerCase()))
   }).slice(0, 8)
 })
 
-async function loadIssueReferences() {
-  try {
-    const collections = await window.bond.listCollections()
-    // Keep the established Bond Issues tracker useful against a daemon that
-    // has not yet returned its migrated prefix. The daemon migration remains
-    // canonical; this is a deliberately narrow compatibility bridge.
-    const issueCollections = collections.filter(collection => collection.issuePrefix || collection.name === 'Bond Issues')
-    const itemLists = await Promise.all(issueCollections.map(collection => window.bond.listCollectionItems(collection.id)))
-    issueReferences.value = itemLists.flatMap((items, index) => {
-      const collection = issueCollections[index]
-      const prefix = collection.issuePrefix || (collection.name === 'Bond Issues' ? 'BOND' : '')
-      const primary = collection.schema.find(field => field.primary)
-      return items.map(item => ({
-        key: `${prefix}-${item.displayNumber}`,
-        title: primary && item.data[primary.name] != null ? String(item.data[primary.name]) : item.id.slice(0, 8),
-        collection,
-        item,
-      }))
-    })
-  } catch { /* collections may be unavailable during startup */ }
-}
-
-let unsubscribeCollections: (() => void) | undefined
 onMounted(() => {
-  // References are independent of skills. Do not let a slow skill scan make
-  // BOND- look inert while the composer is otherwise ready.
-  void loadIssueReferences()
   try {
     void window.bond.listSkills().then(result => { skills.value = result }).catch(() => { /* skills unavailable */ })
   } catch { /* compatibility test surfaces may omit skills */ }
-  try {
-    unsubscribeCollections = window.bond.onCollectionsChanged(() => { void loadIssueReferences() })
-  } catch { /* older test and compatibility surfaces may not expose events */ }
 })
-
-onUnmounted(() => unsubscribeCollections?.())
 
 function updateAutocomplete() {
   const el = inputEl.value
@@ -351,11 +328,11 @@ function updateAutocomplete() {
   showSkillMenu.value = false
 
   const beforeCursor = text.slice(0, cursor)
-  // Issue lookup is deliberately quiet until a complete four-letter, uppercase
+  // Issue lookup is deliberately quiet until a complete, KNOWN uppercase
   // tracker prefix is present. Normal prose should never summon a ticket list.
-  const match = beforeCursor.match(/(?:^|\s)([A-Z]{4}(?:-\d*)?)$/)
+  const match = beforeCursor.match(/(?:^|\s)([A-Z]{2,6}(?:-\d*)?)$/)
   const prefix = match?.[1].split('-', 1)[0]
-  if (match && issueReferences.value.some(issue => issue.key.split('-', 1)[0] === prefix)) {
+  if (match && prefix && issuePrefixes.value.has(prefix)) {
     issueMatchStart.value = cursor - match[1].length
     issueMenuIndex.value = 0
     showIssueMenu.value = filteredIssueReferences.value.length > 0
@@ -386,7 +363,7 @@ function syncInput(value: string, cursor = value.length) {
   })
 }
 
-function selectIssueReference(issue: IssueReference) {
+function selectIssueReference(issue: CollectionReference) {
   const el = inputEl.value
   if (!el) return
   const cursor = el.selectionStart ?? el.value.length
@@ -489,7 +466,7 @@ function handleKeyDown(e: KeyboardEvent) {
       <div class="skill-menu issue-menu" role="listbox" aria-label="Issue references">
         <button
           v-for="(issue, i) in filteredIssueReferences"
-          :key="issue.item.id"
+          :key="issue.itemId"
           type="button"
           class="skill-menu-item issue-menu-item"
           :class="{ 'is-selected': i === issueMenuIndex }"
@@ -572,7 +549,7 @@ function handleKeyDown(e: KeyboardEvent) {
       <div v-if="selectedIssueReferences.length" class="issue-token-strip" aria-label="Referenced issues">
         <button
           v-for="issue in selectedIssueReferences"
-          :key="issue.item.id"
+          :key="issue.itemId"
           type="button"
           class="issue-reference-token"
           :title="issue.title"

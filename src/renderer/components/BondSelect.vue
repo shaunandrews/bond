@@ -6,7 +6,8 @@ import BondFlyoutMenu from './BondFlyoutMenu.vue'
 const props = defineProps<{
   modelValue?: string
   disabled?: boolean
-  options: { value: string; label: string }[]
+  /** color is an optional CSS color rendered as a dot before the label. */
+  options: { value: string; label: string; color?: string }[]
   placement?: 'top' | 'bottom'
   variant?: 'default' | 'minimal'
   size?: 'sm' | 'md'
@@ -20,10 +21,9 @@ const open = ref(false)
 const triggerEl = ref<HTMLElement | null>(null)
 const focusedIndex = ref(-1)
 
-const selectedLabel = computed(() => {
-  const opt = props.options.find(o => o.value === props.modelValue)
-  return opt?.label ?? props.modelValue ?? ''
-})
+const selectedOption = computed(() => props.options.find(o => o.value === props.modelValue))
+
+const selectedLabel = computed(() => selectedOption.value?.label ?? props.modelValue ?? '')
 
 const flyoutPlacement = computed(() =>
   props.placement === 'top' ? 'top-start' as const : 'bottom-start' as const
@@ -76,6 +76,7 @@ function handleKeyDown(e: KeyboardEvent) {
       @click="toggle"
       @keydown="handleKeyDown"
     >
+      <span v-if="selectedOption?.color" class="bond-select-dot" :style="{ background: selectedOption.color }" />
       <span class="bond-select-label">{{ selectedLabel }}</span>
       <PhCaretDown
         class="bond-select-icon"
@@ -104,6 +105,7 @@ function handleKeyDown(e: KeyboardEvent) {
         <span class="bond-select-check-slot">
           <PhCheck v-if="opt.value === modelValue" :size="12" weight="bold" />
         </span>
+        <span v-if="opt.color" class="bond-select-dot" :style="{ background: opt.color }" />
         <span>{{ opt.label }}</span>
       </button>
     </BondFlyoutMenu>
@@ -209,6 +211,13 @@ function handleKeyDown(e: KeyboardEvent) {
   width: 14px;
   flex-shrink: 0;
   color: var(--color-accent);
+}
+
+.bond-select-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
 }
 
 </style>

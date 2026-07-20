@@ -57,6 +57,15 @@
 
   --window-bg-opacity: 100%;
 
+  /* Field option palette — named keys stored in collection schemas (FieldColor) */
+  --field-red: #c94f4f;
+  --field-orange: #d07a3a;
+  --field-yellow: #ab8b2f;
+  --field-green: #5d9e63;
+  --field-blue: #4d7fc4;
+  --field-purple: #8b64b8;
+  --field-gray: #7a828c;
+
   --sidebar-border: rgba(0, 0, 0, 0.1);
   --sidebar-text: rgba(0, 0, 0, 0.8);
   --sidebar-text-muted: rgba(0, 0, 0, 0.5);
@@ -83,6 +92,14 @@
 
     --overlay: rgba(0, 0, 0, 0.6);
     --overlay-heavy: rgba(0, 0, 0, 0.85);
+
+    --field-red: #ef9a9a;
+    --field-orange: #efb27f;
+    --field-yellow: #e2cb75;
+    --field-green: #a5d6a7;
+    --field-blue: #90b6ec;
+    --field-purple: #c1a3e8;
+    --field-gray: #99a1ab;
 
     --sidebar-border: rgba(255, 255, 255, 0.1);
     --sidebar-text: rgba(255, 255, 255, 0.85);

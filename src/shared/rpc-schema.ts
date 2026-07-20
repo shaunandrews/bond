@@ -13,7 +13,7 @@ import type {
   Collection,
   CollectionItem,
   EditMode,
-  FieldDef,
+  FieldDefInput,
   ImageMediaType,
   ImageRecord,
   ItemComment,
@@ -100,8 +100,23 @@ export type SessionUpdates = Partial<
 >
 
 export type CollectionUpdates = Partial<
-  Pick<Collection, 'name' | 'icon' | 'schema' | 'archived' | 'features' | 'issuePrefix'>
->
+  Pick<Collection, 'name' | 'icon' | 'archived' | 'features' | 'issuePrefix'>
+> & {
+  /** Accepts legacy string[] options on the wire; the daemon normalizes. */
+  schema?: FieldDefInput[]
+}
+
+/** One resolvable PREFIX-n issue key — powers composer autocomplete, chips, and hover cards. */
+export interface CollectionReference {
+  key: string            // "BOND-12"
+  title: string          // primary field value, or "Untitled"
+  collectionId: string
+  itemId: string
+  prefix: string
+  displayNumber: number
+  /** Present when the collection has a status field: true if the item sits in a done/cancelled category. */
+  done?: boolean
+}
 
 // --- The method registry ---
 
@@ -170,7 +185,7 @@ export interface RpcMethods {
   // Collections
   'collection.list': { params: void; result: Collection[] }
   'collection.get': { params: { id: string }; result: Collection | null }
-  'collection.create': { params: { name: string; schema: FieldDef[]; icon?: string }; result: Collection }
+  'collection.create': { params: { name: string; schema: FieldDefInput[]; icon?: string; issuePrefix?: string }; result: Collection }
   'collection.update': { params: { id: string; updates?: CollectionUpdates }; result: Collection | null }
   'collection.delete': { params: { id: string }; result: boolean }
   'collection.renameField': { params: { id: string; oldName: string; newName: string }; result: boolean }
@@ -185,6 +200,7 @@ export interface RpcMethods {
   'collection.listItemComments': { params: { itemId: string }; result: ItemComment[] }
   'collection.searchItems': { params: { collectionId: string; query: string }; result: CollectionItem[] }
   'collection.getByName': { params: { name: string }; result: Collection | null }
+  'collection.listReferences': { params: void; result: CollectionReference[] }
 
   // Sense
   'sense.status': { params: void; result: { enabled: boolean; state: SenseState } & SenseStatsResult }
@@ -321,6 +337,7 @@ export const RPC_METHOD_NAMES = [
   'collection.listItemComments',
   'collection.searchItems',
   'collection.getByName',
+  'collection.listReferences',
   'sense.status',
   'sense.enable',
   'sense.disable',

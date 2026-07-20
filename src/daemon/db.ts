@@ -46,6 +46,7 @@ export function getDb(): Database.Database {
   migrateCreateCollectionItemCommentsTable(_db)
   migrateAddCollectionItemProjectId(_db)
   migrateAddCollectionItemDisplayNumber(_db)
+  migrateAddCollectionNextDisplayNumber(_db)
   retireLegacyJournalCollection(_db)
   migrateCreateSenseMemoryTables(_db)
   migrateDropRetiredTables(_db)
@@ -517,15 +518,38 @@ function migrateAddCollectionItemDisplayNumber(db: Database.Database): void {
     db.exec('ALTER TABLE collection_items ADD COLUMN display_number INTEGER NOT NULL DEFAULT 0')
   }
 
-  const collections = db.prepare('SELECT id FROM collections').all() as { id: string }[]
+  // Number ONLY rows that never got one (0 = the column default). This used to
+  // renumber every item on every boot, which rewrote user-visible keys like
+  // BOND-12 whenever an item had been deleted. Stable means write-once.
   const update = db.prepare('UPDATE collection_items SET display_number = ? WHERE id = ?')
   const assign = db.transaction(() => {
-    for (const collection of collections) {
-      const items = db.prepare('SELECT id FROM collection_items WHERE collection_id = ? ORDER BY created_at ASC, id ASC').all(collection.id) as { id: string }[]
-      items.forEach((item, index) => update.run(index + 1, item.id))
+    const collections = db.prepare('SELECT DISTINCT collection_id FROM collection_items WHERE display_number = 0').all() as { collection_id: string }[]
+    for (const { collection_id } of collections) {
+      let next = (db.prepare('SELECT COALESCE(MAX(display_number), 0) as m FROM collection_items WHERE collection_id = ?').get(collection_id) as { m: number }).m + 1
+      const items = db.prepare('SELECT id FROM collection_items WHERE collection_id = ? AND display_number = 0 ORDER BY created_at ASC, id ASC').all(collection_id) as { id: string }[]
+      for (const item of items) update.run(next++, item.id)
     }
   })
   assign()
+}
+
+/**
+ * Issue numbers must never be reused: MAX(display_number)+1 hands a deleted
+ * top item's number to the next insert, silently re-pointing existing
+ * BOND-n references. A stored counter only moves forward.
+ */
+function migrateAddCollectionNextDisplayNumber(db: Database.Database): void {
+  const columns = db.pragma('table_info(collections)') as { name: string }[]
+  if (columns.some(c => c.name === 'next_display_number')) return
+  const seed = db.transaction(() => {
+    db.exec('ALTER TABLE collections ADD COLUMN next_display_number INTEGER NOT NULL DEFAULT 1')
+    db.exec(`
+      UPDATE collections SET next_display_number = 1 + COALESCE(
+        (SELECT MAX(display_number) FROM collection_items WHERE collection_id = collections.id), 0
+      )
+    `)
+  })
+  seed()
 }
 
 function retireLegacyJournalCollection(db: Database.Database): void {

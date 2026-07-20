@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { PhStar } from '@phosphor-icons/vue'
 import type { Collection, CollectionItem, FieldDef } from '../../../shared/session'
+import FieldValue from '../fields/FieldValue.vue'
 
 const props = defineProps<{
   name?: string
@@ -91,10 +91,6 @@ onUnmounted(() => {
   unsub?.()
 })
 
-function openExternalLink(url: string) {
-  void window.bond.openExternal(url)
-}
-
 function getPrimaryField(schema: FieldDef[]): FieldDef | undefined {
   return schema.find(f => f.primary)
 }
@@ -106,15 +102,6 @@ function getItemLabel(item: CollectionItem, schema: FieldDef[]): string {
     if (val != null) return String(val)
   }
   return item.id.slice(0, 8)
-}
-
-function formatValue(value: unknown, field: FieldDef): string {
-  if (value == null) return '—'
-  switch (field.type) {
-    case 'boolean': return value ? 'Yes' : 'No'
-    case 'number': return `${field.prefix ?? ''}${value}${field.suffix ?? ''}`
-    default: return Array.isArray(value) ? value.join(', ') : String(value)
-  }
 }
 </script>
 
@@ -141,27 +128,12 @@ function formatValue(value: unknown, field: FieldDef): string {
       </div>
       <div v-else class="collection-items">
         <div v-for="item in filteredItems" :key="item.id" class="item-row">
+          <span v-if="targetCollection.issuePrefix" class="item-key">{{ targetCollection.issuePrefix }}-{{ item.displayNumber }}</span>
           <span class="item-label">{{ getItemLabel(item, targetCollection.schema) }}</span>
           <div class="item-fields">
             <template v-for="field in targetCollection.schema.filter(f => !f.primary)" :key="field.name">
               <span v-if="item.data[field.name] != null" class="item-field">
-                <template v-if="field.type === 'rating'">
-                  <span class="rating">
-                    <template v-for="n in (field.max ?? 5)" :key="n">
-                      <PhStar v-if="n <= (item.data[field.name] as number)" :size="12" weight="fill" class="star star--filled" />
-                      <PhStar v-else :size="12" class="star star--empty" />
-                    </template>
-                  </span>
-                </template>
-                <template v-else-if="field.type === 'select'">
-                  <span class="field-badge">{{ item.data[field.name] }}</span>
-                </template>
-                <template v-else-if="field.type === 'url'">
-                  <a class="field-link" @click.prevent="openExternalLink(String(item.data[field.name]))">{{ field.name }}</a>
-                </template>
-                <template v-else>
-                  <span class="field-value">{{ formatValue(item.data[field.name], field) }}</span>
-                </template>
+                <FieldValue :value="item.data[field.name]" :def="field" />
               </span>
             </template>
           </div>
@@ -233,6 +205,14 @@ function formatValue(value: unknown, field: FieldDef): string {
   flex-shrink: 0;
 }
 
+.item-key {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
 .item-fields {
   display: flex;
   align-items: center;
@@ -244,40 +224,7 @@ function formatValue(value: unknown, field: FieldDef): string {
 .item-field {
   display: inline-flex;
   align-items: center;
-}
-
-.rating {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-}
-
-.star--filled {
-  color: var(--color-accent);
-}
-
-.star--empty {
-  color: var(--color-muted);
-  opacity: 0.3;
-}
-
-.field-badge {
-  font-size: 0.75em;
-  color: var(--color-muted);
-  background: var(--color-tint);
-  padding: 0.1em 0.5em;
-  border-radius: var(--radius-sm);
-}
-
-.field-value {
   color: var(--color-muted);
   font-size: 0.85em;
-}
-
-.field-link {
-  color: var(--color-accent);
-  font-size: 0.85em;
-  cursor: pointer;
-  text-decoration: underline;
 }
 </style>

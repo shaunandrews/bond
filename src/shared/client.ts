@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import type { BondSendInput, TaggedChunk } from './stream'
-import type { AttachedImage, EditMode, FieldDef, SessionMessage } from './session'
+import type { AttachedImage, EditMode, FieldDefInput, SessionMessage } from './session'
 import type { ImageMediaType } from './session'
 import type { TranscriptMessage } from './transcript'
 import type { SenseSettings } from './sense'
@@ -27,6 +27,14 @@ import {
 interface PendingRequest {
   resolve: (result: unknown) => void
   reject: (error: Error) => void
+}
+
+/** Rejection carrying the JSON-RPC error code and data alongside the message. */
+export class RpcCallError extends Error {
+  constructor(message: string, public code: number, public data?: unknown) {
+    super(message)
+    this.name = 'RpcCallError'
+  }
 }
 
 export class BondClient {
@@ -133,7 +141,7 @@ export class BondClient {
         if (p) {
           this.pending.delete(msg.id)
           if (msg.error) {
-            p.reject(new Error(msg.error.message))
+            p.reject(new RpcCallError(msg.error.message, msg.error.code, msg.error.data))
           } else {
             p.resolve(msg.result)
           }
@@ -358,7 +366,7 @@ export class BondClient {
     return this.call('collection.get', { id })
   }
 
-  async createCollection(name: string, schema: FieldDef[], icon?: string): Promise<RpcResult<'collection.create'>> {
+  async createCollection(name: string, schema: FieldDefInput[], icon?: string): Promise<RpcResult<'collection.create'>> {
     return this.call('collection.create', { name, schema, icon })
   }
 

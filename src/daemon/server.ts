@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { socketIdentity, socketLost, type DaemonHealth } from './lifecycle'
 import type { TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
-import type { SessionMessage, AttachedImage, EditMode } from '../shared/session'
+import type { SessionMessage, AttachedImage, EditMode, FieldDefInput } from '../shared/session'
 import { parseEditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
 import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, getSourceMessages, reconcileInterruptedTurns } from './transcript'
@@ -19,6 +19,7 @@ import {
   RPC_METHOD_NOT_FOUND,
   RPC_INTERNAL_ERROR,
   RPC_INVALID_PARAMS,
+  RPC_VALIDATION_ERROR,
   PROTOCOL_VERSION,
   type JsonRpcRequest,
   type JsonRpcMessage
@@ -64,7 +65,9 @@ import {
   addItemComment,
   deleteItemComment,
   listItemComments,
-  searchItems
+  searchItems,
+  listReferences,
+  CollectionValidationError
 } from './collections'
 import { createSenseController, type SenseController } from './sense/controller'
 import { getStats as getSenseStats, clearData as clearSenseData } from './sense/storage'
@@ -319,7 +322,7 @@ type RpcHandler<M extends DispatchableMethod> = (params: RpcParams<M>, ctx: RpcC
 type RpcHandlers = { [M in DispatchableMethod]: RpcHandler<M> }
 
 class RpcError extends Error {
-  constructor(public code: number, message: string) {
+  constructor(public code: number, message: string, public data?: unknown) {
     super(message)
   }
 }
@@ -584,6 +587,8 @@ const handlers: RpcHandlers = {
   // --- Collections ---
   'collection.list': () => listCollections(),
 
+  'collection.listReferences': () => listReferences(),
+
   'collection.get': (params) => {
     const cid = getStringParam(raw(params), 'id')
     if (!cid) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
@@ -594,10 +599,11 @@ const handlers: RpcHandlers = {
     const p = raw(params)
     const name = getStringParam(p, 'name')
     if (!name) throw new RpcError(RPC_INVALID_PARAMS, 'name is required')
-    const schema = getParam(p, 'schema') as unknown[] | undefined
+    const schema = getParam(p, 'schema')
     if (!schema || !Array.isArray(schema)) throw new RpcError(RPC_INVALID_PARAMS, 'schema is required')
     const icon = getStringParam(p, 'icon') ?? ''
-    const collection = createCollection(name, schema as any, icon)
+    const issuePrefix = getStringParam(p, 'issuePrefix') ?? ''
+    const collection = createCollection(name, schema as FieldDefInput[], icon, [], issuePrefix)
     broadcastCollectionsChanged()
     return collection
   },
@@ -1051,7 +1057,10 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
     const result = await handler(req.params, { ws })
     return JSON.stringify(makeResponse(req.id, result))
   } catch (e) {
-    if (e instanceof RpcError) return JSON.stringify(makeErrorResponse(req.id, e.code, e.message))
+    if (e instanceof RpcError) return JSON.stringify(makeErrorResponse(req.id, e.code, e.message, e.data))
+    if (e instanceof CollectionValidationError) {
+      return JSON.stringify(makeErrorResponse(req.id, RPC_VALIDATION_ERROR, e.message, { errors: e.errors }))
+    }
     return JSON.stringify(makeErrorResponse(req.id, RPC_INTERNAL_ERROR, e instanceof Error ? e.message : String(e)))
   }
 }

@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import ChatInput from './ChatInput.vue'
+import { resetIssueReferencesForTest } from '../composables/useIssueReferences'
 
 describe('ChatInput', () => {
   function createWrapper(busy = false) {
@@ -164,5 +166,95 @@ describe('ChatInput', () => {
 
     ;(wrapper.vm as any).setText('edited message')
     expect((textarea.element as HTMLTextAreaElement).value).toBe('edited message')
+  })
+})
+
+describe('ChatInput issue references', () => {
+  beforeEach(() => {
+    resetIssueReferencesForTest()
+    ;(window as unknown as { bond: unknown }).bond = {
+      listSkills: vi.fn().mockResolvedValue([]),
+      listCollectionReferences: vi.fn().mockResolvedValue([
+        { key: 'BOND-3', title: 'Redesign composer', collectionId: 'c1', itemId: 'i3', prefix: 'BOND', displayNumber: 3 },
+        { key: 'BOND-30', title: 'Other thing', collectionId: 'c1', itemId: 'i30', prefix: 'BOND', displayNumber: 30 },
+        { key: 'WP-1', title: 'Two-letter tracker', collectionId: 'c2', itemId: 'i9', prefix: 'WP', displayNumber: 1 },
+      ]),
+      onCollectionsChanged: () => () => {},
+    }
+  })
+
+  afterEach(() => {
+    resetIssueReferencesForTest()
+    delete (window as unknown as { bond?: unknown }).bond
+  })
+
+  async function typeText(wrapper: ReturnType<typeof mount<typeof ChatInput>>, text: string) {
+    const textarea = wrapper.find('textarea')
+    const el = textarea.element as HTMLTextAreaElement
+    el.value = text
+    el.selectionStart = el.selectionEnd = text.length
+    await textarea.trigger('input')
+    await nextTick()
+  }
+
+  function createReferenceWrapper() {
+    return mount(ChatInput, {
+      props: { busy: false, model: 'balanced' as const, editMode: { type: 'full' as const } },
+      global: { stubs: { Teleport: true } },
+    })
+  }
+
+  it('opens the suggestion menu for a known prefix, including non-4-letter ones', async () => {
+    const wrapper = createReferenceWrapper()
+    await Promise.resolve()
+    await nextTick()
+
+    await typeText(wrapper, 'related to WP')
+    expect(wrapper.find('.issue-menu').exists()).toBe(true)
+    expect(wrapper.find('.issue-menu').text()).toContain('WP-1')
+  })
+
+  it('stays quiet for unknown uppercase words', async () => {
+    const wrapper = createReferenceWrapper()
+    await Promise.resolve()
+    await nextTick()
+
+    await typeText(wrapper, 'uses HTTP')
+    expect(wrapper.find('.issue-menu').exists()).toBe(false)
+  })
+
+  it('narrows by number once a dash is typed', async () => {
+    const wrapper = createReferenceWrapper()
+    await Promise.resolve()
+    await nextTick()
+
+    await typeText(wrapper, 'BOND-30')
+    const menu = wrapper.find('.issue-menu')
+    expect(menu.text()).toContain('BOND-30')
+    expect(menu.text()).not.toContain('Redesign composer')
+  })
+
+  it('shows a token strip only for known keys present in the text', async () => {
+    const wrapper = createReferenceWrapper()
+    await Promise.resolve()
+    await nextTick()
+
+    await typeText(wrapper, 'see BOND-3 vs UTF-8 and BOND-99 ')
+    const strip = wrapper.find('.issue-token-strip')
+    expect(strip.exists()).toBe(true)
+    expect(strip.text()).toContain('BOND-3')
+    expect(strip.text()).not.toContain('UTF-8')
+    expect(strip.text()).not.toContain('BOND-99')
+  })
+
+  it('highlights known keys as tokens in the preview overlay only', async () => {
+    const wrapper = createReferenceWrapper()
+    await Promise.resolve()
+    await nextTick()
+
+    await typeText(wrapper, 'BOND-3 and UTF-8 ')
+    const highlight = wrapper.find('.chat-highlight').html()
+    expect(highlight).toContain('<span class="issue-token">BOND-3</span>')
+    expect(highlight).not.toContain('<span class="issue-token">UTF-8</span>')
   })
 })

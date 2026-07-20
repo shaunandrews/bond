@@ -1,5 +1,5 @@
 import { ref, computed, watch } from 'vue'
-import type { Collection, CollectionItem, FieldDef } from '../../shared/session'
+import type { Collection, CollectionItem, FieldDefInput } from '../../shared/session'
 
 const STORAGE_KEY = 'bond:activeCollectionId'
 
@@ -34,7 +34,7 @@ export function useCollections() {
     }
   }
 
-  async function create(name: string, schema: FieldDef[], icon?: string): Promise<Collection> {
+  async function create(name: string, schema: FieldDefInput[], icon?: string): Promise<Collection> {
     const collection = await window.bond.createCollection(name, schema, icon)
     collections.value.unshift(collection)
     activeCollectionId.value = collection.id

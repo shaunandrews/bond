@@ -92,12 +92,17 @@ const BOND_BASE_PROMPT =
   '<bond-embed type="media" limit="6" />                 — cap the count\n' +
   'Tag MUST be on its own line. Self-closing. Mix freely with markdown commentary. ALWAYS use embeds when showing Bond data to the user.\n\n' +
   'COLLECTIONS:\n' +
-  'Bond has a collections system for tracking anything with user-defined schemas (movies, books, coffee, workouts, etc.). Manage via the `bond collection` CLI. This is the complete syntax — do not probe the CLI for help or read its source:\n' +
+  'Bond has a collections system for tracking anything with typed, user-defined schemas (issue trackers, movies, books, workouts, etc.). Manage via the `bond collection` CLI. This is the complete syntax — do not probe the CLI for help or read its source:\n' +
   '- `bond collection` — list all collections\n' +
-  '- `bond collection create <name> --icon 🎬 --schema \'<json>\'` — create. The schema is a JSON array of fields: `[{"name":"title","type":"text","primary":true},{"name":"status","type":"select","options":["todo","doing","done"]},{"name":"due","type":"date"}]`. Field types: text, longtext, number, date, boolean, select, multiselect, rating, url, tags, image. Mark exactly one text field `"primary":true`. select/multiselect need `options`.\n' +
-  '- `bond collection add <name> --<field> <value> ...` — add an item (one flag per schema field, e.g. `--title "Ship beta" --status doing`)\n' +
+  '- `bond collection create <name> --icon 🎬 --schema \'<json>\' [--prefix BOND]` — create. `--prefix` (2-6 letters) gives every item a stable tracker key like BOND-12 — always set one for issue-tracker-style collections. The schema is a JSON array of fields, e.g. `[{"name":"title","type":"text","primary":true},{"name":"status","type":"status","options":[{"value":"open","category":"open"},{"value":"in progress","category":"active"},{"value":"done","category":"done"}]},{"name":"priority","type":"priority"},{"name":"due","type":"date"}]`.\n' +
+  '- Field types: text, longtext, number, date (YYYY-MM-DD), boolean, select, multiselect, rating, url, tags, image, status, priority. Mark exactly one text field `"primary":true`.\n' +
+  '- select/multiselect/status need `options`. Options may be plain strings or objects `{"value","label","color","category"}`. For status fields give each option a `category` — one of open/active/done/cancelled — which powers done-tracking and grouping; colors: red, orange, yellow, green, blue, purple, gray. priority defaults to urgent/high/medium/low/none when options are omitted — only pass options to override that scale.\n' +
+  '- `bond collection add <name> --<field> <value> ...` — add an item (one flag per schema field, e.g. `--title "Ship beta" --status "in progress"`)\n' +
   '- `bond collection show <name|id>` / `ls` / `update <name> <item> --<field> <v>` / `done` / `info` / `rm` / `archive` — manage collections and items\n' +
-  'When the user talks about items conversationally, use the CLI to create/update items. To show collections in chat, use <bond-embed type="collection" /> or variants with name/filter/search/limit.\n\n'
+  '- Writes are VALIDATED against the schema: unknown fields are rejected, select/status/priority values must match an option, dates must be YYYY-MM-DD, numbers must parse. A failed write names the offending field and the allowed values — fix the value and retry, do not invent new fields. Pass an empty value (`--due ""`) to clear a field.\n' +
+  'When the user talks about items conversationally, use the CLI to create/update items. To show collections in chat, use <bond-embed type="collection" /> or variants with name/filter/search/limit.\n\n' +
+  'ISSUE KEYS:\n' +
+  'Tokens like BOND-12 (an uppercase 2-6 letter prefix, a dash, a number) in a user message are references to collection items — the prefix names the collection, the number is the item\'s stable display number. Resolve one with `bond collection info <collection> <KEY>` (e.g. `bond collection info issues BOND-12`); `bond collection ls` shows every item\'s key. Item commands (`update`, `done`, `info`, `rm`) accept the key in place of an item name. Always use these keys when discussing, listing, or updating tracker items so the user can reference them later.\n\n'
 
 function buildSkillsPrompt(): string {
   const skills = getCachedSkills()

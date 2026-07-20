@@ -1,6 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import type { Collection, CollectionItem, FieldDef, ItemComment } from '../shared/session'
+import type { Collection, CollectionItem, FieldDef, FieldDefInput, ItemComment } from '../shared/session'
+import type { CollectionReference } from '../shared/rpc-schema'
+import { coerceItemData, isDoneValue, ISSUE_PREFIX_RE, normalizeSchema, validateSchema, type FieldError } from '../shared/fields'
 import { getDb } from './db'
+
+/** Schema/data rejection carrying per-field errors; server.ts maps it to RPC_VALIDATION_ERROR. */
+export class CollectionValidationError extends Error {
+  constructor(public errors: FieldError[]) {
+    super(errors.map(e => (e.field ? `${e.field}: ${e.message}` : e.message)).join('; '))
+    this.name = 'CollectionValidationError'
+  }
+}
 
 // --- Row types ---
 
@@ -42,7 +52,8 @@ function rowToCollection(r: CollectionRow): Collection {
     id: r.id,
     name: r.name,
     icon: r.icon,
-    schema: JSON.parse(r.schema) as FieldDef[],
+    // Legacy rows may hold string[] options — every read hands out canonical FieldDef[]
+    schema: normalizeSchema(JSON.parse(r.schema) as FieldDefInput[]),
     features,
     issuePrefix: r.issue_prefix || undefined,
     archived: r.archived === 1,
@@ -103,19 +114,30 @@ export function getCollectionByName(name: string): Collection | null {
   return row ? rowToCollection(row) : null
 }
 
-export function createCollection(name: string, schema: FieldDef[], icon = '', features: string[] = []): Collection {
+function validateIssuePrefix(raw: string): string {
+  const prefix = raw.trim().toUpperCase()
+  if (prefix && !ISSUE_PREFIX_RE.test(prefix)) {
+    throw new CollectionValidationError([{ field: 'issuePrefix', message: `"${raw}" must be 2-6 letters (e.g. BOND, WP)` }])
+  }
+  return prefix
+}
+
+export function createCollection(name: string, schema: FieldDefInput[], icon = '', features: string[] = [], issuePrefix = ''): Collection {
   const db = getDb()
   const id = randomUUID()
   const now = new Date().toISOString()
-  const issuePrefix = name === 'Bond Issues' ? 'BOND' : ''
+  const prefix = validateIssuePrefix(issuePrefix)
+  const canonical = normalizeSchema(schema)
+  const schemaErrors = validateSchema(canonical)
+  if (schemaErrors.length) throw new CollectionValidationError(schemaErrors)
   db.prepare('INSERT INTO collections (id, name, icon, schema, features, issue_prefix, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)')
-    .run(id, name, icon, JSON.stringify(schema), JSON.stringify(features), issuePrefix, now, now)
-  return { id, name, icon, schema, features, issuePrefix: issuePrefix || undefined, archived: false, createdAt: now, updatedAt: now }
+    .run(id, name, icon, JSON.stringify(canonical), JSON.stringify(features), prefix, now, now)
+  return { id, name, icon, schema: canonical, features, issuePrefix: prefix || undefined, archived: false, createdAt: now, updatedAt: now }
 }
 
 export function updateCollection(
   id: string,
-  updates: Partial<Pick<Collection, 'name' | 'icon' | 'schema' | 'archived' | 'features' | 'issuePrefix'>>
+  updates: Partial<Pick<Collection, 'name' | 'icon' | 'archived' | 'features' | 'issuePrefix'>> & { schema?: FieldDefInput[] }
 ): Collection | null {
   const db = getDb()
   const sets: string[] = []
@@ -123,9 +145,14 @@ export function updateCollection(
 
   if (updates.name !== undefined) { sets.push('name = ?'); values.push(updates.name) }
   if (updates.icon !== undefined) { sets.push('icon = ?'); values.push(updates.icon) }
-  if (updates.schema !== undefined) { sets.push('schema = ?'); values.push(JSON.stringify(updates.schema)) }
+  if (updates.schema !== undefined) {
+    const canonical = normalizeSchema(updates.schema)
+    const schemaErrors = validateSchema(canonical)
+    if (schemaErrors.length) throw new CollectionValidationError(schemaErrors)
+    sets.push('schema = ?'); values.push(JSON.stringify(canonical))
+  }
   if (updates.features !== undefined) { sets.push('features = ?'); values.push(JSON.stringify(updates.features)) }
-  if (updates.issuePrefix !== undefined) { sets.push('issue_prefix = ?'); values.push(updates.issuePrefix.toUpperCase()) }
+  if (updates.issuePrefix !== undefined) { sets.push('issue_prefix = ?'); values.push(validateIssuePrefix(updates.issuePrefix)) }
   if (updates.archived !== undefined) { sets.push('archived = ?'); values.push(updates.archived ? 1 : 0) }
   if (sets.length === 0) return getCollection(id)
 
@@ -167,17 +194,24 @@ export function getItem(id: string): CollectionItem | null {
 
 export function addItem(collectionId: string, data: Record<string, unknown>): CollectionItem {
   const db = getDb()
+  const collection = getCollection(collectionId)
+  if (!collection) throw new CollectionValidationError([{ field: '', message: 'collection not found' }])
+  const coerced = coerceItemData(collection.schema, data, { partial: false })
+  if (!coerced.ok) throw new CollectionValidationError(coerced.errors)
+  data = coerced.data
   const id = randomUUID()
   const now = new Date().toISOString()
-  const maxOrder = (db.prepare('SELECT COALESCE(MAX(sort_order), -1) as m FROM collection_items WHERE collection_id = ?').get(collectionId) as { m: number }).m
-  const sortOrder = maxOrder + 1
-  const maxDisplayNumber = (db.prepare('SELECT COALESCE(MAX(display_number), 0) as m FROM collection_items WHERE collection_id = ?').get(collectionId) as { m: number }).m
-  const displayNumber = maxDisplayNumber + 1
-  db.prepare('INSERT INTO collection_items (id, collection_id, data, project_id, sort_order, display_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, collectionId, JSON.stringify(data), null, sortOrder, displayNumber, now, now)
-
-  // Touch collection updated_at
-  db.prepare('UPDATE collections SET updated_at = ? WHERE id = ?').run(now, collectionId)
+  // The counter (not MAX+1) hands out display numbers so deleting the newest
+  // item can never re-issue its number to a future item.
+  const insert = db.transaction((): { displayNumber: number; sortOrder: number } => {
+    const counter = (db.prepare('SELECT next_display_number as n FROM collections WHERE id = ?').get(collectionId) as { n: number }).n
+    db.prepare('UPDATE collections SET next_display_number = ?, updated_at = ? WHERE id = ?').run(counter + 1, now, collectionId)
+    const maxOrder = (db.prepare('SELECT COALESCE(MAX(sort_order), -1) as m FROM collection_items WHERE collection_id = ?').get(collectionId) as { m: number }).m
+    db.prepare('INSERT INTO collection_items (id, collection_id, data, project_id, sort_order, display_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, collectionId, JSON.stringify(data), null, maxOrder + 1, counter, now, now)
+    return { displayNumber: counter, sortOrder: maxOrder + 1 }
+  })
+  const { displayNumber, sortOrder } = insert()
 
   return { id, collectionId, data, sortOrder, displayNumber, createdAt: now, updatedAt: now }
 }
@@ -190,8 +224,16 @@ export function updateItem(id: string, data: Record<string, unknown>): Collectio
   const existing = db.prepare(`SELECT ${ITEM_COLS} FROM collection_items WHERE id = ?`).get(id) as ItemRow | undefined
   if (!existing) return null
 
+  // Validate only the incoming keys — legacy rows with now-invalid values in
+  // OTHER fields must stay editable. Explicit null clears a field.
+  const collection = getCollection(existing.collection_id)
+  if (!collection) return null
+  const coerced = coerceItemData(collection.schema, data, { partial: true })
+  if (!coerced.ok) throw new CollectionValidationError(coerced.errors)
+
   const existingData = JSON.parse(existing.data) as Record<string, unknown>
-  const merged = { ...existingData, ...data }
+  const merged = { ...existingData, ...coerced.data }
+  for (const key of coerced.cleared) delete merged[key]
 
   db.prepare('UPDATE collection_items SET data = ?, updated_at = ? WHERE id = ?')
     .run(JSON.stringify(merged), now, id)
@@ -221,6 +263,40 @@ export function reorderItems(orderedIds: string[]): void {
     orderedIds.forEach((id, i) => stmt.run(i, id))
   })
   run()
+}
+
+/**
+ * Every PREFIX-n reference across all prefixed collections in one cheap call —
+ * the single source for composer autocomplete, message chips, and hover cards.
+ * Pre-hardening databases can hold duplicate display numbers; the newest item
+ * wins its key deterministically.
+ */
+export function listReferences(): CollectionReference[] {
+  const out = new Map<string, { ref: CollectionReference; createdAt: string }>()
+  for (const collection of listCollections()) {
+    const prefix = collection.issuePrefix
+    if (!prefix) continue
+    const primary = collection.schema.find(f => f.primary)
+    const statusField = collection.schema.find(f => f.type === 'status')
+    for (const item of listItems(collection.id)) {
+      const key = `${prefix}-${item.displayNumber}`
+      const titleValue = primary ? item.data[primary.name] : undefined
+      const ref: CollectionReference = {
+        key,
+        title: titleValue != null && String(titleValue).trim() ? String(titleValue) : 'Untitled',
+        collectionId: collection.id,
+        itemId: item.id,
+        prefix,
+        displayNumber: item.displayNumber,
+        ...(statusField ? { done: isDoneValue(statusField, item.data[statusField.name]) } : {}),
+      }
+      const existing = out.get(key)
+      if (!existing || existing.createdAt <= item.createdAt) {
+        out.set(key, { ref, createdAt: item.createdAt })
+      }
+    }
+  }
+  return [...out.values()].map(e => e.ref)
 }
 
 // --- Schema operations ---

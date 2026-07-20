@@ -5,7 +5,7 @@
  *
  * Usage:
  *   bond collection                                        List all collections
- *   bond collection create <name> --icon 🎬 --schema '<json>'   Create a collection
+ *   bond collection create <name> --icon 🎬 --schema '<json>' [--prefix BOND]   Create a collection
  *   bond collection show <name|id>                         Show collection details
  *   bond collection schema <name|id>                       Print schema as JSON
  *   bond collection edit <name|id> --name <n>              Rename
@@ -24,25 +24,18 @@
  */
 
 import { call, connect, WebSocket } from './connect'
+import type { FieldDef } from '../shared/session'
+import { FIELD_TYPES, formatFieldValue as formatFieldText, isDoneValue, optionsOf, parseIssueKey } from '../shared/fields'
 
 interface Collection {
   id: string
   name: string
   icon: string
   schema: FieldDef[]
+  issuePrefix?: string
   archived: boolean
   createdAt: string
   updatedAt: string
-}
-
-interface FieldDef {
-  name: string
-  type: string
-  primary?: boolean
-  options?: string[]
-  max?: number
-  prefix?: string
-  suffix?: string
 }
 
 interface CollectionItem {
@@ -50,8 +43,14 @@ interface CollectionItem {
   collectionId: string
   data: Record<string, unknown>
   sortOrder: number
+  displayNumber: number
   createdAt: string
   updatedAt: string
+}
+
+/** Tracker key like BOND-12 when the collection has a prefix. */
+function itemKey(item: CollectionItem, col: Collection): string | null {
+  return col.issuePrefix ? `${col.issuePrefix}-${item.displayNumber}` : null
 }
 
 const R = '\x1b[0;31m'
@@ -91,7 +90,13 @@ function getItemLabel(item: CollectionItem, schema: FieldDef[]): string {
   return item.id.slice(0, 8)
 }
 
-function findItem(items: CollectionItem[], query: string, schema: FieldDef[]): CollectionItem | undefined {
+function findItem(items: CollectionItem[], query: string, schema: FieldDef[], issuePrefix?: string): CollectionItem | undefined {
+  // Tracker key (BOND-12, case-insensitive) resolves by display number
+  const key = parseIssueKey(query.toUpperCase())
+  if (key && (!issuePrefix || key.prefix === issuePrefix)) {
+    const byNumber = items.find(i => i.displayNumber === key.number)
+    if (byNumber) return byNumber
+  }
   // ID prefix
   const byId = items.find(i => i.id.toLowerCase().startsWith(query.toLowerCase()))
   if (byId) return byId
@@ -110,41 +115,47 @@ function findItem(items: CollectionItem[], query: string, schema: FieldDef[]): C
   return undefined
 }
 
+/** Stored palette keys → ANSI, for status/priority option colors. */
+const FIELD_COLOR_ANSI: Record<string, string> = {
+  red: '\x1b[0;31m',
+  orange: '\x1b[38;5;208m',
+  yellow: '\x1b[0;33m',
+  green: '\x1b[0;32m',
+  blue: '\x1b[0;34m',
+  purple: '\x1b[0;35m',
+  gray: '\x1b[0;90m',
+}
+
+/** ANSI-wraps the shared registry's plain-text formatting. */
 function formatFieldValue(value: unknown, field: FieldDef): string {
   if (value == null) return `${D}—${N}`
+  const text = formatFieldText(value, field)
   switch (field.type) {
     case 'boolean': return value ? `${G}yes${N}` : `${D}no${N}`
-    case 'rating': {
-      const max = field.max ?? 5
-      const n = typeof value === 'number' ? value : 0
-      return '★'.repeat(n) + `${D}${'☆'.repeat(max - n)}${N}`
+    case 'rating': return text.replace(/(☆+)$/, `${D}$1${N}`)
+    case 'status':
+    case 'priority': {
+      const opt = optionsOf(field).find(o => o.value === value)
+      const ansi = FIELD_COLOR_ANSI[opt?.color ?? ''] ?? Y
+      return `${ansi}${text}${N}`
     }
-    case 'select': return `${Y}${value}${N}`
+    case 'select': return `${Y}${text}${N}`
     case 'multiselect':
     case 'tags':
-      return Array.isArray(value) ? value.map(v => `${Y}${v}${N}`).join(', ') : String(value)
-    case 'number': {
-      const prefix = field.prefix ?? ''
-      const suffix = field.suffix ?? ''
-      return `${prefix}${value}${suffix}`
-    }
-    default: return String(value)
+      return Array.isArray(value) ? value.map(v => `${Y}${v}${N}`).join(', ') : text
+    default: return text
   }
 }
 
+/** Pre-flight coercion via the shared registry; the daemon stays the enforcer. */
 function parseFieldValue(raw: string, field: FieldDef): unknown {
-  switch (field.type) {
-    case 'number':
-    case 'rating':
-      return Number(raw)
-    case 'boolean':
-      return raw === 'true' || raw === 'yes' || raw === '1'
-    case 'multiselect':
-    case 'tags':
-      return raw.split(',').map(s => s.trim())
-    default:
-      return raw
+  const result = FIELD_TYPES[field.type]?.coerce(raw, field) ?? { ok: true as const, value: raw }
+  if (!result.ok) {
+    console.error(`${R}Invalid --${field.name}:${N} ${result.error}`)
+    process.exit(1)
   }
+  // null (not undefined) signals "clear this field" to the daemon
+  return result.value === undefined ? null : result.value
 }
 
 /** Extract dynamic --field value flags based on a collection's schema */
@@ -174,7 +185,7 @@ function printUsage(): void {
 
 Collections:
   bond collection                                        List all collections
-  bond collection create <name> --icon 🎬 --schema '<json>'   Create a collection
+  bond collection create <name> --icon 🎬 --schema '<json>' [--prefix BOND]   Create a collection
   bond collection show <name|id>                         Show collection details
   bond collection schema <name|id>                       Print schema as JSON
   bond collection edit <name|id> --name <n> | --icon <i> Rename / change icon
@@ -245,15 +256,18 @@ async function main() {
         if (!name || name.startsWith('-')) { console.error(`${R}Usage:${N} bond collection create <name> --icon <emoji> --schema '<json>'`); process.exit(1) }
         let icon = ''
         let schemaJson = '[]'
+        let issuePrefix = ''
         for (let i = 2; i < args.length; i++) {
           if (args[i] === '--icon' && args[i + 1]) { icon = args[++i] }
           else if (args[i] === '--schema' && args[i + 1]) { schemaJson = args[++i] }
+          else if (args[i] === '--prefix' && args[i + 1]) { issuePrefix = args[++i] }
         }
         let schema: FieldDef[]
         try { schema = JSON.parse(schemaJson) } catch { console.error(`${R}Invalid schema JSON${N}`); process.exit(1); return }
-        const created = await call(ws, 'collection.create', { name, schema, icon }) as Collection
+        const created = await call(ws, 'collection.create', { name, schema, icon, issuePrefix }) as Collection
         const iconStr = created.icon ? `${created.icon} ` : ''
-        console.log(`${G}Created${N}  ${iconStr}${created.name}  ${D}(${schema.length} fields)${N}`)
+        const prefixStr = created.issuePrefix ? `  ${D}prefix: ${created.issuePrefix}${N}` : ''
+        console.log(`${G}Created${N}  ${iconStr}${created.name}  ${D}(${schema.length} fields)${N}${prefixStr}`)
         break
       }
 
@@ -270,7 +284,7 @@ async function main() {
         console.log(`\n  ${D}Schema:${N}`)
         for (const f of col.schema) {
           const primary = f.primary ? ` ${Y}(primary)${N}` : ''
-          const opts = f.options ? ` ${D}[${f.options.join(', ')}]${N}` : ''
+          const opts = f.options ? ` ${D}[${f.options.map(o => o.value).join(', ')}]${N}` : ''
           const extra = f.max ? ` ${D}max:${f.max}${N}` : ''
           console.log(`    ${f.name}: ${D}${f.type}${N}${primary}${opts}${extra}`)
         }
@@ -352,7 +366,8 @@ async function main() {
         console.log(`\n  ${icon}${B}${col.name}${N}  ${D}(${items.length} items)${N}\n`)
         items.forEach((item, i) => {
           const label = getItemLabel(item, col.schema)
-          console.log(`  ${D}${i + 1}.${N}  ${label}`)
+          const key = itemKey(item, col)
+          console.log(`  ${D}${i + 1}.${N}  ${key ? `${D}${key}${N}  ` : ''}${label}`)
           for (const f of col.schema) {
             if (f.primary) continue
             const val = item.data[f.name]
@@ -376,7 +391,8 @@ async function main() {
         }
         const item = await call(ws, 'collection.addItem', { collectionId: col.id, data }) as CollectionItem
         const label = getItemLabel(item, col.schema)
-        console.log(`${G}Added${N}  ${label}`)
+        const key = itemKey(item, col)
+        console.log(`${G}Added${N}  ${key ? `${D}${key}${N}  ` : ''}${label}`)
         break
       }
 
@@ -388,7 +404,7 @@ async function main() {
         const col = findCollection(collections, colQuery)
         if (!col) { console.error(`${R}No matching collection:${N} ${colQuery}`); process.exit(1) }
         const items = await call(ws, 'collection.listItems', { collectionId: col.id }) as CollectionItem[]
-        const item = findItem(items, itemQuery, col.schema)
+        const item = findItem(items, itemQuery, col.schema, col.issuePrefix)
         if (!item) { console.error(`${R}No matching item:${N} ${itemQuery}`); process.exit(1) }
         const { data } = extractSchemaFlags(args.slice(3), col.schema)
         if (Object.keys(data).length === 0) { console.error(`${R}No updates specified${N}`); process.exit(1) }
@@ -405,20 +421,24 @@ async function main() {
         const collections = await call(ws, 'collection.list') as Collection[]
         const col = findCollection(collections, colQuery)
         if (!col) { console.error(`${R}No matching collection:${N} ${colQuery}`); process.exit(1) }
-        // Find a status-like select field
-        const statusField = col.schema.find(f =>
-          f.type === 'select' && f.name.toLowerCase().includes('status')
-        ) || col.schema.find(f => f.type === 'boolean' && f.name.toLowerCase().includes('done'))
+        // Prefer a real status field, then legacy status-named selects, then done-named booleans
+        const statusField = col.schema.find(f => f.type === 'status')
+          || col.schema.find(f => f.type === 'select' && f.name.toLowerCase().includes('status'))
+          || col.schema.find(f => f.type === 'boolean' && f.name.toLowerCase().includes('done'))
         if (!statusField) { console.error(`${R}No status field found in schema${N}`); process.exit(1) }
         const items = await call(ws, 'collection.listItems', { collectionId: col.id }) as CollectionItem[]
-        const item = findItem(items, itemQuery, col.schema)
+        const item = findItem(items, itemQuery, col.schema, col.issuePrefix)
         if (!item) { console.error(`${R}No matching item:${N} ${itemQuery}`); process.exit(1) }
         let doneValue: unknown
         if (statusField.type === 'boolean') {
           doneValue = true
+        } else if (statusField.type === 'status') {
+          // First option whose category is done-like
+          const opts = optionsOf(statusField)
+          doneValue = opts.find(o => isDoneValue(statusField, o.value))?.value ?? opts[opts.length - 1]?.value ?? 'Done'
         } else {
-          // Pick the last option (usually "Watched", "Finished", "Done")
-          const opts = statusField.options ?? []
+          // Legacy selects: pick the option that reads done-ish, else the last one
+          const opts = optionsOf(statusField).map(o => o.value)
           doneValue = opts.find(o => /finish|done|watch|complete|caught up/i.test(o)) ?? opts[opts.length - 1] ?? 'Done'
         }
         await call(ws, 'collection.updateItem', { id: item.id, data: { [statusField.name]: doneValue } })
@@ -435,10 +455,11 @@ async function main() {
         const col = findCollection(collections, colQuery)
         if (!col) { console.error(`${R}No matching collection:${N} ${colQuery}`); process.exit(1) }
         const items = await call(ws, 'collection.listItems', { collectionId: col.id }) as CollectionItem[]
-        const item = findItem(items, itemQuery, col.schema)
+        const item = findItem(items, itemQuery, col.schema, col.issuePrefix)
         if (!item) { console.error(`${R}No matching item:${N} ${itemQuery}`); process.exit(1) }
         const label = getItemLabel(item, col.schema)
-        console.log(`\n  ${B}${label}${N}`)
+        const key = itemKey(item, col)
+        console.log(`\n  ${key ? `${D}${key}${N}  ` : ''}${B}${label}${N}`)
         console.log(`  ${D}ID: ${item.id.slice(0, 8)}...${N}`)
         for (const f of col.schema) {
           if (f.primary) continue
@@ -462,7 +483,7 @@ async function main() {
         if (itemQuery) {
           // Delete an item
           const items = await call(ws, 'collection.listItems', { collectionId: col.id }) as CollectionItem[]
-          const item = findItem(items, itemQuery, col.schema)
+          const item = findItem(items, itemQuery, col.schema, col.issuePrefix)
           if (!item) { console.error(`${R}No matching item:${N} ${itemQuery}`); process.exit(1) }
           await call(ws, 'collection.deleteItem', { id: item.id })
           const label = getItemLabel(item, col.schema)

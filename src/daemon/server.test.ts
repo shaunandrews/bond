@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import WebSocket from 'ws'
 import { startServer, type BondServer } from './server'
-import { BondClient } from '../shared/client'
-import { PROTOCOL_VERSION } from '../shared/protocol'
+import { BondClient, RpcCallError } from '../shared/client'
+import { PROTOCOL_VERSION, RPC_VALIDATION_ERROR } from '../shared/protocol'
 import { setDataDir } from './paths'
 import { getDb } from './db'
 import { listMessages as listTranscriptMessages } from './transcript'
@@ -288,6 +288,29 @@ describe('error handling', () => {
     } catch (e) {
       expect((e as Error).message).toContain('Unknown method')
     }
+  })
+
+  it('maps collection validation failures to RPC_VALIDATION_ERROR with structured data', async () => {
+    const collection = await client.createCollection('Tracker', [
+      { name: 'title', type: 'text', primary: true },
+      { name: 'status', type: 'status', options: ['open', 'done'] },
+    ])
+    try {
+      await client.addCollectionItem(collection.id, { title: 'x', status: 'bogus' })
+      expect.unreachable('should have thrown')
+    } catch (e) {
+      const err = e as RpcCallError
+      expect(err).toBeInstanceOf(RpcCallError)
+      expect(err.code).toBe(RPC_VALIDATION_ERROR)
+      expect(err.message).toContain('status')
+      expect(err.message).toContain('open, done')
+      expect(err.data).toEqual({ errors: [{ field: 'status', message: expect.stringContaining('open, done') }] })
+    }
+  })
+
+  it('rejects invalid schemas at collection.create', async () => {
+    await expect(client.createCollection('Bad', [{ name: 'sel', type: 'select' }]))
+      .rejects.toMatchObject({ code: RPC_VALIDATION_ERROR })
   })
 })
 

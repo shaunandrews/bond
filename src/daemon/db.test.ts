@@ -249,6 +249,54 @@ describe('db module', () => {
       }).not.toThrow()
     })
 
+    it('seeds next_display_number from each collection\'s existing max', () => {
+      let db = getDb()
+      const now = new Date().toISOString()
+      db.prepare('INSERT INTO collections (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)')
+        .run('col-a', 'With items', now, now)
+      db.prepare('INSERT INTO collections (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)')
+        .run('col-b', 'Empty', now, now)
+      for (const n of [1, 2, 7]) {
+        db.prepare('INSERT INTO collection_items (id, collection_id, display_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+          .run(`item-${n}`, 'col-a', n, now, now)
+      }
+      // Simulate a pre-migration database, then reopen to re-run migrations
+      db.exec('ALTER TABLE collections DROP COLUMN next_display_number')
+      closeDb()
+      db = getDb()
+
+      const a = db.prepare("SELECT next_display_number as n FROM collections WHERE id = 'col-a'").get() as { n: number }
+      const b = db.prepare("SELECT next_display_number as n FROM collections WHERE id = 'col-b'").get() as { n: number }
+      expect(a.n).toBe(8) // max(7) + 1, gaps preserved
+      expect(b.n).toBe(1)
+    })
+
+    it('never renumbers items that already hold a display number across reopens', () => {
+      // Regression: the display-number backfill used to reassign 1..N on every
+      // boot, silently rewriting user-visible keys after any deletion.
+      let db = getDb()
+      const now = new Date().toISOString()
+      db.prepare('INSERT INTO collections (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)')
+        .run('col-r', 'Tracker', now, now)
+      for (const n of [1, 3, 9]) { // gaps from deletions must survive
+        db.prepare('INSERT INTO collection_items (id, collection_id, display_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+          .run(`item-${n}`, 'col-r', n, now, now)
+      }
+      // A row an old daemon inserted without a number gets the next free one
+      db.prepare('INSERT INTO collection_items (id, collection_id, display_number, created_at, updated_at) VALUES (?, ?, 0, ?, ?)')
+        .run('item-unnumbered', 'col-r', now, now)
+      closeDb()
+      db = getDb()
+
+      const rows = db.prepare('SELECT id, display_number FROM collection_items WHERE collection_id = ? ORDER BY display_number').all('col-r') as { id: string; display_number: number }[]
+      expect(rows).toEqual([
+        { id: 'item-1', display_number: 1 },
+        { id: 'item-3', display_number: 3 },
+        { id: 'item-9', display_number: 9 },
+        { id: 'item-unnumbered', display_number: 10 },
+      ])
+    })
+
     it('creates sense tables', () => {
       const db = getDb()
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'sense_%'").all() as { name: string }[]

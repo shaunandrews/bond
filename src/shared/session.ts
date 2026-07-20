@@ -78,17 +78,38 @@ export interface SessionMessage {
 
 // --- Collections ---
 
-export type FieldType = 'text' | 'longtext' | 'number' | 'date' | 'boolean' | 'select' | 'multiselect' | 'rating' | 'url' | 'tags' | 'image'
+export type FieldType =
+  | 'text' | 'longtext' | 'number' | 'date' | 'boolean'
+  | 'select' | 'multiselect' | 'rating' | 'url' | 'tags' | 'image'
+  | 'status' | 'priority'
+
+/** Workflow bucket for status options — powers "done" semantics and board grouping. */
+export type StatusCategory = 'open' | 'active' | 'done' | 'cancelled'
+
+/** Named palette keys — resolved to CSS tokens in the renderer, ANSI in the CLI. */
+export type FieldColor = 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'gray'
+
+export interface FieldOption {
+  value: string
+  label?: string            // display fallback = value
+  color?: FieldColor
+  category?: StatusCategory // status fields only; default 'open'
+}
 
 export interface FieldDef {
   name: string
   type: FieldType
   primary?: boolean
-  options?: string[]     // for select/multiselect
-  max?: number           // for rating (default 5)
-  prefix?: string        // for number display (e.g. "$")
-  suffix?: string        // for number display (e.g. "min", "%")
-  default?: unknown      // default value for new items
+  options?: FieldOption[]  // for select/multiselect/status/priority — canonical after normalizeSchema
+  max?: number             // for rating (default 5)
+  prefix?: string          // for number display (e.g. "$")
+  suffix?: string          // for number display (e.g. "min", "%")
+  default?: unknown        // default value for new items
+}
+
+/** Accepted on the wire for collection create/update; options may be legacy plain strings. */
+export type FieldDefInput = Omit<FieldDef, 'options'> & {
+  options?: (string | FieldOption)[]
 }
 
 export interface Collection {

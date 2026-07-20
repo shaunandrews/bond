@@ -73,7 +73,7 @@ describe('BondClient reconnect', () => {
     await client.connect()
 
     const firstNotification = nextEvent((fn) => client.onCollectionsChanged(fn))
-    await client.createCollection('Before restart', [])
+    await client.createCollection('Before restart', [{ name: 'title', type: 'text', primary: true }])
     await firstNotification
 
     currentToken = 'token-b'
@@ -86,7 +86,7 @@ describe('BondClient reconnect', () => {
 
     // ...and the listener registered before the restart still fires.
     const secondNotification = nextEvent((fn) => client.onCollectionsChanged(fn))
-    await client.createCollection('After restart', [])
+    await client.createCollection('After restart', [{ name: 'title', type: 'text', primary: true }])
     await secondNotification
   })
 

@@ -1,7 +1,40 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { shallowMount } from '@vue/test-utils'
 import MessageBubble from './MessageBubble.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
+import { resetIssueReferencesForTest } from '../composables/useIssueReferences'
+
+describe('MessageBubble issue references', () => {
+  beforeEach(() => {
+    resetIssueReferencesForTest()
+    ;(window as unknown as { bond: unknown }).bond = {
+      listCollectionReferences: vi.fn().mockResolvedValue([
+        { key: 'BOND-12', title: 'Fix the thing', collectionId: 'c1', itemId: 'i1', prefix: 'BOND', displayNumber: 12 },
+      ]),
+      onCollectionsChanged: () => () => {},
+    }
+  })
+
+  afterEach(() => {
+    resetIssueReferencesForTest()
+    delete (window as unknown as { bond?: unknown }).bond
+  })
+
+  it('chips known issue keys but leaves unknown PREFIX-n prose alone', async () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: '1', role: 'user' as const, text: 'BOND-12 breaks UTF-8 output and BOND-99 too' } },
+      global: { stubs: { Teleport: true } },
+    })
+    await Promise.resolve()
+    await nextTick()
+
+    const html = wrapper.find('.user-markdown').html()
+    expect(html).toContain('data-issue-key="BOND-12"')
+    expect(html).not.toContain('data-issue-key="UTF-8"')
+    expect(html).not.toContain('data-issue-key="BOND-99"') // not a real item
+  })
+})
 
 describe('MessageBubble', () => {
   it('renders user message with markdown and alignment', () => {

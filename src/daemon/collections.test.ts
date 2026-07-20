@@ -5,14 +5,15 @@ import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { setDataDir } from './paths'
 import { getDb, closeDb } from './db'
-import type { FieldDef } from '../shared/session'
+import type { FieldDef, FieldDefInput } from '../shared/session'
 import {
   listCollections, getCollection, getCollectionByName, createCollection,
   updateCollection, deleteCollection,
   listItems, getItem, addItem, updateItem, deleteItem, reorderItems,
   renameField, countItems,
   addItemComment, deleteItemComment, listItemComments,
-  searchItems,
+  searchItems, listReferences,
+  CollectionValidationError,
 } from './collections'
 
 let testDir: string
@@ -277,6 +278,206 @@ describe('collections module', () => {
       const c = createCollection('Movies', testSchema)
       addItem(c.id, { title: 'Inception' })
       expect(searchItems(c.id, 'zzzzz')).toEqual([])
+    })
+  })
+
+  describe('display numbers and issue keys', () => {
+    it('never reuses a display number after deleting the newest item', () => {
+      const c = createCollection('Tracker', testSchema, '', [], 'BOND')
+      addItem(c.id, { title: 'one' })
+      addItem(c.id, { title: 'two' })
+      const three = addItem(c.id, { title: 'three' })
+      expect(three.displayNumber).toBe(3)
+
+      deleteItem(three.id)
+      const four = addItem(c.id, { title: 'four' })
+      expect(four.displayNumber).toBe(4) // 3 stays retired forever
+    })
+
+    it('validates and uppercases the issue prefix', () => {
+      const c = createCollection('Tracker', testSchema, '', [], 'wp')
+      expect(c.issuePrefix).toBe('WP')
+      expect(() => createCollection('Bad', testSchema, '', [], 'TOOLONGX')).toThrow(/2-6 letters/)
+      expect(() => updateCollection(c.id, { issuePrefix: 'B0ND' })).toThrow(/2-6 letters/)
+      // Clearing stays allowed
+      expect(updateCollection(c.id, { issuePrefix: '' })?.issuePrefix).toBeUndefined()
+    })
+
+    describe('listReferences', () => {
+      it('returns keys with titles across prefixed collections only', () => {
+        const tracker = createCollection('Tracker', [
+          { name: 'title', type: 'text', primary: true },
+          { name: 'status', type: 'status', options: ['open', { value: 'done', category: 'done' }] },
+        ], '', [], 'BOND')
+        createCollection('Movies', testSchema) // no prefix — invisible to references
+        addItem(tracker.id, { title: 'First issue' })
+        addItem(tracker.id, { title: 'Fixed issue', status: 'done' })
+
+        const refs = listReferences()
+        expect(refs).toHaveLength(2)
+        expect(refs[0]).toMatchObject({ key: 'BOND-1', title: 'First issue', prefix: 'BOND', displayNumber: 1, done: false })
+        expect(refs[1]).toMatchObject({ key: 'BOND-2', title: 'Fixed issue', done: true })
+        expect(refs[0].collectionId).toBe(tracker.id)
+        expect(refs[0].itemId).toBeTruthy()
+      })
+
+      it('omits done when the collection has no status field and falls back to Untitled', () => {
+        const c = createCollection('Tracker', testSchema, '', [], 'WP')
+        const item = addItem(c.id, { title: 'Something' })
+        getDb().prepare('UPDATE collection_items SET data = ? WHERE id = ?').run('{}', item.id)
+
+        const [ref] = listReferences()
+        expect(ref.title).toBe('Untitled')
+        expect('done' in ref).toBe(false)
+      })
+
+      it('resolves pre-hardening duplicate display numbers newest-wins', () => {
+        const c = createCollection('Tracker', testSchema, '', [], 'BOND')
+        const older = addItem(c.id, { title: 'Older' })
+        const newer = addItem(c.id, { title: 'Newer' })
+        // Simulate a legacy MAX+1 collision
+        getDb().prepare('UPDATE collection_items SET display_number = 1, created_at = ? WHERE id = ?')
+          .run('2099-01-01T00:00:00.000Z', newer.id)
+
+        const refs = listReferences().filter(r => r.key === 'BOND-1')
+        expect(refs).toHaveLength(1)
+        expect(refs[0].itemId).toBe(newer.id)
+        expect(refs[0].title).toBe('Newer')
+        void older
+      })
+    })
+  })
+
+  describe('schema normalization', () => {
+    it('normalizes legacy string[] options on create and read', () => {
+      const legacy: FieldDefInput[] = [
+        { name: 'title', type: 'text', primary: true },
+        { name: 'genre', type: 'select', options: ['drama', 'comedy'] },
+      ]
+      const c = createCollection('Films', legacy)
+      expect(c.schema[1].options).toEqual([{ value: 'drama' }, { value: 'comedy' }])
+      // Read path returns canonical too
+      expect(getCollection(c.id)!.schema[1].options).toEqual([{ value: 'drama' }, { value: 'comedy' }])
+    })
+
+    it('normalizes legacy string[] rows already in the database', () => {
+      const c = createCollection('Films', [{ name: 'title', type: 'text', primary: true }])
+      // Simulate a pre-migration row shape written by an older daemon
+      getDb().prepare('UPDATE collections SET schema = ? WHERE id = ?').run(
+        JSON.stringify([
+          { name: 'title', type: 'text', primary: true },
+          { name: 'status', type: 'status', options: ['todo', 'done'] },
+        ]),
+        c.id
+      )
+      const schema = getCollection(c.id)!.schema
+      expect(schema[1].options![0]).toEqual({ value: 'todo', category: 'open', color: 'gray' })
+    })
+
+    it('gives priority fields the default scale', () => {
+      const c = createCollection('Tracker', [
+        { name: 'title', type: 'text', primary: true },
+        { name: 'priority', type: 'priority' },
+      ])
+      expect(c.schema[1].options!.map(o => o.value)).toEqual(['urgent', 'high', 'medium', 'low', 'none'])
+    })
+  })
+
+  describe('schema validation', () => {
+    it('rejects a schema without a primary text field', () => {
+      expect(() => createCollection('Bad', [{ name: 'n', type: 'number' }])).toThrow(CollectionValidationError)
+    })
+
+    it('rejects optioned fields without options', () => {
+      expect(() => createCollection('Bad', [
+        { name: 'title', type: 'text', primary: true },
+        { name: 'area', type: 'select' },
+      ])).toThrow(/options/)
+    })
+
+    it('rejects unknown field types', () => {
+      expect(() => createCollection('Bad', [
+        { name: 'title', type: 'text', primary: true },
+        { name: 'x', type: 'wat' as never },
+      ])).toThrow(/unknown type/)
+    })
+
+    it('rejects invalid schema updates but allows valid ones', () => {
+      const c = createCollection('Movies', testSchema)
+      expect(() => updateCollection(c.id, { schema: [{ name: 'x', type: 'number' }] })).toThrow(CollectionValidationError)
+      const updated = updateCollection(c.id, { schema: [{ name: 'name', type: 'text', primary: true }] })
+      expect(updated?.schema[0].name).toBe('name')
+    })
+  })
+
+  describe('item validation', () => {
+    const trackerSchema: FieldDefInput[] = [
+      { name: 'title', type: 'text', primary: true },
+      { name: 'status', type: 'status', options: ['open', { value: 'done', category: 'done' }] },
+      { name: 'due', type: 'date' },
+      { name: 'rating', type: 'rating', max: 5 },
+    ]
+
+    it('rejects values outside a status field\'s options, naming the allowed values', () => {
+      const c = createCollection('Tracker', trackerSchema)
+      try {
+        addItem(c.id, { title: 'x', status: 'bogus' })
+        expect.unreachable('should have thrown')
+      } catch (e) {
+        expect(e).toBeInstanceOf(CollectionValidationError)
+        const err = e as CollectionValidationError
+        expect(err.errors[0].field).toBe('status')
+        expect(err.message).toContain('open, done')
+      }
+    })
+
+    it('rejects unknown fields', () => {
+      const c = createCollection('Tracker', trackerSchema)
+      expect(() => addItem(c.id, { title: 'x', bogus: 1 })).toThrow(/unknown field/)
+    })
+
+    it('coerces CLI-style string input and applies status default', () => {
+      const c = createCollection('Tracker', trackerSchema)
+      const item = addItem(c.id, { title: 'Ship it', rating: '4' })
+      expect(item.data).toEqual({ title: 'Ship it', rating: 4, status: 'open' })
+    })
+
+    it('requires the primary field on add', () => {
+      const c = createCollection('Tracker', trackerSchema)
+      expect(() => addItem(c.id, { status: 'open' })).toThrow(/primary field is required/)
+    })
+
+    it('rejects malformed dates', () => {
+      const c = createCollection('Tracker', trackerSchema)
+      expect(() => addItem(c.id, { title: 'x', due: 'someday' })).toThrow(/YYYY-MM-DD/)
+    })
+
+    it('null clears a field on update', () => {
+      const c = createCollection('Tracker', trackerSchema)
+      const item = addItem(c.id, { title: 'x', due: '2026-08-01' })
+      const updated = updateItem(item.id, { due: null })
+      expect(updated?.data.due).toBeUndefined()
+      expect(updated?.data.title).toBe('x')
+    })
+
+    it('keeps legacy-invalid values editable on other keys', () => {
+      const c = createCollection('Tracker', trackerSchema)
+      const item = addItem(c.id, { title: 'x', status: 'open' })
+      // Simulate legacy garbage written before validation existed
+      getDb().prepare('UPDATE collection_items SET data = ? WHERE id = ?')
+        .run(JSON.stringify({ title: 'x', status: 'not-a-real-status' }), item.id)
+      // Editing an unrelated key succeeds and preserves the garbage untouched
+      const updated = updateItem(item.id, { title: 'renamed' })
+      expect(updated?.data.title).toBe('renamed')
+      expect(updated?.data.status).toBe('not-a-real-status')
+      // But writing the offending key demands validity
+      expect(() => updateItem(item.id, { status: 'still-bogus' })).toThrow(CollectionValidationError)
+    })
+
+    it('resolves option values case-insensitively to canonical form', () => {
+      const c = createCollection('Tracker', trackerSchema)
+      const item = addItem(c.id, { title: 'x', status: 'DONE' })
+      expect(item.data.status).toBe('done')
     })
   })
 })

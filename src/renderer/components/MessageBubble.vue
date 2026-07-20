@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { Message } from '../types/message'
-import { imageDataUri, type Collection } from '../../shared/session'
+import { imageDataUri } from '../../shared/session'
+import { ISSUE_KEY_RE } from '../../shared/fields'
+import { useIssueReferences } from '../composables/useIssueReferences'
 import MarkdownMessage from './MarkdownMessage.vue'
 import ArtifactFrame from './ArtifactFrame.vue'
 import EmbedRenderer from './EmbedRenderer.vue'
@@ -12,13 +14,20 @@ import { copyToClipboard } from '../lib/clipboard'
 import { formatApprovalInput, formatDuration, formatToolLabel } from '../lib/format'
 import TurnActivity from './TurnActivity.vue'
 
+const ISSUE_TOKEN_RE = new RegExp(ISSUE_KEY_RE.source, 'g')
+
+// Singleton reference index — no per-bubble collection scans.
+const { byKey: issueRefsByKey } = useIssueReferences()
+
 function renderUserMarkdown(text: string): string {
   const raw = marked.parse(text, { async: false, gfm: true, breaks: true }) as string
-  return DOMPurify.sanitize(raw).replace(/\b([A-Z]{4}-\d+)\b/g, '<span class="issue-reference" data-issue-key="$1">$1</span>')
+  // Only decorate keys that resolve to a real item — "UTF-8" must stay prose.
+  return DOMPurify.sanitize(raw).replace(ISSUE_TOKEN_RE, m =>
+    issueRefsByKey.value.has(m) ? `<span class="issue-reference" data-issue-key="${m}">${m}</span>` : m
+  )
 }
 
 const props = defineProps<{ msg: Message }>()
-const issueTitles = ref<Record<string, string>>({})
 const issueHover = ref<{ key: string; title: string; x: number; y: number } | null>(null)
 const userHtml = computed(() => renderUserMarkdown(props.msg.role === 'user' ? props.msg.text : ''))
 
@@ -27,24 +36,6 @@ defineEmits<{
   openActivity: []
 }>()
 
-async function loadIssueTitles() {
-  try {
-    const collections = await window.bond.listCollections()
-    const trackers = collections.filter(collection => collection.issuePrefix || collection.name === 'Bond Issues')
-    const lists = await Promise.all(trackers.map(collection => window.bond.listCollectionItems(collection.id)))
-    const titles: Record<string, string> = {}
-    lists.forEach((items, index) => {
-      const collection: Collection = trackers[index]
-      const prefix = collection.issuePrefix || (collection.name === 'Bond Issues' ? 'BOND' : '')
-      const primary = collection.schema.find(field => field.primary)
-      for (const item of items) {
-        titles[`${prefix}-${item.displayNumber}`] = primary && item.data[primary.name] != null ? String(item.data[primary.name]) : 'Untitled issue'
-      }
-    })
-    issueTitles.value = titles
-  } catch { /* messages still render readable keys offline */ }
-}
-
 function updateIssueHover(event: MouseEvent) {
   const token = (event.target as HTMLElement).closest('.issue-reference') as HTMLElement | null
   if (!token) {
@@ -52,10 +43,8 @@ function updateIssueHover(event: MouseEvent) {
     return
   }
   const key = token.dataset.issueKey ?? ''
-  issueHover.value = { key, title: issueTitles.value[key] ?? 'Issue reference', x: event.clientX + 14, y: event.clientY + 16 }
+  issueHover.value = { key, title: issueRefsByKey.value.get(key)?.title ?? 'Issue reference', x: event.clientX + 14, y: event.clientY + 16 }
 }
-
-onMounted(() => { void loadIssueTitles() })
 
 const segments = computed(() => {
   if (props.msg.role !== 'bond' || !hasRichContent(props.msg.text)) return null
