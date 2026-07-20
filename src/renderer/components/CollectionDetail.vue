@@ -5,6 +5,7 @@ import type { Collection, CollectionItem, FieldDef } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
 import BondTab from './BondTab.vue'
+import BondSelect from './BondSelect.vue'
 import CollectionItemDetail from './CollectionItemDetail.vue'
 
 const props = defineProps<{
@@ -23,6 +24,7 @@ const sortAsc = ref(true)
 
 // Grouping
 const groupByField = ref<string | null>(null)
+const filters = ref<Record<string, string>>({})
 const viewMode = ref<'table' | 'list' | 'cards'>('table')
 
 const schema = computed(() => props.collection.schema)
@@ -83,15 +85,19 @@ interface GroupedItems {
   items: CollectionItem[]
 }
 
+const filteredItems = computed(() => sortedItems.value.filter(item =>
+  Object.entries(filters.value).every(([field, value]) => !value || item.data[field] === value)
+))
+
 const groupedItems = computed((): GroupedItems[] => {
-  if (!groupByField.value) return [{ label: '', items: sortedItems.value }]
+  if (!groupByField.value) return [{ label: '', items: filteredItems.value }]
   const field = schema.value.find(f => f.name === groupByField.value)
-  if (!field || field.type !== 'select' || !field.options) return [{ label: '', items: sortedItems.value }]
+  if (!field || field.type !== 'select' || !field.options) return [{ label: '', items: filteredItems.value }]
   const groups: GroupedItems[] = field.options.map(opt => ({
     label: opt,
-    items: sortedItems.value.filter(i => i.data[field.name] === opt)
+    items: filteredItems.value.filter(i => i.data[field.name] === opt)
   }))
-  const ungrouped = sortedItems.value.filter(i => {
+  const ungrouped = filteredItems.value.filter(i => {
     const val = i.data[field.name]
     return val == null || !field.options!.includes(String(val))
   })
@@ -117,6 +123,14 @@ function setViewMode(value: string) {
   if (value === 'table' || value === 'list' || value === 'cards') viewMode.value = value
 }
 
+function filterOptions(field: FieldDef) {
+  return [{ value: '', label: `All ${field.name}` }, ...(field.options ?? []).map(value => ({ value, label: value }))]
+}
+
+function setFilter(fieldName: string, value: string) {
+  filters.value = { ...filters.value, [fieldName]: value }
+}
+
 function collectionSettingsKey() {
   // Retains the existing key so saved column layouts upgrade in place.
   return `bond:collection-columns:${props.collection.id}`
@@ -129,6 +143,7 @@ type CollectionViewSettings = {
   groupByField?: string | null
   sortField?: string | null
   sortAsc?: boolean
+  filters?: Record<string, string>
 }
 
 function loadCollectionSettings() {
@@ -143,6 +158,12 @@ function loadCollectionSettings() {
     if (saved.sortField && schemaFields.includes(saved.sortField)) sortField.value = saved.sortField
     if (typeof saved.sortAsc === 'boolean') sortAsc.value = saved.sortAsc
     if (saved.groupByField && groupFields.includes(saved.groupByField)) groupByField.value = saved.groupByField
+    if (saved.filters) {
+      filters.value = Object.fromEntries(Object.entries(saved.filters).filter(([name, value]) => {
+        const field = selectFields.value.find(candidate => candidate.name === name)
+        return typeof value === 'string' && field?.options?.includes(value)
+      }))
+    }
   } catch {
     columnOrder.value = fields
     hiddenColumns.value = []
@@ -158,12 +179,14 @@ function saveCollectionSettings() {
       groupByField: groupByField.value,
       sortField: sortField.value,
       sortAsc: sortAsc.value,
+      filters: filters.value,
     }
     localStorage.setItem(collectionSettingsKey(), JSON.stringify(settings))
   } catch { /* local storage may be unavailable */ }
 }
 
 watch([viewMode, groupByField, sortField, sortAsc], saveCollectionSettings)
+watch(filters, saveCollectionSettings, { deep: true })
 
 function toggleColumn(fieldName: string) {
   hiddenColumns.value = hiddenColumns.value.includes(fieldName)
@@ -288,6 +311,16 @@ function formatValue(value: unknown, field: FieldDef): string {
           </BondButton>
           <div v-if="columnMenuOpen" class="view-settings-menu">
             <template v-if="selectFields.length">
+              <BondText as="div" size="xs" weight="medium" color="muted" class="view-settings-label">Filter</BondText>
+              <div v-for="field in selectFields" :key="field.name" class="filter-row">
+                <BondText size="xs" color="muted">{{ field.name }}</BondText>
+                <BondSelect
+                  :model-value="filters[field.name] ?? ''"
+                  :options="filterOptions(field)"
+                  size="sm"
+                  @update:model-value="setFilter(field.name, $event)"
+                />
+              </div>
               <BondText as="div" size="xs" weight="medium" color="muted" class="view-settings-label">Group by</BondText>
               <BondButton
                 v-for="f in selectFields"
@@ -327,6 +360,10 @@ function formatValue(value: unknown, field: FieldDef): string {
           <PhPlus :size="14" weight="bold" />
           Add item
         </BondButton>
+      </div>
+
+      <div v-else-if="filteredItems.length === 0" class="detail-empty">
+        <BondText size="sm" color="muted">No items match these filters.</BondText>
       </div>
 
       <!-- Items table -->
@@ -489,6 +526,13 @@ function formatValue(value: unknown, field: FieldDef): string {
 }
 .view-settings-label { padding: 0.3rem 0.35rem 0.25rem; }
 .view-settings-hint { padding: 0 0.35rem 0.35rem; }
+.filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.15rem 0.35rem 0.35rem;
+}
 .view-settings-menu .group-chip { margin: 0 0.2rem 0.45rem 0; }
 .column-option { display: flex; align-items: center; gap: 0.45rem; padding: 0.35rem; border-radius: var(--radius-sm); color: var(--color-text-primary); font-size: 0.78rem; cursor: grab; }
 .column-option:hover { background: var(--color-tint); }
