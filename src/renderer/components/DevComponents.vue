@@ -335,9 +335,9 @@ const catalogueComponents = [
     .map(component => ({
       ...component,
       category: 'Inventory',
-      description: 'Discovered from the renderer source. Its interactive contract and showcase are pending documentation.',
-      props: [],
-      events: [],
+      description: 'Discovered from the renderer source. Props and events are extracted from its public Vue declarations; its interactive showcase is pending curation.',
+      props: component.props.map(prop => ({ ...prop, description: 'Extracted from defineProps.' })),
+      events: component.events.map(event => ({ ...event, description: 'Extracted from defineEmits.' })),
     })),
 ]
 const categories = ['Directives', 'Primitives', 'Layout', 'Composed', 'Inventory'] as const
