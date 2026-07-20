@@ -690,12 +690,6 @@ export const componentInventory = [
     "events": []
   },
   {
-    "name": "QuickChat",
-    "file": "components/QuickChat.vue",
-    "props": [],
-    "events": []
-  },
-  {
     "name": "SenseAppLegend",
     "file": "components/SenseAppLegend.vue",
     "props": [
