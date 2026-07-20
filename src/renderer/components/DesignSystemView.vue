@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { designTokens } from '../design-system.generated'
 
 interface Token {
   name: string
@@ -11,12 +12,14 @@ const radiusTokens = ref<Token[]>([])
 const shadowTokens = ref<Token[]>([])
 const fontTokens = ref<Token[]>([])
 const transitionTokens = ref<Token[]>([])
+const spacingTokens = ref<Token[]>([])
+const layerTokens = ref<Token[]>([])
 
-const colorNames = ['bg', 'surface', 'border', 'text-primary', 'muted', 'accent', 'err', 'ok']
-const radiusNames = ['sm', 'md', 'lg', 'xl']
+const colorNames = [...new Set([...Object.keys(designTokens.colors), ...Object.keys(designTokens.themes.light)])]
+const radiusNames = Object.keys(designTokens.rounded)
 const shadowNames = ['sm', 'md', 'lg']
 const fontNames = ['sans', 'mono']
-const transitionNames = ['fast', 'base']
+const transitionNames = Object.keys(designTokens.motion).filter(name => name !== 'ease-out')
 
 function readTokens() {
   const style = getComputedStyle(document.documentElement)
@@ -42,8 +45,18 @@ function readTokens() {
   }))
 
   transitionTokens.value = transitionNames.map(name => ({
-    name: `--transition-${name}`,
-    value: style.getPropertyValue(`--transition-${name}`).trim()
+    name: `--duration-${name}`,
+    value: style.getPropertyValue(`--duration-${name}`).trim()
+  }))
+
+  spacingTokens.value = Object.keys(designTokens.spacing).map(name => ({
+    name: `--space-${name}`,
+    value: style.getPropertyValue(`--space-${name}`).trim()
+  }))
+
+  layerTokens.value = Object.keys(designTokens.layers).map(name => ({
+    name: `--z-${name}`,
+    value: style.getPropertyValue(`--z-${name}`).trim()
   }))
 }
 
@@ -75,7 +88,7 @@ function contrastClass(color: string): string {
   <div class="ds-view">
     <header class="ds-header">
       <h1>Design System</h1>
-      <p>Living reference for Bond's visual language. Tokens defined in <code>app.css</code> and consumed via Tailwind utilities and CSS variables.</p>
+      <p>Living reference generated from <code>DESIGN.md</code> and <code>design-system.behavior.yml</code>. Resolved values reflect the active theme.</p>
     </header>
 
     <!-- Colors -->
@@ -169,7 +182,7 @@ function contrastClass(color: string): string {
     <!-- Transitions -->
     <section class="ds-section">
       <h2>Transitions</h2>
-      <p class="ds-description">Timing tokens for consistent interaction feedback.</p>
+      <p class="ds-description">Generated motion roles for consistent interaction feedback.</p>
       <div class="ds-transition-row">
         <div
           v-for="token in transitionTokens"
@@ -178,9 +191,9 @@ function contrastClass(color: string): string {
         >
           <div
             class="ds-transition-box"
-            :style="{ transition: `background var(${token.name}), transform var(${token.name})` }"
+            :style="{ transition: `background ${token.value} var(--ease-out), transform ${token.value} var(--ease-out)` }"
           />
-          <code>{{ token.name.replace('--transition-', '') }}</code>
+          <code>{{ token.name.replace('--duration-', '') }}</code>
           <span class="ds-token-value">{{ token.value }}</span>
         </div>
       </div>
@@ -189,12 +202,12 @@ function contrastClass(color: string): string {
     <!-- Spacing -->
     <section class="ds-section">
       <h2>Spacing</h2>
-      <p class="ds-description">Uses Tailwind's default 4px base scale. Visual reference for common values.</p>
+      <p class="ds-description">Semantic spacing roles generated from the design contract.</p>
       <div class="ds-spacing-list">
-        <div v-for="size in [4, 8, 12, 16, 20, 24, 32, 40, 48]" :key="size" class="ds-spacing-item">
-          <div class="ds-spacing-bar" :style="{ width: `${size}px` }" />
-          <span class="ds-spacing-label">{{ size }}px</span>
-          <span class="ds-spacing-class">{{ size / 4 }}</span>
+        <div v-for="token in spacingTokens" :key="token.name" class="ds-spacing-item">
+          <div class="ds-spacing-bar" :style="{ width: token.value }" />
+          <span class="ds-spacing-label">{{ token.value }}</span>
+          <span class="ds-spacing-class">{{ token.name.replace('--space-', '') }}</span>
         </div>
       </div>
     </section>
@@ -211,7 +224,7 @@ function contrastClass(color: string): string {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="token in [...colorTokens, ...fontTokens, ...radiusTokens, ...shadowTokens, ...transitionTokens]" :key="token.name">
+          <tr v-for="token in [...colorTokens, ...fontTokens, ...radiusTokens, ...shadowTokens, ...transitionTokens, ...spacingTokens, ...layerTokens]" :key="token.name">
             <td><code>{{ token.name }}</code></td>
             <td>{{ token.value }}</td>
           </tr>
