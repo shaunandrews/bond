@@ -17,6 +17,7 @@ import BondPanelGroup from './BondPanelGroup.vue'
 import BondPanel from './BondPanel.vue'
 import BondPanelHandle from './BondPanelHandle.vue'
 import type { Message } from '../types/message'
+import { componentInventory } from '../component-inventory.generated'
 
 const expandedSections = ref<Set<string>>(new Set(['BondButton']))
 
@@ -326,14 +327,27 @@ const components = [
   },
 ]
 
-const categories = ['Directives', 'Primitives', 'Layout', 'Composed'] as const
+const documentedNames = new Set(components.map(component => component.name))
+const catalogueComponents = [
+  ...components,
+  ...componentInventory
+    .filter(component => !documentedNames.has(component.name))
+    .map(component => ({
+      ...component,
+      category: 'Inventory',
+      description: 'Discovered from the renderer source. Its interactive contract and showcase are pending documentation.',
+      props: [],
+      events: [],
+    })),
+]
+const categories = ['Directives', 'Primitives', 'Layout', 'Composed', 'Inventory'] as const
 </script>
 
 <template>
   <main class="dev-list app-main px-6">
       <template v-for="cat in categories" :key="cat">
         <h2 class="dev-category">{{ cat }}</h2>
-        <div v-for="comp in components.filter(c => c.category === cat)" :key="comp.name" class="dev-card">
+        <div v-for="comp in catalogueComponents.filter(c => c.category === cat)" :key="comp.name" class="dev-card">
           <button type="button" class="dev-card-header" @click="toggle(comp.name)">
             <div>
               <span class="dev-card-name">{{ comp.name }}</span>
