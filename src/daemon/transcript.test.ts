@@ -261,6 +261,34 @@ describe('turn reconciliation', () => {
   })
 })
 
+describe('startup sweep', () => {
+  it('re-finalizes activity rows regressed after their turn completed', () => {
+    insertTurnStart({
+      epochId: 'epoch-1', turnId: 'turn-1', userMessageId: 'user-1', assistantMessageId: 'bond-1', activityMessageId: 'activity-1', text: 'hi',
+    })
+    completeTurn({ turnId: 'turn-1', status: 'done', completedAt: '2026-01-01T00:00:00.000Z' })
+    // Simulate pre-guard corruption via direct SQL (upsertMessages now rejects this).
+    getDb().prepare('UPDATE messages SET data = ? WHERE id = ?')
+      .run(JSON.stringify({ turnId: 'turn-1', status: 'working', startedAt: 1, events: [] }), 'activity-1')
+
+    const reconciled = reconcileInterruptedTurns()
+
+    expect(reconciled).toBe(1)
+    const activity = listMessages().messages.find(m => m.id === 'activity-1')
+    expect((activity?.data as { status?: string } | undefined)?.status).toBe('done')
+  })
+
+  it('reports zero when finished rows are already healthy', () => {
+    insertTurnStart({
+      epochId: 'epoch-1', turnId: 'turn-1', userMessageId: 'user-1', assistantMessageId: 'bond-1', activityMessageId: 'activity-1', text: 'hi',
+    })
+    upsertMessages([{ id: 'activity-1', role: 'meta', kind: 'activity', data: { turnId: 'turn-1', status: 'done', startedAt: 1, endedAt: 2, events: [] } }])
+    completeTurn({ turnId: 'turn-1', status: 'done', completedAt: '2026-01-01T00:00:00.000Z' })
+
+    expect(reconcileInterruptedTurns()).toBe(0)
+  })
+})
+
 describe('messages table ownership', () => {
   // These tests need to control the database from before its first open, so
   // they swap in their own data dir and restore the suite's one afterwards.

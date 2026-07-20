@@ -467,7 +467,25 @@ export function reconcileInterruptedTurns(now = nowIso()): number {
   for (const turn of stuck) {
     completeTurn({ turnId: turn.id, status: 'cancelled', completedAt: now })
   }
-  return stuck.length
+
+  // The turns table is the authority: a stale client write (pre-dating the
+  // upsert guard) could have regressed a finished turn's activity row back to
+  // a live status, leaving an eternally pulsing "Working…" row. Re-finalize
+  // any live activity row whose turn already ended.
+  const finished = db.prepare(`
+    SELECT t.status AS turn_status, t.completed_at, t.activity_message_id, m.data AS activity_data
+    FROM turns t JOIN messages m ON m.id = t.activity_message_id
+    WHERE t.status IN ('done','failed','cancelled')
+  `).all() as Array<{ turn_status: TurnStatus; completed_at: string | null; activity_message_id: string; activity_data: string | null }>
+  let repaired = 0
+  for (const row of finished) {
+    const status = String(parseJsonObject(row.activity_data)?.status ?? '')
+    if (!LIVE_ACTIVITY_STATUSES.includes(status)) continue
+    finalizeActivityMessage(db, row.activity_message_id, row.turn_status, row.completed_at ?? now)
+    repaired++
+  }
+  if (repaired > 0) console.log(`[bond-daemon] startup sweep re-finalized ${repaired} regressed activity row(s)`)
+  return stuck.length + repaired
 }
 
 export function listMessages(options: { beforeSeq?: number; limit?: number } = {}): TranscriptPage {
