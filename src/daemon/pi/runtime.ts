@@ -12,22 +12,17 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import type { BondStreamChunk } from '../../shared/stream'
 import type { EditMode } from '../../shared/session'
-import { normalizeModelTier } from '../../shared/models'
+import { selectModel } from './model'
 import { getImagePaths } from '../images'
 import { codexImageGenExtension, extractRevisedPrompt, IMAGEGEN_TOOL_NAMES, imageGenAvailable, saveGeneratedImages, stripResultImageData } from '../imagegen'
 import { createMemoryExtensionFactory, MEMORY_TOOL_NAMES } from '../memory/tools'
 import { createWebExtensionFactory, WEB_TOOL_NAMES } from '../web/tools'
+import { createDesignExtensionFactory, DESIGN_TOOL_NAMES } from '../design/tools'
 import { createOnboardingExtensionFactory, getFirstRunStatus, ONBOARDING_STAGE_TOOLS, type BondPanelId, type OnboardingToolHooks } from '../onboarding'
 import type { OnboardingFirstRunStatus } from '../../shared/onboarding'
 import { getDataDir } from '../paths'
 import { getMessages } from '../sessions'
 import { registerApproval, clearTurnApprovals, type ApprovalResult } from '../approvals'
-
-const MODEL_IDS = {
-  high: 'claude-opus-4-6',
-  balanced: 'claude-sonnet-4-5',
-  fast: 'claude-haiku-4-5',
-} as const
 
 function getSessionDir(): string {
   const dir = join(getDataDir(), 'pi', 'sessions')
@@ -110,21 +105,6 @@ function imageContent(imageIds: string[] | undefined) {
       return []
     }
   })
-}
-
-async function selectModel(name: string | undefined) {
-  const runtime = await ModelRuntime.create()
-  const tier = normalizeModelTier(name)
-  const preferred = MODEL_IDS[tier]
-  const available = await runtime.getAvailable()
-  const anthropic = available.find(model => model.provider === 'anthropic' && model.id === preferred)
-  if (anthropic) return { model: anthropic, modelRuntime: runtime }
-
-  const codexIds = { high: 'gpt-5.6-terra', balanced: 'gpt-5.5', fast: 'gpt-5.4-mini' }
-  const codex = available.find(model => model.provider === 'openai-codex' && model.id === codexIds[tier])
-    ?? available.find(model => model.provider === 'openai-codex')
-  if (codex) return { model: codex, modelRuntime: runtime }
-  throw new Error('No authenticated Claude or ChatGPT subscription is available in Pi.')
 }
 
 /**
@@ -324,8 +304,10 @@ export function toolsForEditMode(editMode: EditMode, onboardingStatus: Onboardin
   // no workspace files, so they stay available in every edit mode.
   // The Codex image tool likewise only feeds Bond's own image store, but it
   // needs the ChatGPT/Codex subscription login, so it's gated on that.
+  // Felix (consult_designer) runs an isolated read-only session, so design
+  // consultation stays available even in readonly mode.
   const imageGenTools = options.imageGen ? IMAGEGEN_TOOL_NAMES : []
-  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...imageGenTools, ...onboardingTools]
+  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...DESIGN_TOOL_NAMES, ...imageGenTools, ...onboardingTools]
 }
 
 /** Run one Bond turn through Pi and persist it in Bond-owned Pi JSONL storage. */
@@ -360,6 +342,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     extensionFactories: [
       createMemoryExtensionFactory({ sourceMessageId: options.memorySourceMessageId }),
       createWebExtensionFactory(),
+      createDesignExtensionFactory({ model: options.model }),
       codexImageGenExtension,
       createOnboardingExtensionFactory({
         // show_panel rides the normal chunk stream to the renderer.
@@ -424,7 +407,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
   // the allowlist with no registered tool means an extension silently failed
   // (or vice versa: a registered tool missing from the allowlist would have
   // been deactivated by activateRequestedTools above).
-  const requiredBondTools = [...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...IMAGEGEN_TOOL_NAMES, ...Object.values(ONBOARDING_STAGE_TOOLS).flat()].filter(name => tools.includes(name))
+  const requiredBondTools = [...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...DESIGN_TOOL_NAMES, ...IMAGEGEN_TOOL_NAMES, ...Object.values(ONBOARDING_STAGE_TOOLS).flat()].filter(name => tools.includes(name))
   const missingBondTools = requiredBondTools.filter(name => !activeTools.includes(name))
   if (missingBondTools.length) {
     session.dispose()

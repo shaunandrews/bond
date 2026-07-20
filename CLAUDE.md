@@ -90,6 +90,14 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `web/broker.ts` | Render broker — parks tool promises, sends `web.requestRender` to the app, resolves on `web.renderReady`; errors clearly when no app is connected |
 | `web/extract.ts` | DuckDuckGo SERP parsing (linkedom) and page → markdown extraction (Readability + Turndown) over app-rendered HTML |
 | `remote.ts` | Remote (LAN) access server — TCP listener on `0.0.0.0:3113` serving the `out/web` bundle + WebSocket RPC gated by the persistent pairing token (`remote.token`), same-origin upgrade check, `remote.status` RPC |
+| `pi/model.ts` | Capability-tier → concrete-model resolution (`pickModel`/`selectModel`) shared by the main turn and standalone sessions (extracted so Felix doesn't import runtime.ts) |
+| `design/tools.ts` | The `consult_designer` Pi tool — Bond's doorway to Felix (verbs: critique/define/refine/migrate). Does the deterministic prep (context docs, detector, migration inventory) and hands it to an isolated Felix session; available in every edit mode |
+| `design/felix.ts` | Felix's session runner — isolated read-only Pi session (`read`/`grep`/`find`/`ls`, in-memory persistence, SSE, parent-abort wired); returns only the final report text |
+| `design/doctrine.ts` | Felix's design doctrine as prompt string constants — governance mechanics (drift taxonomy, design-system lock, register split), mechanical rules, ban lists, DESIGN.md contract. Distilled from Impeccable (Apache-2.0, attributed) |
+| `design/prompt.ts` | Assembles Felix's system prompt per verb/register and the per-consultation user prompt (brief → scope → context docs → machine evidence last, anti-anchoring) |
+| `design/context-docs.ts` | PRODUCT.md/DESIGN.md resolution for target paths (root → `.agents/context/` → `docs/`, stops at git root/home) — mirrors Impeccable's convention |
+| `design/detector.ts` | Pinned `npx impeccable detect --json` wrapper — optional deterministic evidence with honest degradation (unavailable/timeout/error) |
+| `design/migrate.ts` | Migration inventory — scans literals in style contexts, clusters near-duplicates, maps clusters onto tokens (DESIGN.md frontmatter + CSS custom props) into exact/near/none buckets with Impeccable's tolerances |
 | `imagegen.ts` | Bond glue for the bundled `pi-codex-image-gen` Pi extension (`codex_generate_image` — gpt-image-2 via the ChatGPT/Codex subscription already connected in Pi, no API key). Gates the tool on an `openai-codex` OAuth credential, captures generated images into the Bond image store, emits `generated_image` stream chunks, and strips base64 from activity previews. The package's disk writes and install telemetry are disabled via env defaults in `main.ts` |
 | `onboarding.ts` | First-run detection, transcript intro seeding, and the staged interview → panel-tour flow (`pending` → `education` → `completed`). Serves stage-specific system-prompt sections and Pi tools: `complete_onboarding` (closes the interview, seeds the soul, returns the tour script), `complete_tour`, `show_panel` (opens a side panel via a `show_panel` stream chunk), and `enable_sense`. The interview and tour are the real agent — no scripted flow |
 | `sandbox.ts` | New-user sandbox: swaps the daemon's data dir to a fresh empty directory (and back) so the real app runs a genuine first-run without touching real data |
@@ -179,6 +187,14 @@ src/
       tools.ts                       # web_search + fetch_content Pi tools (keyless, cached)
       broker.ts                      # Render broker for the app's hidden browser window
       extract.ts                     # DDG SERP parsing + Readability/Turndown markdown
+    design/
+      tools.ts                       # consult_designer Pi tool (Felix's doorway)
+      felix.ts                       # Isolated read-only Felix session runner
+      doctrine.ts                    # Felix's design doctrine (prompt constants)
+      prompt.ts                      # System/user prompt assembly per verb/register
+      context-docs.ts                # PRODUCT.md/DESIGN.md resolution
+      detector.ts                    # Pinned impeccable detect --json wrapper
+      migrate.ts                     # Literal inventory → cluster → token mapping
     sense/
       controller.ts                  # State machine (disabled/armed/recording/idle/paused/suspended)
       presence.ts                    # Idle detection via ioreg
