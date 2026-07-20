@@ -8,6 +8,8 @@ import {
   promotedToolName,
   promotionsForEditMode,
   readOnlyToolNames,
+  routeKeyFor,
+  routeSpecFromSchema,
   suggestToolClass,
   type McpPolicy,
 } from './policy'
@@ -105,8 +107,11 @@ describe('decideMcpCall', () => {
       expect(decideMcpCall({ editMode: SCOPED, policy: trusted(), toolName: 'search' }).kind).toBe('allow')
     })
 
-    it('auto-allows confirmed writes in full but prompts in scoped', () => {
-      expect(decideMcpCall({ editMode: FULL, policy: trusted(), toolName: 'post' }).kind).toBe('allow')
+    // Full mode is a standing approval for Bond's OWN workspace tools, where
+    // the blast radius is this machine. An MCP write lands in someone else's
+    // system with no undo, so trust buys silence on reads only.
+    it('still prompts for a confirmed write in every mode', () => {
+      expect(decideMcpCall({ editMode: FULL, policy: trusted(), toolName: 'post' }).kind).toBe('ask')
       expect(decideMcpCall({ editMode: SCOPED, policy: trusted(), toolName: 'post' }).kind).toBe('ask')
     })
 
@@ -161,5 +166,148 @@ describe('promotionsForEditMode', () => {
 
   it('is empty when nothing is pinned', () => {
     expect(promotionsForEditMode([{ id: 'a8c', enabled: true, policy: policy() }], FULL)).toEqual([])
+  })
+})
+
+// The real context-a8c execute-tool schema: provider + subtool select the
+// operation, subtool_args is the payload, and `tool`/`params` are legacy
+// aliases the model may use instead.
+const EXECUTE_SCHEMA = {
+  type: 'object',
+  properties: {
+    provider: { type: 'string', description: 'The provider name' },
+    subtool: { type: 'string', description: 'The sub-tool name within the provider' },
+    subtool_args: { type: 'object', description: 'Arguments to pass to the sub-tool' },
+    tool: { type: 'string', description: 'Legacy alias for `subtool`. Prefer `subtool` for new code.' },
+    params: { type: 'object', description: 'Legacy alias for `subtool_args`.' },
+  },
+  required: ['provider'],
+}
+
+describe('routeSpecFromSchema', () => {
+  it('routes a proxy tool on its leading string arguments', () => {
+    expect(routeSpecFromSchema(EXECUTE_SCHEMA).map((s) => s.name)).toEqual(['provider', 'subtool'])
+  })
+
+  // Missing this is a real bypass: a rule on linear/create-issue would not
+  // see a call that spelled it `tool: 'create-issue'`.
+  it('binds a legacy alias to the segment it stands in for', () => {
+    expect(routeSpecFromSchema(EXECUTE_SCHEMA)[1].aliases).toEqual(['tool'])
+  })
+
+  it('routes a single-argument tool on that argument', () => {
+    const schema = { type: 'object', properties: { provider: { type: 'string' } }, required: ['provider'] }
+    expect(routeSpecFromSchema(schema).map((s) => s.name)).toEqual(['provider'])
+  })
+
+  // An ordinary tool must keep behaving exactly as it did before routing.
+  it('routes nothing for a tool with no string arguments', () => {
+    expect(routeSpecFromSchema({ type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } } })).toEqual([])
+    expect(routeSpecFromSchema({ type: 'object' })).toEqual([])
+    expect(routeSpecFromSchema(undefined)).toEqual([])
+    expect(routeSpecFromSchema('nonsense')).toEqual([])
+  })
+})
+
+describe('routeKeyFor', () => {
+  const spec = routeSpecFromSchema(EXECUTE_SCHEMA)
+
+  it('builds the route from the call arguments', () => {
+    expect(routeKeyFor(spec, { provider: 'linear', subtool: 'search' })).toBe('linear/search')
+  })
+
+  it('resolves a legacy alias to the same route', () => {
+    expect(routeKeyFor(spec, { provider: 'linear', tool: 'create-issue' })).toBe('linear/create-issue')
+  })
+
+  it('stops at the first missing segment', () => {
+    expect(routeKeyFor(spec, { provider: 'linear' })).toBe('linear')
+    expect(routeKeyFor(spec, { subtool: 'search' })).toBeNull()
+    expect(routeKeyFor(spec, {})).toBeNull()
+    expect(routeKeyFor(spec, undefined)).toBeNull()
+  })
+
+  it('is null for a tool that does not route', () => {
+    expect(routeKeyFor([], { anything: 'here' })).toBeNull()
+  })
+})
+
+describe('classifyTool with routes', () => {
+  const withRules = (overrides: Partial<McpPolicy>) => policy(overrides)
+
+  it('matches the most specific rule', () => {
+    const p = withRules({ read: ['exec:linear'], write: ['exec:linear/create-issue'] })
+
+    expect(classifyTool(p, 'exec', 'linear/search')).toBe('read')
+    expect(classifyTool(p, 'exec', 'linear/create-issue')).toBe('write')
+  })
+
+  it('falls back from route to a blanket tool rule', () => {
+    const p = withRules({ read: ['exec'] })
+    expect(classifyTool(p, 'exec', 'linear/search')).toBe('read')
+  })
+
+  it('does not leak one provider\'s rule to another', () => {
+    const p = withRules({ read: ['exec:mgs'] })
+
+    expect(classifyTool(p, 'exec', 'mgs/search')).toBe('read')
+    expect(classifyTool(p, 'exec', 'linear/search')).toBe('unknown')
+  })
+
+  it('keeps plain tool-name classification working', () => {
+    expect(classifyTool(policy({ read: ['search_p2'] }), 'search_p2')).toBe('read')
+  })
+})
+
+describe('decideMcpCall with routes', () => {
+  const trusted = (overrides: Partial<McpPolicy> = {}) => policy({ trust: 'trusted', ...overrides })
+
+  // The whole point of the exercise.
+  it('runs a trusted read route silently while its sibling write still asks', () => {
+    const p = trusted({ read: ['exec:linear/search'], write: ['exec:linear/create-issue'] })
+
+    for (const editMode of [FULL, SCOPED]) {
+      expect(decideMcpCall({ editMode, policy: p, toolName: 'exec', route: 'linear/search' }).kind).toBe('allow')
+      expect(decideMcpCall({ editMode, policy: p, toolName: 'exec', route: 'linear/create-issue' }).kind).toBe('ask')
+    }
+  })
+
+  it('asks for an unclassified sibling of a trusted route', () => {
+    const p = trusted({ read: ['exec:linear/search'] })
+    expect(decideMcpCall({ editMode: FULL, policy: p, toolName: 'exec', route: 'linear/delete' }).kind).toBe('ask')
+  })
+
+  // A call that hides its route can't inherit a route-specific allowance.
+  it('asks when the route cannot be determined', () => {
+    const p = trusted({ read: ['exec:linear/search'] })
+    expect(decideMcpCall({ editMode: FULL, policy: p, toolName: 'exec', route: null }).kind).toBe('ask')
+  })
+
+  it('names the route in a readonly block so the reason is actionable', () => {
+    const decision = decideMcpCall({ editMode: READONLY, policy: trusted(), toolName: 'exec', route: 'linear/create-issue' })
+    expect(decision).toMatchObject({ kind: 'block' })
+    expect((decision as { reason: string }).reason).toContain('exec (linear/create-issue)')
+  })
+
+  it('honours always-ask on a route', () => {
+    const p = trusted({ read: ['exec:linear'], alwaysAsk: ['exec:linear/create-issue'] })
+
+    expect(decideMcpCall({ editMode: FULL, policy: p, toolName: 'exec', route: 'linear/search' }).kind).toBe('allow')
+    expect(decideMcpCall({ editMode: FULL, policy: p, toolName: 'exec', route: 'linear/create-issue' }).kind).toBe('ask')
+  })
+
+  it('lets a readonly session use a confirmed read route', () => {
+    const p = trusted({ read: ['exec:mgs/search'] })
+    expect(decideMcpCall({ editMode: READONLY, policy: p, toolName: 'exec', route: 'mgs/search' }).kind).toBe('allow')
+  })
+})
+
+describe('readOnlyToolNames with routes', () => {
+  it('exposes the tool when only one of its routes is a confirmed read', () => {
+    expect(readOnlyToolNames(policy({ read: ['exec:mgs/search'] }))).toEqual(['exec'])
+  })
+
+  it('dedupes several routes on the same tool', () => {
+    expect(readOnlyToolNames(policy({ read: ['exec:mgs/search', 'exec:linear/search'] }))).toEqual(['exec'])
   })
 })

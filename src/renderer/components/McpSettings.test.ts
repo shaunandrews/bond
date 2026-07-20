@@ -268,7 +268,7 @@ describe('McpSettings — trust policy', () => {
     const { wrapper } = await expanded({
       mcpList: vi.fn().mockResolvedValue({ servers: [server({ policy: { ...POLICY, trust: 'trusted', read: ['search_p2'] } })], presets: [] }),
     })
-    expect(wrapper.text()).toContain('1 read-only tool runs without asking')
+    expect(wrapper.text()).toContain('1 read-only rule runs without asking')
   })
 
   it('changes trust through the daemon', async () => {
@@ -281,11 +281,12 @@ describe('McpSettings — trust policy', () => {
     expect(bond.mcpSetTrust).toHaveBeenCalledWith('context-a8c', 'trusted')
   })
 
-  it('classifies a tool and refreshes the catalog', async () => {
+  it('classifies a tool from the one permission control', async () => {
     const { wrapper, bond } = await expanded()
 
-    const toolSelect = wrapper.findAllComponents({ name: 'BondSelect' })[1]
-    toolSelect.vm.$emit('update:modelValue', 'read')
+    const permission = wrapper.findComponent({ name: 'BondTab' })
+    expect(permission.props('tabs').map((tab: { label: string }) => tab.label)).toEqual(['Ask', 'Read', 'Write'])
+    permission.vm.$emit('update:modelValue', 'read')
     await flushPromises()
 
     expect(bond.mcpClassifyTool).toHaveBeenCalledWith('context-a8c', 'search_p2', 'read')
@@ -316,13 +317,24 @@ describe('McpSettings — trust policy', () => {
     expect(pinned.bond.mcpPromoteTool).toHaveBeenCalledWith('context-a8c', 'search_p2', false)
   })
 
-  it('toggles always-ask for a tool', async () => {
-    const { wrapper, bond } = await expanded()
+  // always-ask is set from the CLI; the UI's job is to make it visible and
+  // one click to clear, not to add a second control to every row.
+  it('shows an always-ask tool and clears it in one click', async () => {
+    const { wrapper, bond } = await expanded({
+      mcpListTools: vi.fn().mockResolvedValue({ tools: [toolInfo({ alwaysAsk: true })], errors: [] }),
+    })
 
-    await wrapper.find('[aria-label="Always ask before search_p2"]').trigger('click')
+    expect(wrapper.text()).toContain('always asks')
+    await wrapper.find('[aria-label="Stop always asking before search_p2"]').trigger('click')
     await flushPromises()
 
-    expect(bond.mcpSetAlwaysAsk).toHaveBeenCalledWith('context-a8c', 'search_p2', true)
+    expect(bond.mcpSetAlwaysAsk).toHaveBeenCalledWith('context-a8c', 'search_p2', false)
+  })
+
+  it('offers no always-ask chip when the tool is not flagged', async () => {
+    const { wrapper } = await expanded()
+    expect(wrapper.find('[aria-label="Stop always asking before search_p2"]').exists()).toBe(false)
+    expect(wrapper.findAll('.chip-button')).toHaveLength(0)
   })
 
   it('reports a catalog that could not be loaded', async () => {
@@ -413,5 +425,182 @@ describe('McpSettings — http servers and tokens', () => {
   it('offers no token field for a stdio server', async () => {
     const { wrapper } = await expanded()
     expect(wrapper.findAll('button').some(button => button.text() === 'Set token')).toBe(false)
+  })
+})
+
+describe('McpSettings — a proxy tool\'s reach', () => {
+  // The real context-a8c description: a lead sentence plus a bulleted catalog
+  // of every provider the single tool fronts.
+  const CATALOG = `Load a provider to fetch work-related information at Automattic via tools. Available providers:
+
+- slack: Fetch Slack information (messages, DMs, channels, threads, users). Use when fetching Slack URLs.
+
+- linear: Fetch, create, and update Linear information (issues, projects, teams). Use when querying Linear.
+
+- mgs: (Matt's Global Search) searches WordPress.com internal educational sites and knowledge bases.`
+
+  const ROUTE = {
+    segments: ['provider', 'subtool'],
+    options: ['slack', 'linear', 'mgs'],
+    classes: { slack: 'unknown', linear: 'unknown', mgs: 'unknown' },
+  }
+
+  async function withCatalog(route: unknown = ROUTE) {
+    return await expanded({
+      mcpListTools: vi.fn().mockResolvedValue({
+        tools: [toolInfo({ name: 'context-a8c-load-provider', description: CATALOG, route })],
+        errors: [],
+      }),
+    })
+  }
+
+  it('states how far the tool reaches instead of dumping the catalog as prose', async () => {
+    const { wrapper } = await withCatalog()
+
+    expect(wrapper.text()).toContain('Reaches 3 providers')
+    // The lead sentence stays; the 2,500-character provider dump does not.
+    expect(wrapper.text()).toContain('Load a provider to fetch work-related information')
+    expect(wrapper.text()).not.toContain('Use when fetching Slack URLs')
+  })
+
+  it('renders one chip per provider', async () => {
+    const { wrapper } = await withCatalog()
+
+    expect(wrapper.findAll('.reach-chip').map((chip) => chip.text())).toEqual(['slack', 'linear', 'mgs'])
+  })
+
+  // Nothing is hidden — the detail is one click away, per provider.
+  it('reveals a provider\'s full description on click, and hides it again', async () => {
+    const { wrapper } = await withCatalog()
+    const linear = wrapper.findAll('.reach-chip')[1]
+
+    await linear.trigger('click')
+    expect(wrapper.find('.reach-detail').text()).toContain('Fetch, create, and update Linear information')
+
+    await linear.trigger('click')
+    expect(wrapper.find('.reach-detail').exists()).toBe(false)
+  })
+
+  it('shows one provider at a time', async () => {
+    const { wrapper } = await withCatalog()
+    const chips = wrapper.findAll('.reach-chip')
+
+    await chips[0].trigger('click')
+    await chips[1].trigger('click')
+
+    expect(wrapper.findAll('.reach-detail')).toHaveLength(1)
+    expect(wrapper.find('.reach-detail').text()).toContain('Linear')
+  })
+
+  it('leaves an ordinary tool without a reach section', async () => {
+    const { wrapper } = await expanded({
+      mcpListTools: vi.fn().mockResolvedValue({ tools: [toolInfo({ description: 'Returns the sum of two numbers' })], errors: [] }),
+    })
+
+    expect(wrapper.find('.reach').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Returns the sum of two numbers')
+  })
+})
+
+describe('McpSettings — per-provider permissions', () => {
+  const CATALOG = `Run a sub-tool from a loaded provider. Providers:
+
+- linear: Fetch, create, and update Linear issues.
+
+- mgs: Search WordPress.com internal knowledge bases.`
+
+  function execTool(classes: Record<string, string> = { linear: 'unknown', mgs: 'unknown' }) {
+    return toolInfo({
+      name: 'context-a8c-execute-tool',
+      description: CATALOG,
+      route: { segments: ['provider', 'subtool'], options: ['linear', 'mgs'], classes },
+    })
+  }
+
+  async function withExec(classes?: Record<string, string>) {
+    return await expanded({
+      mcpListTools: vi.fn().mockResolvedValue({ tools: [execTool(classes)], errors: [] }),
+    })
+  }
+
+  it('names the routing segment from the schema', async () => {
+    const { wrapper } = await withExec()
+    expect(wrapper.text()).toContain('Reaches 2 providers — set any one separately')
+  })
+
+  // The whole point: one tool name, two different answers.
+  it('classifies a single provider without touching its siblings', async () => {
+    const { wrapper, bond } = await withExec()
+
+    await wrapper.findAll('.reach-chip')[1].trigger('click')
+    const control = wrapper.findAllComponents({ name: 'BondTab' }).at(-1)!
+    control.vm.$emit('update:modelValue', 'read')
+    await flushPromises()
+
+    expect(bond.mcpClassifyTool).toHaveBeenCalledWith('context-a8c', 'context-a8c-execute-tool:mgs', 'read')
+  })
+
+  it('shows each provider\'s current classification at a glance', async () => {
+    const { wrapper } = await withExec({ linear: 'write', mgs: 'read' })
+    const chips = wrapper.findAll('.reach-chip')
+
+    expect(chips[0].classes()).toContain('write')
+    expect(chips[1].classes()).toContain('read')
+  })
+
+  it('opens a provider with its own permission control and description', async () => {
+    const { wrapper } = await withExec({ linear: 'write', mgs: 'unknown' })
+
+    await wrapper.findAll('.reach-chip')[0].trigger('click')
+
+    expect(wrapper.find('.route-detail').text()).toContain('context-a8c-execute-tool: linear')
+    expect(wrapper.find('.route-detail').text()).toContain('Fetch, create, and update Linear issues.')
+    expect(wrapper.findAllComponents({ name: 'BondTab' }).at(-1)!.props('modelValue')).toBe('write')
+  })
+
+  it('falls back to the described entries when the schema enumerates nothing', async () => {
+    const { wrapper } = await expanded({
+      mcpListTools: vi.fn().mockResolvedValue({
+        tools: [toolInfo({ name: 't', description: CATALOG, route: { segments: ['provider'], options: [], classes: {} } })],
+        errors: [],
+      }),
+    })
+
+    expect(wrapper.findAll('.reach-chip').map((chip) => chip.text())).toEqual(['linear', 'mgs'])
+  })
+})
+
+describe('McpSettings — settings that are not in effect yet', () => {
+  // Regression: Read/Write are overridden by server trust, so setting one
+  // while trust is "ask" silently did nothing at all.
+  it('says per-tool rules are waiting on trust, and offers the one click', async () => {
+    const { wrapper, bond } = await expanded({
+      mcpList: vi.fn().mockResolvedValue({
+        servers: [server({ policy: { ...POLICY, trust: 'ask', read: ['context-a8c-load-provider'] } })],
+        presets: [],
+      }),
+    })
+
+    expect(wrapper.text()).toContain('take effect once this server is trusted')
+
+    await wrapper.findAll('button').find(button => button.text() === 'Trust this server')!.trigger('click')
+    await flushPromises()
+
+    expect(bond.mcpSetTrust).toHaveBeenCalledWith('context-a8c', 'trusted')
+  })
+
+  it('stays quiet when no rules exist yet', async () => {
+    const { wrapper } = await expanded()
+    expect(wrapper.text()).not.toContain('take effect once this server is trusted')
+  })
+
+  it('stays quiet once the server is trusted', async () => {
+    const { wrapper } = await expanded({
+      mcpList: vi.fn().mockResolvedValue({
+        servers: [server({ policy: { ...POLICY, trust: 'trusted', read: ['context-a8c-load-provider'] } })],
+        presets: [],
+      }),
+    })
+    expect(wrapper.text()).not.toContain('take effect once this server is trusted')
   })
 })

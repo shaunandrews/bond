@@ -14,7 +14,8 @@
  *   bond mcp remove <id>                     Delete a server
  *   bond mcp tools [id] [query]              Discovered tools (connects on demand)
  *   bond mcp trust <id> <ask|trusted|disabled>   Set how much a server is trusted
- *   bond mcp classify <id> <tool> <read|write|ask>   Confirm what a tool does
+ *   bond mcp classify <id> <tool[:route]> <read|write|ask>   Confirm what a tool does
+ *                                            (route scopes a proxy tool, e.g. execute-tool:linear)
  *   bond mcp ask <id> <tool> [off]           Always prompt for one tool
  *   bond mcp promote <id> <tool> [off]       Pin a tool as a first-class Bond tool
  *   bond mcp secret set <ref> [value]        Store a token in the macOS Keychain
@@ -154,8 +155,9 @@ function usage(): never {
   ${G}tools${N} [id] [query]            Discovered tools (connects on demand)
   ${G}trust${N} <id> <ask|trusted|disabled>
                                 How much this server is trusted (default: ask)
-  ${G}classify${N} <id> <tool> <read|write|ask>
-                                Confirm what a tool does — drives auto-approval
+  ${G}classify${N} <id> <tool[:route]> <read|write|ask>
+                                Confirm what a tool does — drives auto-approval.
+                                Scope a proxy tool per provider: execute-tool:linear
   ${G}ask${N} <id> <tool> [off]         Always prompt for this tool, even when trusted
   ${G}promote${N} <id> <tool> [off]     Pin a tool as a first-class Bond tool
   ${G}secret${N} set|rm|list [ref]      Keychain-backed tokens (values are never read back)`)

@@ -49,7 +49,7 @@ import {
   type McpServerConfig,
 } from './mcp/config'
 import { listSecretRefs as listMcpSecretRefs, removeSecret as removeMcpSecret, setSecret as setMcpSecret } from './mcp/keychain'
-import { classifyTool as classifyMcpToolClass, suggestToolClass as suggestMcpToolClass } from './mcp/policy'
+import { classifyTool as classifyMcpToolClass, firstSegmentOptions, routeSpecFromSchema, suggestToolClass as suggestMcpToolClass } from './mcp/policy'
 import { policyFor as mcpPolicyFor, reconnectMcpServer, searchCatalog as searchMcpCatalog, serverStatuses as mcpServerStatuses } from './mcp/manager'
 import { getRemoteStatus } from './remote'
 import { removeSkill } from './skills'
@@ -645,11 +645,34 @@ const handlers: RpcHandlers = {
     const result = await searchMcpCatalog(getStringParam(p, 'query'), getStringParam(p, 'server'))
     // Join each protocol tool with the human-owned policy the gate actually
     // uses, so the UI never has to reimplement classification.
+    // First-segment values are a per-SERVER namespace: context-a8c enumerates
+    // its providers on load-provider, and execute-tool routes on the same set
+    // without repeating it. Pooling them is what lets the UI offer per-provider
+    // rules on the tool that actually does the work.
+    const serverOptions = new Map<string, string[]>()
+    for (const tool of result.tools) {
+      const segments = routeSpecFromSchema(tool.inputSchema)
+      if (!segments.length) continue
+      const options = firstSegmentOptions(tool.inputSchema, segments[0].name)
+      if (options.length) {
+        serverOptions.set(tool.server, [...new Set([...(serverOptions.get(tool.server) ?? []), ...options])])
+      }
+    }
+
     return {
       tools: result.tools.map((tool) => {
         const policy = mcpPolicyFor(tool.server)
+        const segments = routeSpecFromSchema(tool.inputSchema)
+        const options = segments.length ? (serverOptions.get(tool.server) ?? []) : []
         return {
           ...tool,
+          ...(segments.length ? {
+            route: {
+              segments: segments.map((segment) => segment.name),
+              options,
+              classes: Object.fromEntries(options.map((option) => [option, classifyMcpToolClass(policy, tool.name, option)])),
+            },
+          } : {}),
           toolClass: classifyMcpToolClass(policy, tool.name),
           suggestedClass: suggestMcpToolClass(tool.annotations),
           alwaysAsk: policy.alwaysAsk.includes(tool.name),

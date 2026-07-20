@@ -18,9 +18,11 @@ import type {
   McpServerStatusWire,
   McpToolInfoWire,
 } from '../../shared/rpc-schema'
+import { parseToolDescription, type CatalogEntry, type ParsedToolDescription } from '../lib/toolCatalog'
 import BondButton from './BondButton.vue'
 import BondInput from './BondInput.vue'
 import BondSelect from './BondSelect.vue'
+import BondTab from './BondTab.vue'
 import BondText from './BondText.vue'
 import BondTextarea from './BondTextarea.vue'
 
@@ -38,6 +40,7 @@ const jsonDraft = ref('')
 const confirmRemoveId = ref('')
 const tokenDraftId = ref('')
 const tokenDraft = ref('')
+const openEntryKey = ref('')
 
 const STATE_LABELS: Record<McpServerStatusWire['state'], string> = {
   connected: 'connected',
@@ -53,14 +56,81 @@ const TRUST_OPTIONS = [
   { value: 'disabled', label: 'Never run' },
 ]
 
-const CLASS_OPTIONS = [
-  { value: 'unknown', label: 'Unclassified' },
-  { value: 'read', label: 'Read-only' },
-  { value: 'write', label: 'Writes' },
+/**
+ * One control, three states, in the order they escalate. "Ask" is the
+ * unclassified default — decideMcpCall prompts for anything it can't place,
+ * so the honest label for that state is what it does, not what it lacks.
+ */
+const PERMISSION_TABS = [
+  { id: 'unknown', label: 'Ask' },
+  { id: 'read', label: 'Read' },
+  { id: 'write', label: 'Write' },
 ]
 
 const unusedPresets = computed(() =>
   presets.value.filter((preset) => !servers.value.some((server) => server.id === preset.id)))
+
+/** Parsed descriptions are pure and re-render often — parse each one once. */
+const catalogCache = new Map<string, ParsedToolDescription>()
+
+function catalogOf(tool: McpToolInfoWire): ParsedToolDescription {
+  const key = `${tool.server}:${tool.name}:${tool.description.length}`
+  let parsed = catalogCache.get(key)
+  if (!parsed) {
+    parsed = parseToolDescription(tool.description)
+    catalogCache.set(key, parsed)
+  }
+  return parsed
+}
+
+/**
+ * What a proxy tool can reach. The daemon's route options are authoritative
+ * (they come from the schema); the parsed description fills in when a server
+ * documents its providers in prose but doesn't enumerate them.
+ */
+function reachOf(tool: McpToolInfoWire): string[] {
+  if (tool.route?.options.length) return tool.route.options
+  return catalogOf(tool).entries.map((entry) => entry.name)
+}
+
+/** "providers" reads better than "options" when the schema names the segment. */
+function routeNoun(tool: McpToolInfoWire): string {
+  const segment = tool.route?.segments[0]
+  if (!segment) return 'entries'
+  return segment.endsWith('s') ? segment : `${segment}s`
+}
+
+function routeClassOf(tool: McpToolInfoWire, route: string): 'read' | 'write' | 'unknown' {
+  return tool.route?.classes[route] ?? 'unknown'
+}
+
+function entryText(tool: McpToolInfoWire, route: string): string {
+  return catalogOf(tool).entries.find((entry) => entry.name === route)?.description ?? ''
+}
+
+function toggleEntry(tool: McpToolInfoWire, route: string): void {
+  const key = `${tool.name}:${route}`
+  openEntryKey.value = openEntryKey.value === key ? '' : key
+}
+
+/** The route whose detail panel is open on this tool, if any. */
+function openRoute(tool: McpToolInfoWire): string | undefined {
+  const prefix = `${tool.name}:`
+  return openEntryKey.value.startsWith(prefix) ? openEntryKey.value.slice(prefix.length) : undefined
+}
+
+/** Rules are stored scoped: `execute-tool:linear` beats a blanket tool rule. */
+function classifyRoute(server: McpServerConfigWire, tool: McpToolInfoWire, route: string, toolClass: string): void {
+  void run(server.id, async () => {
+    await window.bond.mcpClassifyTool(server.id, `${tool.name}:${route}`, toolClass as 'read' | 'write' | 'unknown')
+    await loadTools(server.id)
+  })
+}
+
+/** True once any rule exists — the point at which "trust is off" starts mattering. */
+function hasClassifiedTools(server: McpServerConfigWire): boolean {
+  return server.policy.read.length > 0 || server.policy.write.length > 0
+}
 
 function statusFor(id: string): McpServerStatusWire | undefined {
   return statuses.value.find((status) => status.id === id)
@@ -80,8 +150,8 @@ function trustHint(policy: McpPolicyWire): string {
   if (policy.trust === 'ask') return 'Every call asks you first.'
   const reads = policy.read.length
   return reads
-    ? `${reads} read-only ${reads === 1 ? 'tool runs' : 'tools run'} without asking. Everything else still asks.`
-    : 'Nothing runs unasked yet — classify a tool as read-only below.'
+    ? `${reads} read-only ${reads === 1 ? 'rule runs' : 'rules run'} without asking. Writes and anything unclassified still ask.`
+    : 'Nothing runs unasked yet — mark something Read below.'
 }
 
 function message(err: unknown): string {
@@ -370,8 +440,23 @@ onUnmounted(() => {
           <div class="tool-header">
             <BondText size="xs" weight="medium">Tools</BondText>
             <BondText size="xs" color="muted">
-              Classifying a tool read-only lets a trusted server run it without asking.
+              Read runs without asking on a trusted server. Write always asks — an MCP write lands in someone else's system.
             </BondText>
+          </div>
+
+          <!--
+            Read/Write below do nothing while trust is "Ask every time" — the
+            server-level setting overrides them. Saying so (and offering the
+            one click that fixes it) beats letting someone set a control that
+            silently has no effect.
+          -->
+          <div v-if="server.policy.trust === 'ask' && hasClassifiedTools(server)" class="pending-note">
+            <BondText size="xs" color="muted">
+              These settings take effect once this server is trusted — right now every call still asks.
+            </BondText>
+            <BondButton variant="secondary" size="sm" :disabled="busyId === server.id" @click="setTrust(server, 'trusted')">
+              Trust this server
+            </BondButton>
           </div>
 
           <BondText v-if="loadingToolsId === server.id" size="xs" color="muted">Connecting…</BondText>
@@ -382,42 +467,84 @@ onUnmounted(() => {
 
           <div v-else class="tool-list">
             <div v-for="tool in toolsByServer[server.id]" :key="tool.name" class="tool-row">
-              <div class="flex flex-col gap-0.5 min-w-0">
-                <div class="flex items-center gap-1.5 min-w-0">
-                  <BondText size="xs" weight="medium" mono truncate>{{ tool.name }}</BondText>
+              <div class="tool-head">
+                <div class="tool-identity">
+                  <BondText size="sm" weight="medium" mono truncate>{{ tool.name }}</BondText>
                   <span v-if="tool.promoted" class="chip accent">pinned</span>
-                  <span v-if="tool.alwaysAsk" class="chip">always asks</span>
+                  <!--
+                    "Always ask" isn't redundant with the Ask state: a tool can
+                    be classified read (so a readonly session may use it at all)
+                    and still demand confirmation. It's set from the CLI, so the
+                    UI's job is to make it visible and one click to clear.
+                  -->
+                  <button
+                    v-if="tool.alwaysAsk"
+                    type="button"
+                    class="chip chip-button"
+                    v-tooltip="'Always asks before running. Click to stop.'"
+                    :aria-label="`Stop always asking before ${tool.name}`"
+                    @click="toggleAlwaysAsk(server, tool)"
+                  >always asks</button>
                 </div>
-                <BondText size="xs" color="muted" truncate>{{ tool.description || 'No description.' }}</BondText>
-                <BondText v-if="tool.toolClass === 'unknown' && tool.suggestedClass !== 'unknown'" size="xs" color="muted">
-                  The server says this is {{ tool.suggestedClass === 'read' ? 'read-only' : 'a write' }} — confirm it yourself.
+                <div class="tool-actions">
+                  <BondTab
+                    size="sm"
+                    :tabs="PERMISSION_TABS"
+                    :modelValue="tool.toolClass"
+                    @update:modelValue="value => classify(server, tool, value)"
+                  />
+                  <button
+                    type="button"
+                    :class="['icon-btn', { active: tool.promoted }]"
+                    v-tooltip="tool.promoted ? 'Unpin from Bond\'s tool list' : 'Pin as a first-class Bond tool'"
+                    :aria-label="`Pin ${tool.name}`"
+                    @click="togglePinned(server, tool)"
+                  >
+                    <PhPushPin :size="14" :weight="tool.promoted ? 'fill' : 'regular'" />
+                  </button>
+                </div>
+              </div>
+
+              <p v-if="catalogOf(tool).summary" class="tool-summary">{{ catalogOf(tool).summary }}</p>
+
+              <!--
+                A proxy tool's real surface lives in its description as a
+                bulleted catalog. Showing those entries as chips is the whole
+                point: "reaches 10 providers" is the fact you need to decide
+                whether this may run unattended.
+              -->
+              <div v-if="reachOf(tool).length" class="reach">
+                <BondText size="xs" color="muted">
+                  Reaches {{ reachOf(tool).length }} {{ routeNoun(tool) }} — set any one separately
                 </BondText>
+                <div class="reach-chips">
+                  <button
+                    v-for="name in reachOf(tool)"
+                    :key="name"
+                    type="button"
+                    :class="['reach-chip', routeClassOf(tool, name), { open: openEntryKey === `${tool.name}:${name}` }]"
+                    :aria-expanded="openEntryKey === `${tool.name}:${name}`"
+                    @click="toggleEntry(tool, name)"
+                  >{{ name }}</button>
+                </div>
+
+                <div v-if="openRoute(tool)" class="route-detail">
+                  <div class="route-detail-head">
+                    <BondText size="xs" weight="medium" mono>{{ tool.name }}: {{ openRoute(tool) }}</BondText>
+                    <BondTab
+                      size="sm"
+                      :tabs="PERMISSION_TABS"
+                      :modelValue="routeClassOf(tool, openRoute(tool)!)"
+                      @update:modelValue="value => classifyRoute(server, tool, openRoute(tool)!, value)"
+                    />
+                  </div>
+                  <p v-if="entryText(tool, openRoute(tool)!)" class="reach-detail">{{ entryText(tool, openRoute(tool)!) }}</p>
+                </div>
               </div>
-              <div class="tool-actions">
-                <BondSelect
-                  size="sm"
-                  variant="minimal"
-                  :modelValue="tool.toolClass"
-                  :options="CLASS_OPTIONS"
-                  @update:modelValue="value => classify(server, tool, value)"
-                />
-                <button
-                  type="button"
-                  :class="['icon-btn', { active: tool.alwaysAsk }]"
-                  v-tooltip="tool.alwaysAsk ? 'Stop always asking' : 'Always ask for this tool'"
-                  :aria-label="`Always ask before ${tool.name}`"
-                  @click="toggleAlwaysAsk(server, tool)"
-                >?</button>
-                <button
-                  type="button"
-                  :class="['icon-btn', { active: tool.promoted }]"
-                  v-tooltip="tool.promoted ? 'Unpin from Bond\'s tool list' : 'Pin as a first-class Bond tool'"
-                  :aria-label="`Pin ${tool.name}`"
-                  @click="togglePinned(server, tool)"
-                >
-                  <PhPushPin :size="13" :weight="tool.promoted ? 'fill' : 'regular'" />
-                </button>
-              </div>
+
+              <BondText v-if="tool.toolClass === 'unknown' && tool.suggestedClass !== 'unknown'" size="xs" color="muted">
+                The server says this is {{ tool.suggestedClass === 'read' ? 'read-only' : 'a write' }} — confirm it yourself.
+              </BondText>
             </div>
           </div>
         </div>
@@ -574,20 +701,134 @@ or { "id": "remote", "url": "https://example.com/mcp" }'
 
 .tool-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.5rem 0.625rem;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.625rem 0.75rem;
 }
 .tool-row + .tool-row {
   border-top: 1px solid var(--color-border);
 }
 
+.tool-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.tool-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
 .tool-actions {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.375rem;
   flex-shrink: 0;
+}
+
+/* A readable measure, and the source's own line breaks preserved — the
+   newlines were always in the description; HTML was collapsing them. */
+.tool-summary {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--color-muted);
+  white-space: pre-line;
+  text-wrap: pretty;
+}
+
+.reach {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.reach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.reach-chip {
+  all: unset;
+  cursor: pointer;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-muted);
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+.reach-chip:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-muted);
+}
+.reach-chip.open {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+.reach-chip:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+.route-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.route-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.pending-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+/* A glance should show which providers already have a rule. */
+.reach-chip.read {
+  color: var(--color-ok);
+  border-color: color-mix(in srgb, var(--color-ok) 45%, transparent);
+}
+.reach-chip.write {
+  color: var(--color-err);
+  border-color: color-mix(in srgb, var(--color-err) 45%, transparent);
+}
+
+.reach-detail {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--color-muted);
+  text-wrap: pretty;
 }
 
 .chip {
@@ -601,6 +842,24 @@ or { "id": "remote", "url": "https://example.com/mcp" }'
 .chip.accent {
   background: color-mix(in srgb, var(--color-accent) 15%, transparent);
   color: var(--color-accent);
+}
+
+.chip-button {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.65rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-tint);
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+.chip-button:hover {
+  color: var(--color-text-primary);
+}
+.chip-button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
 }
 
 .key-badge {

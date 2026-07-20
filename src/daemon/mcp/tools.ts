@@ -27,7 +27,7 @@ import {
   McpServerError,
   type McpToolInfo,
 } from './manager'
-import { decideMcpCall, type McpDecision, type PromotionTarget } from './policy'
+import { decideMcpCall, routeKeyFor, routeSpecFromSchema, type McpDecision, type PromotionTarget } from './policy'
 
 export const MCP_TOOL_NAMES = ['mcp']
 
@@ -64,6 +64,8 @@ export interface McpApprovalInput {
   requestId: string
   server: string
   tool: string
+  /** Sub-operation, for proxy tools that front many (e.g. `linear/search`). */
+  route?: string | null
   arguments: Record<string, unknown>
 }
 
@@ -125,16 +127,31 @@ export function registerMcpTools(pi: ExtensionAPI, options: McpToolOptions): voi
       kind: 'tool_approval',
       requestId: input.requestId,
       toolName: 'mcp',
-      input: { server: input.server, tool: input.tool, arguments: input.arguments },
-      title: approvalTitle(input.server, input.tool),
+      input: { server: input.server, tool: input.tool, ...(input.route ? { route: input.route } : {}), arguments: input.arguments },
+      title: approvalTitle(input.server, input.route || input.tool),
       description: approvalDescription(input.arguments),
     })
     return registerApproval(input.requestId, options.turnId)
   })
 
+  /**
+   * The route a call targets, for proxy tools where one name fronts many
+   * operations. A server we can't reach yields no route, which is the
+   * conservative answer: the call falls back to the tool-level rule.
+   */
+  async function routeFor(server: string, tool: string, args: Record<string, unknown>): Promise<string | null> {
+    try {
+      const info = await deps.describeTool(server, tool)
+      return routeKeyFor(routeSpecFromSchema(info.inputSchema), args)
+    } catch {
+      return null
+    }
+  }
+
   /** Gate → (maybe) prompt → run. The only path to an MCP server from a turn. */
   async function runMcpCall(server: string, tool: string, args: Record<string, unknown>, abortSignal?: AbortSignal) {
-    const decision: McpDecision = decideMcpCall({ editMode, policy: deps.policyFor(server), toolName: tool })
+    const route = await routeFor(server, tool, args)
+    const decision: McpDecision = decideMcpCall({ editMode, policy: deps.policyFor(server), toolName: tool, route })
     if (decision.kind === 'block') {
       return toolResult({ server, tool, approved: false, error: decision.reason })
     }
@@ -142,7 +159,9 @@ export function registerMcpTools(pi: ExtensionAPI, options: McpToolOptions): voi
     let finalArgs = args
     if (decision.kind === 'ask') {
       const requestId = randomUUID()
-      const answer = await askForApproval({ requestId, server, tool, arguments: args })
+      // The prompt names the route when there is one: "Allow context-a8c:
+      // linear/create-issue?" beats "Allow context-a8c: execute-tool?".
+      const answer = await askForApproval({ requestId, server, tool, route, arguments: args })
       if (!answer.approved) {
         return toolResult({ server, tool, approved: false, error: 'The user denied this MCP call. Do not retry it — ask what they would prefer.' })
       }
@@ -158,6 +177,7 @@ export function registerMcpTools(pi: ExtensionAPI, options: McpToolOptions): voi
         tool,
         approved: true,
         autoApproved: decision.kind === 'allow',
+        ...(route ? { route } : {}),
         isError: flattened.isError,
         truncated: flattened.truncated,
         result: flattened.text,

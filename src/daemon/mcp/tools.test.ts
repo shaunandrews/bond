@@ -245,8 +245,8 @@ describe('policy gate', () => {
     expect(harness.deps.callTool).toHaveBeenCalled()
   })
 
-  it('still prompts for a trusted write in scoped mode', async () => {
-    const harness = withPolicy({ trust: 'trusted', write: ['search_p2'] }, SCOPED)
+  it('still prompts for a trusted write, even in full mode', async () => {
+    const harness = withPolicy({ trust: 'trusted', write: ['search_p2'] }, FULL)
 
     const pending = call(harness)
     await vi.waitFor(() => expect(harness.chunks).toHaveLength(1))

@@ -328,7 +328,7 @@ Global directive for tooltips. Replaces native `title` attributes with styled, a
 - **Styling:** Inverted colors (dark bg on light mode, light bg on dark mode), arrow pointer, fade+scale animation
 
 ### BondText
-Polymorphic text component for all UI text. Renders any HTML element via `as` prop.
+Polymorphic text component for all UI text. Renders any HTML element via `as` prop. `truncate` also applies `block` and suppresses the default inline `text-wrap: pretty` — as an inline style that property outranked the `.truncate` class and shared the `text-wrap-mode` longhand with `white-space: nowrap`, which silently made the prop a no-op everywhere.
 - **Props:** `as?: string` (default: `'span'`), `size?: 'xs' | 'sm' | 'base' | 'lg' | 'xl' | '2xl' | '3xl'`, `weight?: 'normal' | 'medium' | 'semibold' | 'bold'`, `color?: 'primary' | 'muted' | 'accent' | 'err' | 'ok' | 'inherit'`, `align?: 'left' | 'center' | 'right'`, `truncate?: boolean`, `mono?: boolean`
 - **Slot:** default — text content
 
@@ -590,7 +590,9 @@ type EditMode =
   | { type: 'scoped', allowedPaths: string[] }     // Read/write restricted to specific paths
 ```
 
-MCP tools are the one exception to per-mode tool lists being about workspace files. Availability and approval are decided by the per-server **trust policy** (`src/daemon/mcp/policy.ts`), not the edit mode alone: a new server defaults to `trust: 'ask'` with nothing classified, which prompts for every call in every mode. Marking a server **trusted** auto-runs the tools a human confirmed read-only (and, in `full` only, confirmed writes); `readonly` sessions see only confirmed read-only tools and the proxy disappears entirely until at least one exists. `alwaysAsk` outranks trust, and `disabled` blocks the server outright. Promoted tools (`mcp__server__tool`) pass through the same gate.
+MCP tools are the one exception to per-mode tool lists being about workspace files. Availability and approval are decided by the per-server **trust policy** (`src/daemon/mcp/policy.ts`), not the edit mode alone: a new server defaults to `trust: 'ask'` with nothing classified, which prompts for every call in every mode. Marking a server **trusted** auto-runs only what a human confirmed **read-only** — a confirmed *write* always asks, in every mode including `full`, because full mode's standing approval covers Bond's own workspace (recoverable, on this machine) and not an irreversible write into someone else's system. `readonly` sessions see only confirmed read-only tools, and the proxy disappears entirely until at least one exists. `alwaysAsk` outranks trust; `disabled` blocks the server outright. Promoted tools (`mcp__server__tool`) pass through the same gate.
+
+**Proxy servers get sub-tool rules.** One tool name can front many operations selected by argument (`execute-tool {provider: linear, subtool: create-issue}`), so judging by tool name alone would let one classification govern both reads and writes. `routeSpecFromSchema` derives the routing arguments from the tool's input schema (leading string properties, with `Legacy alias for \`x\`` descriptions bound to the segment they stand in for — missing that is a bypass), `routeKeyFor` builds `linear/create-issue` from a call, and rules are stored scoped as `tool:provider[/subtool]` with the most specific match winning. A call whose route can't be determined never inherits a route-specific allowance.
 
 Edit mode is **one global, daemon-persisted setting** (`edit_mode`, validated through `parseEditMode` in `shared/session.ts`): loaded into the composer at boot on every surface (desktop, web, quick chat), applied per-turn via `BondSendInput.editMode`, and mirrored live to all clients through the `edit_mode_changed` chunk when any device changes it. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
 

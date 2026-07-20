@@ -54,11 +54,128 @@ export function suggestToolClass(annotations: Record<string, unknown> | undefine
   return 'unknown'
 }
 
-/** How a tool is classified for policy purposes. Only human choices count. */
-export function classifyTool(policy: McpPolicy, toolName: string): McpToolClass {
-  if (policy.read.includes(toolName)) return 'read'
-  if (policy.write.includes(toolName)) return 'write'
+// --- Sub-tool routing ---
+//
+// A proxy tool is one tool name fronting many operations, selected by its
+// arguments: `execute-tool {provider: linear, subtool: create-issue}`. Judging
+// it by tool name alone means one classification governs both reads and
+// writes, so classifying it read auto-approves issue creation. Routing gives
+// the policy a finer key — `linear/create-issue` — derived from the call.
+
+export interface RouteSegment {
+  name: string
+  /** Other argument names carrying the same value (legacy aliases). */
+  aliases: string[]
+}
+
+export type RouteSpec = RouteSegment[]
+
+/** Rules are stored as `tool` or `tool:provider[/subtool]`. */
+export const ROUTE_SEPARATOR = ':'
+
+const MAX_ROUTE_SEGMENTS = 2
+const LEGACY_ALIAS_RE = /legacy alias for [`'"]?([A-Za-z0-9_]+)/i
+
+/**
+ * Derive routing arguments from a tool's input schema: the leading string
+ * properties are what select the operation, and object properties are the
+ * payload passed along to it.
+ *
+ * A tool with no leading string properties (an ordinary `get-sum`) routes to
+ * nothing and keeps behaving exactly as it did before routing existed.
+ */
+export function routeSpecFromSchema(schema: unknown): RouteSpec {
+  if (!schema || typeof schema !== 'object') return []
+  const properties = (schema as { properties?: unknown }).properties
+  if (!properties || typeof properties !== 'object') return []
+
+  const aliasOf = new Map<string, string[]>()
+  const ordered: string[] = []
+
+  for (const [name, raw] of Object.entries(properties as Record<string, unknown>)) {
+    const property = (raw ?? {}) as { type?: unknown; description?: unknown }
+    if (property.type !== 'string') continue
+    // "Legacy alias for `subtool`" — the same operation under another name.
+    // Missing this is a real bypass: a rule on subtool would not see `tool`.
+    const alias = typeof property.description === 'string' ? property.description.match(LEGACY_ALIAS_RE) : null
+    if (alias) {
+      aliasOf.set(alias[1], [...(aliasOf.get(alias[1]) ?? []), name])
+      continue
+    }
+    ordered.push(name)
+  }
+
+  return ordered
+    .slice(0, MAX_ROUTE_SEGMENTS)
+    .map((name) => ({ name, aliases: aliasOf.get(name) ?? [] }))
+}
+
+/** Enumerated values for a routing segment, when the schema declares them. */
+export function firstSegmentOptions(schema: unknown, segmentName: string): string[] {
+  if (!schema || typeof schema !== 'object') return []
+  const properties = (schema as { properties?: Record<string, unknown> }).properties
+  const property = properties?.[segmentName] as { enum?: unknown } | undefined
+  if (!Array.isArray(property?.enum)) return []
+  return property.enum.filter((value): value is string => typeof value === 'string')
+}
+
+function segmentValue(segment: RouteSegment, args: Record<string, unknown>): string | null {
+  for (const key of [segment.name, ...segment.aliases]) {
+    const value = args[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
+}
+
+/**
+ * The route a call targets, e.g. `linear/search`. Null when the tool doesn't
+ * route or the call omits its leading segment — an unroutable call on a
+ * routed tool must never inherit a route-specific allowance.
+ */
+export function routeKeyFor(spec: RouteSpec, args: Record<string, unknown> | undefined): string | null {
+  if (!spec.length) return null
+  const values: string[] = []
+  for (const segment of spec) {
+    const value = segmentValue(segment, args ?? {})
+    if (!value) break
+    values.push(value)
+  }
+  return values.length ? values.join('/') : null
+}
+
+/** The policy key for a tool, optionally scoped to a route. */
+export function policyKey(toolName: string, route?: string | null): string {
+  return route ? `${toolName}${ROUTE_SEPARATOR}${route}` : toolName
+}
+
+/** Every key a call could match, most specific first. */
+export function candidateKeys(toolName: string, route: string | null): string[] {
+  if (!route) return [toolName]
+  const parts = route.split('/')
+  const keys: string[] = []
+  for (let end = parts.length; end > 0; end -= 1) {
+    keys.push(policyKey(toolName, parts.slice(0, end).join('/')))
+  }
+  keys.push(toolName)
+  return keys
+}
+
+/**
+ * How a call is classified. Only human choices count, and the most specific
+ * rule wins: a `linear/create-issue` rule beats a `linear` rule, which beats
+ * a blanket rule on the tool.
+ */
+export function classifyTool(policy: McpPolicy, toolName: string, route: string | null = null): McpToolClass {
+  for (const key of candidateKeys(toolName, route)) {
+    if (policy.read.includes(key)) return 'read'
+    if (policy.write.includes(key)) return 'write'
+  }
   return 'unknown'
+}
+
+/** True when any candidate key is flagged always-ask. */
+export function isAlwaysAsk(policy: McpPolicy, toolName: string, route: string | null = null): boolean {
+  return candidateKeys(toolName, route).some((key) => policy.alwaysAsk.includes(key))
 }
 
 export type McpDecision =
@@ -82,31 +199,44 @@ export function decideMcpCall(input: {
   editMode: EditMode
   policy: McpPolicy
   toolName: string
+  /** Sub-operation this call targets, when the tool routes (see routeKeyFor). */
+  route?: string | null
 }): McpDecision {
   const { editMode, policy, toolName } = input
+  const route = input.route ?? null
   if (policy.trust === 'disabled') {
     return { kind: 'block', reason: `The MCP server is set to "never run" — change it in Settings → MCP connections.` }
   }
 
-  const toolClass = classifyTool(policy, toolName)
-  const alwaysAsk = policy.alwaysAsk.includes(toolName)
+  const toolClass = classifyTool(policy, toolName, route)
+  const alwaysAsk = isAlwaysAsk(policy, toolName, route)
+  const label = route ? `${toolName} (${route})` : toolName
 
   if (editMode.type === 'readonly') {
     if (toolClass !== 'read') {
-      return { kind: 'block', reason: `This session is read-only and "${toolName}" is not a confirmed read-only tool.` }
+      return { kind: 'block', reason: `This session is read-only and "${label}" is not a confirmed read-only tool.` }
     }
     return alwaysAsk ? { kind: 'ask' } : { kind: 'allow' }
   }
 
   if (policy.trust === 'ask' || alwaysAsk || toolClass === 'unknown') return { kind: 'ask' }
   if (toolClass === 'read') return { kind: 'allow' }
-  // 'write' on a trusted server: full is a standing approval, scoped is not.
-  return editMode.type === 'full' ? { kind: 'allow' } : { kind: 'ask' }
+  // A confirmed write ALWAYS asks, even on a trusted server in full mode.
+  // Full mode is a standing approval for Bond's own workspace tools, where the
+  // blast radius is this machine and git has your back. An MCP write lands in
+  // someone else's system — a Linear issue, a Slack message, a Zendesk ticket
+  // — with no undo, so "trusted" buys silence on reads only.
+  return { kind: 'ask' }
 }
 
-/** Tools a readonly session may see at all — confirmed reads on a non-disabled server. */
+/**
+ * Tools a readonly session may see at all — confirmed reads on a non-disabled
+ * server. A route-scoped rule (`tool:linear/search`) counts: the tool must be
+ * reachable for the route to ever be used.
+ */
 export function readOnlyToolNames(policy: McpPolicy): string[] {
-  return policy.trust === 'disabled' ? [] : [...policy.read]
+  if (policy.trust === 'disabled') return []
+  return [...new Set(policy.read.map((key) => key.split(ROUTE_SEPARATOR)[0]))]
 }
 
 /** The Pi tool name a promoted MCP tool is registered under. */

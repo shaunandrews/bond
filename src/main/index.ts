@@ -438,15 +438,18 @@ function createSettingsWindow(): void {
     ? require('electron').screen.getDisplayMatching(parentBounds)
     : require('electron').screen.getPrimaryDisplay()
   const { x: dx, y: dy, width: dw, height: dh } = display.workArea
-  const sw = 600, sh = 580
+  // Roomy by default: the MCP panel lists servers, their tools, and each
+  // tool's reach, which a 600×580 sheet turned into a column of scroll.
+  // Still clamped to the display so a small screen can't open it offscreen.
+  const sw = Math.min(940, dw - 80), sh = Math.min(800, dh - 80)
 
   settingsWindow = new BrowserWindow({
     width: sw,
     height: sh,
     x: Math.round(dx + (dw - sw) / 2),
     y: Math.round(dy + (dh - sh) / 2),
-    minWidth: 480,
-    minHeight: 400,
+    minWidth: 620,
+    minHeight: 460,
     show: false,
     autoHideMenuBar: true,
     title: 'Settings',

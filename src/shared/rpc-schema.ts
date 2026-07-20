@@ -125,6 +125,17 @@ export interface McpToolInfoWire {
   description: string
   inputSchema: unknown
   annotations?: Record<string, unknown>
+  /**
+   * Sub-operation routing for proxy tools — one tool name fronting many
+   * operations selected by argument. `segments` names the routing arguments
+   * (e.g. provider, subtool); `options` lists the known first-segment values;
+   * `classes` gives each option's current classification.
+   */
+  route?: {
+    segments: string[]
+    options: string[]
+    classes: Record<string, 'read' | 'write' | 'unknown'>
+  }
   /** Human-confirmed classification driving the approval gate. */
   toolClass: 'read' | 'write' | 'unknown'
   /** What the server's own annotations suggest — never authoritative. */
