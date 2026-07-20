@@ -712,11 +712,16 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 
 .mobile-composer {
-  padding: 0 0 max(2px, env(safe-area-inset-bottom));
+  /* The composer owns the lower edge instead of reserving an empty strip for
+     it. `viewport-fit=cover` lets it reach this space in the installed app. */
+  padding: 0;
 }
 
-/* On mobile the field itself is the glass. There is no outer glass tray. */
+/* On mobile the field itself is the glass. There is no outer glass tray.
+   Browsers expose safe-area insets but not the physical display-corner radius,
+   so use a width-responsive native-style radius rather than device guesses. */
 .mobile-composer .chat-box {
+  border-radius: clamp(22px, 7vw, 30px);
   background: color-mix(in srgb, var(--color-surface) 76%, transparent);
   backdrop-filter: blur(18px) saturate(1.15);
   -webkit-backdrop-filter: blur(18px) saturate(1.15);
@@ -731,7 +736,9 @@ function handleKeyDown(e: KeyboardEvent) {
 .mobile-composer .composer-toolbar {
   justify-content: space-between;
   min-height: 44px;
-  padding: 2px 4px;
+  /* Controls remain clear of the home indicator while the glass field—not an
+     empty wrapper—continues all the way to the physical screen edge. */
+  padding: 2px 4px max(2px, env(safe-area-inset-bottom));
 }
 
 .mobile-composer .composer-toolbar > div:last-child {

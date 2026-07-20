@@ -454,7 +454,9 @@ function handleEditModeChange(mode: EditMode) {
   left: 0;
   z-index: 3;
   padding-top: 16px;
-  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  /* The field deliberately occupies the home-indicator area. Its controls
+     remain inset inside the field; this wrapper adds no second dead band. */
+  padding-bottom: 0;
   /* Deliberately only a positioning wrapper. It must never read as a second,
      bordered surface around the composer. */
   background: transparent;
