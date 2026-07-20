@@ -260,6 +260,7 @@ export class WebBondClient {
 }
 
 const TOKEN_STORAGE_KEY = 'bond:remote-token'
+const DEVICE_TOKEN_STORAGE_KEY = 'bond:device-credential'
 
 /**
  * The pairing token arrives in the URL fragment (`#t=…`) on first visit and
@@ -282,4 +283,82 @@ export function readPairingToken(): string | null {
 
 export function clearPairingToken(): void {
   try { localStorage.removeItem(TOKEN_STORAGE_KEY) } catch { /* ignore */ }
+}
+
+/**
+ * A Home Screen web app has its own storage context and can never read the
+ * token Safari saved, so it earns its own credential through the pairing-code
+ * exchange and keeps it here.
+ */
+export function readDeviceCredential(): string | null {
+  try {
+    return localStorage.getItem(DEVICE_TOKEN_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function storeDeviceCredential(token: string): void {
+  try { localStorage.setItem(DEVICE_TOKEN_STORAGE_KEY, token) } catch { /* private mode */ }
+}
+
+export function clearDeviceCredential(): void {
+  try { localStorage.removeItem(DEVICE_TOKEN_STORAGE_KEY) } catch { /* ignore */ }
+}
+
+/**
+ * A device credential outranks the shared token: if this client has paired on
+ * its own, that credential is the one an owner can revoke individually.
+ */
+export function resolveAuthToken(): string | null {
+  return readDeviceCredential() ?? readPairingToken()
+}
+
+/** True when running as an installed Home Screen / desktop web app. */
+export function isStandaloneDisplay(): boolean {
+  if (typeof window === 'undefined') return false
+  // iOS Safari predates display-mode and only sets the legacy navigator flag.
+  if ((navigator as { standalone?: boolean }).standalone === true) return true
+  try {
+    return window.matchMedia?.('(display-mode: standalone)').matches === true
+  } catch {
+    return false
+  }
+}
+
+export type PairingError = 'invalid' | 'expired' | 'used' | 'throttled' | 'unavailable' | 'offline'
+
+export type PairingOutcome = { ok: true; deviceToken: string } | { ok: false; reason: PairingError }
+
+/**
+ * Redeem a one-time code for this device's credential. Plain HTTP, not RPC:
+ * an unpaired client has no token, and the WebSocket auth gate hangs up on a
+ * bad one.
+ */
+export async function exchangePairingCode(code: string, fetchImpl: typeof fetch = fetch): Promise<PairingOutcome> {
+  let res: Response
+  try {
+    res = await fetchImpl('/api/pair', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    })
+  } catch {
+    // The Mac is asleep, off the network, or on a different Wi-Fi — never
+    // report this as a bad code.
+    return { ok: false, reason: 'offline' }
+  }
+
+  let payload: { deviceToken?: unknown; error?: unknown } = {}
+  try {
+    payload = (await res.json()) as typeof payload
+  } catch { /* fall through to the status-based verdict */ }
+
+  if (res.ok && typeof payload.deviceToken === 'string') {
+    storeDeviceCredential(payload.deviceToken)
+    return { ok: true, deviceToken: payload.deviceToken }
+  }
+  const reason = payload.error
+  const known: PairingError[] = ['invalid', 'expired', 'used', 'throttled', 'unavailable']
+  return { ok: false, reason: known.includes(reason as PairingError) ? (reason as PairingError) : 'invalid' }
 }

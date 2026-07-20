@@ -17,6 +17,7 @@ import { claimSocket, daemonHealth, socketIdentity, startSocketWatchdog } from '
 import { installWireToolLogging, installWireWebSocketLogging } from './wire-debug'
 import { startServer, attachConnection, registerBroadcastServer } from './server'
 import { startRemoteServer, type RemoteServer } from './remote'
+import { exchangePairingCode, isValidDeviceToken } from './pairing'
 import { getRemotePort, getOrCreateRemoteToken } from './settings'
 import { shutdownMcp } from './mcp/manager'
 
@@ -103,7 +104,10 @@ async function main(): Promise<void> {
       port: getRemotePort(),
       token: remoteToken,
       webRoot,
-      attach: (ws) => attachConnection(ws, remoteToken),
+      // Either the shared pairing token (Safari QR flow) or a per-device
+      // credential minted through /api/pair (Home Screen app) authenticates.
+      attach: (ws) => attachConnection(ws, remoteToken, isValidDeviceToken),
+      exchangePairingCode,
     })
     registerBroadcastServer(remote.wss)
   } catch (err) {

@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { WebBondClient, readPairingToken, clearPairingToken } from './client'
+import {
+  WebBondClient,
+  readPairingToken,
+  clearPairingToken,
+  resolveAuthToken,
+  readDeviceCredential,
+  storeDeviceCredential,
+  clearDeviceCredential,
+  exchangePairingCode,
+  isStandaloneDisplay,
+} from './client'
 import { makeResponse, makeErrorResponse, makeNotification, PROTOCOL_VERSION, type JsonRpcRequest } from '../../shared/protocol'
 
 class FakeWebSocket {
@@ -239,5 +249,128 @@ describe('readPairingToken', () => {
     clearPairingToken()
     window.location.hash = ''
     expect(readPairingToken()).toBeNull()
+  })
+})
+
+describe('resolveAuthToken', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    window.location.hash = ''
+  })
+
+  it('prefers this device\'s own credential over the shared token', () => {
+    // The device credential is individually revocable; the shared token is
+    // not. If both exist, the credential is the one that must be used.
+    storeDeviceCredential('d'.repeat(64))
+    window.location.hash = '#t=sharedtoken'
+    readPairingToken()
+    expect(resolveAuthToken()).toBe('d'.repeat(64))
+  })
+
+  it('falls back to the shared token when no credential is stored', () => {
+    window.location.hash = '#t=abc123'
+    expect(resolveAuthToken()).toBe('abc123')
+  })
+
+  it('returns null when neither exists', () => {
+    expect(resolveAuthToken()).toBeNull()
+  })
+
+  it('falls back again once the credential is cleared', () => {
+    storeDeviceCredential('d'.repeat(64))
+    window.location.hash = '#t=abc123'
+    readPairingToken()
+    clearDeviceCredential()
+    expect(resolveAuthToken()).toBe('abc123')
+  })
+})
+
+describe('exchangePairingCode', () => {
+  beforeEach(() => localStorage.clear())
+
+  function jsonFetch(status: number, payload: unknown) {
+    return vi.fn(async () => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => payload,
+    })) as unknown as typeof fetch
+  }
+
+  it('POSTs the code to /api/pair and stores the credential', async () => {
+    const fetchImpl = jsonFetch(200, { deviceToken: 'e'.repeat(64), deviceId: 'dev-1' })
+    const result = await exchangePairingCode('ABCD1234', fetchImpl)
+
+    expect(result).toEqual({ ok: true, deviceToken: 'e'.repeat(64) })
+    expect(readDeviceCredential()).toBe('e'.repeat(64))
+    const [url, init] = (fetchImpl as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]
+    expect(url).toBe('/api/pair')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'ABCD1234' })
+  })
+
+  it('surfaces each server rejection reason', async () => {
+    for (const reason of ['invalid', 'expired', 'used', 'throttled', 'unavailable'] as const) {
+      const result = await exchangePairingCode('X', jsonFetch(400, { error: reason }))
+      expect(result).toEqual({ ok: false, reason })
+      expect(readDeviceCredential()).toBeNull()
+    }
+  })
+
+  it('reports offline when the Mac cannot be reached — never a bad code', async () => {
+    const fetchImpl = vi.fn(async () => { throw new TypeError('Failed to fetch') }) as unknown as typeof fetch
+    expect(await exchangePairingCode('ABCD1234', fetchImpl)).toEqual({ ok: false, reason: 'offline' })
+  })
+
+  it('treats an unknown error body as invalid rather than trusting it', async () => {
+    expect(await exchangePairingCode('X', jsonFetch(400, { error: 'weird' }))).toEqual({ ok: false, reason: 'invalid' })
+  })
+
+  it('does not store a credential when the body is missing one', async () => {
+    const result = await exchangePairingCode('X', jsonFetch(200, { ok: true }))
+    expect(result).toEqual({ ok: false, reason: 'invalid' })
+    expect(readDeviceCredential()).toBeNull()
+  })
+
+  it('survives an unparseable response body', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => { throw new SyntaxError('not json') },
+    })) as unknown as typeof fetch
+    expect(await exchangePairingCode('X', fetchImpl)).toEqual({ ok: false, reason: 'invalid' })
+  })
+})
+
+describe('isStandaloneDisplay', () => {
+  it('detects the legacy iOS Safari standalone flag', () => {
+    const nav = navigator as { standalone?: boolean }
+    nav.standalone = true
+    try {
+      expect(isStandaloneDisplay()).toBe(true)
+    } finally {
+      delete nav.standalone
+    }
+  })
+
+  it('detects the display-mode media query', () => {
+    const original = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(display-mode: standalone)',
+    })) as unknown as typeof window.matchMedia
+    try {
+      expect(isStandaloneDisplay()).toBe(true)
+    } finally {
+      window.matchMedia = original
+    }
+  })
+
+  it('is false in an ordinary browser tab', () => {
+    const original = window.matchMedia
+    window.matchMedia = (() => ({ matches: false })) as unknown as typeof window.matchMedia
+    try {
+      expect(isStandaloneDisplay()).toBe(false)
+    } finally {
+      window.matchMedia = original
+    }
   })
 })

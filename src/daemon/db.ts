@@ -51,6 +51,7 @@ export function getDb(): Database.Database {
   migrateBackfillMediaAssets(_db)
   retireLegacyJournalCollection(_db)
   migrateCreateSenseMemoryTables(_db)
+  migrateCreateRemoteDevicesTable(_db)
   migrateDropRetiredTables(_db)
   ensureTranscriptSchema(_db)
   ensureMemorySchema(_db)
@@ -742,6 +743,27 @@ function migrateFromFiles(db: Database.Database): void {
   try {
     renameSync(sessionsDir, join(dataDir, 'sessions.bak'))
   } catch { /* ignore */ }
+}
+
+/**
+ * Per-device credentials for the remote LAN web client. Only the SHA-256 of a
+ * credential is stored — a stolen database can't be replayed as a device.
+ * Revocation is a soft delete so a revoked row keeps failing auth rather than
+ * freeing its hash for reuse.
+ */
+function migrateCreateRemoteDevicesTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS remote_devices (
+      id TEXT PRIMARY KEY,
+      credential_hash TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT,
+      revoked_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_remote_devices_created ON remote_devices(created_at DESC);
+  `)
 }
 
 function migrateCreateSenseMemoryTables(db: Database.Database): void {

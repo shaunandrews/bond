@@ -3,7 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- Home Screen web app. The manifest gives iOS a standalone app; the
+         apple-* metas are still required alongside it for iOS to honour the
+         icon and title. `id`/`start_url` must stay stable — changing them
+         makes iOS treat it as a different installed app. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Bond" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f5f2" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1114" />
+
     <title>Bond</title>
   </head>
   <body>

@@ -198,6 +198,15 @@ onUnmounted(() => {
 .lightbox-leave-to {
   opacity: 0;
 }
+/* A bare URL, a long file path, or a hash has no break opportunity, so it
+   renders as one unbreakable word wider than a phone. `anywhere` (not
+   `break-word`) also shrinks the min-content contribution, so flex and table
+   parents stop reserving room for the whole token. */
+.bond-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .bond-message p { margin: 0; }
 .bond-message p + p { margin-top: 0.5em; }
 .bond-message strong { font-weight: 600; }
@@ -275,11 +284,19 @@ onUnmounted(() => {
   font-size: inherit;
 }
 
+/* `width: 100%` can't hold a table narrower than its columns' min-content, so
+   a many-column table used to spill out of the message. As a block box it
+   sizes to its content, caps at the message width, and scrolls inside itself;
+   min-width keeps narrow tables looking full-width as before. */
 .bond-message table {
+  display: block;
   border-collapse: collapse;
   margin: 0.5em 0;
   font-size: 0.9em;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .bond-message th, .bond-message td {
   border: 1px solid var(--color-border);

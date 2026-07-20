@@ -2,12 +2,12 @@ import { createApp } from 'vue'
 import '../app.css'
 import WebApp from './WebApp.vue'
 import { vTooltip } from '../directives/tooltip'
-import { WebBondClient, readPairingToken } from './client'
+import { WebBondClient, resolveAuthToken } from './client'
 import { buildBondShim } from './shim'
 
 // The shim must exist before any component mounts — the renderer reads
 // window.bond directly throughout.
-const token = readPairingToken()
+const token = resolveAuthToken()
 const client = new WebBondClient({
   url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/`,
   token: token ?? '',

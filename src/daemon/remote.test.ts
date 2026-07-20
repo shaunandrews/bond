@@ -7,6 +7,7 @@ import { WebSocket } from 'ws'
 import {
   resolveStaticPath,
   handleStaticRequest,
+  handlePairRequest,
   originAllowed,
   pairingUrls,
   startRemoteServer,
@@ -118,6 +119,26 @@ describe('handleStaticRequest', () => {
     expect(state.status).toBe(200)
     expect(state.headers['content-type']).toContain('text/javascript')
     expect(state.headers['cache-control']).toContain('immutable')
+  })
+
+  it('never pins the manifest or icons — their URLs are stable, not fingerprinted', async () => {
+    // An immutable manifest would strand an installed Home Screen app on a
+    // year-old copy the next time it changes.
+    const root = makeWebRoot()
+    roots.push(root)
+    writeFileSync(join(root, 'manifest.webmanifest'), '{"name":"Bond"}')
+    mkdirSync(join(root, 'icons'))
+    writeFileSync(join(root, 'icons', 'icon-180.png'), 'png')
+
+    const manifest = fakeRes()
+    await handleStaticRequest(root, { method: 'GET', url: '/manifest.webmanifest' } as IncomingMessage, manifest.res)
+    expect(manifest.state.status).toBe(200)
+    expect(manifest.state.headers['content-type']).toContain('application/manifest+json')
+    expect(manifest.state.headers['cache-control']).toBe('no-cache')
+
+    const icon = fakeRes()
+    await handleStaticRequest(root, { method: 'GET', url: '/icons/icon-180.png' } as IncomingMessage, icon.res)
+    expect(icon.state.headers['cache-control']).toBe('no-cache')
   })
 
   it('404s for missing files and traversal attempts', async () => {
@@ -235,5 +256,136 @@ describe('startRemoteServer', () => {
     await vi.waitFor(() => {
       expect(getRemoteStatus()).toMatchObject({ running: true, port, token: 'second-token' })
     })
+  })
+})
+
+describe('handlePairRequest', () => {
+  function fakeReq(options: {
+    method?: string
+    body?: string
+    origin?: string
+    host?: string
+  } = {}): IncomingMessage {
+    const { method = 'POST', body = '{}', origin, host = '192.168.1.5:3113' } = options
+    const listeners: Record<string, ((arg?: unknown) => void)[]> = {}
+    const req = {
+      method,
+      url: '/api/pair',
+      headers: { origin, host },
+      destroy: vi.fn(),
+      on(event: string, fn: (arg?: unknown) => void) {
+        ;(listeners[event] ??= []).push(fn)
+        // Deliver the body once 'end' is subscribed — by then 'data' is too.
+        // A future reordering makes this time out loudly rather than pass.
+        if (event === 'end') {
+          queueMicrotask(() => {
+            for (const l of listeners.data ?? []) l(Buffer.from(body))
+            for (const l of listeners.end ?? []) l()
+          })
+        }
+        return req
+      },
+    }
+    return req as unknown as IncomingMessage
+  }
+
+  function fakeRes() {
+    const state = { status: 0, headers: {} as Record<string, string>, body: '' }
+    const res = {
+      writeHead: vi.fn((status: number, headers: Record<string, string>) => {
+        state.status = status
+        state.headers = headers
+        return res
+      }),
+      end: vi.fn((body?: unknown) => { state.body = String(body ?? '') }),
+    }
+    return { res: res as unknown as ServerResponse, state }
+  }
+
+  const okExchange = () => ({ ok: true as const, deviceToken: 'a'.repeat(64), deviceId: 'device-1' })
+
+  it('returns a device credential for a good code', async () => {
+    const exchange = vi.fn(okExchange)
+    const { res, state } = fakeRes()
+    await handlePairRequest(fakeReq({ body: JSON.stringify({ code: 'ABCD1234' }) }), res, exchange)
+    expect(exchange).toHaveBeenCalledWith('ABCD1234')
+    expect(state.status).toBe(200)
+    expect(JSON.parse(state.body)).toEqual({ deviceToken: 'a'.repeat(64), deviceId: 'device-1' })
+  })
+
+  it('never caches the credential response', async () => {
+    const { res, state } = fakeRes()
+    await handlePairRequest(fakeReq({ body: JSON.stringify({ code: 'ABCD1234' }) }), res, okExchange)
+    expect(state.headers['cache-control']).toBe('no-store')
+  })
+
+  it('passes through each rejection reason', async () => {
+    for (const reason of ['invalid', 'expired', 'used'] as const) {
+      const { res, state } = fakeRes()
+      await handlePairRequest(fakeReq({ body: JSON.stringify({ code: 'X' }) }), res, () => ({ ok: false, reason }))
+      expect(state.status).toBe(400)
+      expect(JSON.parse(state.body)).toEqual({ error: reason })
+    }
+  })
+
+  it('answers 429 when throttled so a client can tell guessing from a bad code', async () => {
+    const { res, state } = fakeRes()
+    await handlePairRequest(
+      fakeReq({ body: JSON.stringify({ code: 'X' }) }),
+      res,
+      () => ({ ok: false, reason: 'throttled' }),
+    )
+    expect(state.status).toBe(429)
+  })
+
+  it('rejects non-POST methods', async () => {
+    const { res, state } = fakeRes()
+    await handlePairRequest(fakeReq({ method: 'GET' }), res, okExchange)
+    expect(state.status).toBe(405)
+  })
+
+  it('rejects a cross-origin POST — a hostile page must not spend codes', async () => {
+    const exchange = vi.fn(okExchange)
+    const { res, state } = fakeRes()
+    await handlePairRequest(fakeReq({ origin: 'http://evil.test' }), res, exchange)
+    expect(state.status).toBe(403)
+    expect(exchange).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed JSON and non-string codes', async () => {
+    for (const body of ['not json', JSON.stringify({ code: 42 }), JSON.stringify({})]) {
+      const exchange = vi.fn(okExchange)
+      const { res, state } = fakeRes()
+      await handlePairRequest(fakeReq({ body }), res, exchange)
+      expect(state.status).toBe(400)
+      expect(exchange).not.toHaveBeenCalled()
+    }
+  })
+
+  it('rejects an oversized body without reading it all', async () => {
+    const exchange = vi.fn(okExchange)
+    const { res, state } = fakeRes()
+    const req = fakeReq({ body: 'x'.repeat(2048) })
+    await handlePairRequest(req, res, exchange)
+    expect(state.status).toBe(400)
+    expect(exchange).not.toHaveBeenCalled()
+    expect(req.destroy).toHaveBeenCalled()
+  })
+
+  it('reports unavailable when no exchange is wired', async () => {
+    const { res, state } = fakeRes()
+    await handlePairRequest(fakeReq({ body: JSON.stringify({ code: 'ABCD1234' }) }), res, undefined)
+    expect(state.status).toBe(503)
+    expect(JSON.parse(state.body)).toEqual({ error: 'unavailable' })
+  })
+
+  it('contains a throwing exchange instead of killing the request', async () => {
+    const { res, state } = fakeRes()
+    await handlePairRequest(
+      fakeReq({ body: JSON.stringify({ code: 'ABCD1234' }) }),
+      res,
+      () => { throw new Error('db is gone') },
+    )
+    expect(state.status).toBe(500)
   })
 })

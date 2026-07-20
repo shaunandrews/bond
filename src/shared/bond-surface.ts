@@ -57,6 +57,10 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
 
     // --- Remote access (LAN web server) ---
     remoteStatus: () => invoke('remote.status'),
+    createPairingCode: () => invoke('remote.createPairingCode'),
+    listRemoteDevices: () => invoke('remote.listDevices'),
+    revokeRemoteDevice: (id: string) => invoke('remote.revokeDevice', { id }),
+    revokeAllRemoteDevices: () => invoke('remote.revokeAllDevices'),
 
     // --- Continuous transcript ---
     listTranscript: (options?: { beforeSeq?: number; limit?: number }) => invoke('transcript.list', options),

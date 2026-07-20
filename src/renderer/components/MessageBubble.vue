@@ -196,7 +196,7 @@ function formatTime(ts: number | undefined): string {
       :key="i"
       :src="imageDataUri(img)"
       :alt="msg.alt ?? 'Generated image'"
-      class="rounded-lg max-w-[420px] max-h-[420px] object-contain shadow-sm"
+      class="rounded-lg max-w-[min(100%,420px)] max-h-[420px] object-contain shadow-sm"
     />
     <div
       v-if="!msg.images?.length"
@@ -319,6 +319,10 @@ function formatTime(ts: number | undefined): string {
 }
 
 /* User message markdown */
+/* The bubble is fit-content inside a max-width cap, so an unbreakable token
+   (URL, path, hash) would size the bubble past the cap and overflow the
+   transcript. `anywhere` breaks it and keeps the min-content width small. */
+.user-markdown { min-width: 0; overflow-wrap: anywhere; }
 .user-markdown :deep(p) { margin: 0; }
 .user-markdown :deep(p + p) { margin-top: 0.4em; }
 .user-markdown :deep(p:only-child) { white-space: pre-wrap; }

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import WebSocket from 'ws'
-import { startServer, type BondServer } from './server'
+import { startServer, attachConnection, type BondServer } from './server'
 import { BondClient, RpcCallError } from '../shared/client'
 import { PROTOCOL_VERSION, RPC_VALIDATION_ERROR, RPC_INVALID_PARAMS } from '../shared/protocol'
 import { setDataDir } from './paths'
@@ -667,5 +667,72 @@ describe('racing sends over the socket', () => {
     const epochs = getDb().prepare('SELECT COUNT(*) AS n FROM epochs').get() as { n: number }
     expect(epochs.n).toBe(1)
     client2.close()
+  })
+})
+
+describe('attachConnection device-credential gate', () => {
+  // The remote LAN listener accepts EITHER the shared pairing token or a
+  // per-device credential minted through /api/pair, so a Home Screen app
+  // authenticates without ever being handed remote.token.
+  function fakeWs() {
+    const sent: Record<string, any>[] = []
+    let onMessage: ((data: Buffer) => Promise<void> | void) | undefined
+    const ws = {
+      readyState: WebSocket.OPEN,
+      sent,
+      closed: false,
+      on(event: string, fn: (data: Buffer) => Promise<void> | void) {
+        if (event === 'message') onMessage = fn
+        return ws
+      },
+      send(data: string) { sent.push(JSON.parse(data)) },
+      close() { ws.closed = true },
+      async auth(token: unknown) {
+        await onMessage?.(Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'bond.auth', params: { token } })))
+        return sent.at(-1)!
+      },
+    }
+    return ws
+  }
+
+  it('accepts a valid device credential', async () => {
+    const ws = fakeWs()
+    attachConnection(ws as any, 'shared-token', token => token === 'device-cred')
+    const reply = await ws.auth('device-cred')
+    expect(reply.error).toBeUndefined()
+    expect(reply.result).toEqual({ ok: true, protocolVersion: PROTOCOL_VERSION })
+    expect(ws.closed).toBe(false)
+  })
+
+  it('still accepts the shared pairing token — the Safari QR flow keeps working', async () => {
+    const ws = fakeWs()
+    attachConnection(ws as any, 'shared-token', () => false)
+    expect((await ws.auth('shared-token')).error).toBeUndefined()
+  })
+
+  it('rejects a credential the validator refuses (revoked or unknown)', async () => {
+    const ws = fakeWs()
+    const accept = vi.fn(() => false)
+    attachConnection(ws as any, 'shared-token', accept)
+    const reply = await ws.auth('revoked-cred')
+    expect(reply.error.code).toBe(-32600)
+    expect(accept).toHaveBeenCalledWith('revoked-cred')
+    expect(ws.closed).toBe(true)
+  })
+
+  it('never passes a non-string token to the validator', async () => {
+    const ws = fakeWs()
+    const accept = vi.fn(() => true)
+    attachConnection(ws as any, 'shared-token', accept)
+    const reply = await ws.auth({ evil: true })
+    expect(accept).not.toHaveBeenCalled()
+    expect(reply.error).toBeDefined()
+  })
+
+  it('rejects everything when no validator is supplied and the token is wrong', async () => {
+    const ws = fakeWs()
+    attachConnection(ws as any, 'shared-token')
+    expect((await ws.auth('device-cred')).error).toBeDefined()
+    expect(ws.closed).toBe(true)
   })
 })

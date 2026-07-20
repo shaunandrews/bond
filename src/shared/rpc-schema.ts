@@ -55,6 +55,14 @@ export interface RemoteStatusResult {
   urls: string[]
 }
 
+/** Mirrors src/daemon/pairing.ts RemoteDevice (shared cannot import daemon). */
+export interface RemoteDeviceSummary {
+  id: string
+  label: string
+  createdAt: string
+  lastSeenAt: string | null
+}
+
 /** Mirrors src/daemon/skills.ts SkillInfo (shared cannot import daemon). */
 export interface SkillInfo {
   name: string
@@ -205,8 +213,14 @@ export interface RpcMethods {
   'bond.approvalResponse': { params: { requestId: string; approved: boolean }; result: { ok: true } }
   'bond.ping': { params: void; result: { ok: true; protocolVersion: number } }
 
-  // Remote access (LAN web server)
+  // Remote access (LAN web server). The code EXCHANGE is not here — it runs
+  // over plain HTTP (POST /api/pair) because an unpaired client cannot open
+  // an authenticated socket to make an RPC in the first place.
   'remote.status': { params: void; result: RemoteStatusResult }
+  'remote.createPairingCode': { params: void; result: { code: string; expiresAt: number } }
+  'remote.listDevices': { params: void; result: { devices: RemoteDeviceSummary[] } }
+  'remote.revokeDevice': { params: { id: string }; result: { ok: true } }
+  'remote.revokeAllDevices': { params: void; result: { ok: true; revoked: number } }
 
   // Subscriptions
   'bond.subscribe': { params: { sessionId?: string } | void; result: { ok: true } }
@@ -392,6 +406,10 @@ export const RPC_METHOD_NAMES = [
   'bond.approvalResponse',
   'bond.ping',
   'remote.status',
+  'remote.createPairingCode',
+  'remote.listDevices',
+  'remote.revokeDevice',
+  'remote.revokeAllDevices',
   'bond.subscribe',
   'bond.unsubscribe',
   'bond.setModel',

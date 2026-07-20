@@ -9,8 +9,10 @@ import MessageBubble from '../components/MessageBubble.vue'
 import ChatInput from '../components/ChatInput.vue'
 import ApprovalPrompt from '../components/ApprovalPrompt.vue'
 import BondText from '../components/BondText.vue'
+import BondButton from '../components/BondButton.vue'
 import { PhX } from '@phosphor-icons/vue'
-import type { WebBondClient, ConnectionState } from './client'
+import type { WebBondClient, ConnectionState, PairingError } from './client'
+import { clearDeviceCredential, exchangePairingCode, isStandaloneDisplay } from './client'
 
 const props = defineProps<{
   client: WebBondClient
@@ -24,6 +26,40 @@ const connection = ref<ConnectionState>(props.client.state)
 const hasConnected = ref(false)
 
 const needsPairing = computed(() => !props.hasToken || connection.value === 'unpaired')
+
+// An installed Home Screen app can't be re-paired by opening a QR link — that
+// would land in Safari, whose storage it can't see. It pairs with a code.
+const isStandalone = isStandaloneDisplay()
+const pairingCode = ref('')
+const pairingBusy = ref(false)
+const pairingError = ref<PairingError | null>(null)
+
+const PAIRING_ERROR_TEXT: Record<PairingError, string> = {
+  invalid: "That code didn't match. Check it and try again.",
+  expired: 'That code expired. Generate a fresh one on your Mac.',
+  used: 'That code was already used. Generate a fresh one on your Mac.',
+  throttled: 'Too many attempts. Generate a fresh code on your Mac.',
+  unavailable: "Bond's pairing service isn't available. Restart Bond on your Mac.",
+  offline: "Can't reach Bond on your Mac. Check both devices are on the same Wi-Fi and Bond is running.",
+}
+
+async function submitPairingCode() {
+  if (pairingBusy.value || !pairingCode.value.trim()) return
+  pairingBusy.value = true
+  pairingError.value = null
+  const result = await exchangePairingCode(pairingCode.value.trim())
+  if (result.ok) {
+    // A rejected credential may still be sitting in the client; reloading is
+    // the honest way to re-enter the normal boot path with the new one.
+    window.location.reload()
+    return
+  }
+  // A credential this daemon rejected is dead weight — drop it so the next
+  // launch starts clean at the pairing screen instead of retrying it.
+  if (connection.value === 'unpaired') clearDeviceCredential()
+  pairingError.value = result.reason
+  pairingBusy.value = false
+}
 
 const messagesRef = ref<HTMLElement | null>(null)
 const { scrollToBottom } = useAutoScroll(messagesRef)
@@ -96,12 +132,51 @@ function handleEditModeChange(mode: EditMode) {
       </BondText>
     </div>
 
+    <div v-else-if="needsPairing && isStandalone" class="pairing-screen">
+      <BondText as="h1" size="xl" weight="semibold">Pair this device</BondText>
+      <BondText as="p" color="muted" align="center">
+        On your Mac, open Bond → Settings → Remote access and tap
+        <strong>Generate pairing code</strong>. Enter it here.
+      </BondText>
+
+      <form class="pairing-form" @submit.prevent="submitPairingCode">
+        <input
+          v-model="pairingCode"
+          class="pairing-input"
+          type="text"
+          inputmode="text"
+          autocapitalize="characters"
+          autocorrect="off"
+          spellcheck="false"
+          autocomplete="one-time-code"
+          maxlength="12"
+          placeholder="ABCD1234"
+          aria-label="Pairing code"
+          :disabled="pairingBusy"
+        />
+        <BondButton type="submit" variant="primary" :disabled="pairingBusy || !pairingCode.trim()">
+          {{ pairingBusy ? 'Pairing…' : 'Pair' }}
+        </BondButton>
+      </form>
+
+      <BondText v-if="pairingError" as="p" size="sm" color="err" align="center">
+        {{ PAIRING_ERROR_TEXT[pairingError] }}
+      </BondText>
+      <BondText as="p" size="xs" color="muted" align="center">
+        Bond runs on your Mac. This app needs both devices on the same network.
+      </BondText>
+    </div>
+
     <div v-else-if="needsPairing" class="pairing-screen">
       <BondText as="h1" size="xl" weight="semibold">Bond</BondText>
       <BondText as="p" color="muted" align="center">
         This device isn't paired{{ connection === 'unpaired' ? ' anymore' : '' }}.
         Open Bond on your Mac, go to Settings → Remote access, and open the
         pairing link or scan the QR code from this device.
+      </BondText>
+      <BondText as="p" size="xs" color="muted" align="center">
+        Want Bond on your Home Screen? Tap Share → Add to Home Screen, then
+        pair it with a code from the same settings panel.
       </BondText>
     </div>
 
@@ -176,7 +251,11 @@ function handleEditModeChange(mode: EditMode) {
   /* dvh, not vh — mobile browser chrome overlaps 100vh layouts. */
   height: 100dvh;
   min-height: 0;
-  overflow: hidden;
+  /* clip, not hidden: `hidden` still makes this a scroll container, so an
+     overflowing child stays scrollable programmatically — focusing a field
+     near the edge slides the whole shell sideways. `clip` gives the shell no
+     scroll box at all, so body can never receive scrollable overflow. */
+  overflow: clip;
   background: var(--color-bg);
 }
 
@@ -190,6 +269,35 @@ function handleEditModeChange(mode: EditMode) {
   padding: 32px;
   max-width: 420px;
   margin-inline: auto;
+}
+
+.pairing-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-block: 4px;
+}
+
+.pairing-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  /* 16px minimum, or iOS zooms the viewport when the field takes focus. */
+  font-size: 16px;
+  letter-spacing: 0.14em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.pairing-input:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
 }
 
 .web-header {
@@ -206,6 +314,11 @@ function handleEditModeChange(mode: EditMode) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Setting only overflow-y computes overflow-x to `auto`, not `visible` — so
+     a single overflowing message (wide table, long URL, oversized image) made
+     the entire transcript swipeable sideways. The transcript scrolls in one
+     axis, always; anything too wide must scroll inside its own box. */
+  overflow-x: hidden;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
 }
@@ -213,6 +326,7 @@ function handleEditModeChange(mode: EditMode) {
 .chat-column {
   width: 100%;
   max-width: 720px;
+  min-width: 0;
   margin-inline: auto;
   padding-inline: 16px;
 }

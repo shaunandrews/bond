@@ -52,6 +52,7 @@ import { listSecretRefs as listMcpSecretRefs, removeSecret as removeMcpSecret, s
 import { classifyTool as classifyMcpToolClass, firstSegmentOptions, routeSpecFromSchema, suggestToolClass as suggestMcpToolClass } from './mcp/policy'
 import { policyFor as mcpPolicyFor, reconnectMcpServer, searchCatalog as searchMcpCatalog, serverStatuses as mcpServerStatuses } from './mcp/manager'
 import { getRemoteStatus } from './remote'
+import { createPairingCode, listDevices, revokeAllDevices, revokeDevice } from './pairing'
 import { removeSkill } from './skills'
 import { getDb, closeDb } from './db'
 import { buildMatchQuery } from './fts'
@@ -418,6 +419,16 @@ const handlers: RpcHandlers = {
 
   // --- Remote access (LAN web server) ---
   'remote.status': () => getRemoteStatus(),
+
+  'remote.createPairingCode': () => createPairingCode(),
+  'remote.listDevices': () => ({ devices: listDevices() }),
+  'remote.revokeDevice': (params) => {
+    const id = getStringParam(raw(params), 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    revokeDevice(id)
+    return { ok: true as const }
+  },
+  'remote.revokeAllDevices': () => ({ ok: true as const, revoked: revokeAllDevices() }),
 
   // Liveness probe — phone browsers use it to detect zombie sockets
   // (iOS kills WebSockets on lock without firing close events).
@@ -1393,7 +1404,16 @@ async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string
  * passes the persistent pairing token. Subscriber state is module-level, so
  * clients from any listener join the same broadcast pools.
  */
-export function attachConnection(ws: WebSocket, expectedToken?: string): void {
+export function attachConnection(
+  ws: WebSocket,
+  expectedToken?: string,
+  /**
+   * Second chance for a token the shared secret doesn't match — the remote
+   * listener passes the per-device credential check here, so a paired Home
+   * Screen app authenticates without ever seeing `remote.token`.
+   */
+  acceptToken?: (token: string) => boolean,
+): void {
   ws.on('message', async (data) => {
     let msg: JsonRpcMessage
     try {
@@ -1407,7 +1427,7 @@ export function attachConnection(ws: WebSocket, expectedToken?: string): void {
     if (expectedToken && !authenticatedClients.has(ws)) {
       if (isRequest(msg) && msg.method === 'bond.auth') {
         const token = (msg.params as any)?.token
-        if (token === expectedToken) {
+        if (token === expectedToken || (typeof token === 'string' && acceptToken?.(token))) {
           authenticatedClients.add(ws)
           // Version rides the handshake so clients can hard-fail on skew
           // instead of dying per-call on Unknown method.

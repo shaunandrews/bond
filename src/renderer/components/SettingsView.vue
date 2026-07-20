@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { PhTrash, PhPlus, PhEye, PhEyeSlash } from '@phosphor-icons/vue'
 import QRCode from 'qrcode'
 import { useAccentColor } from '../composables/useAccentColor'
 import type { ModelId } from '../../shared/models'
+import type { RemoteDeviceSummary } from '../../shared/rpc-schema'
 import BondSelect from './BondSelect.vue'
 import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
@@ -113,6 +114,74 @@ async function loadRemoteStatus() {
   } catch { /* daemon without remote support */ }
 }
 
+// Home Screen pairing — a phone installed to the Home Screen has its own
+// storage and can't read the token Safari saved, so it pairs with a code.
+const pairingCode = ref('')
+const pairingExpiresAt = ref(0)
+const pairingSecondsLeft = ref(0)
+const pairedDevices = ref<RemoteDeviceSummary[]>([])
+const confirmRevokeAll = ref(false)
+let pairingTimer: ReturnType<typeof setInterval> | null = null
+
+function tickPairingCountdown() {
+  const left = Math.max(0, Math.ceil((pairingExpiresAt.value - Date.now()) / 1000))
+  pairingSecondsLeft.value = left
+  if (left === 0) {
+    pairingCode.value = ''
+    stopPairingCountdown()
+  }
+}
+
+function stopPairingCountdown() {
+  if (pairingTimer) {
+    clearInterval(pairingTimer)
+    pairingTimer = null
+  }
+}
+
+const pairingCountdownLabel = computed(() => {
+  const m = Math.floor(pairingSecondsLeft.value / 60)
+  const s = pairingSecondsLeft.value % 60
+  return `${m}:${String(s).padStart(2, '0')}`
+})
+
+async function generatePairingCode() {
+  try {
+    const result = await window.bond.createPairingCode()
+    pairingCode.value = result.code
+    pairingExpiresAt.value = result.expiresAt
+    tickPairingCountdown()
+    stopPairingCountdown()
+    pairingTimer = setInterval(tickPairingCountdown, 1000)
+  } catch { /* daemon without pairing support */ }
+}
+
+async function loadPairedDevices() {
+  try {
+    pairedDevices.value = (await window.bond.listRemoteDevices()).devices
+  } catch { /* daemon without pairing support */ }
+}
+
+async function revokeDevice(id: string) {
+  await window.bond.revokeRemoteDevice(id)
+  await loadPairedDevices()
+}
+
+async function revokeAllDevices() {
+  if (!confirmRevokeAll.value) {
+    confirmRevokeAll.value = true
+    return
+  }
+  confirmRevokeAll.value = false
+  await window.bond.revokeAllRemoteDevices()
+  await loadPairedDevices()
+}
+
+function formatDeviceDate(iso: string | null): string {
+  if (!iso) return 'never'
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 async function loadPiStatus() {
   const status = await window.bond.getPiStatus()
   piConfigured.value = status.configured
@@ -167,13 +236,16 @@ onMounted(async () => {
     loadWindowOpacity(),
     loadSenseStatus(),
     loadPiStatus(),
-    loadRemoteStatus()
+    loadRemoteStatus(),
+    loadPairedDevices()
   ])
   soul.value = s
   originalSoul.value = s
   defaultModel.value = m as ModelId
   skills.value = sk
 })
+
+onUnmounted(stopPairingCountdown)
 
 async function handleRemoveSkill(name: string) {
   await window.bond.removeSkill(name)
@@ -365,6 +437,37 @@ function handleModelChange(model: string) {
         <p v-else class="text-xs text-muted">
           The web server isn't running — restart the Bond daemon and check <code>~/.bond/daemon.log</code>.
         </p>
+
+        <div v-if="remoteRunning" class="pairing-block">
+          <div class="pairing-head">
+            <BondText size="sm" weight="medium">Home Screen app</BondText>
+            <BondButton size="sm" variant="secondary" @click="generatePairingCode">
+              {{ pairingCode ? 'New code' : 'Generate pairing code' }}
+            </BondButton>
+          </div>
+          <p class="text-xs text-muted">
+            An app added to an iPhone's Home Screen can't read the token from the QR link — Safari and the
+            installed app have separate storage. Pair it with a one-time code instead.
+          </p>
+
+          <div v-if="pairingCode" class="pairing-code-row">
+            <code class="pairing-code">{{ pairingCode }}</code>
+            <BondText size="xs" color="muted">expires in {{ pairingCountdownLabel }}</BondText>
+          </div>
+
+          <div v-if="pairedDevices.length" class="device-list">
+            <div v-for="device in pairedDevices" :key="device.id" class="device-row">
+              <div class="device-meta">
+                <BondText size="xs">Paired {{ formatDeviceDate(device.createdAt) }}</BondText>
+                <BondText size="xs" color="muted">last seen {{ formatDeviceDate(device.lastSeenAt) }}</BondText>
+              </div>
+              <button type="button" class="reset-btn" @click="revokeDevice(device.id)">Revoke</button>
+            </div>
+            <button type="button" class="reset-btn self-start" @click="revokeAllDevices">
+              {{ confirmRevokeAll ? 'Click again to revoke all' : 'Revoke all devices' }}
+            </button>
+          </div>
+        </div>
       </section>
 
       <section class="settings-section">
@@ -716,6 +819,61 @@ function handleModelChange(model: string) {
   display: flex;
   align-items: flex-start;
   gap: 1rem;
+}
+
+.pairing-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.pairing-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.pairing-code-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pairing-code {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  letter-spacing: 0.18em;
+}
+
+.device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.device-meta {
+  display: flex;
+  flex-direction: column;
 }
 
 .remote-qr {
