@@ -386,6 +386,10 @@ export const componentInventory = [
       {
         "name": "placeholder",
         "type": "string | undefined"
+      },
+      {
+        "name": "mobile",
+        "type": "boolean | undefined"
       }
     ],
     "events": [

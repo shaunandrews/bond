@@ -220,6 +220,7 @@ function handleEditModeChange(mode: EditMode) {
             />
           </div>
           <ChatInput
+            mobile
             :busy="chat.busy.value"
             :model="selectedModel"
             :editMode="chat.editMode.value"

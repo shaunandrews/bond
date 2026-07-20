@@ -85,6 +85,7 @@ const props = defineProps<{
   editMode: EditMode
   contextUsage?: { inputTokens: number; contextWindow: number; costUsd: number }
   placeholder?: string
+  mobile?: boolean
 }>()
 const { busy } = toRefs(props)
 
@@ -453,7 +454,7 @@ function handleKeyDown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="pt-1 relative pb-2">
+  <div class="pt-1 relative pb-2" :class="{ 'mobile-composer': props.mobile }">
     <!-- Skill autocomplete menu -->
     <BondFlyoutMenu
       :open="showIssueMenu"
@@ -670,7 +671,7 @@ function handleKeyDown(e: KeyboardEvent) {
           <button
             type="button"
             data-action="send"
-            class="flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-accent text-white hover:opacity-85"
+            class="send-button flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-accent text-white hover:opacity-85"
             @click="handleSubmit()"
           >
             <PhArrowUp :size="16" weight="bold" />
@@ -701,6 +702,61 @@ function handleKeyDown(e: KeyboardEvent) {
 
 .file-input {
   display: none;
+}
+
+/* Web builds do not rely on utility-class generation for the primary action.
+   Keep the mobile control explicitly positioned and colored. */
+.send-button {
+  background: var(--color-accent);
+  color: white;
+}
+
+.mobile-composer {
+  padding: 0 0 max(2px, env(safe-area-inset-bottom));
+}
+
+.mobile-composer .composer-toolbar,
+.mobile-composer .composer-toolbar > div {
+  display: flex;
+  align-items: center;
+}
+
+.mobile-composer .composer-toolbar {
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 2px 4px;
+}
+
+.mobile-composer .composer-toolbar > div:last-child {
+  margin-left: auto;
+  gap: 8px;
+}
+
+.mobile-composer .send-button {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+}
+
+.mobile-composer .image-strip {
+  gap: 6px;
+  margin: 4px 4px 2px;
+}
+
+.mobile-composer .image-thumb img {
+  width: 40px;
+  height: 40px;
+  max-width: 40px;
+  max-height: 40px;
+}
+
+.mobile-composer .chat-textarea {
+  min-height: 28px;
+  max-height: 96px;
+}
+
+.mobile-composer .issue-token-strip {
+  padding-inline: 4px;
 }
 
 .chat-textarea-wrapper {
