@@ -161,11 +161,22 @@ function handleEditModeChange(mode: EditMode) {
 </template>
 
 <style scoped>
+/* The document is never a scroll surface on mobile. Keeping the scroll chain
+   inside .messages avoids iOS handing a gesture to the browser/app shell. */
+:global(html),
+:global(body),
+:global(#app) {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 .web-app {
   display: flex;
   flex-direction: column;
   /* dvh, not vh — mobile browser chrome overlaps 100vh layouts. */
   height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   background: var(--color-bg);
 }
 
@@ -205,7 +216,10 @@ function handleEditModeChange(mode: EditMode) {
 
 .messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .chat-column {
