@@ -453,14 +453,15 @@ function handleEditModeChange(mode: EditMode) {
   bottom: 0;
   left: 0;
   z-index: 3;
-  padding-top: 16px;
-  /* A small optical breathing room keeps the glass from looking welded to
-     the hardware edge. The composer itself still owns its home-indicator inset. */
-  padding-bottom: 12px;
-  /* Deliberately only a positioning wrapper. It must never read as a second,
-     bordered surface around the composer. */
+  /* The mobile composer is a full-width bottom bar, not a floating card. */
+  padding: 0;
   background: transparent;
   border: 0;
+}
+
+.input-area .chat-column {
+  max-width: none;
+  padding-inline: 0;
 }
 
 .go-to-latest {

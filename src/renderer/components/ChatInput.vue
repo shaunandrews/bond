@@ -717,14 +717,20 @@ function handleKeyDown(e: KeyboardEvent) {
   padding: 0;
 }
 
-/* On mobile the field itself is the glass. There is no outer glass tray.
-   Browsers expose safe-area insets but not the physical display-corner radius,
-   so use a width-responsive native-style radius rather than device guesses. */
+/* A full-bleed bottom bar. Glass is reserved for the resting state; focus
+   switches to a solid surface instead of drawing a distracting accent ring. */
 .mobile-composer .chat-box {
-  border-radius: clamp(22px, 7vw, 30px);
+  border-radius: 0;
   background: color-mix(in srgb, var(--color-surface) 76%, transparent);
   backdrop-filter: blur(18px) saturate(1.15);
   -webkit-backdrop-filter: blur(18px) saturate(1.15);
+}
+
+.mobile-composer .chat-box:focus-within {
+  background: var(--color-surface);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .mobile-composer .composer-toolbar,
@@ -755,7 +761,8 @@ function handleKeyDown(e: KeyboardEvent) {
   flex: 0 0 40px;
   place-items: center;
   padding: 0;
-  border-radius: 50%;
+  appearance: none;
+  border-radius: 9999px;
   line-height: 1;
 }
 
