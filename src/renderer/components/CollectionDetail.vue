@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { PhTrash, PhStar, PhPlus, PhSortAscending, PhSortDescending } from '@phosphor-icons/vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { PhTrash, PhStar, PhPlus, PhSortAscending, PhSortDescending, PhEye } from '@phosphor-icons/vue'
 import type { Collection, CollectionItem, FieldDef } from '../../shared/session'
 import BondText from './BondText.vue'
 import BondButton from './BondButton.vue'
+import BondTab from './BondTab.vue'
 import CollectionItemDetail from './CollectionItemDetail.vue'
 
 const props = defineProps<{
@@ -112,33 +113,63 @@ function toggleGroup(fieldName: string) {
   groupByField.value = groupByField.value === fieldName ? null : fieldName
 }
 
-function columnSettingsKey() {
+function setViewMode(value: string) {
+  if (value === 'table' || value === 'list' || value === 'cards') viewMode.value = value
+}
+
+function collectionSettingsKey() {
+  // Retains the existing key so saved column layouts upgrade in place.
   return `bond:collection-columns:${props.collection.id}`
 }
 
-function loadColumnSettings() {
+type CollectionViewSettings = {
+  order?: string[]
+  hidden?: string[]
+  viewMode?: 'table' | 'list' | 'cards'
+  groupByField?: string | null
+  sortField?: string | null
+  sortAsc?: boolean
+}
+
+function loadCollectionSettings() {
   const fields = nonPrimaryFields.value.map(field => field.name)
+  const schemaFields = schema.value.map(field => field.name)
+  const groupFields = selectFields.value.map(field => field.name)
   try {
-    const saved = JSON.parse(localStorage.getItem(columnSettingsKey()) ?? '{}') as { order?: string[]; hidden?: string[] }
+    const saved = JSON.parse(localStorage.getItem(collectionSettingsKey()) ?? '{}') as CollectionViewSettings
     columnOrder.value = [...(saved.order ?? []).filter(name => fields.includes(name)), ...fields.filter(name => !(saved.order ?? []).includes(name))]
     hiddenColumns.value = (saved.hidden ?? []).filter(name => fields.includes(name))
+    if (saved.viewMode && ['table', 'list', 'cards'].includes(saved.viewMode)) viewMode.value = saved.viewMode
+    if (saved.sortField && schemaFields.includes(saved.sortField)) sortField.value = saved.sortField
+    if (typeof saved.sortAsc === 'boolean') sortAsc.value = saved.sortAsc
+    if (saved.groupByField && groupFields.includes(saved.groupByField)) groupByField.value = saved.groupByField
   } catch {
     columnOrder.value = fields
     hiddenColumns.value = []
   }
 }
 
-function saveColumnSettings() {
+function saveCollectionSettings() {
   try {
-    localStorage.setItem(columnSettingsKey(), JSON.stringify({ order: columnOrder.value, hidden: hiddenColumns.value }))
+    const settings: CollectionViewSettings = {
+      order: columnOrder.value,
+      hidden: hiddenColumns.value,
+      viewMode: viewMode.value,
+      groupByField: groupByField.value,
+      sortField: sortField.value,
+      sortAsc: sortAsc.value,
+    }
+    localStorage.setItem(collectionSettingsKey(), JSON.stringify(settings))
   } catch { /* local storage may be unavailable */ }
 }
+
+watch([viewMode, groupByField, sortField, sortAsc], saveCollectionSettings)
 
 function toggleColumn(fieldName: string) {
   hiddenColumns.value = hiddenColumns.value.includes(fieldName)
     ? hiddenColumns.value.filter(name => name !== fieldName)
     : [...hiddenColumns.value, fieldName]
-  saveColumnSettings()
+  saveCollectionSettings()
 }
 
 function dropColumn(target: string) {
@@ -148,7 +179,7 @@ function dropColumn(target: string) {
   next.splice(next.indexOf(target), 0, source)
   columnOrder.value = next
   draggedColumn.value = null
-  saveColumnSettings()
+  saveCollectionSettings()
 }
 
 async function refresh() {
@@ -158,7 +189,7 @@ async function refresh() {
 let unsub: (() => void) | null = null
 
 onMounted(async () => {
-  loadColumnSettings()
+  loadCollectionSettings()
   try {
     await refresh()
   } finally {
@@ -244,13 +275,15 @@ function formatValue(value: unknown, field: FieldDef): string {
     <template v-else>
       <!-- View and grouping controls -->
       <div class="detail-toolbar">
-        <div class="view-switcher" aria-label="Collection view">
-          <button v-for="view in ['table', 'list', 'cards'] as const" :key="view" class="view-chip" :class="{ active: viewMode === view }" @click="viewMode = view">
-            {{ view === 'cards' ? 'Cards' : view[0].toUpperCase() + view.slice(1) }}
-          </button>
-        </div>
+        <BondTab
+          :tabs="[{ id: 'table', label: 'Table' }, { id: 'list', label: 'List' }, { id: 'cards', label: 'Cards' }]"
+          :model-value="viewMode"
+          @update:model-value="setViewMode"
+        />
         <div class="columns-control">
-          <button class="columns-trigger" :aria-expanded="columnMenuOpen" @click="columnMenuOpen = !columnMenuOpen">Columns</button>
+          <BondButton variant="secondary" size="sm" icon :aria-expanded="columnMenuOpen" @click="columnMenuOpen = !columnMenuOpen" v-tooltip="'Columns'">
+            <PhEye :size="15" weight="bold" />
+          </BondButton>
           <div v-if="columnMenuOpen" class="columns-menu">
             <div class="columns-menu-label">Drag to reorder · toggle visibility</div>
             <label
@@ -270,15 +303,17 @@ function formatValue(value: unknown, field: FieldDef): string {
         </div>
         <template v-if="selectFields.length">
         <BondText size="xs" color="muted">Group by:</BondText>
-        <button
+        <BondButton
           v-for="f in selectFields"
           :key="f.name"
+          variant="secondary"
+          size="sm"
           class="group-chip"
           :class="{ active: groupByField === f.name }"
           @click="toggleGroup(f.name)"
         >
           {{ f.name }}
-        </button>
+        </BondButton>
         </template>
       </div>
 
@@ -435,36 +470,7 @@ function formatValue(value: unknown, field: FieldDef): string {
   gap: 0.5rem;
   margin-bottom: 1rem;
 }
-.view-switcher {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-}
-.view-chip {
-  border: 0;
-  border-radius: calc(var(--radius-md) - 2px);
-  padding: 0.2rem 0.55rem;
-  background: transparent;
-  color: var(--color-muted);
-  font: inherit;
-  font-size: 0.72rem;
-  cursor: pointer;
-}
-.view-chip.active { background: var(--color-tint); color: var(--color-text-primary); }
 .columns-control { position: relative; }
-.columns-trigger {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 0.24rem 0.55rem;
-  background: transparent;
-  color: var(--color-muted);
-  font: inherit;
-  font-size: 0.72rem;
-  cursor: pointer;
-}
-.columns-trigger:hover { color: var(--color-text-primary); border-color: var(--color-accent); }
 .columns-menu {
   position: absolute;
   z-index: 5;
@@ -490,24 +496,10 @@ function formatValue(value: unknown, field: FieldDef): string {
   font-weight: 500;
 }
 
-.group-chip {
-  font-size: 0.7rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  background: none;
-  color: var(--color-muted);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-.group-chip:hover {
-  border-color: var(--color-accent);
-  color: var(--color-text-primary);
-}
 .group-chip.active {
   background: var(--color-accent);
   color: white;
-  border-color: var(--color-accent);
+  box-shadow: none;
 }
 
 .item-group + .item-group {
