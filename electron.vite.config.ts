@@ -7,6 +7,14 @@ export default defineConfig({
   main: {},
   preload: {},
   renderer: {
+    server: {
+      watch: {
+        // The pre-commit hook regenerates these modules; watching them made
+        // every commit (and every agent turn that runs the hook) full-reload
+        // the window mid-stream. The .css stays watched — it hot-applies.
+        ignored: ['**/*.generated.ts']
+      }
+    },
     build: {
       rollupOptions: {
         input: {
