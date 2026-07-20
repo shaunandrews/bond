@@ -426,6 +426,34 @@ describe('useChat continuous transcript', () => {
     ])
   })
 
+  it('persists only rows this window changed, never loaded store rows', async () => {
+    // Regression: persistMessages used to bulk-push the entire in-memory
+    // transcript, so any staleness anywhere became corruption everywhere.
+    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      messages: [
+        { id: 'store-1', role: 'user', text: 'from store' },
+        { id: 'store-2', role: 'bond', text: 'stored reply' },
+      ],
+      nextBeforeSeq: null,
+    })
+    await chat.loadTranscript()
+    ;(deps.upsertTranscript as ReturnType<typeof vi.fn>).mockClear()
+
+    await chat.persistMessages()
+    expect(deps.upsertTranscript).not.toHaveBeenCalled()
+
+    await chat.submit('fresh message')
+    await chat.persistMessages()
+    const calls = (deps.upsertTranscript as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls.length).toBeGreaterThan(0)
+    for (const call of calls) {
+      const ids = (call[0] as Array<{ id: string }>).map(m => m.id)
+      expect(ids).not.toContain('store-1')
+      expect(ids).not.toContain('store-2')
+      expect(ids.length).toBeGreaterThan(0)
+    }
+  })
+
   it('sends IPC-cloneable payloads instead of Vue reactive proxies', async () => {
     ;(deps.send as ReturnType<typeof vi.fn>).mockImplementation(async input => {
       expect(() => structuredClone(input)).not.toThrow()

@@ -96,7 +96,7 @@ function fromTranscriptMessage(m: TranscriptMessage): Message | null {
 }
 
 const _hmr = import.meta.hot?.data as
-  | { messages?: Message[]; busy?: boolean; queuedMessages?: QueuedMessage[]; transportSessionId?: string | null; nextBeforeSeq?: number | null; hasLoaded?: boolean; activeTurnId?: string | null; activeActivityId?: string | null }
+  | { messages?: Message[]; busy?: boolean; queuedMessages?: QueuedMessage[]; transportSessionId?: string | null; nextBeforeSeq?: number | null; hasLoaded?: boolean; activeTurnId?: string | null; activeActivityId?: string | null; dirtyIds?: string[] }
   | undefined
 
 /** Chunk kinds owned by a single turn — anything here from a foreign turnId is a straggler. */
@@ -128,7 +128,11 @@ export function useChat(deps: ChatDeps = window.bond) {
   let unsub: (() => void) | undefined
   let globalSubscribed = false
   let persistTimer: ReturnType<typeof setTimeout> | null = null
-  let lastPersistPromise: Promise<void> = Promise.resolve()
+  let lastPersistPromise: Promise<unknown> = Promise.resolve()
+  // Rows this window actually mutated. Persistence only ever pushes these —
+  // bulk-pushing the whole transcript let one stale row anywhere become
+  // corruption everywhere.
+  const dirtyIds = new Set<string>(_hmr?.dirtyIds ?? [])
 
   const pendingApprovals = computed(() => {
     activityRevision.value
@@ -146,21 +150,24 @@ export function useChat(deps: ChatDeps = window.bond) {
   function addMessage(msg: Message) {
     if (!msg.ts) msg.ts = Date.now()
     messages.value.push(msg)
+    dirtyIds.add(msg.id)
   }
 
-  function upsertMessage(msg: Message): Promise<void> {
+  function upsertMessage(msg: Message): Promise<boolean> {
     return upsertMessages([msg])
   }
 
-  function upsertMessages(msgs: Message[]): Promise<void> {
+  function upsertMessages(msgs: Message[]): Promise<boolean> {
     const payload = msgs.map(m => toTranscriptMessage({ ...m }))
     const promise = (async () => {
       try {
         const res = await deps.upsertTranscript(payload)
         if (!res.ok) throw new Error('transcript.upsert failed')
+        return true
       } catch (err) {
         console.warn('[bond] transcript upsert failed — data is in renderer memory only', err)
         stashToLocalStorage()
+        return false
       }
     })()
     lastPersistPromise = promise
@@ -180,8 +187,16 @@ export function useChat(deps: ChatDeps = window.bond) {
       clearTimeout(persistTimer)
       persistTimer = null
     }
-    if (!messages.value.length) return
-    await upsertMessages(messages.value)
+    if (!messages.value.length || dirtyIds.size === 0) return
+    const batch = messages.value.filter(m => dirtyIds.has(m.id))
+    // Dirt for rows no longer in the window (reload, pagination trim) is
+    // unrecoverable — drop it rather than carrying it forever.
+    dirtyIds.clear()
+    if (!batch.length) return
+    const ok = await upsertMessages(batch)
+    // Failed pushes stay dirty for the next flush; markers re-added during
+    // the await (fresh mutations) are preserved either way.
+    if (!ok) for (const m of batch) dirtyIds.add(m.id)
   }
 
   function existingActivity(): (Message & { role: 'meta'; kind: 'activity' }) | undefined {
@@ -209,6 +224,7 @@ export function useChat(deps: ChatDeps = window.bond) {
   function updateActivity(updater: (data: TurnActivityData) => void) {
     const msg = activityFor()
     updater(msg.data)
+    dirtyIds.add(msg.id)
     activityRevision.value++
     schedulePersist()
   }
@@ -228,7 +244,7 @@ export function useChat(deps: ChatDeps = window.bond) {
   function endStreaming() {
     for (let i = messages.value.length - 1; i >= 0; i--) {
       const msg = messages.value[i]
-      if (msg.role === 'bond' && msg.streaming) { msg.streaming = false; return }
+      if (msg.role === 'bond' && msg.streaming) { msg.streaming = false; dirtyIds.add(msg.id); return }
     }
   }
 
@@ -341,7 +357,7 @@ export function useChat(deps: ChatDeps = window.bond) {
           data.status = 'responding'
         })
         const last = messages.value[messages.value.length - 1]
-        if (last?.role === 'bond' && last.streaming) last.text += chunk.text
+        if (last?.role === 'bond' && last.streaming) { last.text += chunk.text; dirtyIds.add(last.id) }
         else addMessage({ id: chunk.assistantMessageId ?? uid(), role: 'bond', text: chunk.text, streaming: true })
         schedulePersist()
         break
@@ -435,7 +451,11 @@ export function useChat(deps: ChatDeps = window.bond) {
     messages.value = options.append ? [...loaded, ...messages.value] : loaded
     nextBeforeSeq.value = page.nextBeforeSeq
     hasLoadedTranscript.value = true
-    if (!options.append) adoptLiveTurnFromTranscript()
+    if (!options.append) {
+      // Memory now mirrors the store — nothing is dirty anymore.
+      dirtyIds.clear()
+      adoptLiveTurnFromTranscript()
+    }
     return page
   }
 
@@ -476,6 +496,7 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   function clearMessages() {
     messages.value = []
+    dirtyIds.clear()
     nextBeforeSeq.value = null
     hasLoadedTranscript.value = false
   }
@@ -547,6 +568,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     const stillPending = match.message.data.events.some(e => e.type === 'approval' && e.status === 'pending')
     if (match.message.data.status === 'awaiting_approval' && !stillPending) match.message.data.status = 'working'
     activityRevision.value++
+    dirtyIds.add(match.message.id)
     upsertMessage(match.message)
   }
 
@@ -649,6 +671,7 @@ export function useChat(deps: ChatDeps = window.bond) {
       data.hasLoaded = hasLoadedTranscript.value
       data.activeTurnId = activeTurnId.value
       data.activeActivityId = activeActivityId.value
+      data.dirtyIds = [...dirtyIds]
     })
   }
 
