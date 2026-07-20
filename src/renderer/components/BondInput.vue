@@ -42,9 +42,9 @@ defineEmits<{
   opacity: 0.7;
 }
 
-.bond-input:focus {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -1px;
+.bond-input:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
 }
 
 .bond-input:disabled {

@@ -43,6 +43,11 @@ defineProps<{
   cursor: not-allowed;
 }
 
+.bond-btn:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
 /* Sizes */
 .bond-btn--sm {
   font-size: 0.8125rem;
@@ -69,7 +74,7 @@ defineProps<{
 /* Primary — filled accent */
 .bond-btn--primary {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 .bond-btn--primary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--color-accent) 85%, black);

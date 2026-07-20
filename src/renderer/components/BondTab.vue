@@ -114,4 +114,9 @@ onMounted(updateIndicator)
 .bond-tab.active {
   color: var(--color-text-primary);
 }
+
+.bond-tab:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
 </style>
