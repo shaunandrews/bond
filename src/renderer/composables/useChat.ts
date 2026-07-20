@@ -406,6 +406,27 @@ export function useChat(deps: ChatDeps = window.bond) {
     }
   }
 
+  /**
+   * A window that (re)loads while a turn is running never saw that turn's
+   * turn_start, so the straggler guard in handleChunk would drop its every
+   * chunk — including query_end, freezing the activity row forever. The
+   * persisted row carries the turnId: adopt it so the stream keeps flowing.
+   * If the turn is actually dead (daemon crashed mid-turn), stop/cancel
+   * persists the row as cancelled and the next load comes up clean.
+   */
+  function adoptLiveTurnFromTranscript() {
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const m = messages.value[i]
+      if (m.role !== 'meta' || m.kind !== 'activity') continue
+      if (['working', 'responding', 'awaiting_approval'].includes(m.data.status) && m.data.turnId) {
+        activeTurnId.value = m.data.turnId
+        activeActivityId.value = m.id
+        busy.value = true
+      }
+      return
+    }
+  }
+
   async function loadTranscript(options: { beforeSeq?: number; limit?: number; append?: boolean } = {}) {
     await lastPersistPromise.catch(() => {})
     const page = await deps.listTranscript({ beforeSeq: options.beforeSeq, limit: options.limit ?? TRANSCRIPT_PAGE_SIZE })
@@ -414,6 +435,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     messages.value = options.append ? [...loaded, ...messages.value] : loaded
     nextBeforeSeq.value = page.nextBeforeSeq
     hasLoadedTranscript.value = true
+    if (!options.append) adoptLiveTurnFromTranscript()
     return page
   }
 
@@ -548,16 +570,29 @@ export function useChat(deps: ChatDeps = window.bond) {
   function onQueryEnd(fn: (sessionId: string) => void) { queryEndCallbacks.push(fn) }
 
   /**
-   * Reconnect reconciliation. If this client owns the live turn, its memory is
-   * the freshest copy of the transcript — push it. Otherwise the daemon may
-   * have finished a turn while we were disconnected and IT holds the truth;
-   * blind-upserting our copy here once regressed a finished activity row back
-   * to "working" and wiped its reply text. Reload from SQLite instead.
+   * Reconnect reconciliation. Owning a live turn is NOT proof our memory is
+   * freshest — the daemon may have finalized that turn while we were deaf
+   * (or reloading), leaving us a zombie owner whose blind repersist would
+   * regress the finished rows and wipe the reply. Ask the store first: only
+   * repersist when our owned turn is still unfinalized there; in every other
+   * case the daemon's copy wins and we reload from it.
    */
   async function reconcileOnReconnect() {
     if (busy.value && activeTurnId.value) {
-      await persistMessages()
-      return
+      const ourTurnId = activeTurnId.value
+      const page = await deps.listTranscript({ limit: TRANSCRIPT_PAGE_SIZE })
+      const dbRow = page.messages.find(m => m.role === 'meta' && m.kind === 'activity' && (m.data as { turnId?: string } | undefined)?.turnId === ourTurnId)
+      const dbStatus = String((dbRow?.data as { status?: string } | undefined)?.status ?? '')
+      if (!dbRow || !['done', 'failed', 'cancelled'].includes(dbStatus)) {
+        await persistMessages()
+        return
+      }
+      // Daemon finalized our turn while we were disconnected — drop ownership
+      // so the reload below can't re-adopt a dead turn as busy.
+      busy.value = false
+      activeTurnId.value = null
+      activeActivityId.value = null
+      endStreaming()
     }
     await loadTranscript()
   }
@@ -601,7 +636,10 @@ export function useChat(deps: ChatDeps = window.bond) {
   if (import.meta.hot) {
     import.meta.hot.dispose((data) => {
       if (persistTimer) clearTimeout(persistTimer)
-      persistMessages()
+      // No DB write here: state survives HMR via `data` below, the daemon
+      // persists every turn's rows itself, and a window holding a stale
+      // transcript (dropped chunks) used to blast it over rows the daemon
+      // had already finalized — regressing done turns and wiping replies.
       stashToLocalStorage()
       data.messages = messages.value
       data.busy = busy.value

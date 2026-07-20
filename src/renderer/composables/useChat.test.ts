@@ -355,16 +355,75 @@ describe('useChat continuous transcript', () => {
     ])
   })
 
-  it('reconnect during an owned live turn repersists instead of reloading', async () => {
+  it('adopts a live turn from a loaded transcript so a reloaded window still gets its completion', async () => {
+    // Regression: a mid-turn full reload (design-system:generate rewrites
+    // src/renderer generated files) came back with activeTurnId=null, so the
+    // straggler guard dropped the running turn's chunks — including
+    // query_end — freezing the activity row while the phone rendered fine.
+    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      messages: [
+        { id: 'u1', role: 'user', text: 'long task' },
+        { id: 'a1', role: 'meta', kind: 'activity', data: { turnId: 'turn-live', status: 'working', startedAt: 1, events: [] } },
+      ],
+      nextBeforeSeq: null,
+    })
+    await chat.loadTranscript()
+    expect(chat.busy.value).toBe(true)
+
+    handler({ kind: 'query_end', succeeded: true, turnId: 'turn-live' })
+    await nextTick()
+
+    expect(chat.busy.value).toBe(false)
+    const row = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
+    expect(row && row.role === 'meta' && row.kind === 'activity' ? row.data.status : null).toBe('done')
+  })
+
+  it('does not adopt a finished turn from a loaded transcript', async () => {
+    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      messages: [
+        { id: 'a1', role: 'meta', kind: 'activity', data: { turnId: 'turn-old', status: 'done', startedAt: 1, endedAt: 2, events: [] } },
+      ],
+      nextBeforeSeq: null,
+    })
+    await chat.loadTranscript()
+    expect(chat.busy.value).toBe(false)
+  })
+
+  it('reconnect during an owned turn the store has not finalized repersists', async () => {
     await chat.submit('long running work')
     expect(chat.busy.value).toBe(true)
     ;(deps.upsertTranscript as ReturnType<typeof vi.fn>).mockClear()
-    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockClear()
 
     await chat.reconcileOnReconnect()
 
     expect(deps.upsertTranscript).toHaveBeenCalled()
-    expect(deps.listTranscript).not.toHaveBeenCalled()
+    expect(chat.busy.value).toBe(true)
+  })
+
+  it('reconnect after the daemon finalized our owned turn reloads and drops zombie ownership', async () => {
+    // Regression: a window that adopted (or kept) ownership of a turn the
+    // daemon had already finished would blind-repersist its stale copy on
+    // every reconnect — re-freezing the activity row and wiping the reply.
+    await chat.submit('long running work')
+    const sentTurnId = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0].turnId as string
+    expect(chat.busy.value).toBe(true)
+    ;(deps.upsertTranscript as ReturnType<typeof vi.fn>).mockClear()
+    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      messages: [
+        { id: 'a1', role: 'meta', kind: 'activity', data: { turnId: sentTurnId, status: 'done', startedAt: 1, endedAt: 2, events: [] } },
+        { id: 'b1', role: 'bond', text: 'reply the window never saw' },
+      ],
+      nextBeforeSeq: null,
+    })
+
+    await chat.reconcileOnReconnect()
+
+    expect(deps.upsertTranscript).not.toHaveBeenCalled()
+    expect(chat.busy.value).toBe(false)
+    expect(chat.messages.value).toMatchObject([
+      { role: 'meta', kind: 'activity', data: { status: 'done' } },
+      { role: 'bond', text: 'reply the window never saw' },
+    ])
   })
 
   it('sends IPC-cloneable payloads instead of Vue reactive proxies', async () => {
