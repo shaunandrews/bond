@@ -127,6 +127,16 @@ function filterOptions(field: FieldDef) {
   return [{ value: '', label: `All ${field.name}` }, ...(field.options ?? []).map(value => ({ value, label: value }))]
 }
 
+const sortOptions = computed(() => [
+  { value: '', label: 'Default order' },
+  ...schema.value.map(field => ({ value: field.name, label: field.name })),
+])
+
+function setSortField(value: string) {
+  sortField.value = value && schema.value.some(field => field.name === value) ? value : null
+  if (!sortField.value) sortAsc.value = true
+}
+
 function setFilter(fieldName: string, value: string) {
   filters.value = { ...filters.value, [fieldName]: value }
 }
@@ -320,6 +330,27 @@ function formatValue(value: unknown, field: FieldDef): string {
                   size="sm"
                   @update:model-value="setFilter(field.name, $event)"
                 />
+              </div>
+              <BondText as="div" size="xs" weight="medium" color="muted" class="view-settings-label">Sort by</BondText>
+              <div class="filter-row">
+                <BondSelect
+                  :model-value="sortField ?? ''"
+                  :options="sortOptions"
+                  size="sm"
+                  @update:model-value="setSortField"
+                />
+                <BondButton
+                  variant="ghost"
+                  size="sm"
+                  icon
+                  :disabled="!sortField"
+                  :aria-label="sortAsc ? 'Ascending order' : 'Descending order'"
+                  @click="sortAsc = !sortAsc"
+                  v-tooltip="sortAsc ? 'Ascending order' : 'Descending order'"
+                >
+                  <PhSortAscending v-if="sortAsc" :size="15" weight="bold" />
+                  <PhSortDescending v-else :size="15" weight="bold" />
+                </BondButton>
               </div>
               <BondText as="div" size="xs" weight="medium" color="muted" class="view-settings-label">Group by</BondText>
               <BondButton
