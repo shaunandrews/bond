@@ -83,7 +83,7 @@ function formatTime(ts: number | undefined): string {
 
 <template>
   <!-- User message -->
-  <div v-if="msg.role === 'user'" class="self-end max-w-[92%] flex flex-col items-end gap-1.5" @dblclick="copyText(msg, $event)" @mousemove="updateIssueHover" @mouseleave="issueHover = null">
+  <div v-if="msg.role === 'user'" class="message-bubble message-bubble--user self-end max-w-[92%] flex flex-col items-end gap-1.5" @dblclick="copyText(msg, $event)" @mousemove="updateIssueHover" @mouseleave="issueHover = null">
     <div v-if="msg.images?.length" class="flex flex-wrap justify-end gap-1.5">
       <img
         v-for="(img, i) in msg.images"
@@ -109,7 +109,7 @@ function formatTime(ts: number | undefined): string {
   <!-- Bond message: with artifacts -->
   <div
     v-else-if="msg.role === 'bond' && segments"
-    class="self-start w-full text-sm leading-relaxed"
+    class="message-bubble message-bubble--bond self-start w-full text-sm leading-relaxed"
     @dblclick="copyText(msg, $event)"
   >
     <template v-for="(seg, i) in segments" :key="i">
@@ -141,7 +141,7 @@ function formatTime(ts: number | undefined): string {
     v-else-if="msg.role === 'bond'"
     :text="msg.text"
     :streaming="msg.streaming"
-    class="self-start w-full px-3.5 py-2.5 text-sm leading-relaxed"
+    class="message-bubble message-bubble--bond self-start w-full px-3.5 py-2.5 text-sm leading-relaxed"
     @dblclick="copyText(msg, $event)"
   />
 

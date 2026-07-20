@@ -2,6 +2,8 @@
 colors:
   bg: "#f6f5f2"
   surface: "#ffffff"
+  message-user-bg: "#eee8df"
+  message-user-text: "var(--color-text-primary)"
   border: "#ddd9d0"
   text-primary: "#1a1c1f"
   muted: "#5c6570"

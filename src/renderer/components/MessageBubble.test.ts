@@ -48,6 +48,15 @@ describe('MessageBubble', () => {
     expect(bubble.exists()).toBe(true)
     expect(bubble.html()).toContain('hello there')
     expect(wrapper.find('.self-end').exists()).toBe(true)
+    expect(wrapper.find('.message-bubble--user').exists()).toBe(true)
+  })
+
+  it('marks bond messages with a stable role class for mobile-only styling', () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: '2', role: 'bond' as const, text: 'A reply', streaming: false } },
+    })
+
+    expect(wrapper.find('.message-bubble--bond').exists()).toBe(true)
   })
 
   it('renders bond message with MarkdownMessage component', () => {

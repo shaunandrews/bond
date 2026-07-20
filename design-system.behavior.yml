@@ -2,6 +2,7 @@
 themes:
   light:
     on-accent: "#ffffff"
+    message-user-bg: "#eee8df"
     focus: "#1e5aa8"
     error-text: "#a33737"
     success-text: "#2d6a3a"
@@ -11,6 +12,7 @@ themes:
     overlay-strong: "rgba(0, 0, 0, 0.8)"
   dark:
     on-accent: "#1a1c1f"
+    message-user-bg: "#302c27"
     focus: "#90b6ec"
     error-text: "#ef9a9a"
     success-text: "#a5d6a7"

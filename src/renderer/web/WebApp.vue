@@ -224,6 +224,20 @@ function handleEditModeChange(mode: EditMode) {
   padding-block: 16px 40px;
 }
 
+/* The authored turn is a single quiet surface. Bond replies deliberately
+   remain full-width and unframed so longer responses read as prose. */
+:deep(.message-bubble--user) {
+  max-width: 84%;
+}
+
+:deep(.message-bubble--user .user-markdown) {
+  padding: var(--space-compact) var(--space-default);
+  border-radius: var(--radius-xl);
+  background: var(--color-message-user-bg);
+  color: var(--color-message-user-text);
+  box-shadow: none;
+}
+
 .input-area {
   flex-shrink: 0;
   padding-top: 10px;

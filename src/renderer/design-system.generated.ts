@@ -3,6 +3,8 @@ export const designTokens = {
   "colors": {
     "bg": "#f6f5f2",
     "surface": "#ffffff",
+    "message-user-bg": "#eee8df",
+    "message-user-text": "var(--color-text-primary)",
     "border": "#ddd9d0",
     "text-primary": "#1a1c1f",
     "muted": "#5c6570",
@@ -37,6 +39,7 @@ export const designTokens = {
   "themes": {
     "light": {
       "on-accent": "#ffffff",
+      "message-user-bg": "#eee8df",
       "focus": "#1e5aa8",
       "error-text": "#a33737",
       "success-text": "#2d6a3a",
@@ -47,6 +50,7 @@ export const designTokens = {
     },
     "dark": {
       "on-accent": "#1a1c1f",
+      "message-user-bg": "#302c27",
       "focus": "#90b6ec",
       "error-text": "#ef9a9a",
       "success-text": "#a5d6a7",
