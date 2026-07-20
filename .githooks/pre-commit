@@ -3,6 +3,10 @@
 # which the "prepare" npm script wires up automatically on `npm install`.
 set -e
 root="$(git rev-parse --show-toplevel)"
+# The inventory is derived from the staged component set. Regenerate and stage
+# it here so an ordinary component commit cannot be rejected for bookkeeping.
+npm run design-system:generate --prefix "$root"
+git -C "$root" add src/renderer/design-system.generated.css src/renderer/design-system.generated.ts src/renderer/component-inventory.generated.ts
 npm run design-system:check --prefix "$root"
 npm run typecheck --prefix "$root"
 npm run test:run --prefix "$root"

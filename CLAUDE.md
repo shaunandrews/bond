@@ -269,6 +269,7 @@ src/
       CopyButton.vue                 # Inline copy-to-clipboard button
       MissionBriefing.vue            # Empty transcript welcome screen
       SettingsView.vue               # Accent color, model, personality settings
+      AgentsView.vue                 # Settings-window Agents tab (Felix roster card)
       AboutView.vue                  # Architecture, tools, data paths, CLI reference
       DesignSystemView.vue           # Live design token browser
       SenseView.vue                  # Sense timeline main view (day nav + detail + timeline dock)
@@ -413,6 +414,9 @@ Inline copy-to-clipboard button with checkmark confirmation feedback.
 
 ### SettingsView
 Settings panel with accent color picker (8 presets + custom), default model selector, and personality/soul text editor. No props — reads/writes via `window.bond` directly.
+
+### AgentsView
+Settings-window Agents tab — a presentational roster of Bond's specialist agents (currently Felix, the design consultant): identity card, the four verbs, how he works, and an example ask. Static content, no props or events.
 
 ### DesignSystemView
 Interactive design token showcase. Displays color swatches, typography, radius, shadows, transitions, and spacing values. Reads computed styles from `:root`. No props.

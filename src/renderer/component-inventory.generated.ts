@@ -8,6 +8,12 @@ export const componentInventory = [
     "events": []
   },
   {
+    "name": "AgentsView",
+    "file": "components/AgentsView.vue",
+    "props": [],
+    "events": []
+  },
+  {
     "name": "ApprovalPrompt",
     "file": "components/ApprovalPrompt.vue",
     "props": [

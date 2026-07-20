@@ -96,7 +96,7 @@ function fromTranscriptMessage(m: TranscriptMessage): Message | null {
 }
 
 const _hmr = import.meta.hot?.data as
-  | { messages?: Message[]; busy?: boolean; queuedMessages?: QueuedMessage[]; transportSessionId?: string | null; nextBeforeSeq?: number | null; hasLoaded?: boolean }
+  | { messages?: Message[]; busy?: boolean; queuedMessages?: QueuedMessage[]; transportSessionId?: string | null; nextBeforeSeq?: number | null; hasLoaded?: boolean; activeTurnId?: string | null; activeActivityId?: string | null }
   | undefined
 
 /** Chunk kinds owned by a single turn — anything here from a foreign turnId is a straggler. */
@@ -115,8 +115,11 @@ export function useChat(deps: ChatDeps = window.bond) {
   const contextUsage = ref<{ inputTokens: number; contextWindow: number; costUsd: number }>({ inputTokens: 0, contextWindow: 0, costUsd: 0 })
   const editMode = ref<EditMode>({ type: 'full' })
 
-  const activeActivityId = ref<string | null>(null)
-  const activeTurnId = ref<string | null>(null)
+  // Turn ownership must survive HMR: a turn that edits renderer source
+  // hot-reloads this module mid-stream, and losing activeTurnId here made
+  // handleChunk drop every remaining chunk of the still-running turn.
+  const activeActivityId = ref<string | null>(_hmr?.activeActivityId ?? null)
+  const activeTurnId = ref<string | null>(_hmr?.activeTurnId ?? null)
   const activityRevision = ref(0)
   const currentQueue = computed(() => queuedMessages.value)
   const busySessionIds = computed(() => currentSessionId.value && busy.value ? new Set([currentSessionId.value]) : new Set<string>())
@@ -544,7 +547,20 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   function onQueryEnd(fn: (sessionId: string) => void) { queryEndCallbacks.push(fn) }
 
-  async function repersistAll() { await persistMessages() }
+  /**
+   * Reconnect reconciliation. If this client owns the live turn, its memory is
+   * the freshest copy of the transcript — push it. Otherwise the daemon may
+   * have finished a turn while we were disconnected and IT holds the truth;
+   * blind-upserting our copy here once regressed a finished activity row back
+   * to "working" and wiped its reply text. Reload from SQLite instead.
+   */
+  async function reconcileOnReconnect() {
+    if (busy.value && activeTurnId.value) {
+      await persistMessages()
+      return
+    }
+    await loadTranscript()
+  }
 
   function stashToLocalStorage() {
     if (!messages.value.length) return
@@ -593,6 +609,8 @@ export function useChat(deps: ChatDeps = window.bond) {
       data.transportSessionId = currentSessionId.value
       data.nextBeforeSeq = nextBeforeSeq.value
       data.hasLoaded = hasLoadedTranscript.value
+      data.activeTurnId = activeTurnId.value
+      data.activeActivityId = activeActivityId.value
     })
   }
 
@@ -620,7 +638,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     loadSession,
     clearMessages,
     persistMessages,
-    repersistAll,
+    reconcileOnReconnect,
     stashToLocalStorage,
     restoreFromBackupIfNeeded,
     onQueryEnd

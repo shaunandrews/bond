@@ -333,6 +333,40 @@ describe('useChat continuous transcript', () => {
     expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[1][0]).toMatchObject({ text: 'second' })
   })
 
+  it('reconnect while idle reloads from the store instead of upserting stale state', async () => {
+    // Regression: onConnectionRestored blind-upserted the renderer's whole
+    // in-memory transcript, regressing a daemon-finished activity row back to
+    // "working" and wiping the final reply text.
+    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      messages: [
+        { id: 'a1', role: 'meta', kind: 'activity', data: { turnId: 'turn-1', status: 'done', startedAt: 1, endedAt: 2, events: [] } },
+        { id: 'b1', role: 'bond', text: 'finished reply from daemon' },
+      ],
+      nextBeforeSeq: null,
+    })
+
+    await chat.reconcileOnReconnect()
+
+    expect(deps.upsertTranscript).not.toHaveBeenCalled()
+    expect(deps.listTranscript).toHaveBeenCalled()
+    expect(chat.messages.value).toMatchObject([
+      { role: 'meta', kind: 'activity', data: { status: 'done' } },
+      { role: 'bond', text: 'finished reply from daemon' },
+    ])
+  })
+
+  it('reconnect during an owned live turn repersists instead of reloading', async () => {
+    await chat.submit('long running work')
+    expect(chat.busy.value).toBe(true)
+    ;(deps.upsertTranscript as ReturnType<typeof vi.fn>).mockClear()
+    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockClear()
+
+    await chat.reconcileOnReconnect()
+
+    expect(deps.upsertTranscript).toHaveBeenCalled()
+    expect(deps.listTranscript).not.toHaveBeenCalled()
+  })
+
   it('sends IPC-cloneable payloads instead of Vue reactive proxies', async () => {
     ;(deps.send as ReturnType<typeof vi.fn>).mockImplementation(async input => {
       expect(() => structuredClone(input)).not.toThrow()

@@ -301,7 +301,7 @@ onMounted(async () => {
   })
   removeConnectionRestoredListener = window.bond.onConnectionRestored(async () => {
     if (sandboxed.value) return
-    await chat.repersistAll()
+    await chat.reconcileOnReconnect()
     const restored = await chat.restoreFromBackupIfNeeded()
     if (restored) await chat.loadTranscript()
   })

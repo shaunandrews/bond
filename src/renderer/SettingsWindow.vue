@@ -3,12 +3,14 @@ import { ref } from 'vue'
 import { useAccentColor } from './composables/useAccentColor'
 import BondTab from './components/BondTab.vue'
 import SettingsView from './components/SettingsView.vue'
+import AgentsView from './components/AgentsView.vue'
 import DesignSystemView from './components/DesignSystemView.vue'
 import DevComponents from './components/DevComponents.vue'
 import AboutView from './components/AboutView.vue'
 
 const tabs = [
   { id: 'settings', label: 'Settings' },
+  { id: 'agents', label: 'Agents' },
   { id: 'design', label: 'Design' },
   { id: 'components', label: 'Components' },
   { id: 'about', label: 'About' },
@@ -36,6 +38,7 @@ function handleCreateSkill(description: string) {
       <div class="sw-content">
         <div class="sw-content-inner">
           <SettingsView v-if="activeTab === 'settings'" @createSkill="handleCreateSkill" />
+          <AgentsView v-else-if="activeTab === 'agents'" />
           <DesignSystemView v-else-if="activeTab === 'design'" />
           <DevComponents v-else-if="activeTab === 'components'" />
           <AboutView v-else-if="activeTab === 'about'" />
