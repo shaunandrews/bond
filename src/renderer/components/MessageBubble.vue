@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { Message } from '../types/message'
-import { imageDataUri } from '../../shared/session'
+import { imageDataUri, type AttachedImage } from '../../shared/session'
 import { ISSUE_KEY_RE } from '../../shared/fields'
 import { useIssueReferences } from '../composables/useIssueReferences'
 import MarkdownMessage from './MarkdownMessage.vue'
@@ -13,6 +13,7 @@ import { parseArtifacts, hasRichContent } from '../lib/parseArtifacts'
 import { copyToClipboard } from '../lib/clipboard'
 import { formatApprovalInput, formatDuration, formatToolLabel } from '../lib/format'
 import TurnActivity from './TurnActivity.vue'
+import { PhX } from '@phosphor-icons/vue'
 
 const ISSUE_TOKEN_RE = new RegExp(ISSUE_KEY_RE.source, 'g')
 
@@ -57,6 +58,50 @@ const segments = computed(() => {
 const toast = ref<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false })
 let toastTimer: ReturnType<typeof setTimeout> | undefined
 
+const lightbox = ref<{ src: string; alt: string } | null>(null)
+const zoom = ref(1)
+const activePointers = new Map<number, { x: number; y: number }>()
+let pinchDistance = 0
+let pinchZoom = 1
+
+function openImage(img: AttachedImage, alt: string) {
+  lightbox.value = { src: imageDataUri(img), alt }
+  zoom.value = 1
+}
+
+function closeImage() {
+  lightbox.value = null
+  activePointers.clear()
+  zoom.value = 1
+}
+
+function pointerDistance() {
+  const [a, b] = [...activePointers.values()]
+  return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0
+}
+
+function onImagePointerDown(event: PointerEvent) {
+  activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+  if (activePointers.size === 2) {
+    pinchDistance = pointerDistance()
+    pinchZoom = zoom.value
+  }
+}
+
+function onImagePointerMove(event: PointerEvent) {
+  if (!activePointers.has(event.pointerId)) return
+  activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+  if (activePointers.size === 2 && pinchDistance) {
+    zoom.value = Math.min(4, Math.max(1, pinchZoom * (pointerDistance() / pinchDistance)))
+  }
+}
+
+function onImagePointerUp(event: PointerEvent) {
+  activePointers.delete(event.pointerId)
+  if (activePointers.size < 2) pinchDistance = 0
+}
+
 function copyText(msg: Message, event: MouseEvent) {
   let text = ''
   if (msg.role === 'user') text = msg.text
@@ -87,13 +132,17 @@ function formatTime(ts: number | undefined): string {
 <template>
   <!-- User message -->
   <div :id="id" v-if="msg.role === 'user'" class="message-bubble message-bubble--user self-end max-w-[92%] flex flex-col items-end gap-1.5" @dblclick="copyText(msg, $event)" @mousemove="updateIssueHover" @mouseleave="issueHover = null">
-    <div v-if="msg.images?.length" class="flex flex-wrap justify-end gap-1.5">
-      <img
+    <div v-if="msg.images?.length" class="conversation-image-strip">
+      <button
         v-for="(img, i) in msg.images"
         :key="i"
-        :src="imageDataUri(img)"
-        class="rounded-lg max-w-[200px] max-h-[200px] object-cover"
-      />
+        type="button"
+        class="conversation-image-button"
+        :aria-label="`Open attached image ${i + 1}`"
+        @click="openImage(img, `Attached image ${i + 1}`)"
+      >
+        <img :src="imageDataUri(img)" class="conversation-image-thumbnail" alt="" />
+      </button>
     </div>
     <div
       v-if="msg.text"
@@ -191,13 +240,20 @@ function formatTime(ts: number | undefined): string {
     v-else-if="msg.kind === 'image'"
     class="self-start max-w-[92%] flex flex-col items-start gap-1.5 px-3.5"
   >
-    <img
+    <button
       v-for="(img, i) in msg.images ?? []"
       :key="i"
-      :src="imageDataUri(img)"
-      :alt="msg.alt ?? 'Generated image'"
-      class="rounded-lg max-w-[min(100%,420px)] max-h-[420px] object-contain shadow-sm"
-    />
+      type="button"
+      class="conversation-image-button"
+      :aria-label="`Open generated image ${i + 1}`"
+      @click="openImage(img, msg.alt ?? 'Generated image')"
+    >
+      <img
+        :src="imageDataUri(img)"
+        :alt="msg.alt ?? 'Generated image'"
+        class="conversation-image-thumbnail conversation-image-thumbnail--generated max-w-[min(100%,420px)]"
+      />
+    </button>
     <div
       v-if="!msg.images?.length"
       class="px-3.5 py-2.5 rounded-[10px] text-xs text-muted border border-dashed border-border"
@@ -254,6 +310,26 @@ function formatTime(ts: number | undefined): string {
     {{ msg.text }}
   </div>
   <Teleport to="body">
+    <div
+      v-if="lightbox"
+      class="image-lightbox"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="lightbox.alt"
+      @click.self="closeImage"
+      @pointerdown="onImagePointerDown"
+      @pointermove="onImagePointerMove"
+      @pointerup="onImagePointerUp"
+      @pointercancel="onImagePointerUp"
+    >
+      <button type="button" class="image-lightbox-close" aria-label="Close image" @click="closeImage">
+        <PhX :size="24" weight="bold" />
+      </button>
+      <img :src="lightbox.src" :alt="lightbox.alt" class="image-lightbox-image" :style="{ transform: `scale(${zoom})` }" />
+      <span class="image-lightbox-hint">Pinch to zoom</span>
+    </div>
+  </Teleport>
+  <Teleport to="body">
     <Transition name="copy-toast">
       <div v-if="toast.visible" class="copy-toast" :style="{ left: toast.x + 'px', top: toast.y + 'px' }">
         Message copied
@@ -263,6 +339,95 @@ function formatTime(ts: number | undefined): string {
 </template>
 
 <style scoped>
+.conversation-image-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.conversation-image-button {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.conversation-image-thumbnail {
+  display: block;
+  width: 200px;
+  height: 200px;
+  object-fit: cover;
+}
+
+.conversation-image-thumbnail--generated {
+  width: min(100%, 420px);
+  height: auto;
+  max-height: 420px;
+  object-fit: contain;
+  box-shadow: var(--shadow-sm);
+}
+
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.94);
+  touch-action: none;
+}
+
+.image-lightbox-image {
+  display: block;
+  max-width: 92vw;
+  max-height: 84dvh;
+  object-fit: contain;
+  transform-origin: center;
+  transition: transform 0.08s ease-out;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.image-lightbox-close {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  right: 16px;
+  z-index: 1;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  color: white;
+  cursor: pointer;
+}
+
+.image-lightbox-hint {
+  position: absolute;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .conversation-image-thumbnail,
+  .conversation-image-thumbnail--generated {
+    width: 48px;
+    height: 48px;
+    max-height: none;
+    object-fit: cover;
+    box-shadow: none;
+  }
+}
+
 .activity-summary {
   display: block;
   text-align: center;
