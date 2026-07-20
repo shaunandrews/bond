@@ -316,6 +316,30 @@ export function insertTurnStart(input: InsertTurnStartInput): void {
   })()
 }
 
+const TERMINAL_ACTIVITY_STATUSES = ['done', 'failed', 'cancelled']
+
+/**
+ * A client may describe a turn it is watching; it must never un-finish one.
+ * A window that missed a turn's completion (mid-turn reload, dropped chunks,
+ * old bundle) holds a stale copy, and its later bulk persist used to regress
+ * the finalized activity row to "working" and blank the reply text. The
+ * daemon finalizes turns exactly once — refuse any write that would undo it,
+ * whichever client sends it.
+ */
+function rejectStaleWrite(existing: MessageRow, incoming: TranscriptMessage): string | null {
+  if (existing.role === 'meta' && (incoming.kind ?? existing.kind) === 'activity') {
+    const existingStatus = String(parseJsonObject(existing.data)?.status ?? '')
+    const incomingStatus = String((incoming.data as Record<string, unknown> | undefined)?.status ?? '')
+    if (TERMINAL_ACTIVITY_STATUSES.includes(existingStatus) && LIVE_ACTIVITY_STATUSES.includes(incomingStatus)) {
+      return `activity ${existing.id} is ${existingStatus}; refusing regression to ${incomingStatus}`
+    }
+  }
+  if (existing.role === 'bond' && typeof existing.text === 'string' && existing.text.length > 0 && !(incoming.text ?? '')) {
+    return `bond message ${existing.id} has ${existing.text.length} chars; refusing empty overwrite`
+  }
+  return null
+}
+
 export function upsertMessages(messages: TranscriptMessage[]): void {
   if (messages.length === 0) return
   const db = getDb()
@@ -336,6 +360,13 @@ export function upsertMessages(messages: TranscriptMessage[]): void {
 
     for (const m of messages) {
       const existing = existingStmt.get(m.id) as MessageRow | undefined
+      if (existing) {
+        const rejection = rejectStaleWrite(existing, m)
+        if (rejection) {
+          console.log(`[bond-daemon] transcript.upsert rejected: ${rejection}`)
+          continue
+        }
+      }
       const seq = existing?.seq ?? m.seq ?? nextSeq(db)
       const createdAt = existing?.created_at ?? m.createdAt ?? now
       const epochId = existing?.epoch_id ?? m.epochId ?? null

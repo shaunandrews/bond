@@ -86,6 +86,41 @@ describe('transcript store', () => {
     expect(messages.find(m => m.id === 'bond-1')?.seq).toBe(3)
   })
 
+  it('refuses to regress a finalized activity row or blank a written reply', () => {
+    // Regression: a client that missed a turn's completion (mid-turn reload,
+    // dropped chunks, stale bundle) bulk-persisted its old copy, flipping the
+    // finished activity back to "working" and wiping the reply text.
+    insertTurnStart({
+      epochId: 'epoch-1', turnId: 'turn-1', userMessageId: 'user-1', assistantMessageId: 'bond-1', activityMessageId: 'activity-1', text: 'hi',
+    })
+    upsertMessages([
+      { id: 'activity-1', role: 'meta', kind: 'activity', data: { turnId: 'turn-1', status: 'done', startedAt: 1, endedAt: 2, events: [] } },
+      { id: 'bond-1', role: 'bond', text: 'the finished reply' },
+    ])
+
+    upsertMessages([
+      { id: 'activity-1', role: 'meta', kind: 'activity', data: { turnId: 'turn-1', status: 'working', startedAt: 1, events: [] } },
+      { id: 'bond-1', role: 'bond', text: '' },
+    ])
+
+    const messages = listMessages().messages
+    expect((messages.find(m => m.id === 'activity-1')?.data as { status?: string } | undefined)?.status).toBe('done')
+    expect(messages.find(m => m.id === 'bond-1')?.text).toBe('the finished reply')
+  })
+
+  it('still lets live activity rows update and finished rows refine', () => {
+    insertTurnStart({
+      epochId: 'epoch-1', turnId: 'turn-1', userMessageId: 'user-1', assistantMessageId: 'bond-1', activityMessageId: 'activity-1', text: 'hi',
+    })
+    upsertMessages([{ id: 'activity-1', role: 'meta', kind: 'activity', data: { turnId: 'turn-1', status: 'working', startedAt: 1, events: [{ type: 'thinking' }] } }])
+    upsertMessages([{ id: 'activity-1', role: 'meta', kind: 'activity', data: { turnId: 'turn-1', status: 'done', startedAt: 1, endedAt: 2, events: [] } }])
+    upsertMessages([{ id: 'bond-1', role: 'bond', text: 'longer revised reply' }])
+
+    const messages = listMessages().messages
+    expect((messages.find(m => m.id === 'activity-1')?.data as { status?: string } | undefined)?.status).toBe('done')
+    expect(messages.find(m => m.id === 'bond-1')?.text).toBe('longer revised reply')
+  })
+
   it('completes turns and records context usage on the epoch', () => {
     insertTurnStart({
       epochId: 'epoch-1', turnId: 'turn-1', userMessageId: 'user-1', assistantMessageId: 'bond-1', activityMessageId: 'activity-1', text: 'hi',
