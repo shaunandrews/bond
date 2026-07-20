@@ -40,21 +40,23 @@ describe('useChat continuous transcript', () => {
     handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0]
   })
 
-  it('drops turn-scoped chunks from a cancelled turn instead of minting an orphan activity row', async () => {
-    // Regression: a straggler chunk racing a cancel used to make activityFor()
-    // create a fresh "Working" activity row that then persisted forever.
+  it('drops late chunks after Stop while retaining turn ownership through query_end', async () => {
+    // Stop must keep ownership until the daemon's terminal chunk arrives;
+    // otherwise query_end itself becomes a straggler and the queue cannot
+    // drain safely. Late output from the stopped turn is still ignored.
     await chat.submit('do something slow')
     const sentTurnId = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0].turnId as string
-    chat.cancel()
+    const stopping = chat.cancel()
     const countAfterCancel = chat.messages.value.length
 
     handler({ kind: 'assistant_text', text: 'too late', turnId: sentTurnId })
     handler({ kind: 'thinking_text', text: 'straggler', turnId: sentTurnId })
-
     expect(chat.messages.value).toHaveLength(countAfterCancel)
+    expect(chat.busy.value).toBe(true)
+
+    handler({ kind: 'query_end', succeeded: false, turnId: sentTurnId })
+    await stopping
     expect(chat.busy.value).toBe(false)
-    const working = chat.messages.value.filter(m => m.role === 'meta' && m.kind === 'activity' && m.data.status === 'working')
-    expect(working).toHaveLength(0)
   })
 
   it('accepts chunks for a turn mirrored from another client via turn_start', () => {
@@ -331,6 +333,24 @@ describe('useChat continuous transcript', () => {
 
     expect(deps.send).toHaveBeenCalledTimes(2)
     expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[1][0]).toMatchObject({ text: 'second' })
+  })
+
+  it('preserves and drains queued messages after Stop settles without a live query_end', async () => {
+    await chat.submit('first')
+    await chat.submit('second')
+    await chat.submit('third')
+    const firstTurnId = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0].turnId as string
+    ;(deps.listTranscript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      messages: [{ id: 'activity-1', role: 'meta', kind: 'activity', data: { turnId: firstTurnId, status: 'cancelled', startedAt: 1, endedAt: 2, events: [] } }],
+      nextBeforeSeq: null,
+    })
+
+    await chat.cancel()
+
+    expect(chat.currentQueue.value).toMatchObject([{ text: 'third' }])
+    expect(deps.send).toHaveBeenCalledTimes(2)
+    expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[1][0]).toMatchObject({ text: 'second' })
+    expect(chat.busy.value).toBe(true)
   })
 
   it('reconnect while idle reloads from the store instead of upserting stale state', async () => {

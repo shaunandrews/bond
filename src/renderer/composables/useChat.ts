@@ -129,6 +129,8 @@ export function useChat(deps: ChatDeps = window.bond) {
   let globalSubscribed = false
   let persistTimer: ReturnType<typeof setTimeout> | null = null
   let lastPersistPromise: Promise<unknown> = Promise.resolve()
+  let queueDrainPromise: Promise<void> | null = null
+  let cancellingTurnId: string | null = null
   // Rows this window actually mutated. Persistence only ever pushes these —
   // bulk-pushing the whole transcript let one stale row anywhere become
   // corruption everywhere.
@@ -297,6 +299,9 @@ export function useChat(deps: ChatDeps = window.bond) {
     // "Working" row for the dead turn that then gets persisted. Untagged
     // chunks pass for back-compat; cross-turn kinds are handled above.
     if (chunk.turnId && chunk.turnId !== activeTurnId.value && TURN_SCOPED_CHUNKS.has(chunk.kind)) return
+    // Keep ownership until query_end so the terminal chunk is accepted, but
+    // discard late output from a turn the user has already stopped.
+    if (cancellingTurnId && chunk.turnId === cancellingTurnId && chunk.kind !== 'query_end') return
 
     if (chunk.kind === 'query_start') {
       busy.value = true
@@ -312,22 +317,16 @@ export function useChat(deps: ChatDeps = window.bond) {
       if (activityMsg) {
         finalizeOpenActivityEvents(activityMsg.data, endedAt)
         cancelPendingApprovals(activityMsg.data, endedAt)
-        activityMsg.data.status = !chunk.succeeded || activityMsg.data.status === 'failed' ? 'failed' : 'done'
+        activityMsg.data.status = cancellingTurnId ? 'cancelled' : (!chunk.succeeded || activityMsg.data.status === 'failed' ? 'failed' : 'done')
         activityMsg.data.endedAt = endedAt
         if (activityMsg.data.status === 'failed') activityMsg.data.expanded = true
         activityRevision.value++
       }
       activeActivityId.value = null
+      cancellingTurnId = null
       endStreaming()
       const sid = currentSessionId.value || chunk.sessionId || 'continuous'
-      const endPromise = (async () => {
-        await persistMessages()
-        const next = queuedMessages.value[0]
-        if (next) {
-          queuedMessages.value = queuedMessages.value.slice(1)
-          submit(next.text, next.images)
-        }
-      })()
+      const endPromise = drainNextQueuedMessage()
       lastPersistPromise = endPromise
       queryEndCallbacks.forEach(fn => fn(sid))
       return
@@ -576,17 +575,43 @@ export function useChat(deps: ChatDeps = window.bond) {
     queuedMessages.value = queuedMessages.value.filter(m => m.id !== id)
   }
 
-  function cancel() {
-    queuedMessages.value = []
-    activeTurnId.value = null
-    if (busy.value) {
-      busy.value = false
-      updateActivity(data => { const endedAt = Date.now(); finalizeOpenActivityEvents(data, endedAt); cancelPendingApprovals(data, endedAt); data.status = 'cancelled'; data.endedAt = endedAt })
-      activeActivityId.value = null
-      endStreaming()
-      persistMessages()
+  async function drainNextQueuedMessage(): Promise<void> {
+    if (queueDrainPromise || busy.value) return queueDrainPromise ?? Promise.resolve()
+    queueDrainPromise = (async () => {
+      await persistMessages()
+      // A new turn may have started while persistence was settling.
+      if (busy.value) return
+      const next = queuedMessages.value[0]
+      if (!next) return
+      queuedMessages.value = queuedMessages.value.slice(1)
+      await submit(next.text, next.images)
+    })()
+    try {
+      await queueDrainPromise
+    } finally {
+      queueDrainPromise = null
     }
-    deps.cancel(currentSessionId.value ?? undefined).catch(() => {})
+  }
+
+  async function cancel() {
+    if (!busy.value || cancellingTurnId) return
+    // Do not clear local state or the queue here. The daemon's query_end is
+    // authoritative and is the normal point at which the next queued turn
+    // may start. Clearing ownership early made that terminal chunk a
+    // straggler, losing both the final state and queued messages.
+    cancellingTurnId = activeTurnId.value
+    try {
+      const result = await deps.cancel(currentSessionId.value ?? undefined)
+      if (!result.ok) return
+      // A sleeping/reconnecting client can miss query_end even though cancel
+      // waits for daemon settlement. Reconcile the canonical transcript, then
+      // use the same guarded queue drain as the live query_end path.
+      await reconcileOnReconnect()
+      if (!busy.value) await drainNextQueuedMessage()
+    } catch {
+      // Keep the queue intact. The user can retry Stop or reconnect; neither
+      // should cause queued work to run against an unsettled active turn.
+    }
   }
 
   function onQueryEnd(fn: (sessionId: string) => void) { queryEndCallbacks.push(fn) }

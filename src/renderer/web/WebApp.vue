@@ -35,9 +35,10 @@ onMounted(async () => {
     connection.value = state
     if (state === 'connected') {
       if (hasConnected.value) {
-        // Chunks streamed while the phone slept are gone — SQLite has the
-        // canonical rows, so a reload catches the transcript up.
-        await chat.loadTranscript().catch(() => {})
+        // Chunks streamed while the phone slept are gone. Reconcile before
+        // reloading: a blind reload can leave local turn ownership/busy state
+        // stranded after the daemon has already finalized the turn.
+        await chat.reconcileOnReconnect().catch(() => {})
         nextTick(() => scrollToBottom())
       }
       hasConnected.value = true
