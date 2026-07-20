@@ -59,47 +59,13 @@ const toast = ref<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visi
 let toastTimer: ReturnType<typeof setTimeout> | undefined
 
 const lightbox = ref<{ src: string; alt: string } | null>(null)
-const zoom = ref(1)
-const activePointers = new Map<number, { x: number; y: number }>()
-let pinchDistance = 0
-let pinchZoom = 1
 
 function openImage(img: AttachedImage, alt: string) {
   lightbox.value = { src: imageDataUri(img), alt }
-  zoom.value = 1
 }
 
 function closeImage() {
   lightbox.value = null
-  activePointers.clear()
-  zoom.value = 1
-}
-
-function pointerDistance() {
-  const [a, b] = [...activePointers.values()]
-  return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0
-}
-
-function onImagePointerDown(event: PointerEvent) {
-  activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
-  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
-  if (activePointers.size === 2) {
-    pinchDistance = pointerDistance()
-    pinchZoom = zoom.value
-  }
-}
-
-function onImagePointerMove(event: PointerEvent) {
-  if (!activePointers.has(event.pointerId)) return
-  activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
-  if (activePointers.size === 2 && pinchDistance) {
-    zoom.value = Math.min(4, Math.max(1, pinchZoom * (pointerDistance() / pinchDistance)))
-  }
-}
-
-function onImagePointerUp(event: PointerEvent) {
-  activePointers.delete(event.pointerId)
-  if (activePointers.size < 2) pinchDistance = 0
 }
 
 function copyText(msg: Message, event: MouseEvent) {
@@ -317,16 +283,11 @@ function formatTime(ts: number | undefined): string {
       aria-modal="true"
       :aria-label="lightbox.alt"
       @click.self="closeImage"
-      @pointerdown="onImagePointerDown"
-      @pointermove="onImagePointerMove"
-      @pointerup="onImagePointerUp"
-      @pointercancel="onImagePointerUp"
     >
       <button type="button" class="image-lightbox-close" aria-label="Close image" @click="closeImage">
         <PhX :size="24" weight="bold" />
       </button>
-      <img :src="lightbox.src" :alt="lightbox.alt" class="image-lightbox-image" :style="{ transform: `scale(${zoom})` }" />
-      <span class="image-lightbox-hint">Pinch to zoom</span>
+      <img :src="lightbox.src" :alt="lightbox.alt" class="image-lightbox-image" />
     </div>
   </Teleport>
   <Teleport to="body">
@@ -379,7 +340,6 @@ function formatTime(ts: number | undefined): string {
   place-items: center;
   overflow: hidden;
   background: rgba(0, 0, 0, 0.94);
-  touch-action: none;
 }
 
 .image-lightbox-image {
@@ -387,10 +347,6 @@ function formatTime(ts: number | undefined): string {
   max-width: 92vw;
   max-height: 84dvh;
   object-fit: contain;
-  transform-origin: center;
-  transition: transform 0.08s ease-out;
-  user-select: none;
-  -webkit-user-select: none;
 }
 
 .image-lightbox-close {
@@ -408,13 +364,6 @@ function formatTime(ts: number | undefined): string {
   background: rgba(255, 255, 255, 0.16);
   color: white;
   cursor: pointer;
-}
-
-.image-lightbox-hint {
-  position: absolute;
-  bottom: max(18px, env(safe-area-inset-bottom));
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 12px;
 }
 
 @media (max-width: 700px) {
