@@ -106,9 +106,8 @@ function handleEditModeChange(mode: EditMode) {
     </div>
 
     <template v-else>
-      <header class="web-header">
-        <BondText size="sm" weight="semibold">Bond</BondText>
-        <BondText v-if="connection !== 'connected'" size="xs" color="muted" class="conn-banner">
+      <header v-if="connection !== 'connected'" class="web-header">
+        <BondText size="xs" color="muted">
           {{ connection === 'connecting' ? 'Connecting…' : 'Reconnecting…' }}
         </BondText>
       </header>
@@ -196,23 +195,11 @@ function handleEditModeChange(mode: EditMode) {
 .web-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex-shrink: 0;
-  height: var(--toolbar-height);
-  padding-inline: 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
-  padding-top: env(safe-area-inset-top);
-  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
-  backdrop-filter: blur(20px) saturate(1.15);
-  -webkit-backdrop-filter: blur(20px) saturate(1.15);
-}
-
-.conn-banner {
-  animation: conn-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes conn-pulse {
-  50% { opacity: 0.4; }
+  min-height: var(--toolbar-height);
+  padding: env(safe-area-inset-top) 16px 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
 }
 
 .messages {
