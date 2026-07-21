@@ -750,8 +750,8 @@ function handleKeyDown(e: KeyboardEvent) {
 .mobile-composer .composer-toolbar {
   justify-content: space-between;
   min-height: 44px;
-  /* At rest, give the hardware edge an explicit 18px of breathing room. */
-  padding: 2px 16px 18px;
+  /* At rest, give the hardware edge an explicit 24px of breathing room. */
+  padding: 2px 16px 24px;
 }
 
 /* When the keyboard is present, its top edge becomes the visual boundary.
