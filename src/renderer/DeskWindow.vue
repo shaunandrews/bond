@@ -80,6 +80,16 @@ const restHeight = computed(() => geometry.value?.restHeight ?? 41)
 const menuBarHeight = computed(() => geometry.value?.menuBarHeight ?? 33)
 const windowWidth = computed(() => geometry.value?.windowWidth ?? 640)
 
+/**
+ * The Rest hit target. Above the menu bar it is pinned to the notch's own
+ * x-range — that rule is absolute. BELOW the bar there is no such constraint,
+ * so the band is deliberately wider and taller than the 3pt hairline it
+ * contains: an 8pt sliver directly under the camera housing is not a target
+ * anyone can hit on purpose.
+ */
+const REST_HOVER_WIDTH = 240
+const REST_HOVER_HEIGHT = 14
+
 const GLANCE_WIDTH = 300
 const GLANCE_HEIGHT = 36
 const ASK_WIDTH = 380
@@ -91,7 +101,12 @@ const dropped = computed(() => mode.value !== 'rest')
 
 const shapeStyle = computed(() => {
   if (mode.value === 'rest') {
-    return { width: `${restWidth.value}px`, height: `${restHeight.value}px`, top: '0px', borderRadius: '0' }
+    return {
+      width: `${REST_HOVER_WIDTH}px`,
+      height: `${menuBarHeight.value + REST_HOVER_HEIGHT}px`,
+      top: '0px',
+      borderRadius: '0',
+    }
   }
   const width = mode.value === 'open' ? OPEN_WIDTH : mode.value === 'ask' ? ASK_WIDTH : GLANCE_WIDTH
   const height = mode.value === 'open' ? OPEN_MAX_HEIGHT : mode.value === 'ask' ? ASK_HEIGHT : GLANCE_HEIGHT
@@ -126,14 +141,17 @@ function hotRects(): DeskHotRect[] {
   const centreX = windowWidth.value / 2
 
   if (mode.value === 'rest') {
-    // The only interactive rectangle above the bar is the notch's own x-range,
-    // which owns no menu bar content anyway.
-    return [{
-      x: centreX - restWidth.value / 2,
-      y: 0,
-      width: restWidth.value,
-      height: restHeight.value,
-    }]
+    return [
+      // Above the bar: the notch's own x-range, which owns no menu bar content.
+      { x: centreX - restWidth.value / 2, y: 0, width: restWidth.value, height: menuBarHeight.value },
+      // Below it: a real target around the hairline.
+      {
+        x: centreX - REST_HOVER_WIDTH / 2,
+        y: menuBarHeight.value,
+        width: REST_HOVER_WIDTH,
+        height: REST_HOVER_HEIGHT,
+      },
+    ]
   }
 
   const width = mode.value === 'open' ? OPEN_WIDTH : mode.value === 'ask' ? ASK_WIDTH : GLANCE_WIDTH
@@ -340,9 +358,15 @@ onUnmounted(() => {
       :style="shapeStyle"
     >
       <!-- Rest: three channels in a hairline — presence, thread colour, uncertainty. -->
-      <div v-if="mode === 'rest'" class="desk-rest">
+      <button
+        v-if="mode === 'rest'"
+        type="button"
+        class="desk-rest"
+        aria-label="Open Desk"
+        @click="toggleOpen"
+      >
         <span class="desk-mark" :style="markStyle" />
-      </div>
+      </button>
 
       <!-- Glance: thread + coarse time. Make-aware, no action wanted. -->
       <button v-else-if="mode === 'glance'" type="button" class="desk-glance" @click="toggleOpen">
@@ -449,6 +473,10 @@ onUnmounted(() => {
   position: relative;
   width: 100%;
   height: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
 }
 
 .desk-mark {
