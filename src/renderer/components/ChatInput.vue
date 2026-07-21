@@ -141,6 +141,7 @@ const previewEl = ref<HTMLElement | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const attachedImages = ref<AttachedImage[]>([])
 const inputText = ref('')
+const isFocused = ref(false)
 
 const inputHighlightHtml = computed(() => highlightMarkdownSyntax(inputText.value, issueRefsByKey.value))
 
@@ -500,6 +501,64 @@ function handleKeyDown(e: KeyboardEvent) {
     </div>
 
 
+    <!-- Mobile actions live in the blurred transcript area, not inside the
+         field. They only appear while the composer has the user's attention. -->
+    <div v-if="props.mobile && isFocused" class="mobile-composer-toolbar" @mousedown.prevent>
+      <BondButton
+        variant="ghost"
+        size="sm"
+        icon
+        @click="handleAttachClick"
+        v-tooltip="'Attach image'"
+      >
+        <PhPaperclip :size="16" weight="bold" />
+      </BondButton>
+      <input
+        ref="fileInputEl"
+        type="file"
+        accept="image/jpeg,image/png,image/gif,image/webp"
+        multiple
+        class="file-input"
+        @change="handleFileChange"
+      />
+      <BondButton
+        ref="settingsButtonRef"
+        data-action="composer-settings"
+        variant="ghost"
+        size="sm"
+        icon
+        :aria-expanded="settingsMenuOpen"
+        aria-haspopup="menu"
+        aria-label="Reasoning and permissions"
+        @click.stop="settingsMenuOpen = !settingsMenuOpen"
+        v-tooltip="'Reasoning and permissions'"
+      >
+        <PhSlidersHorizontal :size="16" weight="bold" />
+      </BondButton>
+      <BondFlyoutMenu
+        :open="settingsMenuOpen"
+        :anchor="settingsButtonRef?.$el ?? null"
+        placement="top-end"
+        :width="244"
+        padding
+        @close="settingsMenuOpen = false"
+      >
+        <div class="composer-settings-section">
+          <BondText as="div" size="xs" weight="medium" color="muted" class="composer-settings-label">Reasoning</BondText>
+          <button v-for="modelId in MODEL_IDS" :key="modelId" type="button" class="composer-settings-option" :data-model="modelId" role="menuitemradio" :aria-checked="model === modelId" @click="emit('update:model', modelId)">
+            <span>{{ modelLabels[modelId] }}</span><PhCheck v-if="model === modelId" :size="14" weight="bold" />
+          </button>
+        </div>
+        <div class="composer-settings-divider" />
+        <div class="composer-settings-section">
+          <BondText as="div" size="xs" weight="medium" color="muted" class="composer-settings-label">Permissions</BondText>
+          <button v-for="option in EDIT_MODE_OPTIONS" :key="option.value" type="button" class="composer-settings-option" :data-edit-mode="option.value" role="menuitemradio" :aria-checked="editMode.type === option.value" @click="handleEditModeChange(option.value)">
+            <span>{{ option.label }}</span><PhCheck v-if="editMode.type === option.value" :size="14" weight="bold" />
+          </button>
+        </div>
+      </BondFlyoutMenu>
+    </div>
+
     <div class="chat-box" @click="deselectImage">
       <!-- Image preview strip -->
       <div
@@ -546,6 +605,8 @@ function handleKeyDown(e: KeyboardEvent) {
           @input="autoResize(); updateAutocomplete(); updatePreview()"
           @paste="handlePaste"
           @scroll="syncPreviewScroll"
+          @focus="isFocused = true"
+          @blur="isFocused = false"
           class="chat-textarea"
           :class="{ 'has-highlight': inputText && !props.mobile }"
         />
@@ -578,7 +639,7 @@ function handleKeyDown(e: KeyboardEvent) {
       </div>
 
       <!-- Toolbar -->
-      <div class="composer-toolbar flex items-center justify-between pt-1">
+      <div v-if="!props.mobile" class="composer-toolbar flex items-center justify-between pt-1">
         <!-- self-end: the 26px ghost button otherwise centers against the 32px
              send button and its bottom edge floats 3px high. -->
         <div class="flex items-center gap-s self-end">
@@ -750,26 +811,17 @@ function handleKeyDown(e: KeyboardEvent) {
   /* 8px wrapper inset + the textarea's own 8px inset = 16px: exactly the
      mobile transcript column's text edge. */
   padding-inline: 8px;
+  padding-bottom: max(12px, calc(env(safe-area-inset-bottom) - 12px));
 }
 
-/* Mobile controls form a small toolbar above the text field. Sending lives on
-   the keyboard's Send key, so there is no duplicate, unreliable in-app arrow. */
-.mobile-composer .chat-box {
+/* Focus-only actions float just above the field in the transcript's existing
+   blurred fade. The field stays quiet until it is actually being used. */
+.mobile-composer-toolbar {
   display: flex;
-  flex-direction: column;
-}
-.mobile-composer .composer-toolbar {
-  order: -1;
   justify-content: flex-end;
-  min-height: 40px;
-  padding: 6px 16px 4px;
-}
-.mobile-composer .composer-toolbar > div:last-child {
-  margin-left: 0;
   gap: 8px;
-}
-.mobile-composer .chat-textarea-wrapper {
-  padding-bottom: max(12px, calc(env(safe-area-inset-bottom) - 12px));
+  min-height: 36px;
+  padding: 4px 16px 6px;
 }
 
 /* When the keyboard is present, its top edge becomes the visual boundary. */
@@ -809,7 +861,7 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 
 .mobile-composer .chat-textarea {
-  min-height: 28px;
+  min-height: 52px;
   max-height: 96px;
   /* Keep the native text layer's line boxes compact and deterministic as the
      field grows; the desktop markdown overlay is intentionally absent here. */
