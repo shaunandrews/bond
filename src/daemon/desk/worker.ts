@@ -12,7 +12,7 @@
  * sweep in `sense/storage.ts`.
  */
 import { runPiTextPrompt } from '../pi/runtime'
-import { getRuntime, requeueStaleSegments } from './store'
+import { getRuntime, listBlocksAwaitingNote, requeueStaleSegments } from './store'
 import { commitSwitch, evaluateSwitch, ingestCaptures } from './segmenter'
 import {
   IMMEDIATE_CALLS_PER_HOUR,
@@ -22,9 +22,11 @@ import {
   type TextPrompt,
 } from './inference'
 import { assertionAllowed, createQuestion, expireQuestions } from './questions'
+import { generateReentryNote } from './notes'
 import { emitDeskChanged } from './service'
 import { unfinishedTodosForThread } from './today'
 import { getDb } from '../db'
+import { DESK_TIMING } from '../../shared/desk'
 
 /** Fast segmentation: metadata only, no model call. */
 const SEGMENT_INTERVAL_MS = 2_000
@@ -84,6 +86,7 @@ export function createDeskWorker(options: DeskWorkerOptions = {}): DeskWorker {
     }
 
     if (changed) emitDeskChanged()
+    await writeDepartureNotes()
   }
 
   /**
@@ -108,6 +111,23 @@ export function createDeskWorker(options: DeskWorkerOptions = {}): DeskWorker {
 
     commitSwitch(threadId, { sinceIso, source: 'inferred', confidence: 0.6 })
     await maybeAskAboutTodo(threadId)
+  }
+
+  /**
+   * Notes are written **at departure, in the present tense of the work** — not
+   * reconstructed later from a day summary. That constraint is the whole reason
+   * this belongs in a live panel rather than an end-of-day report.
+   *
+   * Driven off a query so every departure route is covered: a smoothed switch,
+   * an accepted Ask, an expired Ask, a manual start.
+   */
+  async function writeDepartureNotes(): Promise<void> {
+    const pending = listBlocksAwaitingNote({ noiseFloorSeconds: DESK_TIMING.noiseFloorSeconds })
+    if (pending.length === 0) return
+    for (const block of pending) {
+      const result = await generateReentryNote(block.id, { prompt })
+      if (result.status === 'ready') emitDeskChanged()
+    }
   }
 
   /**

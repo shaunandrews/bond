@@ -483,6 +483,32 @@ export function markSegmentFailed(id: string, retryAt: string | null, db: Databa
  * to any retry. Same failure and same fix as `requeueStale` in
  * `sense/worker.ts`; called on worker start.
  */
+/**
+ * Blocks that have been left and still want a re-entry note.
+ *
+ * A query rather than a callback, because a block departs by four different
+ * routes — a smoothed switch, an accepted Ask, an expired Ask, a manual start —
+ * and threading a hook through each one is how a path gets missed.
+ *
+ * Below the noise floor there is nothing to re-enter: you were looking
+ * something up, not working. `edited` and `ready` are already spoken for.
+ */
+export function listBlocksAwaitingNote(
+  opts: { noiseFloorSeconds?: number; limit?: number } = {},
+  db: Database.Database = getDb()
+): DeskBlock[] {
+  return (db.prepare(`
+    SELECT * FROM desk_blocks
+    WHERE ended_at IS NOT NULL
+      AND thread_id IS NOT NULL
+      AND state != 'dismissed'
+      AND note_status = 'none'
+      AND presence_seconds >= ?
+    ORDER BY ended_at DESC
+    LIMIT ?
+  `).all(opts.noiseFloorSeconds ?? 180, opts.limit ?? 3) as BlockRow[]).map(toBlock)
+}
+
 export function requeueStaleSegments(db: Database.Database = getDb()): number {
   return db.prepare(
     "UPDATE desk_segments SET attribution_state = 'unresolved' WHERE attribution_state = 'queued'"

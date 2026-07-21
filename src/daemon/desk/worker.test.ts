@@ -239,6 +239,75 @@ describe('the inference sweep', () => {
   })
 })
 
+describe('re-entry notes at departure', () => {
+  function departedBlock(presence: number) {
+    const block = createBlock({ threadId: studio.id, startedAt: at(0) })
+    const seg = createSegment({
+      blockId: block.id, startedAt: at(0), resourceSignature: 'sig',
+      evidence: { appName: 'Studio', paths: ['SyncDialog.tsx'] },
+    })
+    void seg
+    getDb().prepare('UPDATE desk_blocks SET ended_at = ?, presence_seconds = ? WHERE id = ?')
+      .run(at(600), presence, block.id)
+    return block
+  }
+
+  it('writes a note for a block that has been left', async () => {
+    setRuntime({ running: true })
+    const block = departedBlock(900)
+
+    await createDeskWorker({ prompt: async () => 'Left at SyncDialog.tsx — conflict copy unwritten' }).tickNow()
+
+    const after = getBlockDetail(block.id)!
+    expect(after.reentryNote).toBe('Left at SyncDialog.tsx — conflict copy unwritten')
+    expect(after.noteStatus).toBe('ready')
+  })
+
+  it('never writes one for a block below the noise floor', async () => {
+    setRuntime({ running: true })
+    const block = departedBlock(60)
+    const prompt = vi.fn(async () => 'a note')
+
+    await createDeskWorker({ prompt }).tickNow()
+
+    expect(prompt).not.toHaveBeenCalled()
+    expect(getBlockDetail(block.id)!.reentryNote).toBeNull()
+  })
+
+  it('does not rewrite a note it already wrote', async () => {
+    setRuntime({ running: true })
+    const block = departedBlock(900)
+    const prompt = vi.fn(async () => 'the note')
+
+    const worker = createDeskWorker({ prompt })
+    await worker.tickNow()
+    await worker.tickNow()
+
+    expect(prompt).toHaveBeenCalledTimes(1)
+    expect(getBlockDetail(block.id)!.reentryNote).toBe('the note')
+  })
+
+  it('leaves the still-open current block alone', async () => {
+    setRuntime({ running: true })
+    const open = createBlock({ threadId: studio.id, startedAt: at(0) })
+    getDb().prepare('UPDATE desk_blocks SET presence_seconds = 900 WHERE id = ?').run(open.id)
+    const prompt = vi.fn(async () => 'a note')
+
+    await createDeskWorker({ prompt }).tickNow()
+    expect(prompt).not.toHaveBeenCalled()
+  })
+
+  it('broadcasts so the panel picks the note up', async () => {
+    const listener = vi.fn()
+    ;(await import('./service')).onDeskChanged(listener)
+    setRuntime({ running: true })
+    departedBlock(900)
+
+    await createDeskWorker({ prompt: async () => 'the note' }).tickNow()
+    expect(listener).toHaveBeenCalled()
+  })
+})
+
 describe('back-fill catch-up', () => {
   function seedUnresolved(n: number) {
     for (let i = 0; i < n; i++) {
