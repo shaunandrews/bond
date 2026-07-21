@@ -146,8 +146,11 @@ const inputHighlightHtml = computed(() => highlightMarkdownSyntax(inputText.valu
 
 function updatePreview() {
   inputText.value = inputEl.value?.value ?? ''
-  // Re-sync scroll after Vue re-renders the highlight div (v-html reset scrollTop)
-  nextTick(syncPreviewScroll)
+  // The desktop markdown overlay is useful at a desk, but it makes iOS paint
+  // two text layers and reflow both on every keystroke. Mobile uses the native
+  // textarea's metrics instead; references and autocomplete still use this
+  // reactive text value.
+  if (!props.mobile) nextTick(syncPreviewScroll)
 }
 
 function syncPreviewScroll() {
@@ -527,7 +530,7 @@ function handleKeyDown(e: KeyboardEvent) {
       <!-- Textarea with markdown preview overlay -->
       <div class="chat-textarea-wrapper">
         <div
-          v-if="inputText"
+          v-if="inputText && !props.mobile"
           ref="previewEl"
           class="chat-highlight"
           aria-hidden="true"
@@ -543,7 +546,7 @@ function handleKeyDown(e: KeyboardEvent) {
           @paste="handlePaste"
           @scroll="syncPreviewScroll"
           class="chat-textarea"
-          :class="{ 'has-highlight': inputText }"
+          :class="{ 'has-highlight': inputText && !props.mobile }"
         />
       </div>
 
@@ -799,6 +802,9 @@ function handleKeyDown(e: KeyboardEvent) {
 .mobile-composer .chat-textarea {
   min-height: 28px;
   max-height: 96px;
+  /* Keep the native text layer's line boxes compact and deterministic as the
+     field grows; the desktop markdown overlay is intentionally absent here. */
+  line-height: 1.35;
 }
 
 .mobile-composer .issue-token-strip {
