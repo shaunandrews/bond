@@ -750,9 +750,14 @@ function handleKeyDown(e: KeyboardEvent) {
 .mobile-composer .composer-toolbar {
   justify-content: space-between;
   min-height: 44px;
-  /* Use some of the home-indicator area, but leave enough clearance that the
-     hardware corner curve never crowds the controls. */
-  padding: 2px 16px max(16px, calc(env(safe-area-inset-bottom) - 12px));
+  /* At rest, give the hardware edge an explicit 18px of breathing room. */
+  padding: 2px 16px 18px;
+}
+
+/* When the keyboard is present, its top edge becomes the visual boundary.
+   Don't preserve an artificial gap between the controls and that edge. */
+.mobile-composer .chat-box:focus-within .composer-toolbar {
+  padding-bottom: 0;
 }
 
 .mobile-composer .composer-toolbar > div:last-child {
