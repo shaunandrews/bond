@@ -690,6 +690,34 @@ export const componentInventory = [
     "events": []
   },
   {
+    "name": "QuestionPrompt",
+    "file": "components/QuestionPrompt.vue",
+    "props": [
+      {
+        "name": "questionId",
+        "type": "string"
+      },
+      {
+        "name": "question",
+        "type": "string"
+      },
+      {
+        "name": "header",
+        "type": "string | undefined"
+      },
+      {
+        "name": "options",
+        "type": "QuestionOption[]"
+      }
+    ],
+    "events": [
+      {
+        "name": "answer",
+        "payload": "questionId: string, answer: QuestionAnswer"
+      }
+    ]
+  },
+  {
     "name": "SenseAppLegend",
     "file": "components/SenseAppLegend.vue",
     "props": [
