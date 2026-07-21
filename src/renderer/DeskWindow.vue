@@ -99,6 +99,20 @@ const OPEN_MAX_HEIGHT = 420
 
 const dropped = computed(() => mode.value !== 'rest')
 
+const droppedWidth = computed(() =>
+  mode.value === 'open' ? OPEN_WIDTH : mode.value === 'ask' ? ASK_WIDTH : GLANCE_WIDTH)
+
+/** Content height, below the menu bar strip the shape swallows. */
+const droppedBody = computed(() =>
+  mode.value === 'open' ? OPEN_MAX_HEIGHT : mode.value === 'ask' ? ASK_HEIGHT : GLANCE_HEIGHT)
+
+/**
+ * Every dropped state starts at `top: 0` and is wider than the notch, so the
+ * notch's own black sits INSIDE the panel's black. There is no seam and no
+ * visible cutout — the panel reads as the camera housing growing, which is the
+ * whole illusion. Drawing above the menu bar is fine; only the *hit* region is
+ * constrained to the notch x-range up there.
+ */
 const shapeStyle = computed(() => {
   if (mode.value === 'rest') {
     return {
@@ -108,14 +122,13 @@ const shapeStyle = computed(() => {
       borderRadius: '0',
     }
   }
-  const width = mode.value === 'open' ? OPEN_WIDTH : mode.value === 'ask' ? ASK_WIDTH : GLANCE_WIDTH
-  const height = mode.value === 'open' ? OPEN_MAX_HEIGHT : mode.value === 'ask' ? ASK_HEIGHT : GLANCE_HEIGHT
   return {
-    width: `${width}px`,
-    height: `${height}px`,
-    // Everything that paints starts below the menu bar, never over it.
-    top: `${menuBarHeight.value}px`,
-    borderRadius: '0 0 14px 14px',
+    width: `${droppedWidth.value}px`,
+    height: `${menuBarHeight.value + droppedBody.value}px`,
+    top: '0px',
+    // Square at the screen edge, rounded where it leaves the notch.
+    borderRadius: '0 0 16px 16px',
+    paddingTop: `${menuBarHeight.value}px`,
   }
 })
 
@@ -377,14 +390,14 @@ onUnmounted(() => {
       </button>
 
       <!-- Glance: thread + coarse time. Make-aware, no action wanted. -->
-      <button v-else-if="mode === 'glance'" type="button" class="desk-glance" @click="toggleOpen">
+      <button v-else-if="mode === 'glance'" type="button" class="desk-glance desk-content" @click="toggleOpen">
         <span class="desk-dot" :style="threadColor ? { background: threadColor } : undefined" />
         <span class="desk-glance-name">{{ currentName ?? 'Nothing yet' }}</span>
         <span v-if="currentName" class="desk-glance-time">{{ currentElapsed }}</span>
       </button>
 
       <!-- Ask: one line, two answers. Never a modal, never an interrupt. -->
-      <div v-else-if="mode === 'ask'" class="desk-ask">
+      <div v-else-if="mode === 'ask'" class="desk-content desk-ask">
         <span class="desk-ask-text">{{ askText }}</span>
         <div class="desk-ask-actions">
           <button type="button" class="desk-btn is-yes" @click="answer(true)">Yes</button>
@@ -393,7 +406,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Open: two lists, kept structurally separate. -->
-      <div v-else class="desk-panel">
+      <div v-else class="desk-content desk-panel">
         <header class="desk-panel-head">
           <span class="desk-dot" :style="threadColor ? { background: threadColor } : undefined" />
           <span class="desk-panel-now">{{ currentName ?? 'Nothing in flight' }}</span>
@@ -461,12 +474,32 @@ onUnmounted(() => {
 }
 
 .desk-shape.is-dropped {
-  background: rgba(16, 17, 20, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-top: 0;
-  filter: drop-shadow(0 10px 26px rgba(0, 0, 0, 0.5));
+  /* Pure black, continuous with the notch itself — any tint or translucency
+     puts a visible seam where the panel meets the camera housing. */
+  background: #000;
+  filter: drop-shadow(0 12px 30px rgba(0, 0, 0, 0.55));
   align-items: stretch;
   overflow: hidden;
+  /* The plan's motion budget: transform and opacity only, scaled from the top
+     edge so it unfurls out of the notch. Compositor-only — no width/height
+     animation, no spring, no bounce. */
+  transform-origin: top center;
+  animation: desk-unfurl 0.34s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes desk-unfurl {
+  from { transform: translateX(-50%) scaleY(0.55) scaleX(0.82); opacity: 0; }
+  to   { transform: translateX(-50%) scaleY(1) scaleX(1); opacity: 1; }
+}
+
+/* Text is faded in behind the unfurl so the scale never visibly distorts it. */
+.desk-content {
+  animation: desk-content-in 0.26s ease-out 0.12s backwards;
+}
+
+@keyframes desk-content-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .desk-shape.is-uncertain .desk-mark {
@@ -648,6 +681,10 @@ onUnmounted(() => {
   .desk-shape,
   .desk-mark {
     transition: none;
+  }
+  .desk-shape.is-dropped,
+  .desk-content {
+    animation: none;
   }
 }
 </style>
