@@ -100,6 +100,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `desk/questions.ts` | The Ask lifecycle under one persisted ten-minute budget (`last_assertion_at`, so a restart can't reset it). Rejecting is a real state change — drop the unconfirmed matcher, clear the segment attributions, restore the block, suppress the pairing. Silence auto-accepts **this block only** and teaches nothing |
 | `desk/retention.ts` | The Desk sweep, riding Sense's `textRetentionDays` cutoff and keyed to Desk timestamps (not capture links) so it is correct in either order. Edited notes graduate onto the thread before their block expires; suppressions and confirmed patterns survive, their captured examples do not |
 | `desk/today.ts` | The idempotent Today collection. **`issue_prefix` has no uniqueness constraint**, so `ensureToday` reconciles rather than assumes: adopt the collection the setting names (or the oldest), strip `TODAY` from the others, never mint a third — two claimants would make `listReferences()` serve two items for one `TODAY-n` key |
+| `desk/notes.ts` | Re-entry note generation at departure — the last 30 minutes of linked text only, redacted at assembly AND before persistence, nothing stored on a redaction hit. A user edit wins even if it lands mid-flight |
 | `desk/service.ts` | The RPC-facing facade + the `desk.changed` broadcast. Reassignment is optimistic and confirms a durable rule **only** when a concrete pattern is supplied; a generic bundle (Chrome, Terminal, Finder, Slack, Code) is refused out loud |
 | `desk/worker.ts` | Two loops on one serialized queue — 2s segmentation and a 15-minute inference sweep. No scheduler: a `setInterval`, matching the hourly retention sweep |
 | `desk/stats.ts` | The instrumentation `bond desk stats` reads — calls, tokens, immediate-vs-swept, cache hit rate, unknown-resource latency. Without it the Phase 2 dogfood produces an impression instead of a decision |
@@ -201,7 +202,8 @@ src/
     desk-helpers.ts                  # Pure desk.ts logic (arg parsing, formatting)
     ask-helpers.ts                   # Pure ask.ts logic (arg parsing, answer-line parsing, formatting)
   native/
-    window-helper.m                  # CGWindowList native helper (Obj-C)
+    window-helper.m                  # CGWindowList native helper (Obj-C) — emits layer + frame
+    notch-helper.m                   # Per-display notch/menu-bar geometry via NSScreen (Obj-C)
     ocr-helper.m                     # Apple Vision OCR native helper (Obj-C)
     accessibility-helper.m           # AXUIElement tree walker native helper (Obj-C)
   daemon/
@@ -244,6 +246,7 @@ src/
       segmenter.ts                   # Captures → segments → blocks; eligibility gate, presence, smoothing
       inference.ts                   # Batched unknown-resource classification (runPiTextPrompt, 'fast')
       questions.ts                   # Ask lifecycle under the persisted ten-minute budget
+      notes.ts                       # Re-entry note generation at departure
       retention.ts                   # The Desk sweep, riding Sense's textRetentionDays cutoff
       today.ts                       # Idempotent Today collection + todo ↔ thread links
       service.ts                     # RPC facade + desk.changed broadcast
@@ -282,7 +285,10 @@ src/
     sense.ts                         # Sense capture coordinator (desktopCapturer)
     tray.ts                          # Menu bar tray icon for Sense state
     web.ts                           # Hidden-browser render host for daemon web tools
-    desk.ts                          # Desk window host seam (Phase 3 registers the real NSPanel)
+    desk.ts                          # Desk window host registry
+    desk-window.ts                   # The level-27 NSPanel, cursor poll, display following
+    desk-fullscreen.ts               # Desk's own window-helper poll for fullscreen suppression
+    notch-geometry.ts                # Per-display notch + menu-bar geometry (helper + fallback)
   preload/index.ts                   # contextBridge API
   shared/
     protocol.ts                      # JSON-RPC 2.0 types + PROTOCOL_VERSION
@@ -297,6 +303,7 @@ src/
     models.ts                        # ModelId type
     web.ts                           # WebRenderRequest/WebRenderResult render round-trip types
     desk.ts                          # Desk thread/block/segment/matcher/question types, DESK_TIMING, formatApproxDuration
+    desk-window.ts                   # main <-> Desk-renderer contract (geometry, hit rects)
   renderer/
     App.vue                          # Root shell — panel layout + view routing
     web/
@@ -306,6 +313,9 @@ src/
       client.ts                      # WebBondClient — JSON-RPC over native WebSocket, pairing token, reconnect
       shim.ts                        # window.bond built on WebBondClient; Electron-only methods become no-ops
     ViewerWindow.vue                 # Markdown/plaintext file viewer window (Library documents)
+    DeskWindow.vue                   # The notch panel — Rest / Glance / Ask / Open
+    desk.html / desk-main.ts         # Desk window entry
+    desk.css                         # Strips app.css window chrome from the transparent panel
     app.css                          # Tailwind v4 theme tokens
     types/message.ts                 # Message union type
     types/webview.d.ts               # Electron webview element types
@@ -657,7 +667,22 @@ Edit mode is **one global, daemon-persisted setting** (`edit_mode`, validated th
 
 **Sense is the eye. Desk is what's on your desk** — the work threads currently in flight, the re-entry note for each, and today's todos. It is built entirely on top of the existing Sense capture pipeline: **Desk reads Sense; Sense never knows Desk exists.** The only structural coupling is `desk_capture_links`, which keeps the dependency one-way instead of putting a Desk column on `sense_captures`. Either side can be rewritten independently.
 
-Full design and phasing: `plans/desk.md`. Phase 1 (two live Sense bugs) and Phase 2 (the whole daemon half + `bond desk` CLI) are implemented; the notch panel is Phase 3.
+Full design and phasing: `plans/desk.md`. All four phases are implemented.
+
+### The surface
+
+Four states, and **nothing is ever an interrupt** — no modal, no sound, no bounce, no Notification Center entry, no badge. Desk has exactly one channel.
+
+| State | What it is | Trigger |
+|---|---|---|
+| **Rest** | A hairline below the notch. Colour = thread, dimmed = still deciding. | Always, while running |
+| **Glance** | Lozenge — thread + coarse time. | Hover, 400ms delay |
+| **Ask** | One line, two answers. Holds ~20s, then retracts. | A stable candidate switch |
+| **Open** | In flight + Today, kept structurally separate. | Click |
+
+The heavier work — the day's blocks, thread create/rename/merge/archive, and the buried rules editor — lives in `DeskView.vue`, the fifth right panel. HUDs stay small.
+
+**Anything drawn inside the notch's own footprint is physically invisible.** The framebuffer keeps those pixels and a screenshot shows them perfectly, but the display cannot emit light through the camera housing. Everything that paints starts below the menu bar; the only interactive rectangle above it is the notch's own x-range, which owns no menu bar content. `clampHotRects` enforces that and is the one function that can break the menu bar for the whole machine.
 
 ### Product rules — hard lines, not v1 scope cuts
 
