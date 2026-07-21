@@ -727,7 +727,9 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 
 .mobile-composer .chat-box:focus-within {
-  background: var(--color-surface);
+  /* iOS owns the keyboard assistant's fill. Match that system edge here so
+     the focused composer reads as one continuous surface with it. */
+  background: var(--mobile-system-edge);
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -748,9 +750,9 @@ function handleKeyDown(e: KeyboardEvent) {
 .mobile-composer .composer-toolbar {
   justify-content: space-between;
   min-height: 44px;
-  /* Use the lower part of the home-indicator area rather than reserving it as
-     empty air, while retaining a small physical-edge buffer. */
-  padding: 2px 16px max(8px, calc(env(safe-area-inset-bottom) - 24px));
+  /* Use some of the home-indicator area, but leave enough clearance that the
+     hardware corner curve never crowds the controls. */
+  padding: 2px 16px max(16px, calc(env(safe-area-inset-bottom) - 12px));
 }
 
 .mobile-composer .composer-toolbar > div:last-child {
