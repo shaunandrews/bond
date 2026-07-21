@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { getDb } from '../db'
-import { computeSpecificity, normalizePattern, tooBroadReason } from './signature'
+import { computeSpecificity, normalizePattern, oneOffReason, tooBroadReason } from './signature'
 import type { DeskEvidence, DeskMatcher, DeskMatcherField, DeskMatcherOperator } from '../../shared/desk'
 
 interface MatcherRow {
@@ -211,9 +211,16 @@ export function resolveMatcher(
     path: input.paths.map(p => p.trim().toLowerCase()),
   }
 
-  const rows = db.prepare(
-    'SELECT * FROM desk_matchers WHERE enabled = 1 ORDER BY confirmed DESC, specificity DESC, created_at ASC'
-  ).all() as MatcherRow[]
+  // Archiving a thread must actually stop it claiming new work. Without the
+  // join, archiving only hides a thread from the In-flight list while its
+  // matchers keep winning every lookup — the user's most direct corrective
+  // gesture would silently do nothing.
+  const rows = db.prepare(`
+    SELECT m.* FROM desk_matchers m
+    JOIN desk_threads t ON t.id = m.thread_id
+    WHERE m.enabled = 1 AND t.status != 'archived'
+    ORDER BY m.confirmed DESC, m.specificity DESC, m.created_at ASC
+  `).all() as MatcherRow[]
 
   const hits = rows
     .filter(row => {
@@ -391,7 +398,7 @@ export function pruneOverbroadMatchers(db: Database.Database = getDb()): { delet
     const reason = tooBroadReason(row.field, row.pattern, {
       appName: example.appName,
       bundleId: example.bundleId,
-    })
+    }) ?? oneOffReason(row.pattern)
     if (!reason) continue
     deleted += remove.run(row.id).changes
     reasons.push(reason)

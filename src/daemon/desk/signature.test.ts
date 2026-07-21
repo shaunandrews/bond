@@ -10,6 +10,7 @@ import {
   redactField,
   resourceSignature,
   signatureForCapture,
+  oneOffReason,
   tooBroadReason,
   type CaptureRow,
 } from './signature'
@@ -250,6 +251,33 @@ describe('tooBroadReason', () => {
     // ...but a multi-word title in the same app is fine
     expect(tooBroadReason('title', '~/Developer/Projects/bond — nvim', { bundleId: 'com.mitchellh.ghostty' }))
       .toBeNull()
+  })
+})
+
+describe('oneOffReason', () => {
+  it('rejects the uuid filename real inference produced', () => {
+    expect(oneOffReason('6c19f53c-2e52-495e-8f7a-8918a973dacb.webp'))
+      .toMatch(/one-off identifier/)
+  })
+
+  it('rejects a git sha or long hex blob', () => {
+    expect(oneOffReason('commit 4d20a2eb17c9f8a3e5d2')).toMatch(/one-off identifier/)
+  })
+
+  it('rejects personal data outright — it does not belong in a stored rule', () => {
+    expect(oneOffReason('+212 7 70 64 28 92, +1 (775) 313-1259')).toMatch(/personal data/)
+    expect(oneOffReason('Messages — shaun@a8c.com')).toMatch(/personal data/)
+  })
+
+  it('accepts a pattern that could plausibly match again', () => {
+    expect(oneOffReason('Studio — Sync Dialog')).toBeNull()
+    expect(oneOffReason('/Developer/Projects/bond')).toBeNull()
+    expect(oneOffReason('setlist.fm/show')).toBeNull()
+  })
+
+  it('does not mistake ordinary numbers for a phone number', () => {
+    expect(oneOffReason('18x24 Poster Frames')).toBeNull()
+    expect(oneOffReason('Week of July 19, 2026')).toBeNull()
   })
 })
 

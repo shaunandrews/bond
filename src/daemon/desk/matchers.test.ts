@@ -290,6 +290,15 @@ describe('pruneOverbroadMatchers', () => {
     expect(listMatchers()).toHaveLength(1)
   })
 
+  it('removes patterns that can never match twice', () => {
+    seedRaw('title', '6c19f53c-2e52-495e-8f7a-8918a973dacb.webp')
+    seedRaw('title', 'Messages +1 (775) 313-1259 conversation')
+    seedRaw('title', 'Studio — Sync Dialog')
+
+    expect(pruneOverbroadMatchers().deleted).toBe(2)
+    expect(listMatchers().map(m => m.pattern)).toEqual(['Studio — Sync Dialog'])
+  })
+
   it('never touches exact-resource matchers — they are narrow by construction', () => {
     writeInferredMatcher({ ...RESOURCE, threadId: studio.id, confidence: 0.8, example: {} })
     expect(pruneOverbroadMatchers().deleted).toBe(0)
@@ -305,6 +314,38 @@ describe('pruneOverbroadMatchers', () => {
     seedRaw('title', '~')
     pruneOverbroadMatchers()
     expect(pruneOverbroadMatchers().deleted).toBe(0)
+  })
+})
+
+describe('archived threads stop claiming work', () => {
+  it('an archived thread\'s matcher no longer resolves', () => {
+    confirmMatcher({ ...RESOURCE, threadId: studio.id })
+    expect(resolveFor()!.threadId).toBe(studio.id)
+
+    getDb().prepare("UPDATE desk_threads SET status = 'archived' WHERE id = ?").run(studio.id)
+    expect(resolveFor()).toBeNull()
+  })
+
+  it('resolution falls through to a live thread instead', () => {
+    writeInferredMatcher({
+      field: 'title', operator: 'exact', pattern: 'sync dialog',
+      threadId: isp.id, confidence: 0.8, example: {},
+    })
+    confirmMatcher({ ...RESOURCE, threadId: studio.id })
+    // Confirmed normally wins; archiving its thread takes it out of the running.
+    expect(resolveFor('sig-abc', ['Sync Dialog'])!.threadId).toBe(studio.id)
+
+    getDb().prepare("UPDATE desk_threads SET status = 'archived' WHERE id = ?").run(studio.id)
+    expect(resolveFor('sig-abc', ['Sync Dialog'])!.threadId).toBe(isp.id)
+  })
+
+  it('un-archiving brings its rules back', () => {
+    confirmMatcher({ ...RESOURCE, threadId: studio.id })
+    getDb().prepare("UPDATE desk_threads SET status = 'archived' WHERE id = ?").run(studio.id)
+    expect(resolveFor()).toBeNull()
+
+    getDb().prepare("UPDATE desk_threads SET status = 'established' WHERE id = ?").run(studio.id)
+    expect(resolveFor()!.threadId).toBe(studio.id)
   })
 })
 

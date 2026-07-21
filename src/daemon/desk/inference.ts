@@ -22,7 +22,7 @@
  */
 import type Database from 'better-sqlite3'
 import { getDb } from '../db'
-import { redactAll, redactField, tooBroadReason } from './signature'
+import { oneOffReason, redactAll, redactField, tooBroadReason } from './signature'
 import {
   attributeSegment,
   createThread,
@@ -391,7 +391,7 @@ export async function runInferenceBatch(options: InferenceOptions): Promise<Infe
         const reason = tooBroadReason(line.matcherField, line.matcherPattern, {
           appName: segment.evidence.appName,
           bundleId: segment.evidence.bundleId,
-        })
+        }) ?? oneOffReason(line.matcherPattern)
         if (reason) {
           result.problems.push(`rejected matcher for ${line.ref}: ${reason}`)
         } else {
