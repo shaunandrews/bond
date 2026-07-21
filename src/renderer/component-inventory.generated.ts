@@ -515,6 +515,66 @@ export const componentInventory = [
     "events": []
   },
   {
+    "name": "DeskInFlight",
+    "file": "components/DeskInFlight.vue",
+    "props": [
+      {
+        "name": "blocks",
+        "type": "DeskBlockDetail[]"
+      },
+      {
+        "name": "threads",
+        "type": "DeskThread[]"
+      },
+      {
+        "name": "isDark",
+        "type": "boolean | undefined"
+      },
+      {
+        "name": "reassigning",
+        "type": "string | null | undefined"
+      },
+      {
+        "name": "busy",
+        "type": "boolean | undefined"
+      }
+    ],
+    "events": [
+      {
+        "name": "reassign",
+        "payload": "blockId: string, threadId: string"
+      },
+      {
+        "name": "openPicker",
+        "payload": "blockId: string | null"
+      }
+    ]
+  },
+  {
+    "name": "DeskToday",
+    "file": "components/DeskToday.vue",
+    "props": [
+      {
+        "name": "items",
+        "type": "TodayItem[]"
+      },
+      {
+        "name": "busy",
+        "type": "boolean | undefined"
+      }
+    ],
+    "events": [
+      {
+        "name": "toggle",
+        "payload": "itemId: string, done: boolean"
+      },
+      {
+        "name": "add",
+        "payload": "title: string"
+      }
+    ]
+  },
+  {
     "name": "DevComponents",
     "file": "components/DevComponents.vue",
     "props": [],

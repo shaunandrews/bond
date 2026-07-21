@@ -44,7 +44,8 @@ import type { DeskHotRect, DeskWindowGeometry } from '../shared/desk-window'
  * padding for the CSS drop-shadow bleed.
  */
 const WINDOW_WIDTH = 640
-const WINDOW_HEIGHT = 240
+/** Tall enough for the fully-expanded Open panel plus shadow bleed. */
+const WINDOW_HEIGHT = 520
 
 /** ~60Hz. The poll is the outer gate; real events flow once non-click-through. */
 const CURSOR_POLL_MS = 16
