@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { buildDaemonSurface, type BondSurface, type ElectronBondSurface, type RpcInvoker } from '../shared/bond-surface'
 import type { TaggedChunk } from '../shared/stream'
+import type { DeskBridge } from '../shared/desk-window'
 
 /**
  * `window.bond` = daemon proxies (built from the shared surface builder over
@@ -26,6 +27,7 @@ const electronLocalMethods: ElectronBondSurface = {
   onImageChanged: (fn) => listen('bond:imageChanged', fn),
   onLibraryChanged: (fn) => listen('bond:libraryChanged', fn),
   onMcpChanged: (fn) => listen('bond:mcpChanged', fn),
+  onDeskChanged: (fn) => listen('bond:deskChanged', fn),
   onViewerFile: (fn) => listen('bond:viewerFile', fn),
   onCreateSkill: (fn) => listen('bond:createSkill', fn),
   onFullscreenChanged: (fn) => listen('bond:fullscreenChanged', fn),
@@ -42,6 +44,7 @@ const electronLocalMethods: ElectronBondSurface = {
   // Native UI + windows
   showContextMenu: (items) => ipcRenderer.invoke('context-menu:show', items),
   openSettings: () => ipcRenderer.invoke('window:openSettings'),
+  openDesk: (opts) => ipcRenderer.invoke('desk:open', opts),
   openViewer: (filePath, format, title) => ipcRenderer.invoke('viewer:open', filePath, format, title),
   createSkillViaChat: (description) => ipcRenderer.invoke('settings:createSkillViaChat', description),
   // Local filesystem + shell
@@ -62,3 +65,17 @@ const surface: BondSurface = {
 }
 
 contextBridge.exposeInMainWorld('bond', surface)
+
+/**
+ * The Desk window's own tiny bridge. Deliberately NOT part of BondSurface —
+ * it is window plumbing (geometry, hit regions), not product API, and forcing
+ * the web shim to stub it would be noise.
+ */
+const deskBridge: DeskBridge = {
+  setHotRects: (rects) => ipcRenderer.send('desk:setHotRects', rects),
+  onHover: (fn) => listen('desk:hover', fn),
+  onGeometry: (fn) => listen('desk:geometry', fn),
+  ready: () => ipcRenderer.send('desk:ready'),
+}
+
+contextBridge.exposeInMainWorld('desk', deskBridge)

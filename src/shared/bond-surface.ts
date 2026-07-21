@@ -17,7 +17,7 @@
  * main process broadcasts a change event to all windows after the daemon call,
  * so they keep their hand-written per-method IPC channels.
  */
-import type { DispatchableMethod, RpcParams, RpcResult, CollectionUpdates, McpPolicyWire, McpServerConfigWire } from './rpc-schema'
+import type { DispatchableMethod, RpcParams, RpcResult, CollectionUpdates, DeskConfirmedMatcher, McpPolicyWire, McpServerConfigWire } from './rpc-schema'
 import type { BondSendInput, TaggedChunk } from './stream'
 import type { AttachedImage, EditMode, FieldDefInput, ImageMediaType } from './session'
 import type { QuestionAnswer } from './questions'
@@ -194,6 +194,30 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     senseDebrief: (id?: string, sessionId?: string) => invoke('sense.debrief', { id, sessionId }),
     senseDeleteDebrief: (id: string) => invoke('sense.deleteDebrief', { id }),
     senseSystemPromptPreview: (editMode?: EditMode) => invoke('sense.systemPromptPreview', { editMode }),
+
+    // --- Desk ---
+    deskStatus: () => invoke('desk.status'),
+    deskSetRunning: (running: boolean) => invoke('desk.setRunning', { running }),
+    deskBlocks: (range?: { from?: string; to?: string; limit?: number }) => invoke('desk.blocks', range),
+    deskInFlight: (opts?: { since?: string; limit?: number }) => invoke('desk.inFlight', opts),
+    deskThreads: (includeArchived?: boolean) => invoke('desk.threads', { includeArchived }),
+    deskCreateThread: (name: string) => invoke('desk.createThread', { name }),
+    deskRenameThread: (id: string, name: string) => invoke('desk.renameThread', { id, name }),
+    deskMergeThreads: (targetId: string, sourceId: string) => invoke('desk.mergeThreads', { targetId, sourceId }),
+    deskArchiveThread: (id: string, archived?: boolean) => invoke('desk.archiveThread', { id, archived }),
+    deskStartBlock: (threadId: string) => invoke('desk.startBlock', { threadId }),
+    deskReassign: (blockId: string, threadId: string, confirmedMatcher?: DeskConfirmedMatcher) =>
+      invoke('desk.reassign', { blockId, threadId, confirmedMatcher }),
+    deskAnswer: (questionId: string, accepted: boolean) => invoke('desk.answer', { questionId, accepted }),
+    deskUpdateNote: (blockId: string, note: string) => invoke('desk.updateNote', { blockId, note }),
+    deskMatchers: (confirmedOnly?: boolean) => invoke('desk.matchers', { confirmedOnly }),
+    deskDisableMatcher: (id: string) => invoke('desk.disableMatcher', { id }),
+    deskDeleteMatcher: (id: string) => invoke('desk.deleteMatcher', { id }),
+    deskToday: () => invoke('desk.ensureToday'),
+    deskLinkTodo: (itemId: string, threadId: string) => invoke('desk.linkTodo', { itemId, threadId }),
+    deskUnlinkTodo: (itemId: string) => invoke('desk.unlinkTodo', { itemId }),
+    deskCarryTodo: (itemId: string) => invoke('desk.carryTodo', { itemId }),
+    deskStats: (windowHours?: number) => invoke('desk.stats', { windowHours }),
   }
 }
 
@@ -213,6 +237,7 @@ export interface ElectronBondSurface {
   onImageChanged(fn: () => void): () => void
   onLibraryChanged(fn: () => void): () => void
   onMcpChanged(fn: () => void): () => void
+  onDeskChanged(fn: () => void): () => void
   onViewerFile(fn: (filePath: string, format?: 'markdown' | 'plaintext', title?: string) => void): () => void
   onCreateSkill(fn: (description: string) => void): () => void
   onFullscreenChanged(fn: (isFullScreen: boolean) => void): () => void
@@ -230,6 +255,12 @@ export interface ElectronBondSurface {
   // Native UI + windows
   showContextMenu(items: { id: string; label: string; type?: string }[]): Promise<string | null>
   openSettings(): Promise<void>
+  /**
+   * Reveal the Desk notch panel. Desktop-only: Desk is a non-activating
+   * NSPanel owned by main, so the web shim reports `desktop_only` rather than
+   * pretending. `queued` defers the open until back-fill has populated it.
+   */
+  openDesk(opts?: { queued?: boolean }): Promise<{ opened: boolean; reason?: string }>
   openViewer(filePath: string, format?: 'markdown' | 'plaintext', title?: string): Promise<void>
   createSkillViaChat(description: string): Promise<void>
   // Local filesystem + shell

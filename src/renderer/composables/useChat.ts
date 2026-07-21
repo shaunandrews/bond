@@ -31,6 +31,8 @@ export interface ChatDeps {
   createSession?: (options?: { title?: string }) => Promise<{ id: string }>
   subscribe?: (sessionId?: string) => Promise<{ ok: boolean }>
   unsubscribe?: (sessionId?: string) => Promise<{ ok: boolean }>
+  /** Desktop-only: reveal the Desk notch panel. The web shim no-ops. */
+  openDesk?: (opts?: { queued?: boolean }) => Promise<{ opened: boolean; reason?: string }>
   // Legacy deps retained so older component tests can supply partial window.bond mocks.
   getMessages?: (sessionId: string) => Promise<SessionMessage[]>
   saveMessages?: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
@@ -518,6 +520,13 @@ export function useChat(deps: ChatDeps = window.bond) {
       case 'show_panel':
         // UI side-effect, not transcript content: App opens the panel.
         window.dispatchEvent(new CustomEvent('bond:show-panel', { detail: chunk.panel }))
+        break
+      case 'open_desk':
+        // Desk is a separate non-activating window owned by main, not a side
+        // panel — so this dispatches straight through preload rather than
+        // through App's panel router. `queued` means back-fill is still
+        // catching up; main waits rather than opening an empty panel.
+        deps.openDesk?.({ queued: chunk.queued })
         break
     }
   }

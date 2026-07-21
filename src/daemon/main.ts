@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { setDataDir, ensureSkillsDir } from './paths'
 import { claimSocket, daemonHealth, socketIdentity, startSocketWatchdog } from './lifecycle'
 import { installWireToolLogging, installWireWebSocketLogging } from './wire-debug'
-import { startServer, attachConnection, registerBroadcastServer } from './server'
+import { startServer, attachConnection, registerBroadcastServer, startDeskIfRunning, stopDesk } from './server'
 import { startRemoteServer, type RemoteServer } from './remote'
 import { exchangePairingCode, isValidDeviceToken } from './pairing'
 import { getRemotePort, getOrCreateRemoteToken } from './settings'
@@ -114,6 +114,10 @@ async function main(): Promise<void> {
     console.error(`[bond-daemon] remote server failed to start: ${err instanceof Error ? err.message : String(err)}`)
   }
 
+  // A Desk that was running before the restart starts observing again.
+  // Observed activity alone still never turns Desk on.
+  startDeskIfRunning()
+
   console.log(`[bond-daemon] pid=${process.pid} socket=${socketPath}`)
 
   let shuttingDown = false
@@ -121,6 +125,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return
     shuttingDown = true
     stopWatchdog()
+    stopDesk()
     console.log('[bond-daemon] shutting down…')
     // If any close hangs (a lingering connection, a wedged handle), exit
     // anyway — a zombie daemon keeps holding the remote port and the next

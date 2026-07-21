@@ -57,6 +57,9 @@ import { getRemoteStatus } from './remote'
 import { createPairingCode, listDevices, revokeAllDevices, revokeDevice } from './pairing'
 import { removeSkill } from './skills'
 import { listAgents, revokeAgentRunner, updateAgentSettings } from './agents/service'
+import * as desk from './desk/service'
+import { createDeskWorker, type DeskWorker } from './desk/worker'
+import { getRuntime as getDeskRuntime } from './desk/store'
 import { getDb, closeDb } from './db'
 import { buildMatchQuery } from './fts'
 import {
@@ -288,6 +291,43 @@ function getSenseController(): SenseController {
     }
   }
   return senseController
+}
+
+// --- Desk ---
+
+let deskWorker: DeskWorker | null = null
+
+/**
+ * Desk reads Sense but never the other way round, so the controller is handed
+ * to Desk through a provider rather than Desk importing this module back.
+ */
+function getDeskWorker(): DeskWorker {
+  if (!deskWorker) {
+    desk.setSenseStateProvider(() => {
+      const controller = getSenseController()
+      return { state: controller.getState(), enabled: controller.getSettings().enabled }
+    })
+    desk.onDeskChanged(() => broadcastSenseEvent('desk.changed', {}))
+    deskWorker = createDeskWorker()
+  }
+  return deskWorker
+}
+
+/**
+ * `running` is explicit persisted Desk state: a Desk that was running before a
+ * daemon restart starts observing again without anyone asking it to. Observed
+ * activity alone still never turns Desk on.
+ */
+export function startDeskIfRunning(): void {
+  try {
+    if (getDeskRuntime().running) getDeskWorker().start()
+  } catch (error) {
+    console.error('[bond] Desk startup failed:', error)
+  }
+}
+
+export function stopDesk(): void {
+  deskWorker?.stop()
 }
 
 function broadcastSenseEvent(method: string, params: unknown): void {
@@ -1147,6 +1187,14 @@ const handlers: RpcHandlers = {
     return { ok: true }
   },
 
+  'sense.captureFailed': (params) => {
+    const p = raw(params)
+    const captureId = getStringParam(p, 'captureId')
+    if (!captureId) throw new RpcError(RPC_INVALID_PARAMS, 'captureId required')
+    getSenseController().onCaptureFailed(captureId, getStringParam(p, 'reason') ?? undefined)
+    return { ok: true }
+  },
+
   // --- Web (hidden-browser render round-trip) ---
   'web.renderReady': (params) => {
     const renderId = getStringParam(raw(params), 'renderId')
@@ -1419,6 +1467,137 @@ const handlers: RpcHandlers = {
     })
     return { ok: true, message: 'Backfill started in background' }
   },
+
+  // --- Desk ---
+  'desk.status': () => desk.getStatus(),
+
+  'desk.setRunning': (params) => {
+    const running = getBoolParam(raw(params), 'running')
+    if (running === undefined) throw new RpcError(RPC_INVALID_PARAMS, 'running is required')
+    // Materialize the worker FIRST — that is what registers the Sense state
+    // provider, and without it the status returned here reports Sense disabled
+    // on the very call that turns Desk on.
+    const worker = getDeskWorker()
+    if (running) worker.start()
+    else worker.stop()
+    return desk.setRunning(running)
+  },
+
+  'desk.blocks': (params) => {
+    const p = raw(params)
+    return desk.getBlocks({
+      from: getStringParam(p, 'from'),
+      to: getStringParam(p, 'to'),
+      limit: getNumberParam(p, 'limit'),
+    })
+  },
+
+  'desk.inFlight': (params) => {
+    const p = raw(params)
+    return desk.getInFlight({ since: getStringParam(p, 'since'), limit: getNumberParam(p, 'limit') })
+  },
+
+  'desk.threads': (params) => desk.getThreads(getBoolParam(raw(params), 'includeArchived') ?? false),
+
+  'desk.createThread': (params) => {
+    const name = getStringParam(raw(params), 'name')
+    if (!name?.trim()) throw new RpcError(RPC_INVALID_PARAMS, 'name is required')
+    return desk.createUserThread(name)
+  },
+
+  'desk.renameThread': (params) => {
+    const p = raw(params)
+    const id = getStringParam(p, 'id')
+    const name = getStringParam(p, 'name')
+    if (!id || !name?.trim()) throw new RpcError(RPC_INVALID_PARAMS, 'id and name are required')
+    return desk.renameThread(id, name)
+  },
+
+  'desk.mergeThreads': (params) => {
+    const p = raw(params)
+    const targetId = getStringParam(p, 'targetId')
+    const sourceId = getStringParam(p, 'sourceId')
+    if (!targetId || !sourceId) throw new RpcError(RPC_INVALID_PARAMS, 'targetId and sourceId are required')
+    return desk.mergeThreads(targetId, sourceId)
+  },
+
+  'desk.archiveThread': (params) => {
+    const p = raw(params)
+    const id = getStringParam(p, 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return desk.archiveThread(id, getBoolParam(p, 'archived') ?? true)
+  },
+
+  'desk.startBlock': (params) => {
+    const threadId = getStringParam(raw(params), 'threadId')
+    if (!threadId) throw new RpcError(RPC_INVALID_PARAMS, 'threadId is required')
+    return desk.startBlock(threadId)
+  },
+
+  'desk.reassign': (params) => {
+    const p = raw(params)
+    const blockId = getStringParam(p, 'blockId')
+    const threadId = getStringParam(p, 'threadId')
+    if (!blockId || !threadId) throw new RpcError(RPC_INVALID_PARAMS, 'blockId and threadId are required')
+    const confirmed = getParam(p, 'confirmedMatcher') as desk.ConfirmedMatcherInput | undefined
+    return desk.reassignBlock({ blockId, threadId, confirmedMatcher: confirmed })
+  },
+
+  'desk.answer': (params) => {
+    const p = raw(params)
+    const questionId = getStringParam(p, 'questionId')
+    const accepted = getBoolParam(p, 'accepted')
+    if (!questionId || accepted === undefined) {
+      throw new RpcError(RPC_INVALID_PARAMS, 'questionId and accepted are required')
+    }
+    return { ok: desk.answerQuestion(questionId, accepted) !== null }
+  },
+
+  'desk.updateNote': (params) => {
+    const p = raw(params)
+    const blockId = getStringParam(p, 'blockId')
+    if (!blockId) throw new RpcError(RPC_INVALID_PARAMS, 'blockId is required')
+    return desk.updateNote(blockId, getStringParam(p, 'note') ?? '')
+  },
+
+  'desk.matchers': (params) => desk.getMatchers(getBoolParam(raw(params), 'confirmedOnly') ?? true),
+
+  'desk.disableMatcher': (params) => {
+    const id = getStringParam(raw(params), 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return desk.disableMatcher(id)
+  },
+
+  'desk.deleteMatcher': (params) => {
+    const id = getStringParam(raw(params), 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return { ok: desk.deleteMatcher(id) }
+  },
+
+  'desk.ensureToday': () => desk.getToday(),
+
+  'desk.linkTodo': (params) => {
+    const p = raw(params)
+    const itemId = getStringParam(p, 'itemId')
+    const threadId = getStringParam(p, 'threadId')
+    if (!itemId || !threadId) throw new RpcError(RPC_INVALID_PARAMS, 'itemId and threadId are required')
+    desk.linkTodoToThread(itemId, threadId)
+    return { ok: true as const }
+  },
+
+  'desk.unlinkTodo': (params) => {
+    const itemId = getStringParam(raw(params), 'itemId')
+    if (!itemId) throw new RpcError(RPC_INVALID_PARAMS, 'itemId is required')
+    return { ok: desk.unlinkTodoFromThread(itemId) }
+  },
+
+  'desk.carryTodo': (params) => {
+    const itemId = getStringParam(raw(params), 'itemId')
+    if (!itemId) throw new RpcError(RPC_INVALID_PARAMS, 'itemId is required')
+    return desk.carryTodoForward(itemId)
+  },
+
+  'desk.stats': (params) => desk.getStats(getNumberParam(raw(params), 'windowHours')),
 }
 
 async function handleRequest(req: JsonRpcRequest, ws: WebSocket): Promise<string> {

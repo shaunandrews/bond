@@ -423,6 +423,10 @@ export class BondClient {
     return this.onNotification('mcp.changed', fn)
   }
 
+  onDeskChanged(fn: () => void): () => void {
+    return this.onNotification('desk.changed', fn)
+  }
+
   onLibraryChanged(fn: () => void): () => void {
     return this.onNotification('library.changed', fn)
   }
@@ -473,6 +477,10 @@ export class BondClient {
 
   async senseCaptureReady(captureId: string, imagePath: string): Promise<RpcResult<'sense.captureReady'>> {
     return this.call('sense.captureReady', { captureId, imagePath })
+  }
+
+  async senseCaptureFailed(captureId: string, reason?: string): Promise<RpcResult<'sense.captureFailed'>> {
+    return this.call('sense.captureFailed', { captureId, reason })
   }
 
   async webRenderReady(result: WebRenderResult): Promise<RpcResult<'web.renderReady'>> {

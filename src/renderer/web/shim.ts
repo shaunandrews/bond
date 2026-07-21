@@ -31,6 +31,7 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     onImageChanged: (fn) => client.onNotification('image.changed', () => fn()),
     onLibraryChanged: (fn) => client.onNotification('library.changed', () => fn()),
     onMcpChanged: (fn) => client.onNotification('mcp.changed', () => fn()),
+    onDeskChanged: (fn) => client.onNotification('desk.changed', () => fn()),
     onConnectionLost: (fn) => client.onStateChange((state) => { if (state === 'disconnected') fn() }),
     onConnectionRestored: (fn) => {
       let wasLost = false
@@ -76,6 +77,8 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     // Local filesystem and window management don't exist in a browser.
     showContextMenu: async () => null,
     openSettings: async () => {},
+    // Desk is a native non-activating panel; the browser has no equivalent.
+    openDesk: async () => ({ opened: false, reason: 'desktop_only' }),
     openViewer: async () => {},
     createSkillViaChat: async () => {},
     readFile: async () => null,

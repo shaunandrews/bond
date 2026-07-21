@@ -37,6 +37,15 @@ import type { WebRenderRequest, WebRenderResult } from './web'
 import type { ModelId } from './models'
 import type { AssetBacklink, AssetKind, AssetReference, LibraryAddDocumentInput, LibraryAsset } from './library'
 import type { AgentRosterResult, AgentSettings, AgentSummary } from './agents'
+import type {
+  DeskBlockDetail,
+  DeskMatcher,
+  DeskMatcherField,
+  DeskMatcherOperator,
+  DeskStats,
+  DeskStatus,
+  DeskThread,
+} from './desk'
 
 // --- Named wire shapes ---
 
@@ -337,6 +346,7 @@ export interface RpcMethods {
   'sense.pause': { params: { minutes?: number } | void; result: { ok: true; resumeAt: string } }
   'sense.resume': { params: void; result: { ok: true } }
   'sense.captureReady': { params: { captureId: string; imagePath: string }; result: { ok: true } }
+  'sense.captureFailed': { params: { captureId: string; reason?: string }; result: { ok: true } }
   'sense.now': { params: void; result: { capture: SenseCaptureRow | null; state: SenseState } }
   'sense.today': { params: void; result: { sessions: SenseSessionRow[]; apps: SenseAppRow[] } }
   'sense.search': { params: { query: string; limit?: number }; result: SenseSearchHit[] }
@@ -379,6 +389,60 @@ export interface RpcMethods {
   'sense.deleteDebrief': { params: { id: string }; result: { ok: boolean } }
   'sense.systemPromptPreview': { params: { editMode?: EditMode } | void; result: { prompt: string } }
   'sense.backfill': { params: { limit?: number } | void; result: { ok: true; message: string } }
+
+  // Desk — threads currently in flight, their re-entry notes, and today's todos
+  'desk.status': { params: void; result: DeskStatus }
+  'desk.setRunning': { params: { running: boolean }; result: DeskStatus }
+  'desk.blocks': { params: { from?: string; to?: string; limit?: number } | void; result: DeskBlockDetail[] }
+  'desk.inFlight': { params: { since?: string; limit?: number } | void; result: DeskBlockDetail[] }
+  'desk.threads': { params: { includeArchived?: boolean } | void; result: DeskThread[] }
+  'desk.createThread': { params: { name: string }; result: DeskThread }
+  'desk.renameThread': { params: { id: string; name: string }; result: DeskThread | null }
+  'desk.mergeThreads': { params: { targetId: string; sourceId: string }; result: DeskMergeResult | null }
+  'desk.archiveThread': { params: { id: string; archived?: boolean }; result: DeskThread | null }
+  'desk.startBlock': { params: { threadId: string }; result: DeskBlockDetail }
+  'desk.reassign': {
+    params: { blockId: string; threadId: string; confirmedMatcher?: DeskConfirmedMatcher }
+    result: DeskReassignResult | null
+  }
+  'desk.answer': { params: { questionId: string; accepted: boolean }; result: { ok: boolean } }
+  'desk.updateNote': { params: { blockId: string; note: string }; result: DeskBlockDetail | null }
+  'desk.matchers': { params: { confirmedOnly?: boolean } | void; result: DeskMatcher[] }
+  'desk.disableMatcher': { params: { id: string }; result: DeskMatcher | null }
+  'desk.deleteMatcher': { params: { id: string }; result: { ok: boolean } }
+  'desk.ensureToday': { params: void; result: DeskTodayResult }
+  'desk.linkTodo': { params: { itemId: string; threadId: string }; result: { ok: true } }
+  'desk.unlinkTodo': { params: { itemId: string }; result: { ok: boolean } }
+  'desk.carryTodo': { params: { itemId: string }; result: CollectionItem | null }
+  'desk.stats': { params: { windowHours?: number } | void; result: DeskStats }
+}
+
+/** Mirrors `MergeResult` in `daemon/desk/merge.ts`. */
+export interface DeskMergeResult {
+  thread: DeskThread
+  movedBlocks: number
+  movedSegments: number
+  movedMatchers: number
+  mergedSuppressions: number
+  movedTodoLinks: number
+}
+
+export interface DeskConfirmedMatcher {
+  field: DeskMatcherField
+  operator: DeskMatcherOperator
+  pattern: string
+}
+
+export interface DeskReassignResult {
+  block: DeskBlockDetail
+  matcher: DeskMatcher | null
+  learned: string
+}
+
+export interface DeskTodayResult {
+  collectionId: string
+  day: string
+  items: (CollectionItem & { threadId: string | null })[]
 }
 
 // --- Helper types ---
@@ -404,6 +468,8 @@ export interface RpcNotifications {
   'sense.stateChanged': { state: SenseState }
   'sense.requestCapture': { captureDir: string; captureId: string }
   'web.requestRender': WebRenderRequest
+  /** Any block/rule/state change, so the notch and the panel stay in lockstep. */
+  'desk.changed': Record<string, never>
 }
 
 export type RpcNotificationName = keyof RpcNotifications
@@ -506,6 +572,7 @@ export const RPC_METHOD_NAMES = [
   'sense.pause',
   'sense.resume',
   'sense.captureReady',
+  'sense.captureFailed',
   'sense.now',
   'sense.today',
   'sense.search',
@@ -538,6 +605,27 @@ export const RPC_METHOD_NAMES = [
   'sense.deleteDebrief',
   'sense.systemPromptPreview',
   'sense.backfill',
+  'desk.status',
+  'desk.setRunning',
+  'desk.blocks',
+  'desk.inFlight',
+  'desk.threads',
+  'desk.createThread',
+  'desk.renameThread',
+  'desk.mergeThreads',
+  'desk.archiveThread',
+  'desk.startBlock',
+  'desk.reassign',
+  'desk.answer',
+  'desk.updateNote',
+  'desk.matchers',
+  'desk.disableMatcher',
+  'desk.deleteMatcher',
+  'desk.ensureToday',
+  'desk.linkTodo',
+  'desk.unlinkTodo',
+  'desk.carryTodo',
+  'desk.stats',
 ] as const satisfies readonly RpcMethodName[]
 
 type _MissingFromList = Exclude<RpcMethodName, (typeof RPC_METHOD_NAMES)[number]>

@@ -11,6 +11,8 @@ import { RPC_METHOD_NAMES, type DispatchableMethod } from '../shared/rpc-schema'
 import { initSense, destroySense } from './sense'
 import { initWeb, destroyWeb } from './web'
 import { initTray, destroyTray } from './tray'
+import { markDeskReady, openDesk, registerDeskWindowHost, setDeskHotRects } from './desk'
+import { createDeskWindowHost } from './desk-window'
 import { registerWindow, registerSessionWindow, routeChunk, broadcast } from './window-router'
 import type { TaggedChunk } from '../shared/stream'
 
@@ -291,6 +293,8 @@ function createWindow(): void {
   client.onImageChanged(() => broadcast('bond:imageChanged'))
   client.onLibraryChanged(() => broadcast('bond:libraryChanged'))
   client.onMcpChanged(() => broadcast('bond:mcpChanged'))
+  // registerWindow() alone does not subscribe main to a new daemon notification.
+  client.onDeskChanged(() => broadcast('bond:deskChanged'))
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
@@ -666,6 +670,26 @@ app.whenReady().then(async () => {
   ipcMain.handle('window:openSettings', () => {
     createSettingsWindow()
   })
+
+  // --- Desk ---
+  // Main owns idempotent create/show of the notch panel.
+  registerDeskWindowHost(createDeskWindowHost({
+    preloadPath: join(__dirname, '../preload/index.mjs'),
+    ...(process.env.ELECTRON_RENDERER_URL
+      ? { rendererUrl: `${process.env.ELECTRON_RENDERER_URL}/desk.html` }
+      : { rendererFile: join(__dirname, '../renderer/desk.html') }),
+  }))
+  ipcMain.handle('desk:open', (_e, opts?: { queued?: boolean }) => openDesk(opts))
+  ipcMain.on('desk:setHotRects', (_e, rects) => setDeskHotRects(rects))
+  ipcMain.on('desk:ready', () => markDeskReady())
+
+  // A Desk that was running when the app last quit comes back. Explicit
+  // persisted intent is one of the three things allowed to open it — observed
+  // activity alone never is. Must follow registerDeskWindowHost above, or
+  // openDesk() finds no host and reports `unavailable`.
+  client.call('desk.status')
+    .then(status => { if (status.running) return openDesk() })
+    .catch(() => { /* older daemon without desk support */ })
 
   ipcMain.handle('settings:createSkillViaChat', (_e, description: string) => {
     if (mainWindow && !mainWindow.isDestroyed()) {

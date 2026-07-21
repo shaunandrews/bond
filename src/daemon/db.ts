@@ -36,6 +36,7 @@ export function getDb(): Database.Database {
   migrateAddMessageUpdatedAt(_db)
   migrateAddMessageDataColumn(_db)
   migrateCreateSenseTables(_db)
+  migrateAddCapturePid(_db)
   migrateFixSenseFtsUpdateTrigger(_db)
   migrateRebuildSenseFts(_db)
   migrateAddQuickColumn(_db)
@@ -50,6 +51,7 @@ export function getDb(): Database.Database {
   migrateCreateSenseMemoryTables(_db)
   migrateCreateRemoteDevicesTable(_db)
   migrateDropRetiredTables(_db)
+  migrateCreateDeskTables(_db)
   ensureTranscriptSchema(_db)
   ensureMemorySchema(_db)
 
@@ -423,6 +425,18 @@ const SENSE_FTS_UPDATE_TRIGGER = `
         WHERE NEW.text_content IS NOT NULL;
       END;
 `
+
+/**
+ * The active window's pid, captured at trigger time. `text-router.extractText`
+ * has always accepted a pid and always been called without one, so the
+ * accessibility path never ran and every capture went through OCR.
+ */
+function migrateAddCapturePid(db: Database.Database): void {
+  const columns = db.pragma('table_info(sense_captures)') as { name: string }[]
+  if (!columns.some(c => c.name === 'pid')) {
+    db.exec('ALTER TABLE sense_captures ADD COLUMN pid INTEGER')
+  }
+}
 
 /** Replace the mis-guarded update trigger on databases that predate the fix. */
 function migrateFixSenseFtsUpdateTrigger(db: Database.Database): void {
@@ -851,5 +865,164 @@ function migrateDropRetiredTables(db: Database.Database): void {
     DROP TABLE IF EXISTS projects;
     DROP TABLE IF EXISTS todos;
     DROP TABLE IF EXISTS pending_approvals;
+  `)
+}
+
+/**
+ * Desk's own tables. Desk reads Sense; Sense never learns Desk exists — the
+ * only structural coupling is `desk_capture_links`, which keeps the dependency
+ * one-way instead of putting a Desk column on `sense_captures`.
+ *
+ * Idempotent by construction, and deliberately NOT gated behind an
+ * APP_SCHEMA_VERSION bump: that bump is the destructive cutover.
+ *
+ * `desk_matchers` is created before `desk_segments` because the latter
+ * references it.
+ */
+function migrateCreateDeskTables(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS desk_threads (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      normalized_name TEXT NOT NULL,
+      color_seed      TEXT NOT NULL,
+      status          TEXT NOT NULL DEFAULT 'provisional',
+      source          TEXT NOT NULL,
+      user_note       TEXT,
+      user_note_updated_at TEXT,
+      last_seen_at    TEXT,
+      archived_at     TEXT,
+      created_at      TEXT NOT NULL,
+      updated_at      TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_desk_threads_status_seen
+      ON desk_threads(status, last_seen_at DESC);
+
+    CREATE TABLE IF NOT EXISTS desk_blocks (
+      id                TEXT PRIMARY KEY,
+      thread_id         TEXT REFERENCES desk_threads(id) ON DELETE SET NULL,
+      started_at        TEXT NOT NULL,
+      ended_at          TEXT,
+      presence_seconds  INTEGER NOT NULL DEFAULT 0,
+      state             TEXT NOT NULL DEFAULT 'candidate',
+      summary           TEXT,
+      reentry_note      TEXT,
+      note_status       TEXT NOT NULL DEFAULT 'none',
+      confidence        REAL NOT NULL DEFAULT 0,
+      source            TEXT NOT NULL DEFAULT 'inferred',
+      created_at        TEXT NOT NULL,
+      updated_at        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_desk_blocks_started ON desk_blocks(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_desk_blocks_thread ON desk_blocks(thread_id, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS desk_matchers (
+      id                 TEXT PRIMARY KEY,
+      thread_id          TEXT NOT NULL REFERENCES desk_threads(id) ON DELETE CASCADE,
+      field              TEXT NOT NULL,
+      operator           TEXT NOT NULL,
+      pattern            TEXT NOT NULL,
+      normalized_pattern TEXT NOT NULL,
+      confirmed          INTEGER NOT NULL DEFAULT 0,
+      source             TEXT NOT NULL,
+      confidence         REAL NOT NULL DEFAULT 0,
+      specificity        INTEGER NOT NULL,
+      example_json       TEXT NOT NULL DEFAULT '{}',
+      enabled            INTEGER NOT NULL DEFAULT 1,
+      hits               INTEGER NOT NULL DEFAULT 0,
+      last_seen_at       TEXT,
+      example_updated_at TEXT,
+      created_at         TEXT NOT NULL,
+      updated_at         TEXT NOT NULL,
+      UNIQUE(field, operator, normalized_pattern)
+    );
+    CREATE INDEX IF NOT EXISTS idx_desk_matchers_lookup
+      ON desk_matchers(enabled, confirmed DESC, field, specificity DESC);
+
+    CREATE TABLE IF NOT EXISTS desk_segments (
+      id                 TEXT PRIMARY KEY,
+      block_id           TEXT REFERENCES desk_blocks(id) ON DELETE CASCADE,
+      started_at         TEXT NOT NULL,
+      ended_at           TEXT,
+      presence_seconds   INTEGER NOT NULL DEFAULT 0,
+      resource_signature TEXT NOT NULL,
+      evidence_json      TEXT NOT NULL DEFAULT '{}',
+      attribution_state  TEXT NOT NULL DEFAULT 'unresolved',
+      attributed_thread_id TEXT REFERENCES desk_threads(id) ON DELETE SET NULL,
+      matcher_id         TEXT REFERENCES desk_matchers(id) ON DELETE SET NULL,
+      attribution_confidence REAL NOT NULL DEFAULT 0,
+      attributed_at      TEXT,
+      inference_attempts INTEGER NOT NULL DEFAULT 0,
+      retry_at           TEXT,
+      created_at         TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_desk_segments_block ON desk_segments(block_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_desk_segments_resource ON desk_segments(resource_signature);
+    CREATE INDEX IF NOT EXISTS idx_desk_segments_unresolved
+      ON desk_segments(attribution_state, started_at);
+
+    CREATE TABLE IF NOT EXISTS desk_capture_links (
+      segment_id TEXT NOT NULL REFERENCES desk_segments(id) ON DELETE CASCADE,
+      capture_id TEXT NOT NULL REFERENCES sense_captures(id) ON DELETE CASCADE,
+      PRIMARY KEY (segment_id, capture_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS desk_questions (
+      id                 TEXT PRIMARY KEY,
+      kind               TEXT NOT NULL,
+      block_id           TEXT REFERENCES desk_blocks(id) ON DELETE CASCADE,
+      proposed_thread_id TEXT REFERENCES desk_threads(id) ON DELETE CASCADE,
+      item_id            TEXT REFERENCES collection_items(id) ON DELETE CASCADE,
+      resource_signature TEXT,
+      state              TEXT NOT NULL DEFAULT 'pending',
+      presented_at       TEXT,
+      expires_at         TEXT NOT NULL,
+      resolved_at        TEXT,
+      created_at         TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_desk_questions_pending ON desk_questions(state, expires_at);
+
+    CREATE TABLE IF NOT EXISTS desk_suppressions (
+      resource_signature TEXT NOT NULL,
+      thread_id          TEXT NOT NULL REFERENCES desk_threads(id) ON DELETE CASCADE,
+      rejection_count    INTEGER NOT NULL DEFAULT 0,
+      suppress_until     TEXT,
+      permanent          INTEGER NOT NULL DEFAULT 0,
+      updated_at         TEXT NOT NULL,
+      PRIMARY KEY(resource_signature, thread_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS desk_runtime (
+      singleton              INTEGER PRIMARY KEY CHECK(singleton = 1),
+      processed_capture_at   TEXT,
+      processed_capture_id   TEXT,
+      current_block_id       TEXT REFERENCES desk_blocks(id) ON DELETE SET NULL,
+      candidate_thread_id    TEXT REFERENCES desk_threads(id) ON DELETE SET NULL,
+      candidate_matcher_id   TEXT REFERENCES desk_matchers(id) ON DELETE SET NULL,
+      candidate_resource_signature TEXT,
+      candidate_since        TEXT,
+      candidate_presence_seconds INTEGER NOT NULL DEFAULT 0,
+      last_assertion_at      TEXT,
+      running                INTEGER NOT NULL DEFAULT 0,
+      updated_at             TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS desk_todo_links (
+      item_id   TEXT PRIMARY KEY REFERENCES collection_items(id) ON DELETE CASCADE,
+      thread_id TEXT REFERENCES desk_threads(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS desk_metrics (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      recorded_at   TEXT NOT NULL,
+      kind          TEXT NOT NULL,
+      calls         INTEGER NOT NULL DEFAULT 0,
+      segments      INTEGER NOT NULL DEFAULT 0,
+      prompt_chars  INTEGER NOT NULL DEFAULT 0,
+      latency_ms    INTEGER NOT NULL DEFAULT 0,
+      ok            INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_desk_metrics_time ON desk_metrics(recorded_at DESC);
   `)
 }

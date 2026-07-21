@@ -27,6 +27,13 @@ export type BondStreamChunk =
   | { kind: 'queue_update'; queuedTurnIds: string[]; turns: Array<{ turnId: string; text: string; imageIds?: string[] }> }
   /** UI side-effect: open a side panel (onboarding tour's show_panel tool). */
   | { kind: 'show_panel'; panel: 'collections' | 'sense' | 'library' | 'memory' }
+  /**
+   * UI side-effect: reveal the Desk notch panel (the `open_desk` tool).
+   * Not a `show_panel` — Desk is a separate non-activating window owned by
+   * main, and `queued` means back-fill is still catching up so main should
+   * wait for a populated `desk.status` rather than opening an empty panel.
+   */
+  | { kind: 'open_desk'; queued: boolean; senseEnabled: boolean }
   /** Tool-generated image(s) persisted to the Bond image store (codex_generate_image). */
   | { kind: 'generated_image'; imageIds: string[]; alt?: string }
   /** A turn began — carries the sender's message ids so other live viewers can mirror the user message and activity row instead of minting duplicates. */

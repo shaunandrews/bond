@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { existsSync, unlinkSync, readdirSync, rmdirSync, statSync } from 'node:fs'
 import { getDb } from '../db'
 import { getDataDir } from '../paths'
+import { runDeskRetentionSweep } from '../desk/retention'
 
 /**
  * Returns the base directory for Sense stills.
@@ -226,11 +227,21 @@ export function clearData(range?: { from?: string; to?: string }): number {
 
 /**
  * Run all retention cleanup tasks.
+ *
+ * Desk's sweep rides the same cutoff so no Desk-derived screen data outlives
+ * `textRetentionDays`. It keys off Desk timestamps rather than capture links,
+ * so its position relative to `purgeOldCaptures` does not matter.
  */
 export function runRetentionCleanup(retentionDays: number, textRetentionDays: number, storageCapMb: number): void {
   purgeOldImages(retentionDays)
   purgeOldCaptures(textRetentionDays)
   enforceStorageCap(storageCapMb)
+  try {
+    runDeskRetentionSweep(textRetentionDays)
+  } catch (error) {
+    // A Desk sweep failure must never stop Sense's own retention.
+    console.error('[sense/storage] Desk retention sweep failed:', error)
+  }
 }
 
 function cleanEmptyDirs(): void {

@@ -20,6 +20,7 @@ import { createWebExtensionFactory, WEB_TOOL_NAMES } from '../web/tools'
 import { createAgentExtensionFactory, AGENT_TOOL_NAMES } from '../agents/tools'
 import { createMcpExtensionFactory, MCP_TOOL_NAMES } from '../mcp/tools'
 import { createQuestionExtensionFactory, QUESTION_TOOL_NAMES } from '../questions/tools'
+import { createDeskExtensionFactory, DESK_TOOL_NAMES } from '../desk/tools'
 import { mcpProxyAvailable } from '../mcp/config'
 import { promotedToolInfos } from '../mcp/manager'
 import { createOnboardingExtensionFactory, getFirstRunStatus, ONBOARDING_STAGE_TOOLS, type BondPanelId, type OnboardingToolHooks } from '../onboarding'
@@ -326,7 +327,9 @@ export function toolsForEditMode(
   const mcpTools = [...mcpProxy, ...(options.promotedMcpTools ?? [])]
   // Asking a question touches no workspace files, so it stays available in
   // readonly and scoped modes too — same reasoning as the web tools above.
-  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...AGENT_TOOL_NAMES, ...mcpTools, ...imageGenTools, ...onboardingTools, ...QUESTION_TOOL_NAMES]
+  // Desk only reveals a panel and reports state — no workspace reach at all,
+  // so it stays available in every mode for the same reason.
+  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...AGENT_TOOL_NAMES, ...mcpTools, ...imageGenTools, ...onboardingTools, ...QUESTION_TOOL_NAMES, ...DESK_TOOL_NAMES]
 }
 
 /**
@@ -344,6 +347,7 @@ export const REQUIRED_BOND_TOOL_NAMES: string[] = [
   ...IMAGEGEN_TOOL_NAMES,
   ...Object.values(ONBOARDING_STAGE_TOOLS).flat(),
   ...QUESTION_TOOL_NAMES,
+  ...DESK_TOOL_NAMES,
 ]
 
 /** Run one Bond turn through Pi and persist it in Bond-owned Pi JSONL storage. */
@@ -405,6 +409,9 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
         onChunk: options.onChunk,
         abortSignal: options.abortSignal,
       }),
+      // Desk is read-only from the model's side — it reveals a panel and
+      // reports state — so it is available in every edit mode.
+      createDeskExtensionFactory({ onChunk: options.onChunk }),
       codexImageGenExtension,
       createOnboardingExtensionFactory({
         // show_panel rides the normal chunk stream to the renderer.
