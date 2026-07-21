@@ -539,6 +539,7 @@ function handleKeyDown(e: KeyboardEvent) {
         <textarea
           ref="inputEl"
           rows="1"
+          enterkeyhint="send"
           :placeholder="props.placeholder ?? 'Ask Bond something…'"
           :spellcheck="false"
           @keydown="handleKeyDown"
@@ -672,6 +673,7 @@ function handleKeyDown(e: KeyboardEvent) {
             Esc to stop
           </BondButton>
           <button
+            v-if="!props.mobile"
             type="button"
             data-action="send"
             class="send-button flex items-center justify-center w-8 h-8 rounded-full border-none cursor-pointer bg-accent text-white hover:opacity-85"
@@ -750,22 +752,29 @@ function handleKeyDown(e: KeyboardEvent) {
   padding-inline: 8px;
 }
 
+/* Mobile controls form a small toolbar above the text field. Sending lives on
+   the keyboard's Send key, so there is no duplicate, unreliable in-app arrow. */
+.mobile-composer .chat-box {
+  display: flex;
+  flex-direction: column;
+}
 .mobile-composer .composer-toolbar {
-  justify-content: space-between;
-  min-height: 44px;
-  /* At rest, give the hardware edge an explicit 28px of breathing room. */
-  padding: 2px 16px 28px;
+  order: -1;
+  justify-content: flex-end;
+  min-height: 40px;
+  padding: 6px 16px 4px;
 }
-
-/* When the keyboard is present, its top edge becomes the visual boundary.
-   Don't preserve an artificial gap between the controls and that edge. */
-.mobile-composer .chat-box:focus-within .composer-toolbar {
-  padding-bottom: 0;
-}
-
 .mobile-composer .composer-toolbar > div:last-child {
-  margin-left: auto;
+  margin-left: 0;
   gap: 8px;
+}
+.mobile-composer .chat-textarea-wrapper {
+  padding-bottom: max(12px, calc(env(safe-area-inset-bottom) - 12px));
+}
+
+/* When the keyboard is present, its top edge becomes the visual boundary. */
+.mobile-composer .chat-box:focus-within .chat-textarea-wrapper {
+  padding-bottom: 0;
 }
 
 .mobile-composer .send-button {
