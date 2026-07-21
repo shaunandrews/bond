@@ -575,6 +575,12 @@ export const componentInventory = [
     ]
   },
   {
+    "name": "DeskView",
+    "file": "components/DeskView.vue",
+    "props": [],
+    "events": []
+  },
+  {
     "name": "DevComponents",
     "file": "components/DevComponents.vue",
     "props": [],

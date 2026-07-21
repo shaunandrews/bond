@@ -6,7 +6,7 @@ import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
-import { PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhBooks, PhBrain } from '@phosphor-icons/vue'
+import { PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhBooks, PhBrain, PhCompassRose } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
@@ -18,6 +18,7 @@ import LibraryView from './components/LibraryView.vue'
 import CollectionsView from './components/CollectionsView.vue'
 import SensePanelView from './components/SensePanelView.vue'
 import MemoryView from './components/MemoryView.vue'
+import DeskView from './components/DeskView.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
@@ -129,8 +130,8 @@ const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
 const isFullScreen = ref(false)
 
-type RightPanelContent = 'collections' | 'sense' | 'library' | 'memory'
-const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'library', 'memory']
+type RightPanelContent = 'collections' | 'sense' | 'library' | 'memory' | 'desk'
+const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'library', 'memory', 'desk']
 function savedRightPanelContent(): RightPanelContent {
   const saved = localStorage.getItem('bond:right-panel-content') as RightPanelContent | null
   return saved && validRightPanels.includes(saved) ? saved : 'collections'
@@ -493,6 +494,7 @@ onUnmounted(() => {
       />
       <SensePanelView v-else-if="rightPanelContent === 'sense'" />
       <MemoryView v-else-if="rightPanelContent === 'memory'" />
+      <DeskView v-else-if="rightPanelContent === 'desk'" />
       <LibraryView v-else-if="rightPanelContent === 'library'" />
     </BondPanel>
   </BondPanelGroup>
@@ -542,6 +544,17 @@ onUnmounted(() => {
       v-tooltip="rightPanelOpen && rightPanelContent === 'collections' ? 'Close Collections' : 'Collections'"
     >
       <PhListBullets :size="16" weight="bold" />
+    </BondButton>
+    <BondButton
+      variant="ghost"
+      size="sm"
+      icon
+      :aria-label="rightPanelOpen && rightPanelContent === 'desk' ? 'Close Desk panel' : 'Open Desk panel'"
+      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'desk' }"
+      @click.stop="toggleRightPanel('desk')"
+      v-tooltip="rightPanelOpen && rightPanelContent === 'desk' ? 'Close Desk' : 'Desk'"
+    >
+      <PhCompassRose :size="16" weight="bold" />
     </BondButton>
   </nav>
 
