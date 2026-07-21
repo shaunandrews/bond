@@ -818,7 +818,7 @@ function handleKeyDown(e: KeyboardEvent) {
    blurred fade. The field stays quiet until it is actually being used. */
 .mobile-composer-toolbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
   min-height: 36px;
   padding: 4px 16px 6px;
