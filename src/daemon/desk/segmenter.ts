@@ -305,7 +305,9 @@ export interface WindowShare {
 export function rollingWindow(
   atIso: string,
   context: SegmenterContext = {},
-  windowSeconds: number = DESK_TIMING.smoothingWindowSeconds
+  // The working sphere, not the noise floor: a 3-minute window is too short to
+  // see past interleaving, and interleaving is what real work looks like.
+  windowSeconds: number = DESK_TIMING.workingSphereSeconds
 ): { total: number; leader: WindowShare | null; shares: WindowShare[] } {
   const ctx = resolveCtx(context)
   const start = new Date(Date.parse(atIso) - windowSeconds * 1000).toISOString()
@@ -322,9 +324,33 @@ export function rollingWindow(
   const shares = rows
     .map(r => ({ threadId: r.thread_id, seconds: Number(r.seconds ?? 0), share: total > 0 ? Number(r.seconds) / total : 0 }))
     .sort((a, b) => b.seconds - a.seconds)
-  const leader = shares[0] ?? null
-  // "A clear majority", not merely the most — a 40/35/25 split is not a switch.
-  return { total, leader: leader && leader.share > 0.5 ? leader : null, shares }
+
+  return { total, leader: pickLeader(shares), shares }
+}
+
+/**
+ * Who is actually leading?
+ *
+ * A strict >50% majority is the obvious rule and it does not survive contact
+ * with real work. Observed on a live machine: Studio 27 min, Bond 24 min,
+ * Sense Work 20 min — genuinely interleaved across a terminal, a dev build,
+ * and Figma. No thread ever holds half the window, so nothing ever switches
+ * and the panel sits on a block from hours earlier.
+ *
+ * Fragmented attention is the documented norm, not an edge case (10-12
+ * working spheres a day, resumed after ~25 minutes and 2.26 intervening
+ * activities). So the test is a clear *margin* over the runner-up rather than
+ * an absolute majority, plus enough absolute presence that noise cannot win a
+ * quiet window.
+ */
+const LEADER_MARGIN = 1.4
+const LEADER_MIN_SECONDS = 45
+
+export function pickLeader(shares: WindowShare[]): WindowShare | null {
+  const [leader, runnerUp] = shares
+  if (!leader || leader.seconds < LEADER_MIN_SECONDS) return null
+  if (!runnerUp) return leader
+  return leader.seconds >= runnerUp.seconds * LEADER_MARGIN ? leader : null
 }
 
 export type SwitchDecision =

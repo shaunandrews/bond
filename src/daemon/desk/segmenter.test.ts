@@ -363,23 +363,52 @@ describe('rollingWindow', () => {
     expect(leader!.threadId).toBe(a.id)
   })
 
-  it('requires a clear majority, not merely the most', () => {
+  it('declares no leader when three threads are genuinely neck and neck', () => {
+    // Observed live: Studio 27m / Bond 24m / Sense Work 20m. Nobody is leading.
     const a = createThread({ name: 'A', source: 'user' })
     const b = createThread({ name: 'B', source: 'user' })
     const c = createThread({ name: 'C', source: 'user' })
-    segmentFor(a.id, 0, null, 40)
-    segmentFor(b.id, 0, null, 35)
-    segmentFor(c.id, 0, null, 25)
+    segmentFor(a.id, 0, null, 1620)
+    segmentFor(b.id, 0, null, 1440)
+    segmentFor(c.id, 0, null, 1200)
 
     const result = rollingWindow(at(120), ctx(120))
     expect(result.leader).toBeNull()
     expect(result.shares[0].threadId).toBe(a.id)
   })
 
+  it('declares a leader on a clear margin, without needing an absolute majority', () => {
+    // The rule that a strict >50% test could never satisfy with 3 threads live.
+    const a = createThread({ name: 'A', source: 'user' })
+    const b = createThread({ name: 'B', source: 'user' })
+    const c = createThread({ name: 'C', source: 'user' })
+    segmentFor(a.id, 0, null, 600)   // 42% — a plurality, not a majority
+    segmentFor(b.id, 0, null, 400)
+    segmentFor(c.id, 0, null, 420)
+
+    expect(rollingWindow(at(120), ctx(120)).leader?.threadId).toBe(a.id)
+  })
+
+  it('ignores a leader with too little absolute presence', () => {
+    // A quiet window must not let ten seconds of anything declare a switch.
+    const a = createThread({ name: 'A', source: 'user' })
+    segmentFor(a.id, 0, null, 20)
+    expect(rollingWindow(at(120), ctx(120)).leader).toBeNull()
+  })
+
+  it('a single thread with real presence leads outright', () => {
+    const a = createThread({ name: 'A', source: 'user' })
+    segmentFor(a.id, 0, null, 300)
+    expect(rollingWindow(at(120), ctx(120)).leader?.threadId).toBe(a.id)
+  })
+
   it('drops segments that ended before the window opened', () => {
+    // The window is the working sphere (~11 min), not the noise floor.
     const a = createThread({ name: 'A', source: 'user' })
     segmentFor(a.id, 0, 30, 300)
-    expect(rollingWindow(at(600), ctx(600)).total).toBe(0)
+    expect(rollingWindow(at(1200), ctx(1200)).total).toBe(0)
+    // ...and is still counted while it is inside the window
+    expect(rollingWindow(at(400), ctx(400)).total).toBe(300)
   })
 
   it('ignores unattributed segments entirely', () => {
