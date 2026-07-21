@@ -46,15 +46,20 @@ int main(int argc, const char *argv[]) {
             NSNumber *layer = window[(__bridge NSString *)kCGWindowLayer];
             if (layer && [layer intValue] != 0) continue;
 
-            // Get window bounds for area check
-            if (minVisibleArea > 0) {
-                CGRect bounds;
-                NSDictionary *boundsDict = window[(__bridge NSString *)kCGWindowBounds];
-                if (boundsDict) {
-                    CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)boundsDict, &bounds);
-                    double area = bounds.size.width * bounds.size.height;
-                    if (area < minVisibleArea) continue;
-                }
+            // Window geometry. Read here for the area filter, and — since we
+            // already have it — emitted below so callers can answer questions
+            // this helper used to throw the answer away for. Desk's fullscreen
+            // suppression needs exactly this: does the frontmost layer-0 window
+            // cover its whole display.
+            CGRect bounds = CGRectZero;
+            BOOL haveBounds = NO;
+            NSDictionary *boundsDict = window[(__bridge NSString *)kCGWindowBounds];
+            if (boundsDict) {
+                haveBounds = CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)boundsDict, &bounds);
+            }
+            if (minVisibleArea > 0 && haveBounds) {
+                double area = bounds.size.width * bounds.size.height;
+                if (area < minVisibleArea) continue;
             }
 
             NSNumber *pid = window[(__bridge NSString *)kCGWindowOwnerPID];
@@ -78,13 +83,23 @@ int main(int argc, const char *argv[]) {
 
             BOOL isActive = ([pid intValue] == activePid);
 
-            NSDictionary *entry = @{
+            NSMutableDictionary *entry = [@{
                 @"name": ownerName ?: @"",
                 @"bundleId": bundleId ?: @"",
                 @"title": windowName ?: @"",
                 @"active": @(isActive),
-                @"pid": pid
-            };
+                @"pid": pid,
+                @"layer": layer ?: @0
+            } mutableCopy];
+            // Additive: existing consumers ignore the new fields.
+            if (haveBounds) {
+                entry[@"frame"] = @{
+                    @"x": @(bounds.origin.x),
+                    @"y": @(bounds.origin.y),
+                    @"width": @(bounds.size.width),
+                    @"height": @(bounds.size.height)
+                };
+            }
             [results addObject:entry];
         }
 

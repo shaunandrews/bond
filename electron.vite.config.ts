@@ -21,6 +21,7 @@ export default defineConfig({
           main: resolve(__dirname, 'src/renderer/index.html'),
           settings: resolve(__dirname, 'src/renderer/settings.html'),
           viewer: resolve(__dirname, 'src/renderer/viewer.html'),
+          desk: resolve(__dirname, 'src/renderer/desk.html'),
         }
       }
     },

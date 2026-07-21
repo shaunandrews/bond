@@ -1,0 +1,26 @@
+/**
+ * Desk-window overrides, imported AFTER app.css so these win.
+ *
+ * Desk wants app.css's design tokens but none of its window chrome. In
+ * particular `app.css` paints `#app` with the app background at the user's
+ * window opacity — correct for the main window, and a solid 640x240 black
+ * rectangle nailed under the menu bar when it lands in the transparent panel.
+ *
+ * The ONLY thing allowed to paint in this window is `.desk-shape`. Every
+ * ancestor stays fully transparent, or the fixed window rect becomes visible.
+ */
+
+html,
+body,
+#app {
+  background: transparent !important;
+  /* The window is fixed-size and never scrolls; motion is transform-only. */
+  overflow: hidden;
+}
+
+/* Nothing outside the shape should ever swallow a click — main's cursor poll
+   is the outer gate, but a stray full-window element would still register as
+   the window being non-click-through. */
+#app {
+  pointer-events: none;
+}

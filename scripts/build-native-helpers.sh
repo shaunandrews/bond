@@ -48,4 +48,14 @@ xcrun clang \
   -o "$OUT_DIR/bond-accessibility-helper" \
   "$SRC_DIR/accessibility-helper.m"
 
+# bond-notch-helper — per-display notch + menu-bar geometry (Desk)
+echo "  notch-helper"
+xcrun clang \
+  -framework Foundation \
+  -framework AppKit \
+  -fobjc-arc \
+  -O2 \
+  -o "$OUT_DIR/bond-notch-helper" \
+  "$SRC_DIR/notch-helper.m"
+
 echo "Done. Binaries in $OUT_DIR"

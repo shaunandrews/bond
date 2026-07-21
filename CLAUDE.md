@@ -91,6 +91,19 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `web/broker.ts` | Render broker — parks tool promises, sends `web.requestRender` to the app, resolves on `web.renderReady`; errors clearly when no app is connected |
 | `web/extract.ts` | DuckDuckGo SERP parsing (linkedom) and page → markdown extraction (Readability + Turndown) over app-rendered HTML |
 | `questions/tools.ts` | The `ask_user_question` Pi tool — mints daemon-owned option ids, emits the `user_question` chunk, parks the turn on `questions.ts`'s registry until answered, resumed, or the turn is cleared |
+| `desk/signature.ts` | Resource signatures + **the redaction boundary**. Sense only redacts *extracted* text; `window_title` is raw at trigger time. Desk transmits and persists titles/paths, so nothing leaves this module without passing `redact()`. Volatile badges/counters/clocks are stripped so `Inbox (3)` and `Inbox (7)` are one resource; the signature is an opaque hash so a suppression never carries a captured title |
+| `desk/store.ts` | Threads, blocks, segments, and the `desk_runtime` singleton — the only place snake_case rows become `shared/desk.ts` types. Attribution is a **snapshot**, not a join, so correcting a matcher never rewrites history |
+| `desk/matchers.ts` | The deterministic fast path and **the authority matrix**. `confirmed = 0` is an inferred one-resource attribution; `confirmed = 1` is a user-approved pattern. `writeInferredMatcher` cannot mutate a confirmed row, steal a pattern owned by another thread, or ever set `confirmed = 1`; there is deliberately no generic `upsertMatcher`. Also owns three-strike suppressions, checked **before** an unconfirmed matcher resolves so "No" changes behaviour rather than hiding the next question |
+| `desk/merge.ts` | Thread merge in one transaction. Only `desk_suppressions` can collide (its PK includes `thread_id`): fold to `max(count)`, later expiry, `permanent = a OR b` — a merge must never *weaken* negative evidence. `desk_matchers` cannot collide; its UNIQUE excludes `thread_id`, so one pattern has exactly one owner |
+| `desk/segmenter.ts` | Sense captures → segments → blocks, **no model call**. Owns the two-condition eligibility gate (survived-the-blacklist-recheck + a 10s age floor so an out-of-order capture is never leapfrogged), `presence_seconds` derived as `min(gap, 2 x captureInterval)` from the **user's configured** interval, and temporal smoothing over a rolling window of *time* rather than a count of observations |
+| `desk/inference.ts` | The slow path — every pending unknown collapsed into ONE 200–500-token request via `runPiTextPrompt(prompt, 'fast')`. Strict-and-accumulating parse (a bad line is dropped with a reason, never thrown), at most one new thread per batch, redaction re-applied at assembly because existing Sense rows are raw, and a hard six-immediate-calls-per-hour ceiling |
+| `desk/questions.ts` | The Ask lifecycle under one persisted ten-minute budget (`last_assertion_at`, so a restart can't reset it). Rejecting is a real state change — drop the unconfirmed matcher, clear the segment attributions, restore the block, suppress the pairing. Silence auto-accepts **this block only** and teaches nothing |
+| `desk/retention.ts` | The Desk sweep, riding Sense's `textRetentionDays` cutoff and keyed to Desk timestamps (not capture links) so it is correct in either order. Edited notes graduate onto the thread before their block expires; suppressions and confirmed patterns survive, their captured examples do not |
+| `desk/today.ts` | The idempotent Today collection. **`issue_prefix` has no uniqueness constraint**, so `ensureToday` reconciles rather than assumes: adopt the collection the setting names (or the oldest), strip `TODAY` from the others, never mint a third — two claimants would make `listReferences()` serve two items for one `TODAY-n` key |
+| `desk/service.ts` | The RPC-facing facade + the `desk.changed` broadcast. Reassignment is optimistic and confirms a durable rule **only** when a concrete pattern is supplied; a generic bundle (Chrome, Terminal, Finder, Slack, Code) is refused out loud |
+| `desk/worker.ts` | Two loops on one serialized queue — 2s segmentation and a 15-minute inference sweep. No scheduler: a `setInterval`, matching the hourly retention sweep |
+| `desk/stats.ts` | The instrumentation `bond desk stats` reads — calls, tokens, immediate-vs-swept, cache hit rate, unknown-resource latency. Without it the Phase 2 dogfood produces an impression instead of a decision |
+| `desk/tools.ts` | The `open_desk` Pi tool. Emits the `open_desk` chunk; reports Sense-disabled and back-fill-pending states honestly instead of opening an empty panel. Available in every edit mode (it reveals a panel and reports state — no workspace reach) |
 | `mcp/manager.ts` | Daemon-lifetime MCP connection registry — lazy connect, warm client reuse across turns, `tools/list` cache (invalidated by `list_changed` and on reconnect), idle disconnect, per-server error containment, promoted-tool schema prefetch (timeout-bounded), `shutdownMcp()` on the daemon exit path |
 | `mcp/client.ts` | One MCP server connection over the official `@modelcontextprotocol/sdk` — StdioClientTransport or StreamableHTTPClientTransport; resolves `keychain:` references just before connecting; keeps the last 4k of stderr (where a stdio server reports auth trouble) |
 | `mcp/config.ts` | `McpServerConfig` CRUD over the settings KV row `mcp.servers` (stdio + http, never a secret) + policy writes + the Context A8C preset |
@@ -163,10 +176,11 @@ Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from
 | `library.ts` | `AssetKind`, `AssetFormat`, `LibraryAsset`, `AssetReference`, `AssetBacklink` — the Library asset model shared by daemon, renderer, and CLI |
 | `models.ts` | `ModelId` — provider-neutral capability tiers (`'high' | 'balanced' | 'fast'`); Pi maps them to concrete models |
 | `web.ts` | `WebRenderRequest`/`WebRenderResult` — the daemon ↔ app hidden-browser render round-trip |
+| `desk.ts` | Desk's wire types (threads, blocks, segments, matchers, questions, status, stats), `DESK_TIMING` (the ~3 min noise floor, ~11 min working sphere, 60 min session gap, 10 min assertion budget), and `formatApproxDuration` — `~1h 20m`, never `1h 23m` |
 
 ### CLI (`bin/bond`)
 
-`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`, `mcp`, `library`, `ask`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow; `library-helpers.ts` holds `library.ts`'s pure logic — id/number resolution, format detection — split out so it's unit-testable without triggering the CLI's `main()` on import; `ask-helpers.ts` is the same split for `ask.ts`). `bond ask` shows and answers Bond's pending `ask_user_question` — a bare number picks an option, `--text`/`--cancel` answer directly, `--json` (or a non-TTY caller with no explicit answer) prints the pending question as JSON and never blocks. See the "Commands" section above for the common daemon workflows.
+`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`, `mcp`, `library`, `ask`, `desk`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow; `library-helpers.ts` holds `library.ts`'s pure logic — id/number resolution, format detection — split out so it's unit-testable without triggering the CLI's `main()` on import; `ask-helpers.ts` is the same split for `ask.ts`). `bond desk` is Desk's only surface until the notch panel lands — `status`, `on`/`off`, `blocks`, `threads`, `matchers`, `answer`, and above all `stats`, which is where a day of dogfooding becomes a go/no-go decision instead of an impression. `bond ask` shows and answers Bond's pending `ask_user_question` — a bare number picks an option, `--text`/`--cancel` answer directly, `--json` (or a non-TTY caller with no explicit answer) prints the pending question as JSON and never blocks. See the "Commands" section above for the common daemon workflows.
 
 ## Project Structure
 
@@ -183,6 +197,8 @@ src/
     mcp.ts                           # bond mcp — servers, trust policy, tool classification, Keychain secrets
     sense.ts                         # bond sense — CLI for Sense ambient awareness
     ask.ts                           # bond ask — show/answer Bond's pending ask_user_question
+    desk.ts                          # bond desk — status, on/off, blocks, threads, matchers, answer, stats
+    desk-helpers.ts                  # Pure desk.ts logic (arg parsing, formatting)
     ask-helpers.ts                   # Pure ask.ts logic (arg parsing, answer-line parsing, formatting)
   native/
     window-helper.m                  # CGWindowList native helper (Obj-C)
@@ -220,6 +236,20 @@ src/
       extract.ts                     # DDG SERP parsing + Readability/Turndown markdown
     questions/
       tools.ts                       # ask_user_question Pi tool — parks the turn on questions.ts until answered
+    desk/
+      signature.ts                   # Resource signatures + the redaction boundary for titles/paths
+      store.ts                       # Threads, blocks, segments, desk_runtime singleton
+      matchers.ts                    # Deterministic matching, the authority matrix, suppressions
+      merge.ts                       # Transactional thread merge + suppression collision folding
+      segmenter.ts                   # Captures → segments → blocks; eligibility gate, presence, smoothing
+      inference.ts                   # Batched unknown-resource classification (runPiTextPrompt, 'fast')
+      questions.ts                   # Ask lifecycle under the persisted ten-minute budget
+      retention.ts                   # The Desk sweep, riding Sense's textRetentionDays cutoff
+      today.ts                       # Idempotent Today collection + todo ↔ thread links
+      service.ts                     # RPC facade + desk.changed broadcast
+      worker.ts                      # 2s segmentation + 15-min sweep on one serialized queue
+      stats.ts                       # Instrumentation for the Phase 2 go/no-go
+      tools.ts                       # open_desk Pi tool
     agents/
       tools.ts                       # consult_agent Pi tool + roster prompt section
       definition.ts                  # AGENT.md parsing + validation
@@ -252,6 +282,7 @@ src/
     sense.ts                         # Sense capture coordinator (desktopCapturer)
     tray.ts                          # Menu bar tray icon for Sense state
     web.ts                           # Hidden-browser render host for daemon web tools
+    desk.ts                          # Desk window host seam (Phase 3 registers the real NSPanel)
   preload/index.ts                   # contextBridge API
   shared/
     protocol.ts                      # JSON-RPC 2.0 types + PROTOCOL_VERSION
@@ -265,6 +296,7 @@ src/
     library.ts                       # AssetKind, AssetFormat, LibraryAsset, AssetReference, AssetBacklink types
     models.ts                        # ModelId type
     web.ts                           # WebRenderRequest/WebRenderResult render round-trip types
+    desk.ts                          # Desk thread/block/segment/matcher/question types, DESK_TIMING, formatApproxDuration
   renderer/
     App.vue                          # Root shell — panel layout + view routing
     web/
@@ -620,6 +652,47 @@ MCP tools are the one exception to per-mode tool lists being about workspace fil
 **Proxy servers get sub-tool rules.** One tool name can front many operations selected by argument (`execute-tool {provider: linear, subtool: create-issue}`), so judging by tool name alone would let one classification govern both reads and writes. `routeSpecFromSchema` derives the routing arguments from the tool's input schema (leading string properties, with `Legacy alias for \`x\`` descriptions bound to the segment they stand in for — missing that is a bypass), `routeKeyFor` builds `linear/create-issue` from a call, and rules are stored scoped as `tool:provider[/subtool]` with the most specific match winning. A call whose route can't be determined never inherits a route-specific allowance.
 
 Edit mode is **one global, daemon-persisted setting** (`edit_mode`, validated through `parseEditMode` in `shared/session.ts`): loaded into the composer at boot on every surface (desktop and web), applied per-turn via `BondSendInput.editMode`, and mirrored live to all clients through the `edit_mode_changed` chunk when any device changes it. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
+
+## Desk
+
+**Sense is the eye. Desk is what's on your desk** — the work threads currently in flight, the re-entry note for each, and today's todos. It is built entirely on top of the existing Sense capture pipeline: **Desk reads Sense; Sense never knows Desk exists.** The only structural coupling is `desk_capture_links`, which keeps the dependency one-way instead of putting a Desk column on `sense_captures`. Either side can be rewritten independently.
+
+Full design and phasing: `plans/desk.md`. Phase 1 (two live Sense bugs) and Phase 2 (the whole daemon half + `bond desk` CLI) are implemented; the notch panel is Phase 3.
+
+### Product rules — hard lines, not v1 scope cuts
+
+1. **Desk describes. It never grades.** No productivity score, streak, daily target, app-usage bar chart, or comparison to yesterday. Every feature that would rank the day is permanently out of scope.
+2. **Time is always approximate.** `~1h 20m`, never `1h 23m` (`formatApproxDuration` in `shared/desk.ts`). Sense samples on an interval and sees nothing during a call or time away from the desk. The tilde is the panel telling you not to audit it.
+3. **Correction teaches at the narrowest safe scope.** A reassignment always fixes the block. It creates a durable rule only when a concrete resource pattern is named; otherwise it stores a one-resource attribution and asks nothing further.
+4. **Silence is local consent.** An ignored Ask commits the current block and never creates a reusable rule. The user is never blocked and never has to dismiss anything.
+
+### The two paths
+
+**Fast (`segmenter.ts`) — no model call, ever.** Poll capture metadata every 2s, checkpointed by `(captured_at, id)` in `desk_runtime`. App or title changes close one segment and open another. Known resources resolve against `desk_matchers` in one ordered lookup: `confirmed` first, then specificity, then field rank (`path > title > bundle > resource`), then oldest id.
+
+**Slow (`inference.ts`) — batched.** Every pending unknown collapses into ONE 200–500-token `runPiTextPrompt(prompt, 'fast')` request. **Never `runAgentConsult`** — a full agent session per batch is far more machinery and cost than a classification needs.
+
+### Three timescales, kept separate
+
+| Constant | Value | Job |
+|---|---|---|
+| Noise floor | ~3 min | Below this you are looking something up. **Never surface a named block this short.** |
+| Working sphere | ~11–12 min | The altitude Desk operates at. |
+| Session gap | ~60 min | Ends a thread. A five-minute coffee break pauses `presence_seconds`; it does not end anything. |
+
+Sense's 60-**second** idle threshold is a *presence* signal and a fourth, separate thing — it must never be reused for task boundaries.
+
+### Things that look like details and are not
+
+- **Titles and paths have never been through `redact()`.** Sense redacts only *extracted* text (`text-router.ts`); `window_title` is written raw at trigger time and gets away with it because Sense only ever displays it back to its owner. Desk **transmits** titles to a model and **persists** them in `evidence_json` and `example_json`, so `desk/signature.ts` redacts on the way out AND on the way in — including on back-fill, because the rows Sense already wrote are raw. `redact()` returns `string | null`; for a title, `null` drops the title, not the segment.
+- **The eligibility gate is two conditions.** `image_path IS NOT NULL OR image_purged_at IS NOT NULL` (the survived-the-blacklist-recheck predicate — `image_path` alone is wrong because `enforceStorageCap` purges oldest-first with *no age filter*), plus a **10-second age floor** so a capture whose `onCaptureReady` completed out of order is never leapfrogged by the checkpoint.
+- **`presence_seconds` is derived, not counted.** `min(gap_since_previous, 2 × captureIntervalSeconds)`, read from **settings** — `captureIntervalSeconds` is user-configurable, and hardcoding the default of 15 would quietly mis-scale every duration for anyone who changed it. A burst of six clipboard captures in ten seconds must not be credited as six intervals.
+- **Smoothing is over time, not a count.** Sense's cadence is irregular, so "the last eight captures" can span thirty seconds or several minutes. The rolling window sums *attributed segment presence time* and requires a clear majority — 40/35/25 is not a switch.
+- **`desk_matchers` UNIQUE excludes `thread_id`** — one pattern, one owner. That is what lets the authority matrix refuse to let inference steal a pattern, and it is why a thread merge cannot collide on matchers (only `desk_suppressions` can, and folding it must never *weaken* the suppression).
+
+### Retention
+
+Desk-derived screen data expires with Sense's `textRetentionDays`, swept from `runRetentionCleanup` in `sense/storage.ts`. **No raw title, path, example, summary, generated note, inferred attribution, or orphan inferred thread may outlive it.** What survives is what the user authored: named/renamed threads, todos, confirmed patterns, suppressions (an explicit rejection carrying only an opaque hash), and `user_note` values — including notes that **graduate** from an edited block note onto the thread just before the block expires.
 
 ## Image Storage
 

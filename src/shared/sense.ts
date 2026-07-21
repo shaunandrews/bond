@@ -66,6 +66,14 @@ export interface SenseStatus {
   storageBytes: number
 }
 
+/** A rectangle in CoreGraphics screen coordinates (origin top-left). */
+export interface WindowFrame {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 // Window detection output from bond-window-helper
 export interface DetectedWindow {
   name: string
@@ -73,6 +81,14 @@ export interface DetectedWindow {
   title: string
   active: boolean
   pid: number
+  /**
+   * `kCGWindowLayer`. The helper only emits layer-0 windows today, but the
+   * field is carried so a caller can tell rather than assume.
+   * Optional: a helper binary predating this field simply omits it.
+   */
+  layer?: number
+  /** `kCGWindowBounds`. Desk's fullscreen suppression is built on this. */
+  frame?: WindowFrame
 }
 
 // OCR output from bond-ocr-helper
