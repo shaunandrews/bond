@@ -8,6 +8,7 @@ import type { EditMode, AttachedImage } from '../../shared/session'
 import MessageBubble from '../components/MessageBubble.vue'
 import ChatInput from '../components/ChatInput.vue'
 import ApprovalPrompt from '../components/ApprovalPrompt.vue'
+import QuestionPrompt from '../components/QuestionPrompt.vue'
 import BondText from '../components/BondText.vue'
 import BondButton from '../components/BondButton.vue'
 import { PhArrowDown, PhX } from '@phosphor-icons/vue'
@@ -26,6 +27,10 @@ const connection = ref<ConnectionState>(props.client.state)
 const hasConnected = ref(false)
 
 const needsPairing = computed(() => !props.hasToken || connection.value === 'unpaired')
+
+const composerPlaceholder = computed<string | undefined>(() =>
+  chat.pendingQuestion.value ? 'Pick an option above, or type your own answer…' : undefined
+)
 
 // An installed Home Screen app can't be re-paired by opening a QR link — that
 // would land in Safari, whose storage it can't see. It pairs with a code.
@@ -266,12 +271,22 @@ function handleEditModeChange(mode: EditMode) {
               @respond="chat.respondToApproval"
             />
           </div>
+          <div v-if="chat.pendingQuestion.value" class="question-stack">
+            <QuestionPrompt
+              :questionId="chat.pendingQuestion.value.questionId"
+              :question="chat.pendingQuestion.value.question"
+              :header="chat.pendingQuestion.value.header"
+              :options="chat.pendingQuestion.value.options"
+              @answer="chat.answerQuestion"
+            />
+          </div>
           <ChatInput
             mobile
             :busy="chat.busy.value"
             :model="selectedModel"
             :editMode="chat.editMode.value"
             :contextUsage="chat.contextUsage.value"
+            :placeholder="composerPlaceholder"
             @submit="handleSend"
             @cancel="chat.cancel"
             @update:model="handleModelChange"
@@ -517,5 +532,11 @@ function handleEditModeChange(mode: EditMode) {
   flex-direction: column;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+/* A question is part of the composer flow, not a floating approval card.
+   Keep it attached to the composer and let its option dividers run full width. */
+.question-stack {
+  margin: 0;
 }
 </style>

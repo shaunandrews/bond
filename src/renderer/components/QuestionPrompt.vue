@@ -2,7 +2,6 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { PhX } from '@phosphor-icons/vue'
 import BondButton from './BondButton.vue'
-import BondText from './BondText.vue'
 import type { QuestionAnswer, QuestionOption } from '../../shared/questions'
 
 const props = defineProps<{
@@ -43,7 +42,7 @@ onUnmounted(() => {
 <template>
   <div ref="rootEl" class="question-prompt" role="group" :aria-labelledby="titleId" tabindex="-1">
     <div class="question-header">
-      <BondText :id="titleId" size="sm" weight="medium">{{ question }}</BondText>
+      <span :id="titleId" class="question-title">{{ question }}</span>
       <BondButton variant="ghost" size="sm" icon aria-label="Dismiss question" @click="dismiss" v-tooltip="'Dismiss'">
         <PhX :size="14" />
       </BondButton>
@@ -59,8 +58,8 @@ onUnmounted(() => {
         @click="choose(option)"
       >
         <span class="option-copy">
-          <BondText size="sm" weight="medium">{{ option.label }}</BondText>
-          <BondText v-if="option.description" size="xs" color="muted" class="option-description">{{ option.description }}</BondText>
+          <span class="option-label">{{ option.label }}</span>
+          <span v-if="option.description" class="option-description">{{ option.description }}</span>
         </span>
       </button>
     </div>
@@ -71,8 +70,8 @@ onUnmounted(() => {
 .question-prompt {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
+  gap: 0;
+  padding: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
@@ -82,12 +81,18 @@ onUnmounted(() => {
 }
 .question-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 10px 12px 8px;
 }
-.question-header > :first-child {
+.question-title {
   min-width: 0;
+  color: var(--color-text-primary);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
 }
 .question-options {
   display: flex;
@@ -96,8 +101,8 @@ onUnmounted(() => {
 .question-option {
   display: flex;
   width: 100%;
-  min-height: 40px;
-  padding: 9px 0;
+  min-height: 44px;
+  padding: 9px 12px;
   border: 0;
   border-top: 1px solid var(--color-border);
   border-radius: 0;
@@ -115,20 +120,32 @@ onUnmounted(() => {
 .option-copy {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
+}
+.option-label {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.25;
+}
+.option-description {
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 @media (max-width: 700px) {
   .question-prompt {
-    gap: 2px;
-    padding: 8px 12px;
     border-right: 0;
     border-left: 0;
     border-radius: 0;
   }
-  .option-description {
-    display: none;
+  .question-header {
+    padding: 12px 16px 8px;
+  }
+  .question-option {
+    padding-inline: 16px;
   }
 }
 </style>
