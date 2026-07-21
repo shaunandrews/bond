@@ -66,7 +66,7 @@ Renderer (Vue) → Electron IPC → Main Process → WebSocket over Unix socket 
 
 The daemon runs an HTTP + WebSocket server (`ws`) bound to the Unix socket `~/.bond/bond.sock`. `BondClient` (`src/shared/client.ts`) is the shared WebSocket client used by both the main process and the CLI.
 
-**Remote access**: the daemon also listens on TCP `0.0.0.0:3113` (`remote.port` setting; port reserved via Port Keeper), serving the `out/web` browser bundle over HTTP and the same JSON-RPC WebSocket protocol. Browsers on the LAN pair via a URL/QR from Settings → Remote access whose `#t=…` fragment carries a persistent token (`remote.token` setting); the WebSocket auth gate plus a same-origin upgrade check are the security boundary. The web client (`src/renderer/web/`) reuses the renderer components with a browser `window.bond` shim over a native WebSocket. Live multi-device sync rides on three chunks: `turn_start` (mirrors the sender's user message + activity ids on other clients), `approval_resolved` (flips pending approval prompts everywhere), and `edit_mode_changed` (mirrors the global permissions mode). The renderer drops turn-scoped chunks whose `turnId` it doesn't own — a straggler racing a cancel can't mint orphan activity rows. **The web client runs in an insecure context** (plain http on a LAN IP) — secure-context-only APIs (`crypto.randomUUID`, `navigator.clipboard`, service workers) are undefined there; any renderer code the web client can reach needs fallbacks (`uid()` in `useChat.ts` and `lib/clipboard.ts` are the pattern). All agent work runs through **Pi** (`@earendil-works/pi-coding-agent`), which resolves Bond's capability tiers against the user's connected subscription — Bond never calls a provider API directly. Pi session transcripts persist as JSONL under `~/Library/Application Support/bond/pi/sessions/`.
+**Remote access**: the daemon also listens on TCP `0.0.0.0:3113` (`remote.port` setting; port reserved via Port Keeper), serving the `out/web` browser bundle over HTTP and the same JSON-RPC WebSocket protocol. Browsers on the LAN pair via a URL/QR from Settings → Remote access whose `#t=…` fragment carries a persistent token (`remote.token` setting); the WebSocket auth gate plus a same-origin upgrade check are the security boundary. The web client (`src/renderer/web/`) reuses the renderer components with a browser `window.bond` shim over a native WebSocket. Live multi-device sync rides on four chunks: `turn_start` (mirrors the sender's user message + activity ids on other clients), `approval_resolved` (flips pending approval prompts everywhere), `question_resolved` (flips pending `ask_user_question` cards everywhere, including answers sent from `bond ask`), and `edit_mode_changed` (mirrors the global permissions mode). The renderer drops turn-scoped chunks whose `turnId` it doesn't own — a straggler racing a cancel can't mint orphan activity rows. **The web client runs in an insecure context** (plain http on a LAN IP) — secure-context-only APIs (`crypto.randomUUID`, `navigator.clipboard`, service workers) are undefined there; any renderer code the web client can reach needs fallbacks (`uid()` in `useChat.ts` and `lib/clipboard.ts` are the pattern). All agent work runs through **Pi** (`@earendil-works/pi-coding-agent`), which resolves Bond's capability tiers against the user's connected subscription — Bond never calls a provider API directly. Pi session transcripts persist as JSONL under `~/Library/Application Support/bond/pi/sessions/`.
 
 ### Daemon (`src/daemon/`)
 
@@ -80,6 +80,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `server.ts` | WebSocket server with thin JSON-RPC 2.0 dispatch (`bond.*`, `session.*`, `image.*`, `settings.*`, `skills.*`, `sense.*`, `collection.*`, `web.*`) — turn lifecycle lives in `turns.ts` |
 | `turns.ts` | Turn runner — serialized send lifecycle (a new send atomically aborts the running turn), active-turn ownership, broadcast/Sense transport seam |
 | `approvals.ts` | The single pending-approval registry — `requestId` resolves, `turnId` scopes bulk clears; clients reconstruct pending prompts from persisted activity rows (no replay) |
+| `questions.ts` | The single pending-question registry for `ask_user_question` — same shape as `approvals.ts` (`questionId` resolves, `turnId` scopes bulk clears), plus the `PendingQuestion` snapshot `question.pending` serves to the CLI |
 | `agent.ts` / `pi/runtime.ts` | Builds Bond context, runs Pi sessions, streams chunks, parks tool approvals via `approvals.ts` |
 | `pi/runtime.ts` | Pi session lifecycle, event streaming, edit-mode → tool/permission mapping, Bond memory tool registration, tier resolution, Pi OAuth |
 | `memory/service.ts` | Serialized automatic observer persistence + epoch observer/reflector hooks; `enqueueMemoryTask` runs deferred work (incl. epoch-rollover hooks) on the same queue so it never blocks a send |
@@ -89,6 +90,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `web/tools.ts` | Bond-owned Pi tools `web_search` + `fetch_content` — keyless, zero-config web access with a 15-min cache and polite batch spacing |
 | `web/broker.ts` | Render broker — parks tool promises, sends `web.requestRender` to the app, resolves on `web.renderReady`; errors clearly when no app is connected |
 | `web/extract.ts` | DuckDuckGo SERP parsing (linkedom) and page → markdown extraction (Readability + Turndown) over app-rendered HTML |
+| `questions/tools.ts` | The `ask_user_question` Pi tool — mints daemon-owned option ids, emits the `user_question` chunk, parks the turn on `questions.ts`'s registry until answered, resumed, or the turn is cleared |
 | `mcp/manager.ts` | Daemon-lifetime MCP connection registry — lazy connect, warm client reuse across turns, `tools/list` cache (invalidated by `list_changed` and on reconnect), idle disconnect, per-server error containment, promoted-tool schema prefetch (timeout-bounded), `shutdownMcp()` on the daemon exit path |
 | `mcp/client.ts` | One MCP server connection over the official `@modelcontextprotocol/sdk` — StdioClientTransport or StreamableHTTPClientTransport; resolves `keychain:` references just before connecting; keeps the last 4k of stderr (where a stdio server reports auth trouble) |
 | `mcp/config.ts` | `McpServerConfig` CRUD over the settings KV row `mcp.servers` (stdio + http, never a secret) + policy writes + the Context A8C preset |
@@ -164,7 +166,7 @@ Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from
 
 ### CLI (`bin/bond`)
 
-`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`, `mcp`, `library`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow; `library-helpers.ts` holds `library.ts`'s pure logic — id/number resolution, format detection — split out so it's unit-testable without triggering the CLI's `main()` on import). See the "Commands" section above for the common daemon workflows.
+`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`, `mcp`, `library`, `ask`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow; `library-helpers.ts` holds `library.ts`'s pure logic — id/number resolution, format detection — split out so it's unit-testable without triggering the CLI's `main()` on import; `ask-helpers.ts` is the same split for `ask.ts`). `bond ask` shows and answers Bond's pending `ask_user_question` — a bare number picks an option, `--text`/`--cancel` answer directly, `--json` (or a non-TTY caller with no explicit answer) prints the pending question as JSON and never blocks. See the "Commands" section above for the common daemon workflows.
 
 ## Project Structure
 
@@ -180,6 +182,8 @@ src/
     screenshot.ts                    # bond screenshot — capture Bond window
     mcp.ts                           # bond mcp — servers, trust policy, tool classification, Keychain secrets
     sense.ts                         # bond sense — CLI for Sense ambient awareness
+    ask.ts                           # bond ask — show/answer Bond's pending ask_user_question
+    ask-helpers.ts                   # Pure ask.ts logic (arg parsing, answer-line parsing, formatting)
   native/
     window-helper.m                  # CGWindowList native helper (Obj-C)
     ocr-helper.m                     # Apple Vision OCR native helper (Obj-C)
@@ -189,6 +193,7 @@ src/
     server.ts                        # WebSocket JSON-RPC server (thin dispatch)
     turns.ts                         # Turn runner — serialized send lifecycle
     approvals.ts                     # Single pending-approval registry
+    questions.ts                     # Single pending-question registry (ask_user_question)
     agent.ts                         # Bond prompt and Pi runtime entrypoint
      pi/runtime.ts                    # Pi session, event, and permission bridge
     sessions.ts                      # Session CRUD (SQLite)
@@ -213,6 +218,8 @@ src/
       tools.ts                       # web_search + fetch_content Pi tools (keyless, cached)
       broker.ts                      # Render broker for the app's hidden browser window
       extract.ts                     # DDG SERP parsing + Readability/Turndown markdown
+    questions/
+      tools.ts                       # ask_user_question Pi tool — parks the turn on questions.ts until answered
     agents/
       tools.ts                       # consult_agent Pi tool + roster prompt section
       definition.ts                  # AGENT.md parsing + validation
@@ -295,6 +302,7 @@ src/
       ViewShell.vue                  # View wrapper (sticky header/footer, scroll area)
       ChatInput.vue                  # Textarea + model/edit-mode selectors + attach + send/stop
       ApprovalPrompt.vue             # Tool approval prompt stacked above the composer
+      QuestionPrompt.vue             # ask_user_question prompt stacked above the composer, numbered + keyboard-answerable
       MessageBubble.vue              # Renders message variants incl. turn activity
       TurnActivity.vue               # Unified in-chat turn activity timeline
       MarkdownMessage.vue            # Markdown with syntax highlighting + copy
@@ -424,6 +432,11 @@ Focused tool approval request stacked above ChatInput while leaving the normal c
 - **Props:** `requestId: string`, `toolName: string`, `input: Record<string, unknown>`, `description?: string`, `context?: string` (background context)
 - **Events:** `respond(requestId: string, approved: boolean)`
 
+### QuestionPrompt
+Focused `ask_user_question` prompt stacked above ChatInput, same slot as ApprovalPrompt. Numbered options (daemon-minted ids); auto-focuses on mount so `1`–`9` answer immediately without stealing text input — the keydown handler ignores events from an `INPUT`/`TEXTAREA`/`contentEditable` target. `Escape` or the dismiss button cancels. Typing a custom answer into the composer while a question is pending resolves it directly (`useChat.ts`'s `submit()` intercept) rather than starting a new turn.
+- **Props:** `questionId: string`, `question: string`, `header?: string`, `options: QuestionOption[]`
+- **Events:** `answer(questionId: string, answer: QuestionAnswer)`
+
 ### MessageBubble
 Renders all message variants based on the `Message` union type. Delegates markdown to MarkdownMessage and turn activity rows to TurnActivity. User messages render attached images above text. Generated images (`meta`/`image`) render start-aligned with a loading placeholder until their base64 resolves.
 - **Props:** `msg: Message` — role/kind determines which variant renders
@@ -506,9 +519,9 @@ Dev-only component catalog with live previews and prop/event documentation. Acce
 ## Composables
 
 ### useChat(deps)
-All continuous transcript state and logic. Handles message streaming, persistence, tool approvals, turn activity, and HMR-safe state preservation. On submit, creates one `meta/activity` message for the turn. Thinking/tool/result/approval chunks update that activity message's `data.events`; assistant text still streams into normal Bond messages. Pending approvals are exposed separately so App can stack approval prompts above the composer while normal input remains usable.
-- **State:** `messages`, `busy`, `currentSessionId`, `pendingApprovals`
-- **Methods:** `submit()`, `cancel()`, `respondToApproval()`, `subscribe()`, `unsubscribe()`, `loadSession()`, `clearMessages()`, `persistMessages()`
+All continuous transcript state and logic. Handles message streaming, persistence, tool approvals, ask_user_question, turn activity, and HMR-safe state preservation. On submit, creates one `meta/activity` message for the turn. Thinking/tool/result/approval/question chunks update that activity message's `data.events`; assistant text still streams into normal Bond messages. Pending approvals and the pending question are exposed separately so App can stack their prompts above the composer while normal input remains usable. Composer text typed while a question is pending is intercepted in `submit()` as that question's custom answer (no new turn, no queue). Answering a question — by option, keyboard number, or typed text, on this device or another — also appends a normal `role: 'user'` bubble with the chosen text, so the exchange reads like an ordinary message in the transcript flow rather than staying buried in the (often-collapsed) activity row. That bubble's id is **derived** (`answer-<questionId>`), never minted: the daemon echoes `question_resolved` to every subscriber including the answerer (and the notification beats the RPC ack down the same socket), so all three append paths must write the same row or one answer becomes three. Answering mid-turn also **closes the current activity row and continues the turn in a fresh one** under the same `turnId` — the answer bubble appends at the end of the transcript, so without the split the live row would sit stranded above it and a working turn would read as dead. `completeTurn` finalizes every activity row carrying the turnId (not just the one it inserted), so a continuation row can't be stranded on "Working" by a client that dies mid-turn.
+- **State:** `messages`, `busy`, `currentSessionId`, `pendingApprovals`, `pendingQuestion`
+- **Methods:** `submit()`, `cancel()`, `respondToApproval()`, `answerQuestion()`, `subscribe()`, `unsubscribe()`, `loadSession()`, `clearMessages()`, `persistMessages()`
 
 
 ### useAutoScroll(containerRef)
@@ -584,7 +597,7 @@ type Message =
   | { id, role: 'meta', kind: 'tool', name, summary? }
   | { id, role: 'meta', kind: 'skill', name, args? }
   | { id, role: 'meta', kind: 'thinking', text, durationSec?, streaming: boolean } // legacy persisted rows only
-  | { id, role: 'meta', kind: 'activity', data: TurnActivityData }
+  | { id, role: 'meta', kind: 'activity', data: TurnActivityData } // events include thinking/tool/responding/approval/question/error — question carries the ask_user_question card (options, status, chosen answer)
   | { id, role: 'meta', kind: 'image', imageIds: string[], images?: AttachedImage[], alt? } // generated images (codex_generate_image)
   | { id, role: 'meta', kind: 'error', text }
   | { id, role: 'meta', kind: 'approval', requestId, toolName, input, title?, description?, status: 'pending' | 'approved' | 'denied' }
@@ -606,7 +619,7 @@ MCP tools are the one exception to per-mode tool lists being about workspace fil
 
 **Proxy servers get sub-tool rules.** One tool name can front many operations selected by argument (`execute-tool {provider: linear, subtool: create-issue}`), so judging by tool name alone would let one classification govern both reads and writes. `routeSpecFromSchema` derives the routing arguments from the tool's input schema (leading string properties, with `Legacy alias for \`x\`` descriptions bound to the segment they stand in for — missing that is a bypass), `routeKeyFor` builds `linear/create-issue` from a call, and rules are stored scoped as `tool:provider[/subtool]` with the most specific match winning. A call whose route can't be determined never inherits a route-specific allowance.
 
-Edit mode is **one global, daemon-persisted setting** (`edit_mode`, validated through `parseEditMode` in `shared/session.ts`): loaded into the composer at boot on every surface (desktop, web, quick chat), applied per-turn via `BondSendInput.editMode`, and mirrored live to all clients through the `edit_mode_changed` chunk when any device changes it. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
+Edit mode is **one global, daemon-persisted setting** (`edit_mode`, validated through `parseEditMode` in `shared/session.ts`): loaded into the composer at boot on every surface (desktop and web), applied per-turn via `BondSendInput.editMode`, and mirrored live to all clients through the `edit_mode_changed` chunk when any device changes it. `agent.ts` builds Bond's system prompt; `pi/runtime.ts` maps each edit mode to Pi's tool and permission configuration.
 
 ## Image Storage
 

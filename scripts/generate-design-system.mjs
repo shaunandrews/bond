@@ -54,7 +54,7 @@ function parseComponentApi(path) {
 }
 
 const componentInventory = execFileSync('git', ['ls-files', 'src/renderer/components'], { cwd: root, encoding: 'utf8' })
-  .trim().split('\n').filter(file => file.endsWith('.vue'))
+  .trim().split('\n').filter(file => file.endsWith('.vue') && existsSync(resolve(root, file)))
   .map(file => ({
     name: file.split('/').at(-1).replace(/\.vue$/, ''),
     file: file.replace('src/renderer/', ''),

@@ -5,6 +5,7 @@
  * 1. Request/response — client sends JsonRpcRequest, daemon replies with JsonRpcResponse
  * 2. Notification (no id) — daemon pushes events (e.g. bond.chunk) to clients
  * 3. Tool approval — daemon pushes tool_approval chunk, client responds via bond.approvalResponse
+ * 4. User question — daemon pushes user_question chunk, client responds via bond.questionResponse
  */
 
 // --- JSON-RPC base types ---
@@ -40,7 +41,7 @@ export type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotificat
 // --- Protocol version ---
 
 /** Bump on ANY breaking change to RpcMethods/RpcNotifications (rpc-schema.ts). Equality = compatibility. */
-export const PROTOCOL_VERSION = 4
+export const PROTOCOL_VERSION = 5
 
 // --- Error codes ---
 

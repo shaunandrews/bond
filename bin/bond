@@ -369,6 +369,11 @@ cmd_mcp() {
   node "$PROJECT_DIR/out/cli/mcp.js" "$@"
 }
 
+cmd_ask() {
+  _ensure_cli
+  node "$PROJECT_DIR/out/cli/ask.js" "$@"
+}
+
 _ensure_cli() {
   # Rebuild bundled CLI subcommands only when a source is newer than its output.
   # scripts/build.mjs owns the entry list so it can't drift from build:cli.
@@ -396,6 +401,7 @@ cmd_help() {
   echo -e "  ${G}media${N}              Manage media (list, add, info, open, rm, purge)"
   echo -e "  ${G}library${N}            Manage Library assets (list, add, open, reveal, rm, ref)"
   echo -e "  ${G}mcp${N}                Manage MCP servers (list, status, add, enable, tools)"
+  echo -e "  ${G}ask${N}                Show/answer Bond's pending question (option #, --text, --cancel, --json)"
   echo -e "  ${G}screenshot${N}         Capture Bond window to /tmp/bond-screenshot.png"
   echo -e "  ${G}test${N}               Run tests"
   echo -e "  ${G}help${N}               This message"
@@ -417,6 +423,7 @@ case "${1:-help}" in
   soul)    shift; cmd_soul "$@" ;;
   sense)   shift; cmd_sense "$@" ;;
   mcp)     shift; cmd_mcp "$@" ;;
+  ask)     shift; cmd_ask "$@" ;;
   screenshot|ss) cmd_screenshot "${2:-/tmp/bond-screenshot.png}" ;;
   test)    cmd_test ;;
   help|-h|--help) cmd_help ;;

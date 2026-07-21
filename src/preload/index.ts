@@ -33,8 +33,6 @@ const electronLocalMethods: ElectronBondSurface = {
   onConnectionRestored: (fn) => listen('bond:connectionRestored', fn),
   onAccentColor: (fn) => listen('bond:accentColor', fn),
   onWindowOpacity: (fn) => listen('bond:windowOpacity', fn),
-  onQuickChatInit: (fn) => listen('bond:quickChatInit', fn),
-  onQuickChatDismiss: (fn) => listen('bond:quickChatDismiss', fn),
 
   // Daemon proxies with main-side broadcast side effects — dedicated channels.
   setModel: (model) => ipcRenderer.invoke('bond:setModel', model),
@@ -46,8 +44,6 @@ const electronLocalMethods: ElectronBondSurface = {
   openSettings: () => ipcRenderer.invoke('window:openSettings'),
   openViewer: (filePath, format, title) => ipcRenderer.invoke('viewer:open', filePath, format, title),
   createSkillViaChat: (description) => ipcRenderer.invoke('settings:createSkillViaChat', description),
-  quickChatDismissed: () => ipcRenderer.invoke('quickChat:dismiss'),
-
   // Local filesystem + shell
   readFile: (filePath) => ipcRenderer.invoke('file:read', filePath),
   readLocalImage: (filePath) => ipcRenderer.invoke('image:readLocal', filePath),

@@ -9,6 +9,7 @@ function mockDeps(): ChatDeps {
     cancel: vi.fn().mockResolvedValue({ ok: true }),
     onChunk: vi.fn().mockReturnValue(vi.fn()),
     respondToApproval: vi.fn().mockResolvedValue({ ok: true }),
+    answerQuestion: vi.fn().mockResolvedValue({ ok: true }),
     getImages: vi.fn().mockResolvedValue([]),
     listTranscript: vi.fn().mockResolvedValue({ messages: [], nextBeforeSeq: null }),
     upsertTranscript: vi.fn().mockResolvedValue({ ok: true }),
@@ -268,6 +269,208 @@ describe('useChat continuous transcript', () => {
     const activity = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
     expect(activity && activity.role === 'meta' && activity.kind === 'activity' ? activity.data.events.at(-1) : undefined)
       .toMatchObject({ type: 'approval', status: 'denied' })
+  })
+
+  it('creates a pending question from a user_question chunk and resolves it via the option API', async () => {
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-1', question: 'Which approach?',
+      options: [
+        { id: 'q-1:0', number: 1, label: 'Balanced', description: 'Middle ground' },
+        { id: 'q-1:1', number: 2, label: 'Aggressive', description: 'Faster but riskier' },
+      ],
+    })
+
+    expect(chat.pendingQuestion.value).toMatchObject({ questionId: 'q-1', question: 'Which approach?' })
+    const activityBefore = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
+    expect(activityBefore).toMatchObject({ data: expect.objectContaining({ status: 'awaiting_question' }) })
+
+    await chat.answerQuestion('q-1', { kind: 'option', optionId: 'q-1:0', label: 'Balanced', number: 1 })
+
+    expect(deps.answerQuestion).toHaveBeenCalledWith('q-1', { kind: 'option', optionId: 'q-1:0', label: 'Balanced', number: 1 })
+    expect(chat.pendingQuestion.value).toBeNull()
+  })
+
+  it('flips a pending question when another client (or the CLI) resolves it', async () => {
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-2', question: 'Which?',
+      options: [{ id: 'q-2:0', number: 1, label: 'A', description: 'a' }, { id: 'q-2:1', number: 2, label: 'B', description: 'b' }],
+    })
+    expect(chat.pendingQuestion.value).not.toBeNull()
+
+    handler({ kind: 'question_resolved', questionId: 'q-2', answer: { kind: 'custom', text: 'do something else' } })
+
+    expect(chat.pendingQuestion.value).toBeNull()
+    expect(deps.answerQuestion).not.toHaveBeenCalled()
+    const activity = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
+    expect(activity && activity.role === 'meta' && activity.kind === 'activity' ? activity.data.events.at(-1) : undefined)
+      .toMatchObject({ type: 'question', status: 'answered', answer: { kind: 'custom', text: 'do something else' } })
+  })
+
+  it('a composer submit while a question is pending resolves it as a custom answer — no new turn, no queue', async () => {
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-3', question: 'Which?',
+      options: [{ id: 'q-3:0', number: 1, label: 'A', description: 'a' }, { id: 'q-3:1', number: 2, label: 'B', description: 'b' }],
+    })
+    const sendCallsBefore = (deps.send as ReturnType<typeof vi.fn>).mock.calls.length
+
+    await chat.submit('actually, do X instead')
+
+    expect(deps.answerQuestion).toHaveBeenCalledWith('q-3', { kind: 'custom', text: 'actually, do X instead' })
+    expect((deps.send as ReturnType<typeof vi.fn>).mock.calls.length).toBe(sendCallsBefore)
+    expect(chat.currentQueue.value).toHaveLength(0)
+  })
+
+  it('a turn error cancels a pending question', async () => {
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-4', question: 'Which?',
+      options: [{ id: 'q-4:0', number: 1, label: 'A', description: 'a' }, { id: 'q-4:1', number: 2, label: 'B', description: 'b' }],
+    })
+    expect(chat.pendingQuestion.value).not.toBeNull()
+
+    handler({ kind: 'raw_error', message: 'boom' })
+
+    expect(chat.pendingQuestion.value).toBeNull()
+    const activity = chat.messages.value.find(m => m.role === 'meta' && m.kind === 'activity')
+    const questionEvent = activity && activity.role === 'meta' && activity.kind === 'activity'
+      ? activity.data.events.find(e => e.type === 'question')
+      : undefined
+    expect(questionEvent).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('shows a picked option as a normal message in the transcript flow', async () => {
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-6', question: 'Which?',
+      options: [{ id: 'q-6:0', number: 1, label: 'Balanced', description: 'Middle ground' }],
+    })
+
+    await chat.answerQuestion('q-6', { kind: 'option', optionId: 'q-6:0', label: 'Balanced', number: 1 })
+
+    const bubble = chat.messages.value.find(m => m.role === 'user' && m.text === 'Balanced')
+    expect(bubble).toBeTruthy()
+  })
+
+  it('shows a typed custom answer as a normal message too', async () => {
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-7', question: 'Which?',
+      options: [{ id: 'q-7:0', number: 1, label: 'A', description: 'a' }],
+    })
+
+    await chat.submit('do X instead')
+
+    const bubble = chat.messages.value.find(m => m.role === 'user' && m.text === 'do X instead')
+    expect(bubble).toBeTruthy()
+  })
+
+  it('mirrors the answer as a message when another client resolves the question', async () => {
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-8', question: 'Which?',
+      options: [{ id: 'q-8:0', number: 1, label: 'A', description: 'a' }],
+    })
+
+    handler({ kind: 'question_resolved', questionId: 'q-8', answer: { kind: 'custom', text: 'do Y' } })
+
+    const bubble = chat.messages.value.find(m => m.role === 'user' && m.text === 'do Y')
+    expect(bubble).toBeTruthy()
+  })
+
+  it('appends exactly one answer bubble when the daemon echoes question_resolved back to the answerer', async () => {
+    // The daemon broadcasts to every subscriber including the sender, and
+    // that notification beats the RPC ack down the socket — this used to
+    // append twice here (and once more per other connected client).
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-10', question: 'Which?',
+      options: [{ id: 'q-10:0', number: 1, label: 'Balanced', description: 'Middle ground' }],
+    })
+
+    const answering = chat.answerQuestion('q-10', { kind: 'option', optionId: 'q-10:0', label: 'Balanced', number: 1 })
+    handler({ kind: 'question_resolved', questionId: 'q-10', answer: { kind: 'option', optionId: 'q-10:0', label: 'Balanced', number: 1 } })
+    await answering
+
+    expect(chat.messages.value.filter(m => m.role === 'user' && m.text === 'Balanced')).toHaveLength(1)
+  })
+
+  it('derives the answer bubble id from the questionId so every client writes one row', async () => {
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-11', question: 'Which?',
+      options: [{ id: 'q-11:0', number: 1, label: 'A', description: 'a' }],
+    })
+
+    handler({ kind: 'question_resolved', questionId: 'q-11', answer: { kind: 'custom', text: 'do Y' } })
+    handler({ kind: 'question_resolved', questionId: 'q-11', answer: { kind: 'custom', text: 'do Y' } })
+
+    const bubbles = chat.messages.value.filter(m => m.role === 'user' && m.text === 'do Y')
+    expect(bubbles).toHaveLength(1)
+    expect(bubbles[0].id).toBe('answer-q-11')
+  })
+
+  it('continues a live turn in a fresh activity row below the answer bubble', async () => {
+    // The answer bubble appends at the end of the transcript, so the original
+    // activity row would be stranded above it and the still-working turn read
+    // as dead. The turn continues in a new row under the same turnId.
+    await chat.submit('need a decision')
+    const turnId = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0].turnId as string
+    handler({
+      kind: 'user_question', questionId: 'q-12', question: 'Which?', turnId,
+      options: [{ id: 'q-12:0', number: 1, label: 'Balanced', description: 'Middle ground' }],
+    })
+
+    await chat.answerQuestion('q-12', { kind: 'option', optionId: 'q-12:0', label: 'Balanced', number: 1 })
+    handler({ kind: 'thinking_text', text: 'back to work', turnId })
+
+    const activities = chat.messages.value.filter(m => m.role === 'meta' && m.kind === 'activity')
+    expect(activities).toHaveLength(2)
+    expect(activities[0]).toMatchObject({ data: expect.objectContaining({ status: 'done' }) })
+    expect(activities[1]).toMatchObject({ data: expect.objectContaining({ status: 'working', turnId }) })
+    // …and the live row is the last thing in the transcript, below the answer.
+    expect(chat.messages.value.at(-1)?.id).toBe(activities[1].id)
+    expect(chat.messages.value.at(-2)?.id).toBe('answer-q-12')
+  })
+
+  it('does not split the activity row when the question is dismissed or the turn is over', async () => {
+    await chat.submit('need a decision')
+    const turnId = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0].turnId as string
+    handler({
+      kind: 'user_question', questionId: 'q-13', question: 'Which?', turnId,
+      options: [{ id: 'q-13:0', number: 1, label: 'A', description: 'a' }],
+    })
+
+    await chat.answerQuestion('q-13', { kind: 'cancelled' })
+    handler({ kind: 'thinking_text', text: 'proceeding anyway', turnId })
+
+    expect(chat.messages.value.filter(m => m.role === 'meta' && m.kind === 'activity')).toHaveLength(1)
+  })
+
+  it('does not add a visible message when the question is dismissed', async () => {
+    await chat.submit('need a decision')
+    handler({
+      kind: 'user_question', questionId: 'q-9', question: 'Which?',
+      options: [{ id: 'q-9:0', number: 1, label: 'A', description: 'a' }],
+    })
+    const before = chat.messages.value.length
+
+    await chat.answerQuestion('q-9', { kind: 'cancelled' })
+
+    expect(chat.messages.value.length).toBe(before)
+  })
+
+  it('drops a user_question chunk from a turn this client does not own', async () => {
+    await chat.submit('need a decision')
+
+    handler({
+      kind: 'user_question', questionId: 'q-5', question: 'Which?', turnId: 'someone-elses-turn',
+      options: [{ id: 'q-5:0', number: 1, label: 'A', description: 'a' }, { id: 'q-5:1', number: 2, label: 'B', description: 'b' }],
+    })
+
+    expect(chat.pendingQuestion.value).toBeNull()
   })
 
   // Regression: crypto.randomUUID only exists in secure contexts. The remote

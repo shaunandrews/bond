@@ -4,6 +4,7 @@ import { PhCaretRight, PhGear, PhPlus, PhTrash } from '@phosphor-icons/vue'
 import BondToolbar from './BondToolbar.vue'
 import ChatInput from './ChatInput.vue'
 import ApprovalPrompt from './ApprovalPrompt.vue'
+import QuestionPrompt from './QuestionPrompt.vue'
 import MessageBubble from './MessageBubble.vue'
 import TurnActivity from './TurnActivity.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
@@ -279,6 +280,21 @@ const components = [
     ],
     events: [
       { name: 'respond', payload: '(requestId: string, approved: boolean)', description: 'Allow or deny the request' },
+    ],
+  },
+  {
+    name: 'QuestionPrompt',
+    file: 'components/QuestionPrompt.vue',
+    category: 'Composed',
+    description: 'Focused ask_user_question prompt stacked above the composer — numbered, keyboard-answerable options.',
+    props: [
+      { name: 'questionId', type: 'string', description: 'Question identifier' },
+      { name: 'question', type: 'string', description: 'The full question text' },
+      { name: 'header', type: 'string', description: 'Optional short chip label' },
+      { name: 'options', type: 'QuestionOption[]', description: 'Numbered choices with label + description' },
+    ],
+    events: [
+      { name: 'answer', payload: '(questionId: string, answer: QuestionAnswer)', description: 'Option pick, custom text, or dismissal' },
     ],
   },
   {
@@ -625,6 +641,20 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed', 'Inventory
                 <!-- ApprovalPrompt -->
                 <template v-if="comp.name === 'ApprovalPrompt'">
                   <ApprovalPrompt requestId="demo-approval" toolName="Bash" :input="{ command: 'npm run test:run' }" description="Run the complete test suite" @respond="() => {}" />
+                </template>
+
+                <!-- QuestionPrompt -->
+                <template v-if="comp.name === 'QuestionPrompt'">
+                  <QuestionPrompt
+                    questionId="demo-question"
+                    question="Which reasoning level should this turn use?"
+                    header="Reasoning"
+                    :options="[
+                      { id: 'demo-question:0', number: 1, label: 'Balanced (Recommended)', description: 'Good default for most tasks' },
+                      { id: 'demo-question:1', number: 2, label: 'High', description: 'Slower, better for hard problems' },
+                    ]"
+                    @answer="() => {}"
+                  />
                 </template>
 
                 <!-- MessageBubble -->

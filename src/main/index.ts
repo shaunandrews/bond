@@ -11,7 +11,6 @@ import { RPC_METHOD_NAMES, type DispatchableMethod } from '../shared/rpc-schema'
 import { initSense, destroySense } from './sense'
 import { initWeb, destroyWeb } from './web'
 import { initTray, destroyTray } from './tray'
-import { initQuickChat, destroyQuickChat } from './quick-chat'
 import { registerWindow, registerSessionWindow, routeChunk, broadcast } from './window-router'
 import type { TaggedChunk } from '../shared/stream'
 
@@ -282,7 +281,7 @@ function createWindow(): void {
   // Register mainWindow with the window router for chunk routing and broadcasts
   registerWindow(mainWindow)
 
-  // Route chunks via the window router (supports quick chat and future multi-window)
+  // Route chunks via the window router for the main and auxiliary windows.
   client.onChunk((chunk: TaggedChunk) => {
     routeChunk(chunk)
   })
@@ -586,7 +585,7 @@ async function attemptReconnect(): Promise<void> {
       await ensureDaemon()
       // Reconnect the SAME client instance: its token provider re-reads the
       // restarted daemon's fresh token, and every registered push listener
-      // (chunks, sense, web renders, tray, quick chat) survives. Recreating
+      // (chunks, sense, web renders, and tray) survives. Recreating
       // the client here once silently severed all of them until app relaunch.
       await client.reconnect()
       isReconnecting = false
@@ -631,8 +630,6 @@ app.whenReady().then(async () => {
   initSense(client)
   initWeb(client)
   initTray(client)
-  initQuickChat(client)
-
   createWindow()
   try {
     simulationActive = (await client.sandboxStatus()).sandboxed
@@ -794,7 +791,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   isQuitting = true
-  destroyQuickChat()
   destroyTray()
   destroySense()
   destroyWeb()

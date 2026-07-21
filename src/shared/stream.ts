@@ -1,4 +1,5 @@
 import type { AttachedImage, EditMode } from './session'
+import type { QuestionAnswer, QuestionOption } from './questions'
 
 export interface BondSendInput {
   text: string
@@ -34,6 +35,10 @@ export type BondStreamChunk =
   | { kind: 'approval_resolved'; requestId: string; approved: boolean }
   /** The global edit mode setting changed (possibly on another device). */
   | { kind: 'edit_mode_changed'; editMode: EditMode }
+  /** The agent asked a structured question and is parked until it's answered. */
+  | { kind: 'user_question'; questionId: string; question: string; header?: string; options: QuestionOption[] }
+  /** A pending question was answered (possibly by another client or the CLI). */
+  | { kind: 'question_resolved'; questionId: string; answer: QuestionAnswer }
 
 /** Chunk tagged with global turn/epoch metadata for renderer routing. */
 export type TaggedChunk = BondStreamChunk & {

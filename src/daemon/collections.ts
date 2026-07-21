@@ -30,7 +30,6 @@ interface ItemRow {
   id: string
   collection_id: string
   data: string
-  project_id: string | null
   sort_order: number
   display_number: number
   created_at: string
@@ -88,7 +87,7 @@ function rowToComment(r: CommentRow): ItemComment {
 // --- Collection CRUD ---
 
 const COLLECTION_COLS = 'id, name, icon, schema, features, issue_prefix, archived, created_at, updated_at'
-const ITEM_COLS = 'id, collection_id, data, project_id, sort_order, display_number, created_at, updated_at'
+const ITEM_COLS = 'id, collection_id, data, sort_order, display_number, created_at, updated_at'
 
 export function listCollections(): Collection[] {
   const db = getDb()
@@ -207,8 +206,8 @@ export function addItem(collectionId: string, data: Record<string, unknown>): Co
     const counter = (db.prepare('SELECT next_display_number as n FROM collections WHERE id = ?').get(collectionId) as { n: number }).n
     db.prepare('UPDATE collections SET next_display_number = ?, updated_at = ? WHERE id = ?').run(counter + 1, now, collectionId)
     const maxOrder = (db.prepare('SELECT COALESCE(MAX(sort_order), -1) as m FROM collection_items WHERE collection_id = ?').get(collectionId) as { m: number }).m
-    db.prepare('INSERT INTO collection_items (id, collection_id, data, project_id, sort_order, display_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, collectionId, JSON.stringify(data), null, maxOrder + 1, counter, now, now)
+    db.prepare('INSERT INTO collection_items (id, collection_id, data, sort_order, display_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, collectionId, JSON.stringify(data), maxOrder + 1, counter, now, now)
     return { displayNumber: counter, sortOrder: maxOrder + 1 }
   })
   const { displayNumber, sortOrder } = insert()

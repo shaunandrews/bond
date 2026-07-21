@@ -54,8 +54,6 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     onViewerFile: noopDisposer,
     onCreateSkill: noopDisposer,
     onFullscreenChanged: noopDisposer,
-    onQuickChatInit: noopDisposer,
-    onQuickChatDismiss: noopDisposer,
 
     // Broadcast-side-effect trio: call the daemon, then emit locally like the
     // desktop main process broadcasts to its windows.
@@ -80,7 +78,6 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     openSettings: async () => {},
     openViewer: async () => {},
     createSkillViaChat: async () => {},
-    quickChatDismissed: async () => {},
     readFile: async () => null,
     readLocalImage: async () => null,
     captureScreenshot: async () => '',

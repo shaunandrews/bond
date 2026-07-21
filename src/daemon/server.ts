@@ -32,6 +32,8 @@ import {
 } from './agent'
 import { getPiAuthStatus, startPiOAuth } from './pi/runtime'
 import { resolveApproval } from './approvals'
+import { resolveQuestion, currentPendingQuestion } from './questions'
+import { parseQuestionAnswer } from '../shared/questions'
 import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, abortActiveTurnForShutdown } from './turns'
 import { setRenderTransport, onRenderReady } from './web/broker'
 import {
@@ -418,6 +420,26 @@ const handlers: RpcHandlers = {
     return { ok: true }
   },
 
+  'bond.questionResponse': (params) => {
+    const p = raw(params)
+    const questionId = getStringParam(p, 'questionId')
+    if (!questionId) throw new RpcError(RPC_INVALID_PARAMS, 'questionId is required')
+    let answer
+    try {
+      answer = parseQuestionAnswer(getParam(p, 'answer'))
+    } catch (error) {
+      throw new RpcError(RPC_INVALID_PARAMS, error instanceof Error ? error.message : 'invalid answer')
+    }
+    // An unknown questionId still resolves and broadcasts — same forgiving
+    // shape as approvals; the broadcast is what un-sticks a stale card on
+    // another device that already saw this question answered.
+    resolveQuestion(questionId, answer)
+    broadcastChunk(undefined, { kind: 'question_resolved', questionId, answer })
+    return { ok: true }
+  },
+
+  'question.pending': () => currentPendingQuestion(),
+
   // --- Remote access (LAN web server) ---
   'remote.status': () => getRemoteStatus(),
 
@@ -565,7 +587,7 @@ const handlers: RpcHandlers = {
     }
     const editMode = parseEditMode(rawMode)
     setSetting('edit_mode', JSON.stringify(editMode))
-    // One global mode: every live client (desktop, phone, quick chat)
+    // One global mode: every live client (desktop and phone)
     // mirrors the change immediately instead of drifting until reload.
     broadcastChunk(undefined, { kind: 'edit_mode_changed', editMode })
     return { ok: true }

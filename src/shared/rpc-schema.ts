@@ -21,6 +21,7 @@ import type {
   SessionMessage,
 } from './session'
 import type { BondSendInput, TaggedChunk } from './stream'
+import type { PendingQuestion, QuestionAnswer } from './questions'
 import type { TranscriptMessage, TranscriptPage } from './transcript'
 import type { SenseSettings, SenseState, SessionDebrief } from './sense'
 import type {
@@ -212,7 +213,11 @@ export interface RpcMethods {
   'bond.send': { params: Partial<BondSendInput> & { sessionId?: string }; result: BondSendResult }
   'bond.cancel': { params: { sessionId?: string } | void; result: { ok: true } }
   'bond.approvalResponse': { params: { requestId: string; approved: boolean }; result: { ok: true } }
+  'bond.questionResponse': { params: { questionId: string; answer: QuestionAnswer }; result: { ok: true } }
   'bond.ping': { params: void; result: { ok: true; protocolVersion: number } }
+
+  // Ask-user-question (parked pending question introspection for the CLI)
+  'question.pending': { params: void; result: PendingQuestion | null }
 
   // Remote access (LAN web server). The code EXCHANGE is not here — it runs
   // over plain HTTP (POST /api/pair) because an unpaired client cannot open
@@ -410,7 +415,9 @@ export const RPC_METHOD_NAMES = [
   'bond.send',
   'bond.cancel',
   'bond.approvalResponse',
+  'bond.questionResponse',
   'bond.ping',
+  'question.pending',
   'remote.status',
   'remote.createPairingCode',
   'remote.listDevices',

@@ -5,6 +5,7 @@ import type { BondStreamChunk } from '../shared/stream'
 import { parseEditMode } from '../shared/session'
 import { runBondQuery, buildAgentContextEnvelope } from './agent'
 import { clearTurnApprovals } from './approvals'
+import { clearTurnQuestions } from './questions'
 import { ensureActiveEpoch } from './epochs'
 import { saveImages } from './images'
 import { enqueueMemoryTask, finalObserverHook, memoryFlushHook, scheduleEpochObservation } from './memory/service'
@@ -93,6 +94,7 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
     if (prev) {
       prev.ac.abort()
       clearTurnApprovals(prev.turnId)
+      clearTurnQuestions(prev.turnId)
       await prev.settled.catch(() => {})
       if (active === prev) active = null
     }
@@ -235,6 +237,7 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       void queryPromise.then((succeeded) => {
         if (active === entry) active = null
         clearTurnApprovals(turnId)
+        clearTurnQuestions(turnId)
         broadcast(sessionId, { kind: 'query_end', succeeded }, tags)
         settle()
       })
@@ -244,6 +247,7 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       // Startup failed before the query launched (epoch/insert threw).
       if (active === entry) active = null
       clearTurnApprovals(turnId)
+      clearTurnQuestions(turnId)
       settle()
       throw error
     }
@@ -257,6 +261,7 @@ export async function cancelActiveTurn(sessionId?: string): Promise<void> {
   if (sessionId && entry.sessionId !== sessionId) return
   entry.ac.abort()
   clearTurnApprovals(entry.turnId)
+  clearTurnQuestions(entry.turnId)
   await entry.settled.catch(() => {})
   if (active === entry) active = null
 }
@@ -271,6 +276,7 @@ export async function settleTurns(): Promise<void> {
     if (entry) {
       entry.ac.abort()
       clearTurnApprovals(entry.turnId)
+      clearTurnQuestions(entry.turnId)
       await entry.settled.catch(() => {})
       if (active === entry) active = null
     }
@@ -285,6 +291,7 @@ export function abortActiveTurnForShutdown(): void {
   if (active) {
     active.ac.abort()
     clearTurnApprovals(active.turnId)
+    clearTurnQuestions(active.turnId)
     active = null
   }
 }

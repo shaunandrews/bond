@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import QuickChat from './components/QuickChat.vue'
 import { useChat } from './composables/useChat'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useCollections } from './composables/useCollections'
@@ -14,6 +13,7 @@ import MessageBubble from './components/MessageBubble.vue'
 import MissionBriefing from './components/MissionBriefing.vue'
 import ChatInput from './components/ChatInput.vue'
 import ApprovalPrompt from './components/ApprovalPrompt.vue'
+import QuestionPrompt from './components/QuestionPrompt.vue'
 import LibraryView from './components/LibraryView.vue'
 import CollectionsView from './components/CollectionsView.vue'
 import SensePanelView from './components/SensePanelView.vue'
@@ -25,8 +25,6 @@ import BondPanelHandle from './components/BondPanelHandle.vue'
 import FieldManual from './components/FieldManual.vue'
 import { shouldPersistOnUnload } from './lib/persistGuard'
 import { playTypewriter } from './lib/typewriter'
-
-const isQuickChatMode = new URLSearchParams(window.location.search).get('mode') === 'quick-chat'
 
 const chat = useChat()
 const collections = useCollections()
@@ -62,6 +60,7 @@ const revealStreaming = ref(false)
 const onboardingActive = ref(false)
 const ONBOARDING_OPEN_STATUSES = ['pending', 'education']
 const composerPlaceholder = computed<string | undefined>(() => {
+  if (chat.pendingQuestion.value) return 'Pick an option above, or type your own answer…'
   if (!onboardingActive.value) return undefined
   const hasAnswered = chat.messages.value.some(msg => msg.role === 'user')
   return hasAnswered ? 'Your answer…' : 'Your name…'
@@ -396,8 +395,6 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <QuickChat v-if="isQuickChatMode" />
-  <template v-else>
   <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
     <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="420">
       <div class="main-panel-wrap">
@@ -450,6 +447,15 @@ onUnmounted(() => {
                 :description="approval.description"
                 :context="approvalContext()"
                 @respond="chat.respondToApproval"
+              />
+            </div>
+            <div v-if="chat.pendingQuestion.value" class="approval-stack">
+              <QuestionPrompt
+                :questionId="chat.pendingQuestion.value.questionId"
+                :question="chat.pendingQuestion.value.question"
+                :header="chat.pendingQuestion.value.header"
+                :options="chat.pendingQuestion.value.options"
+                @answer="chat.answerQuestion"
               />
             </div>
             <!-- .composer-clip clips the offstage composer so its transformed
@@ -540,7 +546,6 @@ onUnmounted(() => {
   </nav>
 
   <FieldManual :open="fieldManualOpen" @close="fieldManualOpen = false" />
-  </template>
 </template>
 
 <style>

@@ -20,6 +20,7 @@
 import type { DispatchableMethod, RpcParams, RpcResult, CollectionUpdates, McpPolicyWire, McpServerConfigWire } from './rpc-schema'
 import type { BondSendInput, TaggedChunk } from './stream'
 import type { AttachedImage, EditMode, FieldDefInput, ImageMediaType } from './session'
+import type { QuestionAnswer } from './questions'
 import type { TranscriptMessage } from './transcript'
 import type { SenseSettings } from './sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
@@ -46,6 +47,9 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     cancel: (sessionId?: string) => invoke('bond.cancel', sessionId ? { sessionId } : undefined),
     respondToApproval: (requestId: string, approved: boolean) =>
       invoke('bond.approvalResponse', { requestId, approved }),
+    answerQuestion: (questionId: string, answer: QuestionAnswer) =>
+      invoke('bond.questionResponse', { questionId, answer }),
+    pendingQuestion: () => invoke('question.pending'),
     subscribe: (sessionId?: string) => invoke('bond.subscribe', sessionId ? { sessionId } : undefined),
     unsubscribe: (sessionId?: string) => invoke('bond.unsubscribe', sessionId ? { sessionId } : undefined),
 
@@ -216,8 +220,6 @@ export interface ElectronBondSurface {
   onConnectionRestored(fn: () => void): () => void
   onAccentColor(fn: (hex: string) => void): () => void
   onWindowOpacity(fn: (opacity: number) => void): () => void
-  onQuickChatInit(fn: (data: { senseApps: string[] }) => void): () => void
-  onQuickChatDismiss(fn: () => void): () => void
 
   // Daemon proxies whose desktop main handler broadcasts to all windows after
   // the call — kept on hand-written per-method channels.
@@ -230,8 +232,6 @@ export interface ElectronBondSurface {
   openSettings(): Promise<void>
   openViewer(filePath: string, format?: 'markdown' | 'plaintext', title?: string): Promise<void>
   createSkillViaChat(description: string): Promise<void>
-  quickChatDismissed(): Promise<void>
-
   // Local filesystem + shell
   readFile(filePath: string): Promise<string | null>
   readLocalImage(filePath: string): Promise<string | null>

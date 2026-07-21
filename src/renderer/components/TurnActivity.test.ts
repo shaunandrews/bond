@@ -124,4 +124,35 @@ describe('TurnActivity', () => {
     await wrapper.find('.approval-actions button').trigger('click')
     expect(wrapper.emitted('approve')?.[0]).toEqual(['req-1', true])
   })
+
+  it('renders a pending question read-only, with no action buttons', async () => {
+    const wrapper = mount(TurnActivity, { props: { data: activity({ status: 'awaiting_question', expanded: true, events: [
+      { id: 'q-1', type: 'question', label: 'Question asked', ts: Date.now(), questionId: 'q-1', question: 'Which approach?', options: [
+        { id: 'q-1:0', number: 1, label: 'Balanced', description: 'Middle ground' },
+      ], status: 'pending' },
+    ] }) } })
+    expect(wrapper.text()).toContain('Question pending')
+    await wrapper.find('.event-row').trigger('click')
+    expect(wrapper.text()).toContain('1. Balanced')
+    expect(wrapper.text()).toContain('Waiting for an answer')
+    expect(wrapper.find('.approval-actions').exists()).toBe(false)
+  })
+
+  it('renders an answered question with the chosen option', async () => {
+    const wrapper = mount(TurnActivity, { props: { data: activity({ status: 'working', expanded: true, events: [
+      { id: 'q-2', type: 'question', label: 'Question asked', ts: Date.now(), endTs: Date.now(), questionId: 'q-2', question: 'Which?', options: [
+        { id: 'q-2:0', number: 1, label: 'Balanced', description: 'Middle ground' },
+      ], status: 'answered', answer: { kind: 'option', optionId: 'q-2:0', label: 'Balanced', number: 1 } },
+    ] }) } })
+    await wrapper.find('.event-row').trigger('click')
+    expect(wrapper.text()).toContain('✓ 1. Balanced')
+  })
+
+  it('renders a cancelled question as dismissed', async () => {
+    const wrapper = mount(TurnActivity, { props: { data: activity({ status: 'working', expanded: true, events: [
+      { id: 'q-3', type: 'question', label: 'Question asked', ts: Date.now(), endTs: Date.now(), questionId: 'q-3', question: 'Which?', options: [], status: 'cancelled' },
+    ] }) } })
+    await wrapper.find('.event-row').trigger('click')
+    expect(wrapper.text()).toContain('Dismissed')
+  })
 })

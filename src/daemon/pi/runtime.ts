@@ -19,6 +19,7 @@ import { createMemoryExtensionFactory, MEMORY_TOOL_NAMES } from '../memory/tools
 import { createWebExtensionFactory, WEB_TOOL_NAMES } from '../web/tools'
 import { createAgentExtensionFactory, AGENT_TOOL_NAMES } from '../agents/tools'
 import { createMcpExtensionFactory, MCP_TOOL_NAMES } from '../mcp/tools'
+import { createQuestionExtensionFactory, QUESTION_TOOL_NAMES } from '../questions/tools'
 import { mcpProxyAvailable } from '../mcp/config'
 import { promotedToolInfos } from '../mcp/manager'
 import { createOnboardingExtensionFactory, getFirstRunStatus, ONBOARDING_STAGE_TOOLS, type BondPanelId, type OnboardingToolHooks } from '../onboarding'
@@ -26,6 +27,7 @@ import type { OnboardingFirstRunStatus } from '../../shared/onboarding'
 import { getDataDir } from '../paths'
 import { getMessages } from '../sessions'
 import { registerApproval, clearTurnApprovals, type ApprovalResult } from '../approvals'
+import { clearTurnQuestions } from '../questions'
 
 function getSessionDir(): string {
   const dir = join(getDataDir(), 'pi', 'sessions')
@@ -322,7 +324,9 @@ export function toolsForEditMode(
   // policy in mcp/tools.ts decides what runs silently and what prompts.
   const mcpProxy = options.mcpProxy === false ? [] : MCP_TOOL_NAMES
   const mcpTools = [...mcpProxy, ...(options.promotedMcpTools ?? [])]
-  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...AGENT_TOOL_NAMES, ...mcpTools, ...imageGenTools, ...onboardingTools]
+  // Asking a question touches no workspace files, so it stays available in
+  // readonly and scoped modes too — same reasoning as the web tools above.
+  return [...workspaceTools, ...MEMORY_TOOL_NAMES, ...WEB_TOOL_NAMES, ...AGENT_TOOL_NAMES, ...mcpTools, ...imageGenTools, ...onboardingTools, ...QUESTION_TOOL_NAMES]
 }
 
 /**
@@ -339,6 +343,7 @@ export const REQUIRED_BOND_TOOL_NAMES: string[] = [
   ...AGENT_TOOL_NAMES,
   ...IMAGEGEN_TOOL_NAMES,
   ...Object.values(ONBOARDING_STAGE_TOOLS).flat(),
+  ...QUESTION_TOOL_NAMES,
 ]
 
 /** Run one Bond turn through Pi and persist it in Bond-owned Pi JSONL storage. */
@@ -394,6 +399,11 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
         abortSignal: options.abortSignal,
         editMode,
         promoted: promotedMcpTools,
+      }),
+      createQuestionExtensionFactory({
+        turnId: options.turnId,
+        onChunk: options.onChunk,
+        abortSignal: options.abortSignal,
       }),
       codexImageGenExtension,
       createOnboardingExtensionFactory({
@@ -487,6 +497,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
 
   const abort = () => {
     clearTurnApprovals(options.turnId)
+    clearTurnQuestions(options.turnId)
     void session.abort()
   }
   options.abortSignal.addEventListener('abort', abort, { once: true })
@@ -516,6 +527,7 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
   } finally {
     options.abortSignal.removeEventListener('abort', abort)
     clearTurnApprovals(options.turnId)
+    clearTurnQuestions(options.turnId)
     unsubscribe()
     session.dispose()
   }

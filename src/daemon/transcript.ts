@@ -397,7 +397,7 @@ export function startTurn(turnId: string, epochId: string): void {
   })()
 }
 
-const LIVE_ACTIVITY_STATUSES = ['working', 'responding', 'awaiting_approval']
+const LIVE_ACTIVITY_STATUSES = ['working', 'responding', 'awaiting_approval', 'awaiting_question']
 
 /**
  * Flip a still-live activity row to its terminal status. The live-status
@@ -420,6 +420,7 @@ function finalizeActivityMessage(db: Database.Database, activityMessageId: strin
     if (!raw || typeof raw !== 'object') continue
     const evt = raw as Record<string, unknown>
     if (evt.type === 'approval' && evt.status === 'pending') evt.status = 'cancelled'
+    if (evt.type === 'question' && evt.status === 'pending') evt.status = 'cancelled'
     if (typeof evt.endTs !== 'number' && (evt.type === 'thinking' || evt.type === 'tool' || evt.type === 'responding')) evt.endTs = endedAt
   }
   db.prepare('UPDATE messages SET data = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(data), completedAt, row.id)
@@ -450,8 +451,26 @@ export function completeTurn(input: CompleteTurnInput): void {
       `).run(input.contextTokens ?? null, input.contextWindow ?? null, row.epoch_id)
     }
 
-    finalizeActivityMessage(db, row.activity_message_id, status, completedAt)
+    for (const id of activityMessageIdsForTurn(db, input.turnId, row.activity_message_id)) {
+      finalizeActivityMessage(db, id, status, completedAt)
+    }
   })()
+}
+
+/**
+ * Every activity row belonging to a turn, starting with the one the daemon
+ * inserted. A turn can grow extra rows: answering an ask_user_question mid-turn
+ * closes the current row and the client mints a continuation one so the live
+ * row stays below the answer. Those rows are client-written (turn_id column
+ * unset), so match on the turnId carried in the row's own data — otherwise a
+ * client that dies before query_end leaves one pulsing "Working…" forever.
+ */
+function activityMessageIdsForTurn(db: Database.Database, turnId: string, primaryId: string): string[] {
+  const rows = db.prepare(
+    "SELECT id FROM messages WHERE role = 'meta' AND kind = 'activity' AND json_extract(data, '$.turnId') = ? ORDER BY seq ASC",
+  ).all(turnId) as Array<{ id: string }>
+  const ids = rows.map(r => r.id)
+  return ids.includes(primaryId) ? ids : [primaryId, ...ids]
 }
 
 /**

@@ -15,7 +15,7 @@ const PREVIEW_LENGTH = 600
 watch(() => props.data.expanded, v => { if (v) expanded.value = true })
 
 const nowTick = ref(Date.now())
-const active = computed(() => ['working', 'responding', 'awaiting_approval'].includes(props.data.status))
+const active = computed(() => ['working', 'responding', 'awaiting_approval', 'awaiting_question'].includes(props.data.status))
 // 500ms tick so the 1s-resolution counter never visibly skips a second. The
 // interval exists only while the row is live — a loaded transcript page holds
 // dozens of completed rows and must not keep dozens of timers firing forever.
@@ -33,11 +33,13 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 const elapsedSec = computed(() => Math.max(0, Math.round(((props.data.endedAt ?? nowTick.value) - props.data.startedAt) / 1000)))
 const toolCount = computed(() => props.data.events.filter(e => e.type === 'tool').length)
 const approvalPending = computed(() => props.data.events.some(e => e.type === 'approval' && e.status === 'pending'))
+const questionPending = computed(() => props.data.events.some(e => e.type === 'question' && e.status === 'pending'))
 const failed = computed(() => props.data.status === 'failed' || props.data.events.some(e => e.type === 'error' || (e.type === 'tool' && e.failed)))
 const last = computed(() => props.data.events[props.data.events.length - 1])
 
 function statusLabel() {
   if (props.data.status === 'awaiting_approval') return 'Approval needed'
+  if (props.data.status === 'awaiting_question') return 'Question pending'
   if (props.data.status === 'failed') return 'Failed'
   if (props.data.status === 'cancelled') return 'Cancelled'
   if (props.data.status === 'done') {
@@ -65,7 +67,7 @@ function time(ts: number) {
 }
 
 function hasDetail(evt: TurnActivityEvent) {
-  return evt.type === 'thinking' || evt.type === 'tool' || evt.type === 'approval' || evt.type === 'error'
+  return evt.type === 'thinking' || evt.type === 'tool' || evt.type === 'approval' || evt.type === 'question' || evt.type === 'error'
 }
 
 function eventEnd(evt: TurnActivityEvent): number | undefined {
@@ -102,7 +104,7 @@ function eventTone(evt: TurnActivityEvent) {
 </script>
 
 <template>
-  <div class="turn-activity" :class="{ active, failed, 'needs-approval': approvalPending }" role="status">
+  <div class="turn-activity" :class="{ active, failed, 'needs-approval': approvalPending || questionPending }" role="status">
     <button class="activity-compact" @click="expanded = !expanded">
       <span v-if="active" class="activity-dot" />
       <PhWarningCircle v-else-if="failed" :size="13" class="text-err" />
@@ -143,6 +145,19 @@ function eventTone(evt: TurnActivityEvent) {
             </div>
             <div v-else class="approval-status">{{ evt.status === 'approved' ? 'Allowed' : evt.status === 'denied' ? 'Denied' : 'Cancelled' }}</div>
           </template>
+          <template v-else-if="evt.type === 'question'">
+            <!-- Read-only: the stacked QuestionPrompt above the composer is the
+                 single actionable surface, so the number-key handler stays
+                 unambiguous. -->
+            <div class="question-options-list">
+              <div v-for="option in evt.options" :key="option.id" class="question-option-row">{{ option.number }}. {{ option.label }}</div>
+            </div>
+            <div v-if="evt.status === 'pending'" class="approval-status">Waiting for an answer</div>
+            <div v-else-if="evt.status === 'answered' && evt.answer" class="approval-status">
+              {{ evt.answer.kind === 'option' ? `✓ ${evt.answer.number}. ${evt.answer.label}` : evt.answer.kind === 'custom' ? `✎ "${evt.answer.text}"` : '' }}
+            </div>
+            <div v-else class="approval-status">Dismissed</div>
+          </template>
           <template v-else-if="evt.type === 'error'">
             <pre>{{ evt.text }}</pre>
           </template>
@@ -173,6 +188,8 @@ function eventTone(evt: TurnActivityEvent) {
 .detail-toggle { margin-top: 5px; padding: 0; border: 0; background: none; color: var(--color-accent); font: inherit; cursor: pointer; }
 .detail-toggle:hover { text-decoration: underline; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font: 11px/1.45 var(--font-mono); color: var(--color-muted); }
+.question-options-list { display: flex; flex-direction: column; gap: 2px; }
+.question-option-row { color: var(--color-muted); }
 .approval-actions { display: flex; gap: 8px; margin-top: 8px; }
 .approval-actions button { padding: 3px 9px; border-radius: var(--radius-md); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-primary); cursor: pointer; }
 .approval-actions button:first-child { background: var(--color-accent); color: white; border-color: var(--color-accent); }

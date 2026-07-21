@@ -39,6 +39,12 @@ describe('buildDaemonSurface', () => {
 
     await bond.respondToApproval('req-1', false)
     expect(calls.at(-1)).toEqual({ method: 'bond.approvalResponse', params: { requestId: 'req-1', approved: false } })
+
+    await bond.answerQuestion('q-1', { kind: 'cancelled' })
+    expect(calls.at(-1)).toEqual({ method: 'bond.questionResponse', params: { questionId: 'q-1', answer: { kind: 'cancelled' } } })
+
+    await bond.pendingQuestion()
+    expect(calls.at(-1)).toEqual({ method: 'question.pending', params: undefined })
   })
 
   it('maps transcript and session methods', async () => {

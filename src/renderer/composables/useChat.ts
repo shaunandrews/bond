@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import type { BondSendInput, TaggedChunk } from '../../shared/stream'
 import type { BondSendResult } from '../../shared/rpc-schema'
 import type { AttachedImage, EditMode, SessionMessage } from '../../shared/session'
+import type { QuestionAnswer } from '../../shared/questions'
 import type { TranscriptMessage, TranscriptPage } from '../../shared/transcript'
 import type { Message } from '../types/message'
 import type { TurnActivityData, TurnActivityEvent } from '../types/activity'
@@ -23,6 +24,7 @@ export interface ChatDeps {
   cancel: (sessionId?: string) => Promise<{ ok: boolean }>
   onChunk: (fn: (chunk: TaggedChunk) => void) => () => void
   respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
+  answerQuestion: (questionId: string, answer: QuestionAnswer) => Promise<{ ok: boolean }>
   getImages: (ids: string[]) => Promise<(AttachedImage | null)[]>
   listTranscript: (options?: { beforeSeq?: number; limit?: number }) => Promise<TranscriptPage>
   upsertTranscript: (messages: TranscriptMessage[]) => Promise<{ ok: boolean }>
@@ -102,7 +104,7 @@ const _hmr = import.meta.hot?.data as
 /** Chunk kinds owned by a single turn — anything here from a foreign turnId is a straggler. */
 const TURN_SCOPED_CHUNKS: ReadonlySet<string> = new Set([
   'query_start', 'query_end', 'assistant_text', 'thinking_text', 'assistant_tool',
-  'tool_result', 'tool_approval', 'raw_error', 'result', 'generated_image', 'system',
+  'tool_result', 'tool_approval', 'user_question', 'raw_error', 'result', 'generated_image', 'system',
 ])
 
 export function useChat(deps: ChatDeps = window.bond) {
@@ -147,6 +149,22 @@ export function useChat(deps: ChatDeps = window.bond) {
       }
     }
     return [...found.values()]
+  })
+
+  // Singular by design — the ask_user_question tool runs sequentially and
+  // Bond asks at most one question at a time. Traversal order (messages,
+  // then events, both append-only) means the last match found is the most
+  // recent one.
+  const pendingQuestion = computed(() => {
+    activityRevision.value
+    let found: (Extract<TurnActivityEvent, { type: 'question' }> & { activityMessageId: string }) | null = null
+    for (const m of messages.value) {
+      if (m.role !== 'meta' || m.kind !== 'activity') continue
+      for (const evt of m.data.events) {
+        if (evt.type === 'question' && evt.status === 'pending') found = { ...evt, activityMessageId: m.id }
+      }
+    }
+    return found
   })
 
   function addMessage(msg: Message) {
@@ -206,7 +224,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     if (byId && byId.role === 'meta' && byId.kind === 'activity') return byId
     for (let i = messages.value.length - 1; i >= 0; i--) {
       const m = messages.value[i]
-      if (m.role === 'meta' && m.kind === 'activity' && ['working', 'responding', 'awaiting_approval'].includes(m.data.status)) {
+      if (m.role === 'meta' && m.kind === 'activity' && ['working', 'responding', 'awaiting_approval', 'awaiting_question'].includes(m.data.status)) {
         activeActivityId.value = m.id
         return m
       }
@@ -216,7 +234,10 @@ export function useChat(deps: ChatDeps = window.bond) {
   function activityFor(): Message & { role: 'meta'; kind: 'activity' } {
     const existing = existingActivity()
     if (existing) return existing
-    const data: TurnActivityData = { turnId: uid(), status: 'working', startedAt: Date.now(), events: [] }
+    // Carry the live turn's id when there is one — a continuation row minted
+    // mid-turn (see splitActivityAfterAnswer) must belong to that turn, or
+    // query_end and the daemon's finalizer can't find it.
+    const data: TurnActivityData = { turnId: activeTurnId.value ?? uid(), status: 'working', startedAt: Date.now(), events: [] }
     const msg: Message & { role: 'meta'; kind: 'activity' } = { id: uid(), role: 'meta', kind: 'activity', data, ts: data.startedAt }
     addMessage(msg)
     activeActivityId.value = msg.id
@@ -237,6 +258,57 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   function cancelPendingApprovals(data: TurnActivityData, end = Date.now()) {
     for (const evt of data.events) if (evt.type === 'approval' && evt.status === 'pending') { evt.status = 'cancelled'; evt.endTs = end }
+  }
+
+  function cancelPendingQuestions(data: TurnActivityData, end = Date.now()) {
+    for (const evt of data.events) if (evt.type === 'question' && evt.status === 'pending') { evt.status = 'cancelled'; evt.endTs = end }
+  }
+
+  /**
+   * An answered question reads like a message the user sent — the option
+   * label or typed text appears as a normal user bubble in the flow of the
+   * conversation, not just inside the (often-collapsed) activity row. A
+   * dismissal has nothing to show: the question card already reflects it.
+   *
+   * The row id is DERIVED from the questionId, never minted: the daemon
+   * broadcasts question_resolved to every client including the answering one
+   * (and that notification beats the RPC ack down the same socket), so the
+   * answerer ran this twice and every other client once more — three separate
+   * uids, three persisted rows, one answer. A derived id makes each of those
+   * paths write the same row.
+   */
+  function appendAnswerMessage(questionId: string, answer: QuestionAnswer) {
+    if (answer.kind === 'cancelled') return
+    const id = `answer-${questionId}`
+    if (messages.value.some(m => m.id === id)) return
+    const msg: Message = { id, role: 'user', text: answer.kind === 'option' ? answer.label : answer.text }
+    addMessage(msg)
+    upsertMessage(msg)
+  }
+
+  /**
+   * The answer bubble lands at the END of the transcript, but the turn's
+   * activity row was inserted at turn start — leaving the live row stranded
+   * above it, so a still-working turn read as dead. Close the row here and
+   * let the next chunk mint a continuation row (same turnId) after the
+   * answer, keeping the live row last. Order survives reload: rows are
+   * ordered by insert seq, which is the order they're written in.
+   */
+  function splitActivityAfterAnswer(activityMessageId: string, answer: QuestionAnswer) {
+    // A dismissal appends no bubble, so the row is still the last thing on
+    // screen — nothing to split around.
+    if (answer.kind === 'cancelled') return
+    if (!busy.value || activeActivityId.value !== activityMessageId) return
+    const msg = messages.value.find(m => m.id === activityMessageId)
+    if (!msg || msg.role !== 'meta' || msg.kind !== 'activity') return
+    const endedAt = Date.now()
+    finalizeOpenActivityEvents(msg.data, endedAt)
+    msg.data.status = 'done'
+    msg.data.endedAt = endedAt
+    activeActivityId.value = null
+    activityRevision.value++
+    dirtyIds.add(msg.id)
+    upsertMessage(msg)
   }
 
   function lastActivityEvent(data: TurnActivityData): TurnActivityEvent | undefined {
@@ -288,6 +360,25 @@ export function useChat(deps: ChatDeps = window.bond) {
       return
     }
 
+    if (chunk.kind === 'question_resolved') {
+      // Answered elsewhere (possibly another client or the CLI) — flip our
+      // pending card instead of leaving it stale until query_end.
+      for (const m of messages.value) {
+        if (m.role !== 'meta' || m.kind !== 'activity') continue
+        const evt = m.data.events.find((e): e is Extract<TurnActivityEvent, { type: 'question' }> => e.type === 'question' && e.questionId === chunk.questionId)
+        if (!evt || evt.status !== 'pending') continue
+        evt.status = chunk.answer.kind === 'cancelled' ? 'cancelled' : 'answered'
+        evt.answer = chunk.answer
+        evt.endTs = Date.now()
+        const stillPending = m.data.events.some(e => e.type === 'question' && e.status === 'pending')
+        if (m.data.status === 'awaiting_question' && !stillPending) m.data.status = 'working'
+        activityRevision.value++
+        appendAnswerMessage(chunk.questionId, chunk.answer)
+        splitActivityAfterAnswer(m.id, chunk.answer)
+      }
+      return
+    }
+
     if (chunk.kind === 'edit_mode_changed') {
       // One global mode across devices — mirror a change made anywhere.
       editMode.value = chunk.editMode
@@ -317,6 +408,7 @@ export function useChat(deps: ChatDeps = window.bond) {
       if (activityMsg) {
         finalizeOpenActivityEvents(activityMsg.data, endedAt)
         cancelPendingApprovals(activityMsg.data, endedAt)
+        cancelPendingQuestions(activityMsg.data, endedAt)
         activityMsg.data.status = cancellingTurnId ? 'cancelled' : (!chunk.succeeded || activityMsg.data.status === 'failed' ? 'failed' : 'done')
         activityMsg.data.endedAt = endedAt
         if (activityMsg.data.status === 'failed') activityMsg.data.expanded = true
@@ -391,6 +483,15 @@ export function useChat(deps: ChatDeps = window.bond) {
           data.events.push({ id: uid(), type: 'approval', label: `Approval requested: ${chunk.toolName}`, ts: Date.now(), requestId: chunk.requestId, toolName: chunk.toolName, input: chunk.input, title: chunk.title, description: chunk.description, status: 'pending' })
         })
         break
+      case 'user_question':
+        updateActivity(data => {
+          if (data.events.some(evt => evt.type === 'question' && evt.questionId === chunk.questionId)) return
+          finalizeOpenActivityEvents(data)
+          data.status = 'awaiting_question'
+          data.expanded = true
+          data.events.push({ id: uid(), type: 'question', label: `Question asked`, ts: Date.now(), questionId: chunk.questionId, question: chunk.question, header: chunk.header, options: chunk.options, status: 'pending' })
+        })
+        break
       case 'result': {
         endStreaming()
         if (chunk.errors?.length) {
@@ -406,7 +507,7 @@ export function useChat(deps: ChatDeps = window.bond) {
       }
       case 'raw_error':
         endStreaming()
-        updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); cancelPendingApprovals(data, data.endedAt); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: chunk.message }) })
+        updateActivity(data => { data.status = 'failed'; data.expanded = true; data.endedAt = Date.now(); cancelPendingApprovals(data, data.endedAt); cancelPendingQuestions(data, data.endedAt); data.events.push({ id: uid(), type: 'error', label: 'Error', ts: Date.now(), text: chunk.message }) })
         addMessage({ id: uid(), role: 'meta', kind: 'error', text: chunk.message })
         persistMessages()
         break
@@ -433,7 +534,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     for (let i = messages.value.length - 1; i >= 0; i--) {
       const m = messages.value[i]
       if (m.role !== 'meta' || m.kind !== 'activity') continue
-      if (['working', 'responding', 'awaiting_approval'].includes(m.data.status) && m.data.turnId) {
+      if (['working', 'responding', 'awaiting_approval', 'awaiting_question'].includes(m.data.status) && m.data.turnId) {
         activeTurnId.value = m.data.turnId
         activeActivityId.value = m.id
         busy.value = true
@@ -508,6 +609,15 @@ export function useChat(deps: ChatDeps = window.bond) {
     // before it even renders — let send() fail visibly instead.
     await ensureGlobalSubscription().catch(() => {})
 
+    // A pending question intercepts plain text as its answer — it never
+    // starts a new turn or joins the queue. Images alongside text fall
+    // through: an image is not an answer to a multiple-choice question.
+    const question = pendingQuestion.value
+    if (question && trimmed && !images?.length) {
+      await answerQuestion(question.questionId, { kind: 'custom', text: trimmed })
+      return
+    }
+
     if (busy.value) {
       queuedMessages.value = [...queuedMessages.value, { id: uid(), text: trimmed, images: images?.length ? images : undefined }]
       return
@@ -569,6 +679,30 @@ export function useChat(deps: ChatDeps = window.bond) {
     activityRevision.value++
     dirtyIds.add(match.message.id)
     upsertMessage(match.message)
+  }
+
+  async function answerQuestion(questionId: string, answer: QuestionAnswer) {
+    let match: { message: Message & { role: 'meta'; kind: 'activity' }; event: Extract<TurnActivityEvent, { type: 'question' }> } | undefined
+    for (const m of messages.value) {
+      if (m.role !== 'meta' || m.kind !== 'activity') continue
+      const evt = m.data.events.find((e): e is Extract<TurnActivityEvent, { type: 'question' }> => e.type === 'question' && e.questionId === questionId)
+      if (evt) match = { message: m, event: evt }
+    }
+    if (!match) return
+    try {
+      const result = await deps.answerQuestion(questionId, answer)
+      if (!result.ok) return
+    } catch { return }
+    match.event.status = answer.kind === 'cancelled' ? 'cancelled' : 'answered'
+    match.event.answer = answer
+    match.event.endTs = Date.now()
+    const stillPending = match.message.data.events.some(e => e.type === 'question' && e.status === 'pending')
+    if (match.message.data.status === 'awaiting_question' && !stillPending) match.message.data.status = 'working'
+    activityRevision.value++
+    dirtyIds.add(match.message.id)
+    upsertMessage(match.message)
+    appendAnswerMessage(questionId, answer)
+    splitActivityAfterAnswer(match.message.id, answer)
   }
 
   function removeQueuedMessage(id: string) {
@@ -705,6 +839,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     busy,
     busySessionIds,
     pendingApprovals,
+    pendingQuestion,
     contextUsage,
     editMode,
     currentSessionId,
@@ -718,6 +853,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     cancel,
     removeQueuedMessage,
     respondToApproval,
+    answerQuestion,
     setEditMode,
     subscribe,
     unsubscribe,

@@ -30,8 +30,6 @@ export function getDb(): Database.Database {
   migrateFromFiles(_db)
   migrateInlineImages(_db)
   migrateAddSiteIdColumn(_db)
-  migrateCreateProjectsTable(_db)
-  migrateAddProjectIdColumns(_db)
   migrateAddFavoritedColumn(_db)
   migrateAddIconSeedColumn(_db)
   migrateCreateCollectionsTable(_db)
@@ -44,7 +42,6 @@ export function getDb(): Database.Database {
   migrateAddCollectionFeatures(_db)
   migrateAddCollectionIssuePrefix(_db)
   migrateCreateCollectionItemCommentsTable(_db)
-  migrateAddCollectionItemProjectId(_db)
   migrateAddCollectionItemDisplayNumber(_db)
   migrateAddCollectionNextDisplayNumber(_db)
   migrateCreateAssetsTable(_db)
@@ -281,34 +278,6 @@ function migrateAddSiteIdColumn(db: Database.Database): void {
   }
 }
 
-/**
- * Projects is a retired feature, but the TABLE must stay as a stub:
- * `sessions`, `collection_items`, `sense_debriefs`, and `sense_facts` all
- * hold live `REFERENCES projects(id)` foreign keys, and with
- * `PRAGMA foreign_keys = ON` dropping the parent table would break inserts
- * on all four. Nothing reads or writes projects anymore.
- */
-function migrateCreateProjectsTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      goal TEXT NOT NULL DEFAULT '',
-      type TEXT NOT NULL DEFAULT 'generic',
-      archived INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-  `)
-}
-
-function migrateAddProjectIdColumns(db: Database.Database): void {
-  const sessionCols = db.pragma('table_info(sessions)') as { name: string }[]
-  if (!sessionCols.some(c => c.name === 'project_id')) {
-    db.exec('ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL')
-  }
-}
-
 function migrateAddFavoritedColumn(db: Database.Database): void {
   const columns = db.pragma('table_info(sessions)') as { name: string }[]
   if (!columns.some(c => c.name === 'favorited')) {
@@ -505,13 +474,6 @@ function migrateCreateCollectionItemCommentsTable(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_collection_item_comments_item ON collection_item_comments(item_id, created_at ASC);
   `)
-}
-
-function migrateAddCollectionItemProjectId(db: Database.Database): void {
-  const columns = db.pragma('table_info(collection_items)') as { name: string }[]
-  if (!columns.some(c => c.name === 'project_id')) {
-    db.exec('ALTER TABLE collection_items ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL')
-  }
 }
 
 /** Give every item a stable, collection-local reference number for human use. */
@@ -772,7 +734,6 @@ function migrateCreateSenseMemoryTables(db: Database.Database): void {
       id TEXT PRIMARY KEY,
       session_id TEXT UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
       session_title TEXT NOT NULL DEFAULT '',
-      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
 
       summary TEXT NOT NULL,
       topics TEXT NOT NULL DEFAULT '[]',
@@ -792,21 +753,18 @@ function migrateCreateSenseMemoryTables(db: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_sense_debriefs_created ON sense_debriefs(created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_sense_debriefs_project ON sense_debriefs(project_id);
 
     CREATE TABLE IF NOT EXISTS sense_facts (
       id TEXT PRIMARY KEY,
       fact TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'user',
       source_debrief_id TEXT REFERENCES sense_debriefs(id) ON DELETE SET NULL,
-      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_sense_facts_active ON sense_facts(active, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_sense_facts_project ON sense_facts(project_id);
   `)
 
   // FTS5 virtual table — guard with existence check (same pattern as sense_fts)
@@ -869,12 +827,28 @@ function migrateDropRetiredTables(db: Database.Database): void {
     }
   }
 
+  // `projects` was retired long ago but survived as a stub because four tables
+  // still held `REFERENCES projects(id)`. Drop the dead child columns first so
+  // the parent can go with it. `memory_items.project_id` is NOT this — it is a
+  // plain scope string with no foreign key, and it stays.
+  for (const table of ['sessions', 'collection_items', 'sense_debriefs', 'sense_facts']) {
+    const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)
+    if (!exists) continue
+    const columns = db.pragma(`table_info(${table})`) as { name: string }[]
+    if (!columns.some(c => c.name === 'project_id')) continue
+    db.exec(`
+      DROP INDEX IF EXISTS idx_${table}_project;
+      ALTER TABLE ${table} DROP COLUMN project_id;
+    `)
+  }
+
   db.exec(`
     DROP TABLE IF EXISTS operative_events;
     DROP TABLE IF EXISTS operatives;
     DROP TABLE IF EXISTS journal_comments;
     DROP TABLE IF EXISTS journal_entries;
     DROP TABLE IF EXISTS project_resources;
+    DROP TABLE IF EXISTS projects;
     DROP TABLE IF EXISTS todos;
     DROP TABLE IF EXISTS pending_approvals;
   `)

@@ -10,6 +10,7 @@ vi.mock('../composables/useChat', () => ({
     messages: { value: [] },
     busy: { value: false },
     pendingApprovals: { value: [] },
+    pendingQuestion: { value: null },
     currentQueue: { value: [] },
     contextUsage: { value: undefined },
     editMode: { value: { type: 'full' } },
@@ -21,6 +22,7 @@ vi.mock('../composables/useChat', () => ({
     cancel: vi.fn(),
     setEditMode: vi.fn(),
     respondToApproval: vi.fn(),
+    answerQuestion: vi.fn(),
     removeQueuedMessage: vi.fn(),
   }),
 }))
@@ -54,7 +56,7 @@ function mountApp(options: { standalone?: boolean; hasToken?: boolean; state?: W
   mocks.isStandaloneDisplay.mockReturnValue(standalone)
   return mount(WebApp, {
     props: { client: fakeClient(state), hasToken },
-    global: { stubs: { MessageBubble: true, ChatInput: true, ApprovalPrompt: true } },
+    global: { stubs: { MessageBubble: true, ChatInput: true, ApprovalPrompt: true, QuestionPrompt: true } },
   })
 }
 

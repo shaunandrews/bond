@@ -6,6 +6,7 @@ import type { TranscriptMessage } from './transcript'
 import type { SenseSettings } from './sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
 import type { WebRenderResult } from './web'
+import type { QuestionAnswer } from './questions'
 import type { ModelId } from './models'
 import type {
   BondSendResult,
@@ -224,6 +225,10 @@ export class BondClient {
 
   async respondToApproval(requestId: string, approved: boolean): Promise<RpcResult<'bond.approvalResponse'>> {
     return this.call('bond.approvalResponse', { requestId, approved })
+  }
+
+  async answerQuestion(questionId: string, answer: QuestionAnswer): Promise<RpcResult<'bond.questionResponse'>> {
+    return this.call('bond.questionResponse', { questionId, answer })
   }
 
   onChunk(fn: (chunk: TaggedChunk) => void): () => void {

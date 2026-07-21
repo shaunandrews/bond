@@ -227,6 +227,24 @@ describe('turn reconciliation', () => {
     expect(events[1].status).toBe('cancelled')
   })
 
+  it('completeTurn finalizes a live activity row and cancels its pending question', () => {
+    seedRunningTurn('turn-q1', {
+      turnId: 'turn-q1',
+      status: 'awaiting_question',
+      startedAt: 1000,
+      events: [
+        { id: 'e1', type: 'question', label: 'Question asked', ts: 1000, questionId: 'q-1', question: 'Which approach?', options: [], status: 'pending' },
+      ],
+    })
+
+    completeTurn({ turnId: 'turn-q1', status: 'cancelled' })
+
+    const data = activityData('turn-q1')
+    expect(data.status).toBe('cancelled')
+    const events = data.events as Array<Record<string, unknown>>
+    expect(events[0].status).toBe('cancelled')
+  })
+
   it('completeTurn leaves a renderer-finalized activity row untouched', () => {
     seedRunningTurn('turn-f2', {
       turnId: 'turn-f2',
@@ -242,6 +260,22 @@ describe('turn reconciliation', () => {
     const data = activityData('turn-f2')
     expect(data.status).toBe('done')
     expect(data.endedAt).toBe(2000)
+  })
+
+  it('completeTurn finalizes a client-minted continuation activity row too', () => {
+    // Answering an ask_user_question mid-turn closes the daemon's row and the
+    // client mints a continuation one (turn_id column unset, turnId in data).
+    // A client that dies before query_end would otherwise leave it pulsing.
+    seedRunningTurn('turn-c1', { turnId: 'turn-c1', status: 'done', startedAt: 1000, endedAt: 2000, events: [] })
+    upsertMessages([{
+      id: 'activity-turn-c1-b', role: 'meta', kind: 'activity',
+      data: { turnId: 'turn-c1', status: 'working', startedAt: 2100, events: [] },
+    }])
+
+    completeTurn({ turnId: 'turn-c1', status: 'cancelled' })
+
+    const row = getDb().prepare('SELECT data FROM messages WHERE id = ?').get('activity-turn-c1-b') as { data: string }
+    expect(JSON.parse(row.data).status).toBe('cancelled')
   })
 
   it('reconcileInterruptedTurns cancels turns stranded by a crash and finalizes their activity rows', () => {

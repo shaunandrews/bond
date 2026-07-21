@@ -7,7 +7,7 @@ import Database from 'better-sqlite3'
 import { setDataDir, getDbPath } from './paths'
 import { getDb, closeDb, APP_SCHEMA_VERSION } from './db'
 
-const RETIRED_TABLES = ['todos', 'project_resources', 'journal_entries', 'journal_comments', 'operatives', 'operative_events', 'pending_approvals']
+const RETIRED_TABLES = ['todos', 'projects', 'project_resources', 'journal_entries', 'journal_comments', 'operatives', 'operative_events', 'pending_approvals']
 
 function tableNames(db: Database.Database): string[] {
   return (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(t => t.name)
@@ -89,14 +89,21 @@ describe('db module', () => {
       }
     })
 
-    it('keeps the projects table as an FK-parent stub', () => {
-      // sessions, collection_items, sense_debriefs, and sense_facts still
-      // carry live REFERENCES projects(id) — the parent table must survive.
+    it('drops the retired projects table and every project_id column', () => {
+      // Projects was retired long ago and only survived because four tables
+      // held REFERENCES projects(id). Both sides are gone now.
       const db = getDb()
-      const cols = db.pragma('table_info(projects)') as { name: string }[]
-      const names = cols.map(c => c.name)
-      expect(names).toContain('id')
-      expect(names).toContain('name')
+      expect(db.pragma('table_info(projects)')).toEqual([])
+      for (const table of ['sessions', 'collection_items', 'sense_debriefs', 'sense_facts']) {
+        const names = (db.pragma(`table_info(${table})`) as { name: string }[]).map(c => c.name)
+        expect(names).not.toContain('project_id')
+      }
+    })
+
+    it('keeps memory_items.project_id — a scope string, not a foreign key', () => {
+      const db = getDb()
+      const names = (db.pragma('table_info(memory_items)') as { name: string }[]).map(c => c.name)
+      expect(names).toContain('project_id')
     })
 
     it('creates the canonical messages shape directly — nullable session_id, seq present', () => {
@@ -127,7 +134,6 @@ describe('db module', () => {
       expect(names).toContain('id')
       expect(names).toContain('collection_id')
       expect(names).toContain('data')
-      expect(names).toContain('project_id') // legacy column retained for old data
       expect(names).toContain('sort_order')
     })
 
@@ -239,7 +245,50 @@ describe('db module', () => {
       expect(backup.entries[0]).toMatchObject({ id: 'j1', title: 'Kept Note' })
     })
 
-    it('keeps FK inserts working against the projects stub after the drop', () => {
+    it('drops populated project_id columns on upgrade without losing the rows', () => {
+      // The real upgrade shape: a current-version DB whose sessions and
+      // collection_items still carry REFERENCES projects(id), with a live
+      // project actually assigned. The columns and parent go; the rows stay.
+      const old = new Database(getDbPath())
+      old.exec(`
+        CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO app_meta VALUES ('schema_version', '${APP_SCHEMA_VERSION}');
+        CREATE TABLE projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          goal TEXT NOT NULL DEFAULT '',
+          type TEXT NOT NULL DEFAULT 'generic',
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO projects VALUES ('p1', 'Old project', '', 'generic', 0, '2026-01-01', '2026-01-01');
+        CREATE TABLE sessions (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL DEFAULT 'New chat',
+          summary TEXT NOT NULL DEFAULT '',
+          archived INTEGER NOT NULL DEFAULT 0,
+          project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO sessions VALUES ('s1', 'Assigned session', '', 0, 'p1', '2026-01-01', '2026-01-01');
+      `)
+      old.close()
+
+      const db = getDb()
+
+      expect(tableNames(db)).not.toContain('projects')
+      const sessionCols = (db.pragma('table_info(sessions)') as { name: string }[]).map(c => c.name)
+      expect(sessionCols).not.toContain('project_id')
+
+      // The row that pointed at a project survived the column drop intact.
+      const session = db.prepare("SELECT title FROM sessions WHERE id = 's1'").get() as { title: string }
+      expect(session.title).toBe('Assigned session')
+      expect(db.pragma('foreign_key_check')).toEqual([])
+    })
+
+    it('keeps inserts working on the four tables that used to hold the FK', () => {
       const db = getDb()
       const now = new Date().toISOString()
       db.prepare('INSERT INTO sessions (id, title, summary, archived, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)')
@@ -247,13 +296,14 @@ describe('db module', () => {
       db.prepare('INSERT INTO collections (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)')
         .run('col-fk', 'Test collection', now, now)
       expect(() => {
-        db.prepare('INSERT INTO collection_items (id, collection_id, project_id, created_at, updated_at) VALUES (?, ?, NULL, ?, ?)')
+        db.prepare('INSERT INTO collection_items (id, collection_id, created_at, updated_at) VALUES (?, ?, ?, ?)')
           .run('item-fk', 'col-fk', now, now)
-        db.prepare('INSERT INTO sense_debriefs (id, session_id, project_id, summary, created_at) VALUES (?, ?, NULL, ?, ?)')
+        db.prepare('INSERT INTO sense_debriefs (id, session_id, summary, created_at) VALUES (?, ?, ?, ?)')
           .run('deb-fk', 's-fk', 'a summary', now)
-        db.prepare('INSERT INTO sense_facts (id, fact, project_id, created_at, updated_at) VALUES (?, ?, NULL, ?, ?)')
+        db.prepare('INSERT INTO sense_facts (id, fact, created_at, updated_at) VALUES (?, ?, ?, ?)')
           .run('fact-fk', 'a fact', now, now)
       }).not.toThrow()
+      expect(db.pragma('foreign_key_check')).toEqual([])
     })
 
     it('seeds next_display_number from each collection\'s existing max', () => {
@@ -319,7 +369,6 @@ describe('db module', () => {
       const names = cols.map(c => c.name)
       expect(names).toContain('edit_mode')
       expect(names).toContain('site_id')
-      expect(names).toContain('project_id')
       expect(names).toContain('favorited')
       expect(names).toContain('icon_seed')
       expect(names).toContain('quick')
