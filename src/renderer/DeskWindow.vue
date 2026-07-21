@@ -47,6 +47,17 @@ type Mode = 'rest' | 'ask' | 'open'
 const mode = ref<Mode>('rest')
 /** Click pins the panel open; hover alone does not. */
 const pinned = ref(false)
+/**
+ * Held true while the panel retracts.
+ *
+ * The shape's geometry comes from `mode`, so without this the element would
+ * snap back to Rest size on the same frame the mode changes and there would be
+ * nothing left to animate. Keeping the dropped geometry for the length of the
+ * exit is what gives the retract something to play against.
+ */
+const exiting = ref(false)
+let exitTimer: ReturnType<typeof setTimeout> | null = null
+const EXIT_MS = 260
 
 const pending = computed(() => status.value?.pendingQuestion ?? null)
 
@@ -104,6 +115,8 @@ const OPEN_WIDTH = 400
 const OPEN_MAX_HEIGHT = 420
 
 const dropped = computed(() => mode.value !== 'rest')
+/** Dropped geometry applies while open AND while retracting. */
+const showingPanel = computed(() => dropped.value || exiting.value)
 
 const droppedWidth = computed(() => (mode.value === 'ask' ? ASK_WIDTH : OPEN_WIDTH))
 
@@ -118,7 +131,7 @@ const droppedBody = computed(() => (mode.value === 'ask' ? ASK_HEIGHT : OPEN_MAX
  * constrained to the notch x-range up there.
  */
 const shapeStyle = computed(() => {
-  if (mode.value === 'rest') {
+  if (!showingPanel.value) {
     return {
       width: `${REST_HOVER_WIDTH}px`,
       height: `${menuBarHeight.value + REST_HOVER_HEIGHT}px`,
@@ -265,7 +278,16 @@ watch(pending, (question) => {
   askTimer = setTimeout(() => { if (mode.value === 'ask') mode.value = 'rest' }, 20_000)
 })
 
-watch(mode, (next) => {
+watch(mode, (next, previous) => {
+  if (previous !== 'rest' && next === 'rest') {
+    // Hold the dropped geometry so the retract has something to play against.
+    exiting.value = true
+    if (exitTimer) clearTimeout(exitTimer)
+    exitTimer = setTimeout(() => { exiting.value = false }, EXIT_MS)
+  } else if (next !== 'rest') {
+    exiting.value = false
+    if (exitTimer) { clearTimeout(exitTimer); exitTimer = null }
+  }
   publishHotRects()
   if (next === 'open') refreshPanel()
   if (next !== 'open') { reassigning.value = null; learned.value = null; pinned.value = false }
@@ -390,6 +412,7 @@ onUnmounted(() => {
   offDeskChanged?.()
   window.removeEventListener('keydown', onKeydown)
   clearHoverTimer()
+  if (exitTimer) clearTimeout(exitTimer)
   if (askTimer) clearTimeout(askTimer)
 })
 </script>
@@ -398,12 +421,20 @@ onUnmounted(() => {
   <div class="desk-root">
     <div
       class="desk-shape"
-      :class="[`is-${mode}`, { 'is-hovering': hovering, 'is-uncertain': uncertain, 'is-dropped': dropped }]"
+      :class="[
+        `is-${mode}`,
+        {
+          'is-hovering': hovering,
+          'is-uncertain': uncertain,
+          'is-dropped': showingPanel,
+          'is-exiting': exiting,
+        },
+      ]"
       :style="shapeStyle"
     >
       <!-- Rest: three channels in a hairline — presence, thread colour, uncertainty. -->
       <button
-        v-if="mode === 'rest'"
+        v-if="!showingPanel"
         type="button"
         class="desk-rest"
         aria-label="Open Desk"
@@ -510,6 +541,19 @@ onUnmounted(() => {
   animation: desk-unfurl 0.34s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+/* Retract. Slightly faster than the unfurl — leaving should feel like letting
+   go, not like a second deliberate gesture. `forwards` holds the collapsed
+   frame so it cannot flash back to full size before the geometry drops. */
+.desk-shape.is-dropped.is-exiting {
+  animation: desk-furl 0.26s cubic-bezier(0.4, 0, 1, 1) forwards;
+  pointer-events: none;
+}
+
+@keyframes desk-furl {
+  from { transform: translateX(-50%) scaleY(1) scaleX(1); opacity: 1; }
+  to   { transform: translateX(-50%) scaleY(0.55) scaleX(0.82); opacity: 0; }
+}
+
 /**
  * Concave top corners.
  *
@@ -527,26 +571,26 @@ onUnmounted(() => {
   content: '';
   position: absolute;
   top: 0;
-  width: var(--desk-corner, 14px);
-  height: var(--desk-corner, 14px);
+  width: var(--desk-corner, 7px);
+  height: var(--desk-corner, 7px);
   pointer-events: none;
 }
 
 .desk-shape.is-dropped::before {
-  left: calc(var(--desk-corner, 14px) * -1);
+  left: calc(var(--desk-corner, 7px) * -1);
   background: radial-gradient(
     circle at 0 100%,
-    transparent var(--desk-corner, 14px),
-    #000 var(--desk-corner, 14px)
+    transparent var(--desk-corner, 7px),
+    #000 var(--desk-corner, 7px)
   );
 }
 
 .desk-shape.is-dropped::after {
-  right: calc(var(--desk-corner, 14px) * -1);
+  right: calc(var(--desk-corner, 7px) * -1);
   background: radial-gradient(
     circle at 100% 100%,
-    transparent var(--desk-corner, 14px),
-    #000 var(--desk-corner, 14px)
+    transparent var(--desk-corner, 7px),
+    #000 var(--desk-corner, 7px)
   );
 }
 
@@ -724,6 +768,7 @@ onUnmounted(() => {
     transition: none;
   }
   .desk-shape.is-dropped,
+  .desk-shape.is-dropped.is-exiting,
   .desk-content {
     animation: none;
   }
