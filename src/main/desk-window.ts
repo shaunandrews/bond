@@ -202,26 +202,21 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
   }
 
   /**
-   * Put the window back if something moved it.
+   * NOTE on Space switching, so nobody tries this again.
    *
-   * Switching Spaces drags the panel along with the transition, because
-   * WindowServer only leaves a window alone during a Space change when it has
-   * `NSWindowCollectionBehaviorStationary` — and Electron exposes no way to set
-   * it (`setVisibleOnAllWorkspaces` covers canJoinAllSpaces and nothing else,
-   * and `electron_ns_panel.mm` re-ORs its own behaviour into every write
-   * anyway). Since we cannot ask for stationary, we enforce it: notice the
-   * drift and undo it.
+   * The panel animates along with a Space transition, and there is no fix
+   * available from JavaScript. The window's FRAME never changes — measured
+   * over a session of real Space switches, a bounds watcher fired zero times —
+   * because WindowServer is compositing the whole Space, not moving the
+   * window. Watching bounds cannot see it, so re-anchoring cannot correct it.
    *
-   * Cheap enough to run continuously — a bounds read is a WindowServer query,
-   * so it runs at a fraction of the cursor poll rather than every frame.
+   * The only real fix is `NSWindowCollectionBehaviorStationary`, and the
+   * string "stationary" does not appear anywhere in the Electron package.
+   * `setVisibleOnAllWorkspaces` covers `canJoinAllSpaces` and nothing else,
+   * and `electron_ns_panel.mm` re-ORs its own collection behaviour into every
+   * write regardless. Setting it requires in-process native access to the
+   * NSWindow — i.e. a native addon.
    */
-  function correctDrift(): void {
-    if (!win || win.isDestroyed() || !expectedBounds) return
-    const actual = win.getBounds()
-    if (actual.x === expectedBounds.x && actual.y === expectedBounds.y) return
-    deskLog('drift corrected', { actual, expected: expectedBounds })
-    win.setBounds(expectedBounds)
-  }
 
   function setClickThrough(next: boolean): void {
     if (!win || win.isDestroyed() || next === clickThrough) return
@@ -232,16 +227,11 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
   }
 
   let polls = 0
-  let driftTicks = 0
   function pollCursor(): void {
     if (!win || win.isDestroyed() || suppressed) {
       if (deskDebug && ++polls % 300 === 1) deskLog('poll skipped', { hasWin: !!win, suppressed })
       return
     }
-    // ~6Hz: fast enough that a Space transition snaps back before it reads as
-    // movement, slow enough that the WindowServer round-trip is free.
-    if (++driftTicks % 10 === 0) correctDrift()
-
     const point = screen.getCursorScreenPoint()
     const bounds = win.getBounds()
     const local = { x: point.x - bounds.x, y: point.y - bounds.y }
