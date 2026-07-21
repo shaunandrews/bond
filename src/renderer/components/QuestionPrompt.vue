@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { PhX } from '@phosphor-icons/vue'
+import { PhQuestion, PhX } from '@phosphor-icons/vue'
 import BondButton from './BondButton.vue'
 import type { QuestionAnswer, QuestionOption } from '../../shared/questions'
 
@@ -42,7 +42,10 @@ onUnmounted(() => {
 <template>
   <div ref="rootEl" class="question-prompt" role="group" :aria-labelledby="titleId" tabindex="-1">
     <div class="question-header">
-      <span :id="titleId" class="question-title">{{ question }}</span>
+      <span class="question-heading">
+        <PhQuestion :size="16" weight="bold" aria-hidden="true" />
+        <span :id="titleId" class="question-title">{{ question }}</span>
+      </span>
       <BondButton variant="ghost" size="sm" icon aria-label="Dismiss question" @click="dismiss" v-tooltip="'Dismiss'">
         <PhX :size="14" />
       </BondButton>
@@ -86,6 +89,13 @@ onUnmounted(() => {
   gap: 8px;
   padding: 10px 12px 8px;
 }
+.question-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  color: var(--color-accent);
+}
 .question-title {
   min-width: 0;
   color: var(--color-text-primary);
@@ -102,7 +112,7 @@ onUnmounted(() => {
   display: flex;
   width: 100%;
   min-height: 44px;
-  padding: 9px 12px;
+  padding: 12px;
   border: 0;
   border-top: 1px solid var(--color-border);
   border-radius: 0;
@@ -125,9 +135,10 @@ onUnmounted(() => {
 }
 .option-label {
   color: var(--color-text-primary);
-  font-size: 14px;
-  font-weight: 550;
-  line-height: 1.25;
+  /* Match the composer: ordinary 16px body text, not mini card headings. */
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.35;
 }
 .option-description {
   color: var(--color-muted);
@@ -145,7 +156,7 @@ onUnmounted(() => {
     padding: 12px 16px 8px;
   }
   .question-option {
-    padding-inline: 16px;
+    padding: 12px 16px;
   }
 }
 </style>
