@@ -60,7 +60,7 @@ export function createTextWorker(settings: SenseSettings) {
 
       // Find pending captures
       const pending = db.prepare(`
-        SELECT id, session_id, image_path, app_bundle_id, captured_at
+        SELECT id, session_id, image_path, app_bundle_id, pid, captured_at
         FROM sense_captures
         WHERE text_status = 'pending' AND image_path IS NOT NULL
         ORDER BY captured_at ASC
@@ -70,6 +70,7 @@ export function createTextWorker(settings: SenseSettings) {
         session_id: string
         image_path: string
         app_bundle_id: string | null
+        pid: number | null
         captured_at: string
       }[]
 
@@ -89,7 +90,11 @@ export function createTextWorker(settings: SenseSettings) {
       for (const row of pending) {
         try {
           const result = await extractText(
-            { imagePath: row.image_path, appBundleId: row.app_bundle_id ?? undefined },
+            {
+              imagePath: row.image_path,
+              appBundleId: row.app_bundle_id ?? undefined,
+              pid: row.pid ?? undefined,
+            },
             settings.textExtractionPreference
           )
 

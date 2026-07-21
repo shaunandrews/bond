@@ -27,13 +27,23 @@ export function initSense(client: BondClient): void {
   const unsubCapture = client.onSenseRequestCapture(async (payload) => {
     const { captureDir, captureId } = payload
 
+    // Every path out of here must answer the daemon. A silent return leaves
+    // `pendingCapture` set forever and the controller refuses every subsequent
+    // capture — one lost screenshot would otherwise end the recording day.
     try {
       const imagePath = await captureScreen(captureDir)
       if (imagePath) {
         await client.senseCaptureReady(captureId, imagePath)
+      } else {
+        await client.senseCaptureFailed(captureId, 'no_screen_source')
       }
     } catch (err) {
       console.error('[Sense] Capture failed:', err)
+      try {
+        await client.senseCaptureFailed(captureId, err instanceof Error ? err.message : 'capture_error')
+      } catch (reportErr) {
+        console.error('[Sense] Could not report capture failure:', reportErr)
+      }
     }
   })
   cleanupFns.push(unsubCapture)

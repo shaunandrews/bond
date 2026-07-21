@@ -2,15 +2,33 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { getDb } from '../db'
-import { createPresenceMonitor, type PresenceState } from './presence'
-import { createWindowDetector } from './window-detector'
-import { createClipboardMonitor } from './clipboard'
+import { createPresenceMonitor, type PresenceMonitor, type PresenceState } from './presence'
+import { createWindowDetector, type WindowDetector } from './window-detector'
+import { createClipboardMonitor, type ClipboardMonitor } from './clipboard'
 import { isBlacklisted, isAmbiguous } from './privacy'
 import { createTextWorker } from './worker'
 import { runRetentionCleanup } from './storage'
 import { getStillsDir, getDateDir } from './storage'
 import type { SenseState, SenseSettings, SenseCapture } from '../../shared/sense'
 import { DEFAULT_SENSE_SETTINGS } from '../../shared/sense'
+
+/**
+ * How long the controller waits for the main process to answer a capture
+ * request before assuming the screenshot was lost. The main process reports
+ * failures explicitly (`sense.captureFailed`); this timeout is the backstop for
+ * the case where main dies, is reloading, or never answers at all. Without it a
+ * single lost screenshot wedges `pendingCapture` and silently ends the
+ * recording day — `triggerCapture` refuses every subsequent capture.
+ */
+const PENDING_CAPTURE_TIMEOUT_MS = 30_000
+
+/** Injectable components — production passes nothing and gets the real ones. */
+export interface SenseControllerDeps {
+  presence?: PresenceMonitor
+  windowDetector?: WindowDetector
+  clipboard?: ClipboardMonitor
+  textWorker?: ReturnType<typeof createTextWorker>
+}
 
 export interface SenseController extends EventEmitter {
   on(event: 'stateChanged', listener: (state: SenseState) => void): this
@@ -26,8 +44,11 @@ export interface SenseController extends EventEmitter {
   suspend(): void
   wake(): void
   onCaptureReady(captureId: string, imagePath: string): void
+  onCaptureFailed(captureId: string, reason?: string): void
   updateSettings(updates: Partial<SenseSettings>): SenseSettings
   destroy(): void
+  /** Test seam: force a capture without driving presence through ioreg. */
+  triggerCaptureForTest(trigger: SenseCapture['captureTrigger']): Promise<void>
 }
 
 /**
@@ -37,17 +58,20 @@ export interface SenseController extends EventEmitter {
  * Orchestrates presence monitor, window detector, clipboard monitor,
  * text extraction worker, and capture lifecycle.
  */
-export function createSenseController(initialSettings?: Partial<SenseSettings>): SenseController {
+export function createSenseController(
+  initialSettings?: Partial<SenseSettings>,
+  deps?: SenseControllerDeps
+): SenseController {
   const emitter = new EventEmitter() as SenseController
   let state: SenseState = 'disabled'
   let settings: SenseSettings = { ...DEFAULT_SENSE_SETTINGS, ...initialSettings }
   let currentSessionId: string | null = null
 
   // Components
-  const presence = createPresenceMonitor(settings.idleThresholdSeconds)
-  const windowDetector = createWindowDetector()
-  const clipboard = createClipboardMonitor()
-  const textWorker = createTextWorker(settings)
+  const presence = deps?.presence ?? createPresenceMonitor(settings.idleThresholdSeconds)
+  const windowDetector = deps?.windowDetector ?? createWindowDetector()
+  const clipboard = deps?.clipboard ?? createClipboardMonitor()
+  const textWorker = deps?.textWorker ?? createTextWorker(settings)
 
   // Timers
   let captureTimer: ReturnType<typeof setInterval> | null = null
@@ -56,6 +80,24 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
 
   // Pending capture (waiting for main process response)
   let pendingCapture: { id: string; preSnapshot: Awaited<ReturnType<typeof windowDetector.getSnapshot>> } | null = null
+  let pendingCaptureTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * Release the pending-capture slot. `orphanId` deletes the capture row that
+   * was written at trigger time but never got an image, so a failed screenshot
+   * leaves no half-row behind for Sense's timeline or Desk's segmenter.
+   */
+  function clearPendingCapture(orphanId?: string): void {
+    if (pendingCaptureTimer) {
+      clearTimeout(pendingCaptureTimer)
+      pendingCaptureTimer = null
+    }
+    pendingCapture = null
+    if (!orphanId) return
+    try {
+      getDb().prepare('DELETE FROM sense_captures WHERE id = ? AND image_path IS NULL').run(orphanId)
+    } catch { /* best effort */ }
+  }
 
   function setState(newState: SenseState): void {
     if (newState === state) return
@@ -108,8 +150,8 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
       db.prepare(`
         INSERT INTO sense_captures (
           id, session_id, captured_at, app_name, app_bundle_id, window_title,
-          visible_windows, capture_trigger, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          visible_windows, capture_trigger, pid, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         captureId, currentSessionId, now,
         activeWindow?.name ?? null,
@@ -117,6 +159,7 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
         activeWindow?.title ?? null,
         JSON.stringify(preSnapshot.windows.map(w => w.name)),
         trigger ?? null,
+        activeWindow?.pid ?? null,
         now
       )
 
@@ -127,12 +170,18 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
 
       // Store pending state for post-capture check
       pendingCapture = { id: captureId, preSnapshot }
+      pendingCaptureTimer = setTimeout(() => {
+        if (pendingCapture?.id !== captureId) return
+        console.warn(`[sense/controller] Capture ${captureId} never completed — clearing wedge`)
+        clearPendingCapture(captureId)
+      }, PENDING_CAPTURE_TIMEOUT_MS)
+      pendingCaptureTimer.unref?.()
 
       // Request capture from main process
       emitter.emit('requestCapture', { captureDir, captureId })
     } catch {
       // Silently skip failed captures
-      pendingCapture = null
+      clearPendingCapture()
     }
   }
 
@@ -268,6 +317,7 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
     windowDetector.stopPolling()
     clipboard.stop()
     stopWatchdog()
+    clearPendingCapture()
     if (retentionTimer) { clearInterval(retentionTimer); retentionTimer = null }
     if (pauseTimer) { clearTimeout(pauseTimer); pauseTimer = null }
     settings.enabled = false
@@ -326,7 +376,7 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
     if (!pendingCapture || pendingCapture.id !== captureId) return
 
     const { preSnapshot } = pendingCapture
-    pendingCapture = null
+    clearPendingCapture()
 
     try {
       // Post-capture window snapshot
@@ -358,13 +408,28 @@ export function createSenseController(initialSettings?: Partial<SenseSettings>):
     }
   }
 
+  /**
+   * The main process reporting that a screenshot could not be taken — a null
+   * `desktopCapturer` source, a permission blip, a thrown encode. Clearing the
+   * slot here rather than waiting out the timeout keeps the very next interval
+   * tick productive.
+   */
+  emitter.onCaptureFailed = (captureId: string, reason?: string) => {
+    if (!pendingCapture || pendingCapture.id !== captureId) return
+    console.warn(`[sense/controller] Capture ${captureId} failed: ${reason ?? 'unknown'}`)
+    clearPendingCapture(captureId)
+  }
+
   emitter.updateSettings = (updates: Partial<SenseSettings>): SenseSettings => {
     settings = { ...settings, ...updates }
     return { ...settings }
   }
 
+  emitter.triggerCaptureForTest = (trigger) => triggerCapture(trigger)
+
   emitter.destroy = () => {
     emitter.disable()
+    clearPendingCapture()
     emitter.removeAllListeners()
   }
 
