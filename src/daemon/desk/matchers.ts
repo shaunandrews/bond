@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { getDb } from '../db'
-import { computeSpecificity, normalizePattern } from './signature'
+import { computeSpecificity, normalizePattern, tooBroadReason } from './signature'
 import type { DeskEvidence, DeskMatcher, DeskMatcherField, DeskMatcherOperator } from '../../shared/desk'
 
 interface MatcherRow {
@@ -363,6 +363,41 @@ export function setMatcherEnabled(id: string, enabled: boolean, db: Database.Dat
 
 export function deleteMatcher(id: string, db: Database.Database = getDb()): boolean {
   return db.prepare('DELETE FROM desk_matchers WHERE id = ?').run(id).changes > 0
+}
+
+/**
+ * Delete unconfirmed matchers too broad to have been written in the first place.
+ *
+ * The breadth check lives at the inference write path, but matchers written
+ * before it existed are still on disk actively mis-attributing work — a
+ * `title|prefix|~` claims every terminal window forever, and no amount of
+ * correct new inference outruns it. Run at worker start so the store repairs
+ * itself rather than needing a manual sweep.
+ *
+ * Confirmed matchers are never touched: the user approved those, and breadth
+ * they chose is their business.
+ */
+export function pruneOverbroadMatchers(db: Database.Database = getDb()): { deleted: number; reasons: string[] } {
+  const rows = db.prepare(
+    "SELECT id, field, pattern, example_json FROM desk_matchers WHERE confirmed = 0 AND field != 'resource'"
+  ).all() as { id: string; field: string; pattern: string; example_json: string }[]
+
+  const reasons: string[] = []
+  const remove = db.prepare('DELETE FROM desk_matchers WHERE id = ? AND confirmed = 0')
+  let deleted = 0
+
+  for (const row of rows) {
+    const example = parseExample(row.example_json)
+    const reason = tooBroadReason(row.field, row.pattern, {
+      appName: example.appName,
+      bundleId: example.bundleId,
+    })
+    if (!reason) continue
+    deleted += remove.run(row.id).changes
+    reasons.push(reason)
+  }
+
+  return { deleted, reasons }
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   redactField,
   resourceSignature,
   signatureForCapture,
+  tooBroadReason,
   type CaptureRow,
 } from './signature'
 
@@ -192,6 +193,63 @@ describe('isGenericBundle', () => {
   it('does not flag a purpose-built app', () => {
     expect(isGenericBundle('com.automattic.studio')).toBe(false)
     expect(isGenericBundle(null)).toBe(false)
+  })
+})
+
+describe('tooBroadReason', () => {
+  it('rejects the patterns that actually showed up in real inference output', () => {
+    // Every one of these was written to a live database and mis-attributed work.
+    expect(tooBroadReason('title', '~')).toBeTruthy()
+    expect(tooBroadReason('title', 'Bond')).toBeTruthy()
+    expect(tooBroadReason('title', 'codex')).toBeTruthy()
+    expect(tooBroadReason('bundle', 'Claude')).toBeTruthy()
+    expect(tooBroadReason('title', 'Studio')).toBeTruthy()
+  })
+
+  it('rejects punctuation-only patterns', () => {
+    for (const pattern of ['~/', '///////', '.........', '---------- ']) {
+      expect(tooBroadReason('title', pattern)).toBeTruthy()
+    }
+  })
+
+  it('rejects an empty or whitespace pattern', () => {
+    expect(tooBroadReason('title', '')).toBeTruthy()
+    expect(tooBroadReason('title', '     ')).toBeTruthy()
+  })
+
+  it('accepts a genuinely distinctive title', () => {
+    expect(tooBroadReason('title', 'Studio — Sync Dialog')).toBeNull()
+    expect(tooBroadReason('title', 'Dave Matthews Setlist')).toBeNull()
+  })
+
+  it('accepts a concrete repository path', () => {
+    expect(tooBroadReason('path', '/Developer/Projects/bond')).toBeNull()
+  })
+
+  it('rejects a bundle rule for a generic app', () => {
+    expect(tooBroadReason('bundle', 'com.google.Chrome')).toMatch(/covers too much/)
+    expect(tooBroadReason('bundle', 'com.mitchellh.ghostty')).toMatch(/covers too much/)
+  })
+
+  it('accepts a bundle rule for a purpose-built app', () => {
+    expect(tooBroadReason('bundle', 'com.automattic.studio')).toBeNull()
+  })
+
+  it('rejects a display name masquerading as a bundle id', () => {
+    expect(tooBroadReason('bundle', 'Ghostty Terminal')).toMatch(/not a bundle identifier/)
+  })
+
+  it('rejects a title matcher that is just the app name', () => {
+    expect(tooBroadReason('title', 'Studio Workbench', { appName: 'Studio Workbench' }))
+      .toMatch(/just the app name/)
+  })
+
+  it('rejects a single word inside a generic app — a bundle rule in disguise', () => {
+    expect(tooBroadReason('title', 'bondbondbond', { bundleId: 'com.mitchellh.ghostty' }))
+      .toMatch(/single word inside a generic app/)
+    // ...but a multi-word title in the same app is fine
+    expect(tooBroadReason('title', '~/Developer/Projects/bond — nvim', { bundleId: 'com.mitchellh.ghostty' }))
+      .toBeNull()
   })
 })
 

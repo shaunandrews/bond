@@ -22,6 +22,7 @@ import {
   type TextPrompt,
 } from './inference'
 import { assertionAllowed, createQuestion, expireQuestions } from './questions'
+import { pruneOverbroadMatchers } from './matchers'
 import { generateReentryNote } from './notes'
 import { emitDeskChanged } from './service'
 import { unfinishedTodosForThread } from './today'
@@ -188,6 +189,11 @@ export function createDeskWorker(options: DeskWorkerOptions = {}): DeskWorker {
       // as sense/worker.ts's requeueStale.
       const requeued = requeueStaleSegments()
       if (requeued > 0) console.log(`[desk/worker] requeued ${requeued} stranded segment(s)`)
+      // Self-heal: drop inferred matchers too broad to have been written.
+      const pruned = pruneOverbroadMatchers()
+      if (pruned.deleted > 0) {
+        console.log(`[desk/worker] pruned ${pruned.deleted} over-broad matcher(s):`, pruned.reasons.slice(0, 5))
+      }
       segmentTimer = setInterval(() => { enqueue(segmentTick) }, options.segmentIntervalMs ?? SEGMENT_INTERVAL_MS)
       segmentTimer.unref?.()
       sweepTimer = setInterval(() => { enqueue(catchUp) }, options.sweepIntervalMs ?? SWEEP_INTERVAL_MS)

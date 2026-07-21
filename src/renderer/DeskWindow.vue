@@ -196,7 +196,7 @@ watch(hovering, (inside) => {
 
 async function refreshStatus(): Promise<void> {
   try {
-    status.value = await window.bond.deskStatus()
+    status.value = await window.bond!.deskStatus()
   } catch {
     // A daemon blip must not blank the panel — keep the last known state.
   }
@@ -205,9 +205,9 @@ async function refreshStatus(): Promise<void> {
 async function refreshPanel(): Promise<void> {
   try {
     const [blocks, allThreads, today] = await Promise.all([
-      window.bond.deskInFlight({ limit: 8 }),
-      window.bond.deskThreads(),
-      window.bond.deskToday(),
+      window.bond!.deskInFlight({ limit: 8 }),
+      window.bond!.deskThreads(),
+      window.bond!.deskToday(),
     ])
     inFlight.value = blocks
     threads.value = allThreads
@@ -318,21 +318,29 @@ let offGeometry: (() => void) | undefined
 let offDeskChanged: (() => void) | undefined
 
 onMounted(() => {
-  const colorScheme = window.matchMedia('(prefers-color-scheme: dark)')
-  isDark.value = colorScheme.matches
-  colorScheme.addEventListener('change', e => { isDark.value = e.matches })
+  // Publish hit regions FIRST. Without them main's cursor poll can never make
+  // the window interactive, so anything that might throw has to come after —
+  // an inert panel is a far worse failure than a missing colour scheme.
+  publishHotRects()
+  window.desk?.ready()
+
+  try {
+    const colorScheme = window.matchMedia('(prefers-color-scheme: dark)')
+    isDark.value = colorScheme.matches
+    colorScheme.addEventListener('change', e => { isDark.value = e.matches })
+  } catch { /* theme is decoration */ }
 
   offHover = window.desk?.onHover(inside => { hovering.value = inside })
   offGeometry = window.desk?.onGeometry(next => { geometry.value = next })
-  offDeskChanged = window.bond.onDeskChanged(() => {
+  // Optional-chained: if the bridge is missing the panel still hovers, opens,
+  // and closes. It just has nothing to show.
+  offDeskChanged = window.bond?.onDeskChanged(() => {
     refreshStatus()
     if (mode.value === 'open') refreshPanel()
   })
 
   window.addEventListener('keydown', onKeydown)
-  window.desk?.ready()
   refreshStatus()
-  publishHotRects()
 })
 
 function onKeydown(event: KeyboardEvent): void {

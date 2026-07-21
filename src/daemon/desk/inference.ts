@@ -22,7 +22,7 @@
  */
 import type Database from 'better-sqlite3'
 import { getDb } from '../db'
-import { redactAll, redactField } from './signature'
+import { redactAll, redactField, tooBroadReason } from './signature'
 import {
   attributeSegment,
   createThread,
@@ -383,15 +383,27 @@ export async function runInferenceBatch(options: InferenceOptions): Promise<Infe
         threadId, confidence: line.confidence, example: segment.evidence,
       }, db)
 
+      // The prompt asks for a narrow pattern; this is what enforces it. A
+      // rejected pattern costs nothing — the exact-resource matcher above
+      // already caches this resource, and a too-broad rule mis-attributes
+      // everything it touches from then on.
       if (line.matcherField && line.matcherPattern) {
-        writeInferredMatcher({
-          field: line.matcherField,
-          operator: line.matcherField === 'path' ? 'exact' : 'prefix',
-          pattern: line.matcherPattern,
-          threadId,
-          confidence: line.confidence,
-          example: segment.evidence,
-        }, db)
+        const reason = tooBroadReason(line.matcherField, line.matcherPattern, {
+          appName: segment.evidence.appName,
+          bundleId: segment.evidence.bundleId,
+        })
+        if (reason) {
+          result.problems.push(`rejected matcher for ${line.ref}: ${reason}`)
+        } else {
+          writeInferredMatcher({
+            field: line.matcherField,
+            operator: line.matcherField === 'path' ? 'exact' : 'prefix',
+            pattern: line.matcherPattern,
+            threadId,
+            confidence: line.confidence,
+            example: segment.evidence,
+          }, db)
+        }
       }
 
       // `matcher_id` records what PRODUCED this attribution, and here that is

@@ -27,6 +27,9 @@
  *    ~2µs, making 60Hz free.
  */
 import { BrowserWindow, screen, powerMonitor, type Display } from 'electron'
+import { appendFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { createFullscreenWatcher, type FullscreenWatcher } from './desk-fullscreen'
 import {
   geometryFor,
@@ -62,6 +65,25 @@ export interface DeskWindowOptions {
   /** Dev server URL, or undefined to load the built file. */
   rendererUrl?: string
   rendererFile?: string
+}
+
+/**
+ * Desk-window diagnostics.
+ *
+ * The Desk panel is a non-activating NSPanel with no menu and no obvious way to
+ * open devtools, and its main-process side logs to whatever terminal is running
+ * the dev server. Both are invisible to anyone debugging from outside, so this
+ * goes to a file instead. Enabled by BOND_DESK_DEBUG=1.
+ */
+const DESK_LOG = join(homedir(), '.bond', 'desk-debug.log')
+const deskDebug = process.env.BOND_DESK_DEBUG === '1'
+
+function deskLog(message: string, detail?: unknown): void {
+  if (!deskDebug) return
+  try {
+    const line = detail === undefined ? message : `${message} ${JSON.stringify(detail)}`
+    appendFileSync(DESK_LOG, `${new Date().toISOString()} ${line}\n`)
+  } catch { /* diagnostics must never break the panel */ }
 }
 
 interface Point { x: number; y: number }
@@ -178,16 +200,25 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
   function setClickThrough(next: boolean): void {
     if (!win || win.isDestroyed() || next === clickThrough) return
     clickThrough = next
+    deskLog('clickThrough', { clickThrough })
     win.setIgnoreMouseEvents(clickThrough, { forward: true })
     win.webContents.send('desk:hover', !clickThrough)
   }
 
+  let polls = 0
   function pollCursor(): void {
-    if (!win || win.isDestroyed() || suppressed) return
+    if (!win || win.isDestroyed() || suppressed) {
+      if (deskDebug && ++polls % 300 === 1) deskLog('poll skipped', { hasWin: !!win, suppressed })
+      return
+    }
     const point = screen.getCursorScreenPoint()
     const bounds = win.getBounds()
     const local = { x: point.x - bounds.x, y: point.y - bounds.y }
     const inside = hotRects.some(rect => pointIn(local, rect))
+    // Once a second while the cursor is anywhere near the top of the window.
+    if (deskDebug && local.y >= -20 && local.y < 80 && ++polls % 60 === 1) {
+      deskLog('poll', { point, bounds, local, rects: hotRects.length, inside })
+    }
     setClickThrough(!inside)
 
     // Follow the user's display — but only from Rest, and only after the
@@ -284,6 +315,11 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
         backgroundThrottling: false,
         contextIsolation: true,
         nodeIntegration: false,
+        // REQUIRED. Bond's preload is an ES module, and a sandboxed renderer
+        // cannot load one — it fails with "Cannot use import statement outside
+        // a module", leaving window.bond and window.desk undefined and the
+        // panel silently inert. Every other Bond window sets this too.
+        sandbox: false,
       },
     })
 
@@ -297,8 +333,20 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
     win.setIgnoreMouseEvents(true, { forward: true })
 
     win.on('closed', () => {
+      deskLog('window closed')
       win = null
       teardown()
+    })
+
+    // The panel has no devtools affordance of its own, so surface its console.
+    win.webContents.on('console-message', (_e, level, message, line, source) => {
+      deskLog('renderer console', { level, message, line, source })
+    })
+    win.webContents.on('preload-error', (_e, preloadPath, error) => {
+      deskLog('PRELOAD ERROR', { preloadPath, error: String(error) })
+    })
+    win.webContents.on('did-fail-load', (_e, code, description) => {
+      deskLog('did-fail-load', { code, description })
     })
 
     if (options.rendererUrl) {
@@ -309,6 +357,12 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
 
     currentDisplayId = display.id
     sendGeometry(display)
+    deskLog('created', {
+      bounds: win.getBounds(),
+      geometry: geometryPayload(display),
+      preload: options.preloadPath,
+      url: options.rendererUrl ?? options.rendererFile,
+    })
 
     watcher = createFullscreenWatcher({
       onChange: applySuppression,
@@ -359,6 +413,7 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
 
     /** Renderer callbacks, routed here by main's IPC handlers. */
     setHotRects(rects: DeskHotRect[]): void {
+      deskLog('setHotRects in', rects)
       if (!win || win.isDestroyed()) return
       const display = screen.getAllDisplays().find(d => d.id === currentDisplayId) ?? activeDisplay()
       const geometry = geometryFor(display, geometryByDisplay)
@@ -367,11 +422,13 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
         { width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
         { menuBarHeight: geometry.menuBarHeight, restWidth: restShape(geometry).width }
       )
+      deskLog('setHotRects clamped', hotRects)
       // An Ask is an active interaction; do not move the panel underneath it.
       interactive = hotRects.some(r => r.height > restShape(geometry).height)
     },
 
     markReady(): void {
+      deskLog('renderer ready')
       rendererReady = true
       if (win && !win.isDestroyed() && !suppressed && !win.isVisible()) win.showInactive()
     },

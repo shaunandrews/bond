@@ -14,6 +14,7 @@ import {
   getSuppression,
   isSuppressed,
   listMatchers,
+  pruneOverbroadMatchers,
   recordMatcherHit,
   recordRejection,
   repointMatcherByUser,
@@ -258,6 +259,52 @@ describe('rejection rollback', () => {
     writeInferredMatcher({ ...RESOURCE, threadId: studio.id, confidence: 0.9, example: {} })
     dropInferredMatchersForThread('sig-abc', studio.id)
     expect(listMatchers().map(m => m.threadId)).toEqual([isp.id])
+  })
+})
+
+describe('pruneOverbroadMatchers', () => {
+  function seedRaw(field: string, pattern: string, example: object = {}) {
+    const id = randomUUID()
+    getDb().prepare(`
+      INSERT INTO desk_matchers (id, thread_id, field, operator, pattern, normalized_pattern,
+        confirmed, source, confidence, specificity, example_json, created_at, updated_at)
+      VALUES (?, ?, ?, 'prefix', ?, ?, 0, 'inferred', 0.8, 200, ?, 'x', 'x')
+    `).run(id, studio.id, field, pattern, pattern.toLowerCase(), JSON.stringify(example))
+    return id
+  }
+
+  it('removes the over-broad patterns real inference produced', () => {
+    seedRaw('title', '~')
+    seedRaw('title', 'Bond')
+    seedRaw('bundle', 'Claude')
+    seedRaw('title', 'Studio — Sync Dialog') // keeper
+
+    const result = pruneOverbroadMatchers()
+    expect(result.deleted).toBe(3)
+    expect(listMatchers().map(m => m.pattern)).toEqual(['Studio — Sync Dialog'])
+  })
+
+  it('never touches a confirmed matcher, however broad', () => {
+    confirmMatcher({ field: 'title', operator: 'prefix', pattern: '~', threadId: studio.id })
+    expect(pruneOverbroadMatchers().deleted).toBe(0)
+    expect(listMatchers()).toHaveLength(1)
+  })
+
+  it('never touches exact-resource matchers — they are narrow by construction', () => {
+    writeInferredMatcher({ ...RESOURCE, threadId: studio.id, confidence: 0.8, example: {} })
+    expect(pruneOverbroadMatchers().deleted).toBe(0)
+  })
+
+  it('uses the captured example to judge a title against its app', () => {
+    seedRaw('title', 'Studio Workbench', { appName: 'Studio Workbench' })
+    expect(pruneOverbroadMatchers().deleted).toBe(1)
+  })
+
+  it('is idempotent and safe on an empty store', () => {
+    expect(pruneOverbroadMatchers().deleted).toBe(0)
+    seedRaw('title', '~')
+    pruneOverbroadMatchers()
+    expect(pruneOverbroadMatchers().deleted).toBe(0)
   })
 })
 
