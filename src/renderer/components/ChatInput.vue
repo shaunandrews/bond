@@ -739,12 +739,18 @@ function handleKeyDown(e: KeyboardEvent) {
   align-items: center;
 }
 
+.mobile-composer .chat-textarea-wrapper {
+  /* 8px wrapper inset + the textarea's own 8px inset = 16px: exactly the
+     mobile transcript column's text edge. */
+  padding-inline: 8px;
+}
+
 .mobile-composer .composer-toolbar {
   justify-content: space-between;
   min-height: 44px;
-  /* Controls remain clear of the home indicator while the glass field—not an
-     empty wrapper—continues all the way to the physical screen edge. */
-  padding: 2px 4px max(2px, env(safe-area-inset-bottom));
+  /* Use the lower part of the home-indicator area rather than reserving it as
+     empty air, while retaining a small physical-edge buffer. */
+  padding: 2px 16px max(8px, calc(env(safe-area-inset-bottom) - 24px));
 }
 
 .mobile-composer .composer-toolbar > div:last-child {
