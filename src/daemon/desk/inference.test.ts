@@ -119,7 +119,7 @@ describe('buildPrompt', () => {
     const prompt = buildPrompt(buildBriefs(segments, getDb()), threads)
     // ~1.5k tokens at the absolute ceiling: a full 14-segment batch, 24 thread
     // labels, two long titles and a path each, all with oversized text.
-    expect(prompt.length).toBeLessThan(6500)
+    expect(prompt.length).toBeLessThan(6800)
   })
 
   it('a typical batch is far smaller than the ceiling', () => {
@@ -129,7 +129,7 @@ describe('buildPrompt', () => {
       return getSegment(s.id)!
     })
     const prompt = buildPrompt(buildBriefs(segments, getDb()), listThreads())
-    expect(prompt.length).toBeLessThan(2200) // ~550 tokens
+    expect(prompt.length).toBeLessThan(2500) // ~625 tokens
   })
 
   it('clips a long excerpt rather than paying for the whole capture', () => {
@@ -271,14 +271,29 @@ describe('runInferenceBatch', () => {
     })
   })
 
-  it('also writes the narrower concrete matcher when the model names one', async () => {
-    const t = createThread({ name: 'Studio sync', source: 'user' })
-    segment({ appName: 'Studio' }, 'sig-1')
-    await run(async () => `S1|${t.id}|0.9|title|Studio — Sync`)
+  it('writes a title matcher as CONTAINS, so a project token mid-title matches', async () => {
+    // A thread spans apps and the token lives inside the title:
+    // "~/Developer/Projects/studio — nvim". Prefix could never find it.
+    const t = createThread({ name: 'Studio', source: 'user' })
+    segment({ appName: 'Ghostty' }, 'sig-1')
+    await run(async () => `S1|${t.id}|0.9|title|studio`)
 
-    const narrow = findMatcher({ field: 'title', operator: 'prefix', pattern: 'Studio — Sync' })!
+    const narrow = findMatcher({ field: 'title', operator: 'contains', pattern: 'studio' })!
     expect(narrow.threadId).toBe(t.id)
     expect(narrow.confirmed).toBe(false)
+  })
+
+  it('that matcher then resolves the same token across different apps', async () => {
+    const t = createThread({ name: 'Studio', source: 'user' })
+    segment({ appName: 'Ghostty' }, 'sig-1')
+    await run(async () => `S1|${t.id}|0.9|title|studio`)
+
+    const { resolveMatcher } = await import('./matchers')
+    // A terminal, a Figma file, and a GitHub page all carry the token.
+    for (const title of ['~/Developer/Projects/studio — nvim', 'studio-figma-todo.md', 'automattic/studio · GitHub']) {
+      expect(resolveMatcher({ signature: 'other', bundleId: null, titles: [title], paths: [] })?.threadId)
+        .toBe(t.id)
+    }
   })
 
   it('cannot mutate or demote a confirmed matcher', async () => {

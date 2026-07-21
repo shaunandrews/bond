@@ -6,6 +6,7 @@ import { socketIdentity, socketLost, type DaemonHealth } from './lifecycle'
 import type { TaggedChunk } from '../shared/stream'
 import type { BondStreamChunk } from '../shared/stream'
 import type { SessionMessage, AttachedImage, EditMode, FieldDefInput } from '../shared/session'
+import type { DetectedWindow } from '../shared/sense'
 import { parseEditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
 import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, getSourceMessages, reconcileInterruptedTurns } from './transcript'
@@ -1185,6 +1186,14 @@ const handlers: RpcHandlers = {
     if (!captureId || !imagePath) throw new RpcError(RPC_INVALID_PARAMS, 'captureId and imagePath required')
     ctrl.onCaptureReady(captureId, imagePath)
     return { ok: true }
+  },
+
+  'sense.windows': (params) => {
+    // Window titles require Screen Recording, which the daemon does not have
+    // under launchd. Main does, so it polls the helper and pushes here.
+    const windows = getParam(raw(params), 'windows')
+    if (Array.isArray(windows)) getSenseController().onWindowSnapshot(windows as DetectedWindow[])
+    return { ok: true as const }
   },
 
   'sense.captureFailed': (params) => {

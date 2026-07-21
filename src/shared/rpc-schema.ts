@@ -23,7 +23,7 @@ import type {
 import type { BondSendInput, TaggedChunk } from './stream'
 import type { PendingQuestion, QuestionAnswer } from './questions'
 import type { TranscriptMessage, TranscriptPage } from './transcript'
-import type { SenseSettings, SenseState, SessionDebrief } from './sense'
+import type { DetectedWindow, SenseSettings, SenseState, SessionDebrief } from './sense'
 import type {
   CoreMemory,
   MemoryItem,
@@ -347,6 +347,7 @@ export interface RpcMethods {
   'sense.resume': { params: void; result: { ok: true } }
   'sense.captureReady': { params: { captureId: string; imagePath: string }; result: { ok: true } }
   'sense.captureFailed': { params: { captureId: string; reason?: string }; result: { ok: true } }
+  'sense.windows': { params: { windows: DetectedWindow[] }; result: { ok: true } }
   'sense.now': { params: void; result: { capture: SenseCaptureRow | null; state: SenseState } }
   'sense.today': { params: void; result: { sessions: SenseSessionRow[]; apps: SenseAppRow[] } }
   'sense.search': { params: { query: string; limit?: number }; result: SenseSearchHit[] }
@@ -573,6 +574,7 @@ export const RPC_METHOD_NAMES = [
   'sense.resume',
   'sense.captureReady',
   'sense.captureFailed',
+  'sense.windows',
   'sense.now',
   'sense.today',
   'sense.search',

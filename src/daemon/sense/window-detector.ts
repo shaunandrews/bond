@@ -9,11 +9,22 @@ export interface WindowSnapshot {
   timestamp: string
 }
 
+/**
+ * How long a pushed snapshot stays authoritative.
+ *
+ * Main polls the helper at ~1.3Hz, so anything older than this means main has
+ * gone away (quit, reloading) and the daemon should fall back to spawning the
+ * helper itself — degraded, because titles will be blank, but not dead.
+ */
+const PUSH_TTL_MS = 6_000
+
 export interface WindowDetector extends EventEmitter {
   on(event: 'appSwitch', listener: (current: DetectedWindow, previous: DetectedWindow | null) => void): this
   emit(event: 'appSwitch', current: DetectedWindow, previous: DetectedWindow | null): boolean
   getSnapshot(): Promise<WindowSnapshot>
   getLastSnapshot(): WindowSnapshot | null
+  /** Main pushing a snapshot taken with Screen Recording permission. */
+  acceptSnapshot(windows: DetectedWindow[]): void
   startPolling(): void
   stopPolling(): void
 }
@@ -30,6 +41,7 @@ export function createWindowDetector(): WindowDetector {
   const helperPath = resolveHelperPath('bond-window-helper')
   let lastSnapshot: WindowSnapshot | null = null
   let timer: ReturnType<typeof setInterval> | null = null
+  let pushed: { snapshot: WindowSnapshot; at: number } | null = null
 
   function capture(): Promise<WindowSnapshot> {
     return new Promise((resolve, reject) => {
@@ -80,7 +92,36 @@ export function createWindowDetector(): WindowDetector {
     }
   }
 
-  emitter.getSnapshot = () => capture()
+  /**
+   * Prefer main's snapshot. `kCGWindowName` returns an EMPTY STRING for other
+   * apps' windows unless the calling process holds Screen Recording permission
+   * — and the daemon runs under launchd as bare node, which does not. Spawning
+   * the helper here yields app names with no titles, which collapses every
+   * window of an app into one indistinguishable resource.
+   */
+  emitter.getSnapshot = async () => {
+    if (pushed && Date.now() - pushed.at < PUSH_TTL_MS) return pushed.snapshot
+    return capture()
+  }
+
+  emitter.acceptSnapshot = (windows: DetectedWindow[]) => {
+    const snapshot: WindowSnapshot = {
+      windows,
+      activeWindow: windows.find(w => w.active) ?? null,
+      timestamp: new Date().toISOString(),
+    }
+    pushed = { snapshot, at: Date.now() }
+    // App-switch detection rides the pushed stream too, so event-driven
+    // captures keep firing while main is the source of truth.
+    const previousActive = lastSnapshot?.activeWindow ?? null
+    const currentActive = snapshot.activeWindow
+    if (currentActive && (!previousActive
+      || currentActive.bundleId !== previousActive.bundleId
+      || currentActive.title !== previousActive.title)) {
+      emitter.emit('appSwitch', currentActive, previousActive)
+    }
+    lastSnapshot = snapshot
+  }
   emitter.getLastSnapshot = () => lastSnapshot
 
   emitter.startPolling = () => {

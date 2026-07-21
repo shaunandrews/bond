@@ -275,13 +275,19 @@ describe('pruneOverbroadMatchers', () => {
 
   it('removes the over-broad patterns real inference produced', () => {
     seedRaw('title', '~')
-    seedRaw('title', 'Bond')
     seedRaw('bundle', 'Claude')
+    seedRaw('title', 'New Tab')
     seedRaw('title', 'Studio — Sync Dialog') // keeper
 
     const result = pruneOverbroadMatchers()
     expect(result.deleted).toBe(3)
     expect(listMatchers().map(m => m.pattern)).toEqual(['Studio — Sync Dialog'])
+  })
+
+  it('keeps a project token — that is the signal, not noise', () => {
+    seedRaw('title', 'studio')
+    seedRaw('title', 'bond')
+    expect(pruneOverbroadMatchers().deleted).toBe(0)
   })
 
   it('never touches a confirmed matcher, however broad', () => {

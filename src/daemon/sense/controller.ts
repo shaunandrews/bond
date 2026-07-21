@@ -9,7 +9,7 @@ import { isBlacklisted, isAmbiguous } from './privacy'
 import { createTextWorker } from './worker'
 import { runRetentionCleanup } from './storage'
 import { getStillsDir, getDateDir } from './storage'
-import type { SenseState, SenseSettings, SenseCapture } from '../../shared/sense'
+import type { DetectedWindow, SenseState, SenseSettings, SenseCapture } from '../../shared/sense'
 import { DEFAULT_SENSE_SETTINGS } from '../../shared/sense'
 
 /**
@@ -45,6 +45,8 @@ export interface SenseController extends EventEmitter {
   wake(): void
   onCaptureReady(captureId: string, imagePath: string): void
   onCaptureFailed(captureId: string, reason?: string): void
+  /** Main pushing a window snapshot taken with Screen Recording permission. */
+  onWindowSnapshot(windows: DetectedWindow[]): void
   updateSettings(updates: Partial<SenseSettings>): SenseSettings
   destroy(): void
   /** Test seam: force a capture without driving presence through ioreg. */
@@ -418,6 +420,10 @@ export function createSenseController(
     if (!pendingCapture || pendingCapture.id !== captureId) return
     console.warn(`[sense/controller] Capture ${captureId} failed: ${reason ?? 'unknown'}`)
     clearPendingCapture(captureId)
+  }
+
+  emitter.onWindowSnapshot = (windows) => {
+    windowDetector.acceptSnapshot(windows)
   }
 
   emitter.updateSettings = (updates: Partial<SenseSettings>): SenseSettings => {

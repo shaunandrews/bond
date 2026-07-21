@@ -180,7 +180,9 @@ export function buildPrompt(briefs: SegmentBrief[], threads: DeskThread[]): stri
 
   return `You are labelling observed desktop activity into coherent work threads.
 
-A work thread is a lightweight name for a coherent piece of work — "Bond mobile composer", "Studio sync dialog", "ISP problem". It is not a project, a repository, or a category.
+A thread is a coherent piece of work — "Studio", "Bond mobile composer", "ISP problem" — and it SPANS APPS. Studio might be a dev build (reporting as "Electron"), a terminal in the studio folder, a Figma file, a Linear issue: one thread. App names mislead — two dev builds are both "Electron", every terminal tab is the same terminal.
+
+What identifies a thread is the PROJECT TOKEN: a distinctive name like "studio" or "bond" inside a title, path, or URL. Look there first.
 
 Existing threads (reply with the T-ref when the activity belongs to one):
 ${labels}
@@ -189,11 +191,13 @@ Observations:
 ${observations}
 
 For each observation, reply with one line:
-<ref>|<T-ref or NEW:thread name>|<confidence 0-1>|<matcher field: bundle|title|path|none>|<matcher pattern or ->
+<ref>|<T-ref or NEW:thread name>|<confidence 0-1>|<matcher field: title|path|bundle|none>|<matcher pattern or ->
 
 Rules:
 - Prefer an existing T-ref. Propose at most ONE new thread across the whole batch, and only if nothing existing fits.
-- The matcher is the narrowest concrete pattern that would identify this resource again. Use "none" unless the pattern is distinctive — never a bare generic app name like Chrome, Terminal, Finder, Slack, or Code.
+- The matcher is the PROJECT TOKEN, not the whole title. For "~/Developer/Projects/studio — nvim" the matcher is "studio", which also matches the Figma file and the GitHub page. Matching is substring-based.
+- Use "none" when nothing generalizes: a one-off article, a product page, a document you will never see again. The resource is cached either way, so "none" costs nothing.
+- Never a bare app name (Chrome, Terminal, Slack, Code, Electron), never a filename containing a uuid or hash.
 - Confidence below 0.5 means you are guessing; say so honestly.
 - Output only the lines. No prose, no headers, no markdown.`
 }
@@ -397,7 +401,12 @@ export async function runInferenceBatch(options: InferenceOptions): Promise<Infe
         } else {
           writeInferredMatcher({
             field: line.matcherField,
-            operator: line.matcherField === 'path' ? 'exact' : 'prefix',
+            // A project token lives INSIDE a title ("~/Projects/studio — nvim"),
+            // so prefix matching could never find it. Paths and bundle ids are
+            // already whole identifiers.
+            operator: line.matcherField === 'title' ? 'contains'
+              : line.matcherField === 'path' ? 'contains'
+              : 'exact',
             pattern: line.matcherPattern,
             threadId,
             confidence: line.confidence,

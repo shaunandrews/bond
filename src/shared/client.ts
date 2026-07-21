@@ -3,7 +3,7 @@ import type { BondSendInput, TaggedChunk } from './stream'
 import type { AttachedImage, EditMode, FieldDefInput, SessionMessage } from './session'
 import type { ImageMediaType } from './session'
 import type { TranscriptMessage } from './transcript'
-import type { SenseSettings } from './sense'
+import type { DetectedWindow, SenseSettings } from './sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
 import type { WebRenderResult } from './web'
 import type { QuestionAnswer } from './questions'
@@ -481,6 +481,10 @@ export class BondClient {
 
   async senseCaptureFailed(captureId: string, reason?: string): Promise<RpcResult<'sense.captureFailed'>> {
     return this.call('sense.captureFailed', { captureId, reason })
+  }
+
+  async senseWindows(windows: DetectedWindow[]): Promise<RpcResult<'sense.windows'>> {
+    return this.call('sense.windows', { windows })
   }
 
   async webRenderReady(result: WebRenderResult): Promise<RpcResult<'web.renderReady'>> {

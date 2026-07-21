@@ -9,9 +9,12 @@
  */
 
 import { desktopCapturer, screen, systemPreferences, powerMonitor } from 'electron'
+import { execFile } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BondClient } from '../shared/client'
+import type { DetectedWindow } from '../shared/sense'
+import { resolveHelperPath } from '../daemon/sense/helpers'
 
 const JPEG_QUALITY = 90 // 0-100, passed to NativeImage.toJPEG()
 const CAPTURE_SCALE = 0.75 // Three-quarter resolution
@@ -47,10 +50,65 @@ export function initSense(client: BondClient): void {
     }
   })
   cleanupFns.push(unsubCapture)
+  startWindowPolling(client)
 
   // Power monitor events — the daemon's presence monitor handles idle detection
   // via ioreg naturally, so system sleep/wake is detected as extended idle time.
   // No explicit forwarding needed for v1.
+}
+
+/**
+ * Window titles require Screen Recording permission, and the daemon does not
+ * have it: `bin/bond start` runs it under launchd as bare node, where
+ * `kCGWindowName` returns an EMPTY STRING for every other app's window. The
+ * daemon used to inherit the grant because Electron spawned it; under launchd
+ * supervision it does not.
+ *
+ * The effect is severe rather than cosmetic — with no titles, every window of
+ * an app collapses into one resource, so two dev Electron apps (say Bond and
+ * Studio) become literally indistinguishable, and so does every terminal tab.
+ *
+ * Main has the grant, so main reads the windows and pushes them over. Same
+ * shape as the screenshot round-trip that already exists.
+ */
+const WINDOW_POLL_MS = 2_000
+const WINDOW_HELPER_TIMEOUT_MS = 3_000
+
+function readWindows(): Promise<DetectedWindow[]> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      resolveHelperPath('bond-window-helper'),
+      ['--json', '--min-visible-area', '3000'],
+      { timeout: WINDOW_HELPER_TIMEOUT_MS },
+      (err, stdout, stderr) => {
+        if (err) return reject(new Error(`bond-window-helper failed: ${stderr || err.message}`))
+        try {
+          const parsed = JSON.parse(stdout.trim())
+          resolve(Array.isArray(parsed) ? (parsed as DetectedWindow[]) : [])
+        } catch (e) {
+          reject(new Error(`Failed to parse window-helper output: ${e}`))
+        }
+      }
+    )
+  })
+}
+
+function startWindowPolling(client: BondClient): void {
+  let inFlight = false
+  const timer = setInterval(async () => {
+    if (inFlight) return // never stack spawns
+    inFlight = true
+    try {
+      await client.senseWindows(await readWindows())
+    } catch {
+      // A failed poll is not worth logging every two seconds; the daemon falls
+      // back to spawning the helper itself once the push goes stale.
+    } finally {
+      inFlight = false
+    }
+  }, WINDOW_POLL_MS)
+  timer.unref?.()
+  cleanupFns.push(() => clearInterval(timer))
 }
 
 /**

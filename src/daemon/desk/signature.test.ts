@@ -198,13 +198,24 @@ describe('isGenericBundle', () => {
 })
 
 describe('tooBroadReason', () => {
-  it('rejects the patterns that actually showed up in real inference output', () => {
-    // Every one of these was written to a live database and mis-attributed work.
+  it('rejects the junk that actually showed up in real inference output', () => {
     expect(tooBroadReason('title', '~')).toBeTruthy()
-    expect(tooBroadReason('title', 'Bond')).toBeTruthy()
-    expect(tooBroadReason('title', 'codex')).toBeTruthy()
     expect(tooBroadReason('bundle', 'Claude')).toBeTruthy()
-    expect(tooBroadReason('title', 'Studio')).toBeTruthy()
+    expect(tooBroadReason('title', 'Claude')).toBeTruthy()
+    expect(tooBroadReason('title', 'Chrome')).toBeTruthy()
+  })
+
+  it('ACCEPTS a project token — the signal a thread is actually identified by', () => {
+    // A thread spans apps: Studio is a dev build, a terminal in the studio
+    // folder, a Figma file, a Linear issue. The token is what ties them
+    // together, and it is short and single-word by nature.
+    expect(tooBroadReason('title', 'studio')).toBeNull()
+    expect(tooBroadReason('title', 'bond')).toBeNull()
+    expect(tooBroadReason('path', 'studio')).toBeNull()
+  })
+
+  it('still rejects a token that is just the app it came from', () => {
+    expect(tooBroadReason('title', 'Ghostty', { appName: 'Ghostty' })).toMatch(/just the app name/)
   })
 
   it('rejects punctuation-only patterns', () => {
@@ -245,12 +256,18 @@ describe('tooBroadReason', () => {
       .toMatch(/just the app name/)
   })
 
-  it('rejects a single word inside a generic app — a bundle rule in disguise', () => {
-    expect(tooBroadReason('title', 'bondbondbond', { bundleId: 'com.mitchellh.ghostty' }))
-      .toMatch(/single word inside a generic app/)
-    // ...but a multi-word title in the same app is fine
-    expect(tooBroadReason('title', '~/Developer/Projects/bond — nvim', { bundleId: 'com.mitchellh.ghostty' }))
-      .toBeNull()
+  it('rejects generic vocabulary that appears in everyone\'s windows', () => {
+    for (const word of ['New Tab', 'Untitled', 'Inbox', 'Dashboard', 'localhost', 'Downloads']) {
+      expect(tooBroadReason('title', word)).toMatch(/too generic/)
+    }
+  })
+
+  it('is not fooled by a leading article', () => {
+    expect(tooBroadReason('title', 'The Dashboard')).toMatch(/too generic/)
+  })
+
+  it('accepts a project token inside a generic app — that is the whole point', () => {
+    expect(tooBroadReason('title', 'studio', { bundleId: 'com.mitchellh.ghostty' })).toBeNull()
   })
 })
 
