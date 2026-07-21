@@ -37,8 +37,16 @@ const reassigning = ref<string | null>(null)
 /** What Bond learned from the last correction. Said once, visibly, then gone. */
 const learned = ref<string | null>(null)
 
-type Mode = 'rest' | 'glance' | 'ask' | 'open'
+/**
+ * Hover and click land on the SAME surface — there is no separate Glance
+ * lozenge. Hovering opens the panel and leaving closes it; clicking pins it so
+ * it stays. Two different shapes for "show me" and "let me use it" was one
+ * state too many.
+ */
+type Mode = 'rest' | 'ask' | 'open'
 const mode = ref<Mode>('rest')
+/** Click pins the panel open; hover alone does not. */
+const pinned = ref(false)
 
 const pending = computed(() => status.value?.pendingQuestion ?? null)
 
@@ -90,8 +98,6 @@ const windowWidth = computed(() => geometry.value?.windowWidth ?? 640)
 const REST_HOVER_WIDTH = 240
 const REST_HOVER_HEIGHT = 14
 
-const GLANCE_WIDTH = 300
-const GLANCE_HEIGHT = 36
 const ASK_WIDTH = 380
 const ASK_HEIGHT = 48
 const OPEN_WIDTH = 400
@@ -99,12 +105,10 @@ const OPEN_MAX_HEIGHT = 420
 
 const dropped = computed(() => mode.value !== 'rest')
 
-const droppedWidth = computed(() =>
-  mode.value === 'open' ? OPEN_WIDTH : mode.value === 'ask' ? ASK_WIDTH : GLANCE_WIDTH)
+const droppedWidth = computed(() => (mode.value === 'ask' ? ASK_WIDTH : OPEN_WIDTH))
 
 /** Content height, below the menu bar strip the shape swallows. */
-const droppedBody = computed(() =>
-  mode.value === 'open' ? OPEN_MAX_HEIGHT : mode.value === 'ask' ? ASK_HEIGHT : GLANCE_HEIGHT)
+const droppedBody = computed(() => (mode.value === 'ask' ? ASK_HEIGHT : OPEN_MAX_HEIGHT))
 
 /**
  * Every dropped state starts at `top: 0` and is wider than the notch, so the
@@ -167,12 +171,15 @@ function hotRects(): DeskHotRect[] {
     ]
   }
 
-  const width = mode.value === 'open' ? OPEN_WIDTH : mode.value === 'ask' ? ASK_WIDTH : GLANCE_WIDTH
-  const height = mode.value === 'open' ? OPEN_MAX_HEIGHT : mode.value === 'ask' ? ASK_HEIGHT : GLANCE_HEIGHT
   return [
     // Keep the notch strip hot so moving up into it does not drop the panel.
     { x: centreX - restWidth.value / 2, y: 0, width: restWidth.value, height: restHeight.value },
-    { x: centreX - width / 2, y: menuBarHeight.value, width, height },
+    {
+      x: centreX - droppedWidth.value / 2,
+      y: menuBarHeight.value,
+      width: droppedWidth.value,
+      height: droppedBody.value,
+    },
   ]
 }
 
@@ -187,21 +194,29 @@ function publishHotRects(): void {
  * reach the menu bar, the traffic lights, and window drags — without a delay it
  * becomes a minefield.
  */
-const GLANCE_DELAY_MS = 400
-let glanceTimer: ReturnType<typeof setTimeout> | null = null
+const HOVER_OPEN_MS = 400
+/** Leaving is forgiving — clipping a corner on the way in must not slam it shut. */
+const HOVER_CLOSE_MS = 260
+let hoverTimer: ReturnType<typeof setTimeout> | null = null
 
-function clearGlanceTimer(): void {
-  if (glanceTimer) { clearTimeout(glanceTimer); glanceTimer = null }
+function clearHoverTimer(): void {
+  if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null }
 }
 
 watch(hovering, (inside) => {
-  clearGlanceTimer()
-  // Ask and Open own the surface; hover never overrides them.
-  if (mode.value === 'ask' || mode.value === 'open') return
+  clearHoverTimer()
+  if (mode.value === 'ask') return // an Ask owns the surface until answered
+
   if (inside) {
-    glanceTimer = setTimeout(() => { if (mode.value === 'rest') mode.value = 'glance' }, GLANCE_DELAY_MS)
-  } else if (mode.value === 'glance') {
-    mode.value = 'rest'
+    if (mode.value === 'open') return
+    hoverTimer = setTimeout(() => { if (mode.value === 'rest') mode.value = 'open' }, HOVER_OPEN_MS)
+    return
+  }
+  // Left the surface. A pinned panel stays; a hovered one retracts.
+  if (mode.value === 'open' && !pinned.value) {
+    hoverTimer = setTimeout(() => {
+      if (mode.value === 'open' && !pinned.value && !hovering.value) mode.value = 'rest'
+    }, HOVER_CLOSE_MS)
   }
 })
 
@@ -245,6 +260,7 @@ watch(pending, (question) => {
   }
   // Never yank an open panel out from under someone to ask a question.
   if (mode.value === 'open') return
+  pinned.value = false
   mode.value = 'ask'
   askTimer = setTimeout(() => { if (mode.value === 'ask') mode.value = 'rest' }, 20_000)
 })
@@ -252,15 +268,22 @@ watch(pending, (question) => {
 watch(mode, (next) => {
   publishHotRects()
   if (next === 'open') refreshPanel()
-  if (next !== 'open') { reassigning.value = null; learned.value = null }
+  if (next !== 'open') { reassigning.value = null; learned.value = null; pinned.value = false }
 })
 watch(geometry, publishHotRects)
 
 // --- actions ---
 
+/** Click pins an already-hovered panel, or opens and pins from Rest. */
 function toggleOpen(): void {
-  clearGlanceTimer()
-  mode.value = mode.value === 'open' ? 'rest' : 'open'
+  clearHoverTimer()
+  if (mode.value === 'open' && pinned.value) {
+    pinned.value = false
+    mode.value = 'rest'
+    return
+  }
+  pinned.value = true
+  mode.value = 'open'
 }
 
 async function answer(accepted: boolean): Promise<void> {
@@ -358,7 +381,7 @@ onMounted(() => {
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
-  if (mode.value === 'open' || mode.value === 'ask') mode.value = 'rest'
+  if (mode.value === 'open' || mode.value === 'ask') { pinned.value = false; mode.value = 'rest' }
 }
 
 onUnmounted(() => {
@@ -366,7 +389,7 @@ onUnmounted(() => {
   offGeometry?.()
   offDeskChanged?.()
   window.removeEventListener('keydown', onKeydown)
-  clearGlanceTimer()
+  clearHoverTimer()
   if (askTimer) clearTimeout(askTimer)
 })
 </script>
@@ -389,13 +412,6 @@ onUnmounted(() => {
         <span class="desk-mark" :style="markStyle" />
       </button>
 
-      <!-- Glance: thread + coarse time. Make-aware, no action wanted. -->
-      <button v-else-if="mode === 'glance'" type="button" class="desk-glance desk-content" @click="toggleOpen">
-        <span class="desk-dot" :style="threadColor ? { background: threadColor } : undefined" />
-        <span class="desk-glance-name">{{ currentName ?? 'Nothing yet' }}</span>
-        <span v-if="currentName" class="desk-glance-time">{{ currentElapsed }}</span>
-      </button>
-
       <!-- Ask: one line, two answers. Never a modal, never an interrupt. -->
       <div v-else-if="mode === 'ask'" class="desk-content desk-ask">
         <span class="desk-ask-text">{{ askText }}</span>
@@ -411,7 +427,12 @@ onUnmounted(() => {
           <span class="desk-dot" :style="threadColor ? { background: threadColor } : undefined" />
           <span class="desk-panel-now">{{ currentName ?? 'Nothing in flight' }}</span>
           <span v-if="currentName" class="desk-glance-time">{{ currentElapsed }}</span>
-          <button type="button" class="desk-close" aria-label="Close Desk panel" @click="toggleOpen">&times;</button>
+          <button
+            type="button"
+            class="desk-close"
+            :aria-label="pinned ? 'Close Desk panel' : 'Keep Desk panel open'"
+            @click="toggleOpen"
+          >{{ pinned ? '\u00d7' : '\u00b7' }}</button>
         </header>
 
         <p v-if="learned" class="desk-learned">{{ learned }}</p>
@@ -479,12 +500,54 @@ onUnmounted(() => {
   background: #000;
   filter: drop-shadow(0 12px 30px rgba(0, 0, 0, 0.55));
   align-items: stretch;
-  overflow: hidden;
+  /* Visible, so the concave corners can paint OUTSIDE the shape. The scrolling
+     content clips itself. */
+  overflow: visible;
   /* The plan's motion budget: transform and opacity only, scaled from the top
      edge so it unfurls out of the notch. Compositor-only — no width/height
      animation, no spring, no bounce. */
   transform-origin: top center;
   animation: desk-unfurl 0.34s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/**
+ * Concave top corners.
+ *
+ * The panel hangs from the screen edge, so a convex radius up there would read
+ * as a floating card that happens to be near the notch. An INVERTED corner —
+ * black flaring outward along the menu bar, then curving down into the panel's
+ * side — is what makes it read as one continuous piece of hardware. It is the
+ * same fillet macOS puts where the notch meets the display edge.
+ *
+ * Built from a radial-gradient quarter-disc placed just outside each top
+ * corner: transparent inside the arc, panel-black outside it.
+ */
+.desk-shape.is-dropped::before,
+.desk-shape.is-dropped::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: var(--desk-corner, 14px);
+  height: var(--desk-corner, 14px);
+  pointer-events: none;
+}
+
+.desk-shape.is-dropped::before {
+  left: calc(var(--desk-corner, 14px) * -1);
+  background: radial-gradient(
+    circle at 0 100%,
+    transparent var(--desk-corner, 14px),
+    #000 var(--desk-corner, 14px)
+  );
+}
+
+.desk-shape.is-dropped::after {
+  right: calc(var(--desk-corner, 14px) * -1);
+  background: radial-gradient(
+    circle at 100% 100%,
+    transparent var(--desk-corner, 14px),
+    #000 var(--desk-corner, 14px)
+  );
 }
 
 @keyframes desk-unfurl {
@@ -538,30 +601,6 @@ onUnmounted(() => {
   height: 7px;
   border-radius: 999px;
   background: #8b939e;
-}
-
-/* --- Glance --- */
-
-.desk-glance {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  height: 100%;
-  padding: 0 0.875rem;
-  background: transparent;
-  border: 0;
-  color: inherit;
-  cursor: pointer;
-}
-
-.desk-glance-name {
-  font: 500 12px/1.2 var(--font-sans, system-ui);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  text-align: left;
 }
 
 .desk-glance-time {
@@ -620,6 +659,8 @@ onUnmounted(() => {
   padding: 0.5rem;
   gap: 0.5rem;
   overflow-y: auto;
+  /* The shape is overflow:visible for the corners, so content clips itself. */
+  border-radius: 0 0 16px 16px;
 }
 
 .desk-panel-head {
