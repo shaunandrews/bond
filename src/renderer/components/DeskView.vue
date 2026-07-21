@@ -17,6 +17,7 @@ import BondInput from './BondInput.vue'
 import BondSelect from './BondSelect.vue'
 import BondTab from './BondTab.vue'
 import BondText from './BondText.vue'
+import BondToolbar from './BondToolbar.vue'
 import { appColor } from '../composables/useSense'
 import { formatApproxDuration } from '../../shared/desk'
 import type { DeskBlockDetail, DeskMatcher, DeskStats, DeskStatus, DeskThread } from '../../shared/desk'
@@ -182,10 +183,22 @@ onUnmounted(() => offChanged?.())
 
 <template>
   <div class="desk-view">
-    <header class="desk-view-head">
+    <!--
+      The right panel's top-right strip is occupied by App's floating
+      `.right-panel-controls` nav, so the first row has to be a BondToolbar and
+      nothing else — same as MemoryView. Putting tabs and a button up here runs
+      them straight underneath those icons.
+    -->
+    <BondToolbar label="Desk" drag blur>
+      <template #middle>
+        <BondText size="sm" weight="medium">Desk</BondText>
+      </template>
+    </BondToolbar>
+
+    <div class="desk-view-tabs">
       <BondTab :tabs="tabs" v-model="tab" />
       <BondButton variant="ghost" size="sm" :disabled="loading" @click="load">Refresh</BondButton>
-    </header>
+    </div>
 
     <!-- Day -->
     <div v-if="tab === 'day'" class="desk-view-body">
@@ -312,19 +325,26 @@ onUnmounted(() => offChanged?.())
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  /* Each right-panel view draws its own seam against the transcript — see
+     MemoryView, LibraryView, SensePanelView. There is no shared wrapper doing
+     it, so omitting these leaves the panel floating with no edge. */
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg);
 }
 
-.desk-view-head {
+.desk-view-tabs {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+  padding: 0.375rem 0.75rem;
   border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
 }
 
 .desk-view-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 0.75rem;
   display: flex;

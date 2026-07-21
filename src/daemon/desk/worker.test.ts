@@ -25,7 +25,15 @@ let testDir: string
 let studio: DeskThread
 
 const SESSION = 'session-1'
-const T0 = Date.parse('2026-07-20T09:00:00.000Z')
+/**
+ * RELATIVE to now, deliberately.
+ *
+ * The segmenter only reaches back BACKFILL_HORIZON_HOURS on a fresh
+ * checkpoint, so a hardcoded fixture date is a time bomb: these tests passed
+ * for a day and then every one of them failed the moment the fixture aged past
+ * 24 hours. Anchor the fixture to the clock the code reads.
+ */
+const T0 = Date.now() - 2 * 60 * 60 * 1000
 const at = (offsetSeconds: number) => new Date(T0 + offsetSeconds * 1000).toISOString()
 
 beforeEach(() => {
