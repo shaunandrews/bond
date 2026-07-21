@@ -188,13 +188,39 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
     win.webContents.send('desk:geometry', geometryPayload(display))
   }
 
+  /** Where we last put the window, so drift can be detected and undone. */
+  let expectedBounds: { x: number; y: number; width: number; height: number } | null = null
+
   /** Position (never resize) the window on a display. */
   function anchorTo(display: Display): void {
     if (!win || win.isDestroyed()) return
     const origin = originFor(display, { width: WINDOW_WIDTH, height: WINDOW_HEIGHT })
-    win.setBounds({ ...origin, width: WINDOW_WIDTH, height: WINDOW_HEIGHT })
+    expectedBounds = { ...origin, width: WINDOW_WIDTH, height: WINDOW_HEIGHT }
+    win.setBounds(expectedBounds)
     currentDisplayId = display.id
     sendGeometry(display)
+  }
+
+  /**
+   * Put the window back if something moved it.
+   *
+   * Switching Spaces drags the panel along with the transition, because
+   * WindowServer only leaves a window alone during a Space change when it has
+   * `NSWindowCollectionBehaviorStationary` — and Electron exposes no way to set
+   * it (`setVisibleOnAllWorkspaces` covers canJoinAllSpaces and nothing else,
+   * and `electron_ns_panel.mm` re-ORs its own behaviour into every write
+   * anyway). Since we cannot ask for stationary, we enforce it: notice the
+   * drift and undo it.
+   *
+   * Cheap enough to run continuously — a bounds read is a WindowServer query,
+   * so it runs at a fraction of the cursor poll rather than every frame.
+   */
+  function correctDrift(): void {
+    if (!win || win.isDestroyed() || !expectedBounds) return
+    const actual = win.getBounds()
+    if (actual.x === expectedBounds.x && actual.y === expectedBounds.y) return
+    deskLog('drift corrected', { actual, expected: expectedBounds })
+    win.setBounds(expectedBounds)
   }
 
   function setClickThrough(next: boolean): void {
@@ -206,11 +232,16 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
   }
 
   let polls = 0
+  let driftTicks = 0
   function pollCursor(): void {
     if (!win || win.isDestroyed() || suppressed) {
       if (deskDebug && ++polls % 300 === 1) deskLog('poll skipped', { hasWin: !!win, suppressed })
       return
     }
+    // ~6Hz: fast enough that a Space transition snaps back before it reads as
+    // movement, slow enough that the WindowServer round-trip is free.
+    if (++driftTicks % 10 === 0) correctDrift()
+
     const point = screen.getCursorScreenPoint()
     const bounds = win.getBounds()
     const local = { x: point.x - bounds.x, y: point.y - bounds.y }
@@ -310,6 +341,10 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
       fullscreenable: false,
       backgroundColor: '#00000000',
       show: false,
+      // Keep it out of Mission Control and App Exposé, where it would otherwise
+      // scale down alongside real windows as an empty transparent rectangle.
+      // Desk is chrome, not a window you switch to.
+      hiddenInMissionControl: true,
       webPreferences: {
         preload: options.preloadPath,
         backgroundThrottling: false,
