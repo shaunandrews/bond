@@ -6,7 +6,7 @@ import { DEFAULT_AGENT_SETTINGS } from '../../../shared/agents'
 import { closeDb, getDb } from '../../db'
 import { setDataDir } from '../../paths'
 import { answerAgentRunQuestion, createAgentRunRecord, getAgentRun, listAgentRunEvents, listAgentRunQuestions, transitionAgentRun } from './store'
-import { createAgentRunWorker } from './worker'
+import { agentRunActiveWallClockMs, createAgentRunWorker } from './worker'
 import { CommandApprovalRequired } from './write-runner'
 
 let dir: string
@@ -45,6 +45,20 @@ afterEach(() => {
 })
 
 describe('agent run worker', () => {
+  it('reconstructs active wall-clock usage without charging parked time', () => {
+    const event = (sequence: number, fromState: any, toState: any, second: number) => ({
+      id: sequence, runId: 'r', sequence, type: `event-${sequence}`, fromState, toState, data: {},
+      createdAt: `2026-01-01T00:00:${String(second).padStart(2, '0')}.000Z`,
+    })
+    const events = [
+      event(1, 'queued', 'preparing-workspace', 0),
+      event(2, 'preparing-workspace', 'running', 1),
+      event(3, 'running', 'needs-input', 5),
+      event(4, 'needs-input', 'running', 40),
+    ]
+    expect(agentRunActiveWallClockMs(events, Date.parse('2026-01-01T00:00:42.000Z'))).toBe(7_000)
+  })
+
   it('drains dispatches with concurrency one', async () => {
     seed('run-1')
     seed('run-2')

@@ -1,4 +1,4 @@
-import type { AgentRun, AgentRunQuestion, AgentRunState } from '../../../shared/agent-runs'
+import type { AgentRun, AgentRunEvent, AgentRunQuestion, AgentRunState } from '../../../shared/agent-runs'
 import {
   getAgentRun,
   approvedAgentRunCommandGrants,
@@ -40,6 +40,21 @@ export interface AgentRunWorker {
 }
 
 const DEFAULT_INTERVAL_MS = 1_000
+
+export function agentRunActiveWallClockMs(events: AgentRunEvent[], throughMs: number): number {
+  let activeSince: number | null = null
+  let elapsed = 0
+  for (const event of events) {
+    const at = Date.parse(event.createdAt)
+    if (!Number.isFinite(at)) continue
+    if (activeSince === null && ['preparing-workspace', 'running'].includes(event.toState ?? '')) activeSince = at
+    if (activeSince !== null && event.fromState && ['preparing-workspace', 'running'].includes(event.fromState) && !['preparing-workspace', 'running'].includes(event.toState ?? '')) {
+      elapsed += Math.max(0, at - activeSince)
+      activeSince = null
+    }
+  }
+  return elapsed + (activeSince === null ? 0 : Math.max(0, throughMs - activeSince))
+}
 
 export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): AgentRunWorker {
   const execute = options.execute ?? executeAgentRun
@@ -104,10 +119,12 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
     active = { runId: prepared.id, controller }
     let started = false
     let wallClockExpired = false
+    const wallClockBudgetMs = Math.max(1, prepared.resourceCaps.wallClockSeconds) * 1_000
+    const wallClockRemainingMs = Math.max(1, wallClockBudgetMs - agentRunActiveWallClockMs(listAgentRunEvents(prepared.id), now()))
     const wallClockTimer = setTimeout(() => {
       wallClockExpired = true
       controller.abort()
-    }, Math.max(1, prepared.resourceCaps.wallClockSeconds) * 1_000)
+    }, wallClockRemainingMs)
     wallClockTimer.unref?.()
     try {
       prepared = await prepare(prepared, controller.signal)

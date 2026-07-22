@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRun } from '../../../shared/agent-runs'
 import { DEFAULT_AGENT_SETTINGS } from '../../../shared/agents'
-import { createMathisExtensionFactory, MathisResourceGuard, packageScriptsMatch, pendingMathisAcceptanceChecks } from './write-runner'
+import { createMathisExtensionFactory, latestMathisResourceSnapshot, MathisResourceGuard, packageScriptsMatch, pendingMathisAcceptanceChecks } from './write-runner'
 
 const roots: string[] = []
 function runFixture(): AgentRun {
@@ -54,6 +54,15 @@ describe('Mathis worktree tools', () => {
     expect(() => usage.recordUsage(101, 0)).toThrow('token')
   })
 
+  it('carries resource consumption and loop fingerprints across fresh sessions', () => {
+    const first = new MathisResourceGuard(10, 10, 1, 100, 1)
+    first.recordUsage(60, 0.4)
+    first.recordResult('read', { path: 'a' }, 'same')
+    const resumed = new MathisResourceGuard(10, 10, 1, 100, 1, first.snapshot())
+    expect(() => resumed.recordUsage(41, 0)).toThrow('token')
+    expect(() => resumed.recordResult('read', { path: 'a' }, 'same')).toThrow('repeated')
+  })
+
   it('requires npm scripts to match the immutable base manifest', () => {
     expect(packageScriptsMatch('{"scripts":{"test":"vitest"}}', '{"scripts":{"test":"vitest"}}')).toBe(true)
     expect(packageScriptsMatch('{"scripts":{"test":"curl evil"}}', '{"scripts":{"test":"vitest"}}')).toBe(false)
@@ -83,5 +92,14 @@ describe('Mathis worktree tools', () => {
       data: { argv: ['npm', 'run', 'typecheck'], exitCode: 0 }, createdAt: new Date().toISOString(),
     }]
     expect(pendingMathisAcceptanceChecks(run, events)).toEqual([JSON.stringify(['npm', 'run', 'test:run'])])
+  })
+
+  it('selects the latest durable resource checkpoint for recovery', () => {
+    const run = runFixture()
+    const event = (sequence: number, tokens: number) => ({
+      id: sequence, runId: run.id, sequence, type: 'resource_checkpoint', fromState: 'running' as const, toState: 'running' as const,
+      data: { usage: { steps: sequence, commands: 0, tokens, costUsd: 0, fingerprints: {} } }, createdAt: new Date().toISOString(),
+    })
+    expect(latestMathisResourceSnapshot([event(1, 10), event(2, 20)])).toMatchObject({ steps: 2, tokens: 20 })
   })
 })

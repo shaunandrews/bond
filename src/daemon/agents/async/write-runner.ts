@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -36,12 +37,20 @@ export class CommandApprovalRequired extends Error {
   }
 }
 
+export interface MathisResourceSnapshot {
+  steps: number
+  commands: number
+  tokens: number
+  costUsd: number
+  fingerprints: Record<string, number>
+}
+
 export class MathisResourceGuard {
-  private steps = 0
-  private commands = 0
-  private tokens = 0
-  private costUsd = 0
-  private readonly fingerprints = new Map<string, number>()
+  private steps: number
+  private commands: number
+  private tokens: number
+  private costUsd: number
+  private readonly fingerprints: Map<string, number>
 
   constructor(
     private readonly maxSteps = 80,
@@ -49,24 +58,48 @@ export class MathisResourceGuard {
     private readonly maxRepeats = 4,
     private readonly maxTokens = 250_000,
     private readonly maxCostUsd = 25,
-  ) {}
+    initial: Partial<MathisResourceSnapshot> = {},
+    private readonly onChange?: (snapshot: MathisResourceSnapshot) => void,
+  ) {
+    this.steps = Math.max(0, initial.steps ?? 0)
+    this.commands = Math.max(0, initial.commands ?? 0)
+    this.tokens = Math.max(0, initial.tokens ?? 0)
+    this.costUsd = Math.max(0, initial.costUsd ?? 0)
+    this.fingerprints = new Map(Object.entries(initial.fingerprints ?? {}).map(([key, count]) => [key, Math.max(0, count)]))
+  }
+
+  snapshot(): MathisResourceSnapshot {
+    return {
+      steps: this.steps,
+      commands: this.commands,
+      tokens: this.tokens,
+      costUsd: this.costUsd,
+      fingerprints: Object.fromEntries(this.fingerprints),
+    }
+  }
+
+  private changed(): void { this.onChange?.(this.snapshot()) }
 
   recordTool(name: string, input: unknown): void {
     this.steps += 1
+    if (name === 'run_command') this.commands += 1
+    this.changed()
     if (this.steps > this.maxSteps) throw new AgentResourceLimitError(`Mathis exceeded the ${this.maxSteps}-step resource cap.`)
-    if (name === 'run_command' && ++this.commands > this.maxCommands) throw new AgentResourceLimitError(`Mathis exceeded the ${this.maxCommands}-command resource cap.`)
+    if (this.commands > this.maxCommands) throw new AgentResourceLimitError(`Mathis exceeded the ${this.maxCommands}-command resource cap.`)
   }
 
   recordResult(name: string, input: unknown, result: unknown): void {
-    const fingerprint = `${name}:${JSON.stringify(input)}:${JSON.stringify(result)}`
+    const fingerprint = createHash('sha256').update(`${name}:${JSON.stringify(input)}:${JSON.stringify(result)}`).digest('hex')
     const count = (this.fingerprints.get(fingerprint) ?? 0) + 1
     this.fingerprints.set(fingerprint, count)
+    this.changed()
     if (count > this.maxRepeats) throw new AgentResourceLimitError(`Mathis repeated the same ${name} action too many times.`)
   }
 
   recordUsage(tokens: number, costUsd: number): void {
     this.tokens += Math.max(0, tokens)
     this.costUsd += Math.max(0, costUsd)
+    this.changed()
     if (this.tokens > this.maxTokens) throw new AgentResourceLimitError(`Mathis exceeded the ${this.maxTokens}-token resource cap.`)
     if (this.costUsd > this.maxCostUsd) throw new AgentResourceLimitError(`Mathis exceeded the $${this.maxCostUsd} resource cap.`)
   }
@@ -127,6 +160,16 @@ export interface MathisExtensionOptions {
   onQuestion(question: ProposedCommandQuestion): void
   onCommandStarted?: (input: { argv: string[]; rule: string; pid: number }) => void
   onCommandCompleted?: (input: { argv: string[]; rule: string; exitCode: number | null; signal: NodeJS.Signals | null }) => void
+}
+
+export function latestMathisResourceSnapshot(events: AgentRunEvent[]): MathisResourceSnapshot | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.type !== 'resource_checkpoint') continue
+    const usage = event.data.usage
+    if (usage && typeof usage === 'object') return usage as MathisResourceSnapshot
+  }
+  return undefined
 }
 
 export function createMathisExtensionFactory(options: MathisExtensionOptions) {
@@ -228,6 +271,20 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
   if (!verb) throw new Error(`Verb "${run.verb}" is no longer available for ${definition.label}.`)
   let pendingQuestion: ProposedCommandQuestion | null = null
   let abortSession = () => {}
+  const caps = run.resourceCaps
+  const guard = new MathisResourceGuard(
+    caps.maxSteps ?? 80,
+    caps.maxSubprocesses ?? 24,
+    4,
+    caps.maxTokens ?? 250_000,
+    caps.maxCostUsd ?? 25,
+    latestMathisResourceSnapshot(input.events ?? []),
+    usage => input.onProgress('resource_checkpoint', { usage }, {
+      phase: 'resource-checkpoint',
+      resourceUsage: usage,
+      lastCompletedAction: 'resource-meter-updated',
+    }),
+  )
   const loader = new DefaultResourceLoader({
     cwd: run.workspace.worktreePath,
     agentDir: getAgentDir(),
@@ -243,6 +300,7 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
       run,
       signal: input.signal,
       exactGrants: input.exactGrants,
+      guard,
       onQuestion: question => {
         pendingQuestion = question
         queueMicrotask(abortSession)
