@@ -44,7 +44,7 @@ function mountTwoPanels(opts: {
           <BondPanel id="left" v-bind="panel1">
             <div>Left</div>
           </BondPanel>
-          <BondPanelHandle id="handle-0" />
+          <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
           <BondPanel id="right" v-bind="panel2">
             <div>Right</div>
           </BondPanel>
@@ -73,9 +73,9 @@ function mountThreePanels(opts: {
       template: `
         <BondPanelGroup :direction="direction">
           <BondPanel id="a" v-bind="panel1"><div>A</div></BondPanel>
-          <BondPanelHandle id="handle-0" />
+          <BondPanelHandle id="handle-0" beforePanelId="a" afterPanelId="b" />
           <BondPanel id="b" v-bind="panel2"><div>B</div></BondPanel>
-          <BondPanelHandle id="handle-1" />
+          <BondPanelHandle id="handle-1" beforePanelId="b" afterPanelId="c" />
           <BondPanel id="c" v-bind="panel3"><div>C</div></BondPanel>
         </BondPanelGroup>
       `,
@@ -260,7 +260,7 @@ describe('BondPanelGroup', () => {
           template: `
             <BondPanelGroup direction="horizontal">
               <BondPanel id="a" :defaultSize="50"><div>A</div></BondPanel>
-              <BondPanelHandle id="handle-0" disabled />
+              <BondPanelHandle id="handle-0" beforePanelId="a" afterPanelId="b" disabled />
               <BondPanel id="b" :defaultSize="50"><div>B</div></BondPanel>
             </BondPanelGroup>
           `,
@@ -352,7 +352,7 @@ describe('BondPanelGroup', () => {
           template: `
             <BondPanelGroup direction="horizontal">
               <BondPanel id="a" :defaultSize="50"><div>A</div></BondPanel>
-              <BondPanelHandle id="handle-0" disabled />
+              <BondPanelHandle id="handle-0" beforePanelId="a" afterPanelId="b" disabled />
               <BondPanel id="b" :defaultSize="50"><div>B</div></BondPanel>
             </BondPanelGroup>
           `,
@@ -381,7 +381,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" ref="leftPanel" :defaultSize="30" :minSize="15" collapsible :collapsedSize="0">
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="70">
                 <div>Right</div>
               </BondPanel>
@@ -418,7 +418,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" ref="leftPanel" :defaultSize="30" :minSize="15" collapsible :collapsedSize="0">
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="70" :minSize="20">
                 <div>Right</div>
               </BondPanel>
@@ -458,7 +458,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" ref="leftPanel" :defaultSize="50" :minSize="10" :maxSize="80">
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="50" :minSize="10">
                 <div>Right</div>
               </BondPanel>
@@ -491,7 +491,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" ref="leftPanel" :defaultSize="50" :minSize="10" :maxSize="60">
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="50" :minSize="10">
                 <div>Right</div>
               </BondPanel>
@@ -523,7 +523,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" ref="leftPanel" :defaultSize="40">
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="60">
                 <div>Right</div>
               </BondPanel>
@@ -551,7 +551,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" ref="leftPanel" :defaultSize="50" collapsible>
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="50">
                 <div>Right</div>
               </BondPanel>
@@ -581,7 +581,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" ref="leftPanel" :defaultSize="50" :minSize="10">
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="50" :minSize="10">
                 <div>Right</div>
               </BondPanel>
@@ -626,7 +626,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" :defaultSize="50">
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="50">
                 <div>Right</div>
               </BondPanel>
@@ -657,7 +657,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" :defaultSize="40">
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="60">
                 <div>Right</div>
               </BondPanel>
@@ -688,7 +688,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="left" unit="px" :defaultSize="260" :minSize="220" :maxSize="400">
                 <div>Left</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="80">
                 <div>Right</div>
               </BondPanel>
@@ -716,7 +716,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="sidebar" unit="px" :defaultSize="260" :minSize="220" :maxSize="400">
                 <div>Sidebar</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="sidebar" afterPanelId="main" />
               <BondPanel id="main" :defaultSize="80">
                 <div>Main</div>
               </BondPanel>
@@ -747,7 +747,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="main" :defaultSize="80" :minSize="30">
                 <div>Main</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="main" afterPanelId="right-panel" />
               <BondPanel id="right-panel" unit="px" :defaultSize="320" :minSize="260" :maxSize="99999">
                 <div>Right panel</div>
               </BondPanel>
@@ -778,7 +778,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="sidebar" ref="sidebarPanel" unit="px" :defaultSize="260" :minSize="220" :maxSize="400" collapsible :collapsedSize="0">
                 <div>Sidebar</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="sidebar" afterPanelId="main" />
               <BondPanel id="main" :defaultSize="80">
                 <div>Main</div>
               </BondPanel>
@@ -809,6 +809,66 @@ describe('BondPanelGroup', () => {
       expect(getFlexBasisPx(panels[0].attributes('style') ?? '')).toBe(260)
       w.unmount()
     })
+
+    it('startCollapsed renders already collapsed on first mount, no animation needed', async () => {
+      const w = mount(
+        defineComponent({
+          components: { BondPanelGroup, BondPanel, BondPanelHandle },
+          template: `
+            <BondPanelGroup direction="horizontal">
+              <BondPanel id="main" :defaultSize="80"><div>Main</div></BondPanel>
+              <BondPanelHandle id="handle-0" beforePanelId="main" afterPanelId="sidebar" />
+              <BondPanel id="sidebar" ref="sidebarPanel" unit="px" :defaultSize="320" :minSize="260" :maxSize="99999" collapsible :collapsedSize="0" :startCollapsed="true">
+                <div>Sidebar</div>
+              </BondPanel>
+            </BondPanelGroup>
+          `,
+          setup() {
+            const sidebarPanel = ref()
+            return { sidebarPanel }
+          },
+        }),
+        { attachTo: document.body },
+      )
+      await nextTick()
+
+      expect(w.vm.sidebarPanel.isCollapsed()).toBe(true)
+      const sidebar = w.find('[data-panel-id="sidebar"]')
+      expect(sidebar.attributes('data-state')).toBe('collapsed')
+      expect(getFlexBasisPx(sidebar.attributes('style') ?? '')).toBe(0)
+      w.unmount()
+    })
+
+    it('expanding a startCollapsed panel restores its configured default size', async () => {
+      const w = mount(
+        defineComponent({
+          components: { BondPanelGroup, BondPanel, BondPanelHandle },
+          template: `
+            <BondPanelGroup direction="horizontal">
+              <BondPanel id="main" :defaultSize="80"><div>Main</div></BondPanel>
+              <BondPanelHandle id="handle-0" beforePanelId="main" afterPanelId="sidebar" />
+              <BondPanel id="sidebar" ref="sidebarPanel" unit="px" :defaultSize="320" :minSize="260" :maxSize="99999" collapsible :collapsedSize="0" :startCollapsed="true">
+                <div>Sidebar</div>
+              </BondPanel>
+            </BondPanelGroup>
+          `,
+          setup() {
+            const sidebarPanel = ref()
+            return { sidebarPanel }
+          },
+        }),
+        { attachTo: document.body },
+      )
+      await nextTick()
+
+      w.vm.sidebarPanel.expand()
+      await flushPanelAnimation()
+
+      expect(w.vm.sidebarPanel.isCollapsed()).toBe(false)
+      const sidebar = w.find('[data-panel-id="sidebar"]')
+      expect(getFlexBasisPx(sidebar.attributes('style') ?? '')).toBe(320)
+      w.unmount()
+    })
   })
 
   describe('group imperative API', () => {
@@ -819,7 +879,7 @@ describe('BondPanelGroup', () => {
           template: `
             <BondPanelGroup ref="group" direction="horizontal">
               <BondPanel id="left" :defaultSize="30"><div>L</div></BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="70"><div>R</div></BondPanel>
             </BondPanelGroup>
           `,
@@ -845,7 +905,7 @@ describe('BondPanelGroup', () => {
           template: `
             <BondPanelGroup ref="group" direction="horizontal">
               <BondPanel id="left" :defaultSize="50"><div>L</div></BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="50"><div>R</div></BondPanel>
             </BondPanelGroup>
           `,
@@ -898,7 +958,7 @@ describe('BondPanelGroup', () => {
                   <div class="slot-output">{{ size }}-{{ collapsed }}</div>
                 </template>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="left" afterPanelId="right" />
               <BondPanel id="right" :defaultSize="60">
                 <div>Right</div>
               </BondPanel>
@@ -922,11 +982,11 @@ describe('BondPanelGroup', () => {
           template: `
             <BondPanelGroup direction="horizontal">
               <BondPanel id="sidebar" :defaultSize="30"><div>Sidebar</div></BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="sidebar" afterPanelId="main" />
               <BondPanel id="main" :defaultSize="70">
                 <BondPanelGroup direction="vertical">
                   <BondPanel id="editor" :defaultSize="60"><div>Editor</div></BondPanel>
-                  <BondPanelHandle id="handle-0" />
+                  <BondPanelHandle id="handle-0" beforePanelId="editor" afterPanelId="terminal" />
                   <BondPanel id="terminal" :defaultSize="40"><div>Terminal</div></BondPanel>
                 </BondPanelGroup>
               </BondPanel>
@@ -962,7 +1022,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="top" :defaultSize="50" header="Top" collapsible>
                 <div>Content</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="top" afterPanelId="bottom" />
               <BondPanel id="bottom" :defaultSize="50">
                 <div>Bottom</div>
               </BondPanel>
@@ -990,7 +1050,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="top" :defaultSize="50" header="Top" collapsible :collapsedSize="0">
                 <div class="inner">Content</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="top" afterPanelId="bottom" />
               <BondPanel id="bottom" :defaultSize="50">
                 <div>Bottom</div>
               </BondPanel>
@@ -1025,7 +1085,7 @@ describe('BondPanelGroup', () => {
               <BondPanel id="top" :defaultSize="50" header="Static">
                 <div>Content</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="top" afterPanelId="bottom" />
               <BondPanel id="bottom" :defaultSize="50">
                 <div>Bottom</div>
               </BondPanel>
@@ -1056,7 +1116,7 @@ describe('BondPanelGroup', () => {
                 </template>
                 <div>Content</div>
               </BondPanel>
-              <BondPanelHandle id="handle-0" />
+              <BondPanelHandle id="handle-0" beforePanelId="top" afterPanelId="bottom" />
               <BondPanel id="bottom" :defaultSize="50">
                 <div>Bottom</div>
               </BondPanel>
@@ -1085,7 +1145,7 @@ describe('BondPanelGroup', () => {
     it('BondPanelHandle throws when used outside BondPanelGroup', () => {
       expect(() => {
         mount(BondPanelHandle, {
-          props: { id: 'orphan-handle' },
+          props: { id: 'orphan-handle', beforePanelId: 'a', afterPanelId: 'b' },
         })
       }).toThrow('BondPanelHandle must be used inside BondPanelGroup')
     })

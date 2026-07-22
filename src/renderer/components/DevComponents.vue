@@ -700,7 +700,7 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed', 'Inventory
                         <BondPanel id="demo-h-left" :defaultSize="30" :minSize="15">
                           <div class="dev-panel-content">Left (30%)</div>
                         </BondPanel>
-                        <BondPanelHandle id="handle-0" />
+                        <BondPanelHandle id="handle-0" beforePanelId="demo-h-left" afterPanelId="demo-h-right" />
                         <BondPanel id="demo-h-right" :defaultSize="70" :minSize="20">
                           <div class="dev-panel-content">Right (70%)</div>
                         </BondPanel>
@@ -714,7 +714,7 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed', 'Inventory
                         <BondPanel id="demo-v-top" :defaultSize="40" :minSize="15">
                           <div class="dev-panel-content">Top (40%)</div>
                         </BondPanel>
-                        <BondPanelHandle id="handle-0" />
+                        <BondPanelHandle id="handle-0" beforePanelId="demo-v-top" afterPanelId="demo-v-bottom" />
                         <BondPanel id="demo-v-bottom" :defaultSize="60" :minSize="15">
                           <div class="dev-panel-content">Bottom (60%)</div>
                         </BondPanel>
@@ -728,13 +728,13 @@ const categories = ['Directives', 'Primitives', 'Layout', 'Composed', 'Inventory
                         <BondPanel id="demo-n-sidebar" :defaultSize="25" :minSize="15" collapsible :collapsedSize="0">
                           <div class="dev-panel-content">Sidebar</div>
                         </BondPanel>
-                        <BondPanelHandle id="handle-0" />
+                        <BondPanelHandle id="handle-0" beforePanelId="demo-n-sidebar" afterPanelId="demo-n-main" />
                         <BondPanel id="demo-n-main" :defaultSize="75" :minSize="30">
                           <BondPanelGroup direction="vertical">
                             <BondPanel id="demo-n-editor" :defaultSize="65" :minSize="20">
                               <div class="dev-panel-content">Editor</div>
                             </BondPanel>
-                            <BondPanelHandle id="handle-0" />
+                            <BondPanelHandle id="handle-0" beforePanelId="demo-n-editor" afterPanelId="demo-n-terminal" />
                             <BondPanel id="demo-n-terminal" :defaultSize="35" :minSize="15" collapsible :collapsedSize="0">
                               <div class="dev-panel-content">Terminal</div>
                             </BondPanel>

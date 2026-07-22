@@ -141,31 +141,17 @@ const rightPanelContent = ref<RightPanelContent>(savedRightPanelContent())
 const rightPanelOpen = computed(() => !rightPanelCollapsed.value)
 const rightPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
 
-function getInitialRightPanelWidth(): number {
-  try {
-    const raw = localStorage.getItem('bond:panels:app-layout')
-    if (raw) {
-      const layout = JSON.parse(raw)
-      if (layout.sizes?.['right-panel'] != null) return layout.sizes['right-panel']
-    }
-  } catch {}
-  return 320
-}
-const rightPanelWidth = ref(getInitialRightPanelWidth())
-
 const rightPanelHidden = computed(() => rightPanelCollapsed.value)
-
-const rightPanelStyle = computed(() => ({
-  marginRight: rightPanelHidden.value ? `-${rightPanelWidth.value}px` : '0',
-  transition: `margin-right var(--transition-base)`,
-}))
 
 // Onboarding tour show_panel tool → open (never toggle-close) a panel.
 function handleShowPanel(event: Event) {
   const panel = (event as CustomEvent<string>).detail as RightPanelContent
   if (!validRightPanels.includes(panel)) return
   rightPanelContent.value = panel
-  rightPanelCollapsed.value = false
+  if (rightPanelCollapsed.value) {
+    rightPanelCollapsed.value = false
+    rightPanelRef.value?.expand()
+  }
   localStorage.setItem('bond:right-panel', panel)
   localStorage.setItem('bond:right-panel-content', panel)
 }
@@ -182,36 +168,26 @@ function toggleRightPanel(panel?: RightPanelContent) {
   if (panel) {
     if (!rightPanelCollapsed.value && rightPanelContent.value === panel) {
       // Same panel clicked while open — collapse
-      syncRightPanelWidth()
       rightPanelCollapsed.value = true
+      rightPanelRef.value?.collapse()
     } else {
       // Different panel or was collapsed — open/switch
       rightPanelContent.value = panel
-      rightPanelCollapsed.value = false
+      if (rightPanelCollapsed.value) {
+        rightPanelCollapsed.value = false
+        rightPanelRef.value?.expand()
+      }
     }
   } else {
     // Generic toggle (keyboard shortcut)
-    if (!rightPanelCollapsed.value) {
-      syncRightPanelWidth()
-    }
     rightPanelCollapsed.value = !rightPanelCollapsed.value
+    if (rightPanelCollapsed.value) rightPanelRef.value?.collapse()
+    else rightPanelRef.value?.expand()
   }
   localStorage.setItem('bond:right-panel', rightPanelCollapsed.value ? 'none' : rightPanelContent.value)
   localStorage.setItem('bond:right-panel-content', rightPanelContent.value)
 }
 
-function syncRightPanelWidth() {
-  const actual = rightPanelRef.value?.getSize()
-  if (actual != null) rightPanelWidth.value = actual
-}
-
-function handleLayoutChange(layout: Record<string, number>) {
-  if (layout['right-panel'] != null) rightPanelWidth.value = layout['right-panel']
-}
-
-function handleLayoutChanged(layout: Record<string, number>) {
-  if (layout['right-panel'] != null) rightPanelWidth.value = layout['right-panel']
-}
 const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
 const { isAtBottom, scrollToBottom } = useAutoScroll(scrollEl)
 
@@ -396,7 +372,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;" @layoutChange="handleLayoutChange" @layoutChanged="handleLayoutChanged">
+  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;">
     <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="420">
       <div class="main-panel-wrap">
       <ViewShell
@@ -479,9 +455,9 @@ onUnmounted(() => {
       </div>
     </BondPanel>
 
-    <BondPanelHandle v-show="!rightPanelHidden" id="handle-0" />
+    <BondPanelHandle v-show="!rightPanelHidden" id="main-right" beforePanelId="main" afterPanelId="right-panel" />
 
-    <BondPanel ref="rightPanelRef" id="right-panel" class="right-panel" unit="px" :defaultSize="320" :minSize="['sense', 'memory'].includes(rightPanelContent) ? 300 : 260" :maxSize="99999" :style="rightPanelStyle">
+    <BondPanel ref="rightPanelRef" id="right-panel" class="right-panel" unit="px" :defaultSize="320" :minSize="['sense', 'memory'].includes(rightPanelContent) ? 300 : 260" :maxSize="99999" collapsible :collapsedSize="0" :startCollapsed="rightPanelCollapsed">
       <CollectionsView v-if="rightPanelContent === 'collections'"
         :collections="collections.activeCollections.value"
         :archivedCollections="collections.archivedCollections.value"

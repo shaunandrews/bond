@@ -25,9 +25,10 @@ const collapsed = ref<Set<string>>(new Set())
 // Sizes saved before collapse, for restore (in panel's own unit)
 const preCollapseSize = ref<Record<string, number>>({})
 
-// Active resize state
-let resizeHandleId: string | null = null
-let resizeStartSizes: Record<string, number> = {}
+// Active resize state — the explicit panel pair being dragged, named by the
+// handle itself (not derived from positional index, since a conditionally
+// rendered middle panel shifts index-based adjacency).
+let resizePair: { before: string; after: string } | null = null
 
 const groupEl = ref<HTMLElement | null>(null)
 
@@ -213,6 +214,21 @@ function registerPanel(reg: PanelRegistration) {
   }
   panels.value = [...panels.value, reg]
   distributeDefaults()
+
+  if (reg.initialCollapsed !== undefined && reg.constraints.collapsible) {
+    const isCollapsed = collapsed.value.has(reg.id)
+    if (reg.initialCollapsed && !isCollapsed) {
+      preCollapseSize.value[reg.id] = sizes.value[reg.id] ?? reg.constraints.defaultSize
+      collapsed.value = new Set([...collapsed.value, reg.id])
+      sizes.value = { ...sizes.value, [reg.id]: reg.constraints.collapsedSize }
+    } else if (!reg.initialCollapsed && isCollapsed) {
+      const next = new Set(collapsed.value)
+      next.delete(reg.id)
+      collapsed.value = next
+      const restore = preCollapseSize.value[reg.id] ?? reg.constraints.defaultSize
+      sizes.value = { ...sizes.value, [reg.id]: restore }
+    }
+  }
 }
 
 function unregisterPanel(id: string) {
@@ -228,16 +244,6 @@ function getPanelSize(id: string): number {
 
 function getPanelIds(): string[] {
   return panels.value.map((p) => p.id)
-}
-
-// --- Handle helpers ---
-function getHandlePanels(handleId: string): { before: string; after: string } | null {
-  const match = handleId.match(/^handle-(\d+)$/)
-  if (!match) return null
-  const idx = parseInt(match[1], 10)
-  const ids = getPanelIds()
-  if (idx < 0 || idx >= ids.length - 1) return null
-  return { before: ids[idx], after: ids[idx + 1] }
 }
 
 // --- DOM sync ---
@@ -266,38 +272,32 @@ function syncPxStateToDom() {
 }
 
 // --- Resize logic ---
-function startResize(handleId: string) {
+function startResize(beforePanelId: string, afterPanelId: string) {
   syncPxStateToDom()
-  resizeHandleId = handleId
-  resizeStartSizes = { ...sizes.value }
+  resizePair = { before: beforePanelId, after: afterPanelId }
 }
 
 function moveResize(delta: number) {
-  if (!resizeHandleId) return
-  applyResizeDelta(resizeHandleId, delta)
+  if (!resizePair) return
+  applyResizeDelta(resizePair.before, resizePair.after, delta)
   emit('layoutChange', { ...sizes.value })
 }
 
 function endResize() {
-  if (!resizeHandleId) return
-  resizeHandleId = null
-  resizeStartSizes = {}
+  if (!resizePair) return
+  resizePair = null
   emit('layoutChanged', { ...sizes.value })
   saveLayout()
 }
 
-function keyboardResize(handleId: string, delta: number) {
-  applyResizeDelta(handleId, delta)
+function keyboardResize(beforePanelId: string, afterPanelId: string, delta: number) {
+  applyResizeDelta(beforePanelId, afterPanelId, delta)
   emit('layoutChange', { ...sizes.value })
   emit('layoutChanged', { ...sizes.value })
   saveLayout()
 }
 
-function applyResizeDelta(handleId: string, deltaPercent: number) {
-  const pair = getHandlePanels(handleId)
-  if (!pair) return
-
-  const { before, after } = pair
+function applyResizeDelta(before: string, after: string, deltaPercent: number) {
   const beforeReg = getPanelReg(before)
   const afterReg = getPanelReg(after)
   if (!beforeReg || !afterReg) return
@@ -619,7 +619,6 @@ provide(PANEL_GROUP_KEY, {
   expandPanel,
   isPanelCollapsed,
   resizePanel,
-  getHandlePanels,
 })
 
 defineExpose({

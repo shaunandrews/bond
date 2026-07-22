@@ -13,6 +13,10 @@ const props = withDefaults(defineProps<{
   collapsible?: boolean
   collapsedSize?: number
   header?: string
+  // Read once at mount — the panel's starting collapse state, for a consumer
+  // that persists its own "is this panel open" flag. Not reactive: toggling
+  // collapse afterward goes through collapse()/expand(), never a prop change.
+  startCollapsed?: boolean
 }>(), {
   defaultSize: 50,
   minSize: 10,
@@ -66,6 +70,7 @@ onMounted(() => {
       collapsible: props.header ? false : props.collapsible,
       collapsedSize: props.collapsedSize,
     },
+    initialCollapsed: props.startCollapsed,
   })
 })
 

@@ -189,6 +189,10 @@ export const componentInventory = [
       {
         "name": "header",
         "type": "string | undefined"
+      },
+      {
+        "name": "startCollapsed",
+        "type": "boolean | undefined"
       }
     ],
     "events": []
@@ -227,6 +231,14 @@ export const componentInventory = [
     "props": [
       {
         "name": "id",
+        "type": "string"
+      },
+      {
+        "name": "beforePanelId",
+        "type": "string"
+      },
+      {
+        "name": "afterPanelId",
         "type": "string"
       },
       {
