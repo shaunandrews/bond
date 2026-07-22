@@ -8,6 +8,12 @@ export const componentInventory = [
     "events": []
   },
   {
+    "name": "AgentRunCard",
+    "file": "components/AgentRunCard.vue",
+    "props": [],
+    "events": []
+  },
+  {
     "name": "AgentsView",
     "file": "components/AgentsView.vue",
     "props": [],
@@ -978,6 +984,17 @@ export const componentInventory = [
         "payload": "description: string"
       }
     ]
+  },
+  {
+    "name": "TasksView",
+    "file": "components/TasksView.vue",
+    "props": [
+      {
+        "name": "focusRunId",
+        "type": "string | null | undefined"
+      }
+    ],
+    "events": []
   },
   {
     "name": "ThinkingIndicator",

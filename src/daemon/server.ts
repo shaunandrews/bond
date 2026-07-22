@@ -75,6 +75,7 @@ import {
   setGitHubHandoffCredential,
   publishAgentRun,
 } from './agents/async/service'
+import { configureAgentRetention, getAgentRetentionConfig } from './agents/async/retention'
 import * as desk from './desk/service'
 import { createDeskWorker, type DeskWorker } from './desk/worker'
 import { getRuntime as getDeskRuntime } from './desk/store'
@@ -1082,6 +1083,10 @@ const handlers: RpcHandlers = {
     if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
     return publishAgentRun(runId)
   },
+
+  'agentruns.retentionConfig': () => getAgentRetentionConfig(),
+
+  'agentruns.configureRetention': (params) => configureAgentRetention((raw(params) ?? {}) as never),
 
   // --- Skills ---
   'skills.list': () => getCachedSkills(),

@@ -77,10 +77,10 @@ describe('Mathis worktree tools', () => {
       registerTool: (_definition: unknown) => { commandTool = _definition },
     } as any)
 
-    await commandTool.execute('tool-1', { argv: ['git', 'status', '--short'], reason: 'inspect current changes' })
+    await commandTool.execute('tool-1', { argv: ['git', 'rev-parse', '--is-inside-work-tree'], reason: 'inspect repository context' })
 
     expect(onCommandStarted).toHaveBeenCalledOnce()
-    expect(onCommandStarted).toHaveBeenCalledWith(expect.objectContaining({ argv: ['git', 'status', '--short'], rule: 'git status' }))
+    expect(onCommandStarted).toHaveBeenCalledWith(expect.objectContaining({ argv: ['git', 'rev-parse', '--is-inside-work-tree'], rule: 'git rev-parse' }))
     expect(onCommandStarted.mock.calls[0][0].pid).toBeTypeOf('number')
   })
 

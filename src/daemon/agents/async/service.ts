@@ -104,7 +104,10 @@ const worker = createAgentRunWorker({
     emit(updated)
     return updated
   },
-  onChanged: emit,
+  onChanged: run => {
+    emit(run)
+    completion.refresh(run)
+  },
   onQuestion: (run, question) => completion.enqueueQuestion(run, question),
   onTerminal: retainAndComplete,
 })
@@ -250,6 +253,7 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
   })
   if (created.created) {
     emit(created.run)
+    completion.track(created.run)
     if (started) void worker.wake()
   }
   return created

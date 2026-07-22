@@ -15,6 +15,7 @@ import { parseArtifacts, hasRichContent } from '../lib/parseArtifacts'
 import { copyToClipboard } from '../lib/clipboard'
 import { formatApprovalInput, formatDuration, formatToolLabel } from '../lib/format'
 import TurnActivity from './TurnActivity.vue'
+import AgentRunCard from './AgentRunCard.vue'
 import { PhChatCircleText, PhX } from '@phosphor-icons/vue'
 
 const ISSUE_TOKEN_RE = new RegExp(ISSUE_KEY_RE.source, 'g')
@@ -217,6 +218,14 @@ function formatTime(ts: number | undefined): string {
       <BondText v-if="threadCreateError" as="span" size="xs" color="err" class="thread-footer-error">{{ threadCreateError }}</BondText>
     </div>
   </div>
+
+  <!-- Turn activity -->
+  <AgentRunCard
+    :id="id"
+    v-else-if="msg.kind === 'agent-run'"
+    :data="msg.data"
+    :fallbackText="msg.text"
+  />
 
   <!-- Turn activity -->
   <TurnActivity

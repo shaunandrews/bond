@@ -26,6 +26,7 @@ import type { SenseSettings } from './sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
 import type { AssetKind, LibraryAddDocumentInput } from './library'
 import type { AgentSettings } from './agents'
+import type { AgentRetentionConfig } from './agent-runs'
 import type { ConversationScope } from './threads'
 
 /** How a runtime reaches the daemon. Params/results are registry-typed. */
@@ -168,6 +169,8 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     /** Write-only: no Bond surface returns the credential value. */
     setAgentRunGitHubCredential: (value: string) => invoke('agentruns.setGithubCredential', { value }),
     publishAgentRun: (runId: string) => invoke('agentruns.publish', { runId }),
+    getAgentRetentionConfig: () => invoke('agentruns.retentionConfig'),
+    configureAgentRetention: (config: Partial<AgentRetentionConfig>) => invoke('agentruns.configureRetention', config),
 
     // --- Skills ---
     listSkills: () => invoke('skills.list'),

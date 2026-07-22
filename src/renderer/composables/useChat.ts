@@ -86,6 +86,7 @@ function toTranscriptMessage(m: Message, threadId?: string | null): TranscriptMe
   if (m.role === 'user') return { ...base, role: 'user', text: m.text, images: plainImages(m.images), imageIds: m.imageIds ? [...m.imageIds] : undefined }
   if (m.role === 'bond') return { ...base, role: 'bond', text: m.text }
   if (m.kind === 'activity') return { ...base, role: 'meta', kind: 'activity', data: plainJson(m.data) as unknown as Record<string, unknown> }
+  if (m.kind === 'agent-run') return { ...base, role: 'meta', kind: 'agent-run', text: m.text, data: plainJson(m.data) as unknown as Record<string, unknown> }
   if (m.kind === 'image') return { ...base, role: 'meta', kind: 'image', imageIds: [...m.imageIds], data: m.alt ? { alt: m.alt } : undefined }
   if (m.kind === 'tool') return { ...base, role: 'meta', kind: 'tool', text: m.summary ?? null, data: { name: m.name, summary: m.summary } }
   if (m.kind === 'skill') return { ...base, role: 'meta', kind: 'skill', text: m.args ?? null, data: { name: m.name, args: m.args } }
@@ -100,6 +101,7 @@ function fromTranscriptMessage(m: TranscriptMessage): Message | null {
   if (m.role === 'user') return { id: m.id, role: 'user', text: m.text ?? '', images: m.images, imageIds: m.imageIds, ts }
   if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text ?? '', streaming: false, ts }
   if (m.kind === 'activity' && m.data) return { id: m.id, role: 'meta', kind: 'activity', data: m.data as unknown as TurnActivityData, ts }
+  if (m.kind === 'agent-run' && m.data) return { id: m.id, role: 'meta', kind: 'agent-run', text: m.text ?? '', data: m.data as unknown as Extract<Message, { kind: 'agent-run' }>['data'], ts }
   if (m.kind === 'image') return { id: m.id, role: 'meta', kind: 'image', imageIds: m.imageIds ?? [], images: m.images, alt: typeof m.data?.alt === 'string' ? m.data.alt : undefined, ts }
   if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: String(m.data?.name ?? ''), summary: m.text ?? String(m.data?.summary ?? ''), ts }
   if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: String(m.data?.name ?? ''), args: m.text ?? String(m.data?.args ?? ''), ts }
@@ -366,7 +368,8 @@ export function useChat(deps: ChatDeps = window.bond, options: UseChatOptions = 
     // Reloading from the daemon gives every live main-conversation client the
     // same durable card; reconnect follows the same transcript-load path.
     if (chunk.kind === 'agent_run_changed') {
-      if (myScope.type === 'main' && chunk.run.completionMessageId) {
+      const hasCard = messages.value.some(message => message.role === 'meta' && message.kind === 'agent-run' && message.data.runId === chunk.run.id)
+      if (myScope.type === 'main' && (chunk.run.completionMessageId || !hasCard)) {
         void loadTranscript().catch(error => console.warn('[bond] agent completion reconciliation failed:', error))
       }
       return

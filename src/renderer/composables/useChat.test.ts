@@ -105,6 +105,11 @@ describe('useChat continuous transcript', () => {
     expect(input.editMode).toEqual({ type: 'readonly' })
   })
 
+  it('reloads the main transcript when a durable agent card is first inserted', async () => {
+    handler({ kind: 'agent_run_changed', run: { id: 'run-card', completionMessageId: null } } as TaggedChunk)
+    await vi.waitFor(() => expect(deps.listTranscript).toHaveBeenCalled())
+  })
+
   it('dispatches show_panel chunks as a window event, not transcript content', () => {
     const seen: string[] = []
     const listener = (event: Event) => seen.push((event as CustomEvent<string>).detail)

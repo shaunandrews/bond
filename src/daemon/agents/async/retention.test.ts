@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_AGENT_SETTINGS } from '../../../shared/agents'
 import { closeDb, getDb } from '../../db'
 import { setDataDir } from '../../paths'
-import { runAgentRetentionSweep } from './retention'
+import { configureAgentRetention, getAgentRetentionConfig, runAgentRetentionSweep } from './retention'
 import { appendAgentRunEvent, createAgentRunPublication, createAgentRunRecord, getAgentRun, getAgentRunPublication, listAgentRunEvents, markAgentRunPublished, transitionAgentRun } from './store'
 
 let root: string
@@ -37,6 +37,15 @@ function terminal(id: string, mode: 'read' | 'write') {
 }
 
 describe('agent retention', () => {
+  it('persists only supported raw-log retention choices and bounded disk budgets', () => {
+    expect(configureAgentRetention({ rawLogRetention: 90, maxRawLogBytes: 32 * 1024 * 1024, worktreeDays: 45 })).toEqual({
+      rawLogRetention: 90, maxRawLogBytes: 32 * 1024 * 1024, worktreeDays: 45,
+    })
+    expect(getAgentRetentionConfig().rawLogRetention).toBe(90)
+    expect(() => configureAgentRetention({ rawLogRetention: 14 as never })).toThrow('7, 30, 90, or forever')
+    expect(() => configureAgentRetention({ maxRawLogBytes: Number.MAX_SAFE_INTEGER })).toThrow('10 GiB')
+  })
+
   it('discards published worktrees and expires raw logs without deleting permanent summaries or provenance', async () => {
     const published = terminal('published', 'write')
     createAgentRunPublication({ runId: published.id, baseRef: 'main', headRef: published.workspace.isolation === 'worktree' ? published.workspace.branch : '', idempotencyKey: 'pub', qReviewRequired: false }, old)

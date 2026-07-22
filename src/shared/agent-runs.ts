@@ -191,3 +191,24 @@ export interface AgentRunDetail {
   questions: AgentRunQuestion[]
   publication: AgentRunPublication | null
 }
+
+export interface AgentRetentionConfig {
+  worktreeDays: number
+  rawLogRetention: 7 | 30 | 90 | 'forever'
+  maxRawLogBytes: number
+}
+
+export interface AgentRunCardData {
+  runId: string
+  agent: string
+  agentLabel: string
+  verb: string
+  status: AgentRunState
+  errorClass?: string | null
+  questionId?: string | null
+  prNumber?: number | null
+  prUrl?: string | null
+  qReviewStatus?: AgentRunQReviewStatus | null
+  qCommentUrl?: string | null
+  publishError?: string | null
+}

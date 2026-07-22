@@ -641,7 +641,7 @@ app.whenReady().then(async () => {
   setupAutoReconnect()
   initSense(client)
   initWeb(client)
-  initTray(client)
+  initTray(client, () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()))
   createWindow()
   try {
     simulationActive = (await client.sandboxStatus()).sandboxed

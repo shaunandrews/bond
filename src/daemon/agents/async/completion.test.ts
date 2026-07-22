@@ -47,6 +47,29 @@ afterEach(() => {
 })
 
 describe('agent run completion insertion', () => {
+  it('inserts one stable progress card only after the active turn settles, then updates it in place', () => {
+    const run = createAgentRunRecord({
+      id: 'progress-card', idempotencyKey: 'progress-card', agent: 'felix', agentLabel: 'Felix', verb: 'critique', brief: 'brief', paths: [],
+      workspace: { repoRoot: '/repo', isolation: 'in-place', branch: null, readOnly: true }, baseSha: null, allowedPaths: [], settings: DEFAULT_AGENT_SETTINGS,
+      agentDefinitionVersion: 'v1', commandPolicyVersion: 'v1', acceptanceChecks: [], resourceCaps: { wallClockSeconds: 300, maxOutputChars: 100_000 },
+    }).run
+    const deferred: Array<() => void> = []
+    const coordinator = createAgentRunCompletionCoordinator({ deferUntilTurnsIdle: task => deferred.push(task) })
+    coordinator.track(run)
+    coordinator.track(run)
+    expect(listMessages().messages).toHaveLength(0)
+    expect(deferred).toHaveLength(1)
+
+    deferred[0]()
+    const message = listMessages().messages[0]
+    expect(message).toMatchObject({ id: 'agent-run:progress-card:activity', kind: 'agent-run', data: { status: 'queued' } })
+    const preparing = transitionAgentRun(run.id, 'preparing-workspace', { eventType: 'preparing' })
+    coordinator.refresh(preparing)
+    deferred[1]()
+    expect(listMessages().messages).toHaveLength(1)
+    expect(listMessages().messages[0]).toMatchObject({ id: message.id, data: { status: 'preparing-workspace' } })
+  })
+
   it('queues while a turn is active and inserts exactly once after settlement', () => {
     const run = terminalRun('complete-later')
     const deferred: Array<() => void> = []

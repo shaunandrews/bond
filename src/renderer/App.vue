@@ -5,10 +5,11 @@ import { useThreads } from './composables/useThreads'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
+import { useAgentRuns } from './composables/useAgentRuns'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
 import { windowMinWidthForPanels, panelWidthFallback, CHAT_MIN_WIDTH } from './lib/panelLayout'
-import { PhArrowDown, PhX, PhListBullets, PhChatCircleText, PhClockCounterClockwise, PhBooks, PhBrain, PhCompassRose } from '@phosphor-icons/vue'
+import { PhArrowDown, PhX, PhListBullets, PhChatCircleText, PhClockCounterClockwise, PhBooks, PhBrain, PhCompassRose, PhRobot } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
@@ -22,6 +23,7 @@ import SensePanelView from './components/SensePanelView.vue'
 import MemoryView from './components/MemoryView.vue'
 import DeskView from './components/DeskView.vue'
 import ThreadsView from './components/ThreadsView.vue'
+import TasksView from './components/TasksView.vue'
 import ThreadPanel from './components/ThreadPanel.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
@@ -34,6 +36,7 @@ import { playTypewriter } from './lib/typewriter'
 const chat = useChat()
 const threads = useThreads()
 const collections = useCollections()
+const agentRuns = useAgentRuns()
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
 
 function applyWindowOpacity(val: number) {
@@ -135,8 +138,9 @@ const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
 const isFullScreen = ref(false)
 
-type RightPanelContent = 'collections' | 'sense' | 'library' | 'memory' | 'desk' | 'threads'
-const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'library', 'memory', 'desk', 'threads']
+type RightPanelContent = 'collections' | 'sense' | 'library' | 'memory' | 'desk' | 'threads' | 'tasks'
+const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'library', 'memory', 'desk', 'threads', 'tasks']
+const focusedAgentRunId = ref<string | null>(null)
 function savedRightPanelContent(): RightPanelContent {
   const saved = localStorage.getItem('bond:right-panel-content') as RightPanelContent | null
   return saved && validRightPanels.includes(saved) ? saved : 'collections'
@@ -223,6 +227,14 @@ function handleScrollToMessage(event: Event) {
   const messageId = (event as CustomEvent<string>).detail
   const el = document.getElementById(`msg-${messageId}`)
   el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+function handleShowAgentRun(event: Event) {
+  focusedAgentRunId.value = (event as CustomEvent<string>).detail
+  rightPanelContent.value = 'tasks'
+  if (rightPanelCollapsed.value) void openRightPanel()
+  localStorage.setItem('bond:right-panel', 'tasks')
+  localStorage.setItem('bond:right-panel-content', 'tasks')
 }
 
 function toggleRightPanel(panel?: RightPanelContent) {
@@ -446,6 +458,7 @@ onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
   window.addEventListener('bond:show-panel', handleShowPanel)
   window.addEventListener('bond:scroll-to-message', handleScrollToMessage)
+  window.addEventListener('bond:show-agent-run', handleShowAgentRun)
   removeCreateSkillListener = window.bond.onCreateSkill(handleCreateSkill)
   removeOpacityListener = window.bond.onWindowOpacity(applyWindowOpacity)
   removeAccentListener = window.bond.onAccentColor(applyExternalAccent)
@@ -464,6 +477,7 @@ onMounted(async () => {
     await chat.reconcileOnReconnect()
     const restored = await chat.restoreFromBackupIfNeeded()
     if (restored) await chat.loadTranscript()
+    await agentRuns.reconcile()
   })
   chat.subscribe()
   try {
@@ -536,6 +550,7 @@ onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('bond:show-panel', handleShowPanel)
   window.removeEventListener('bond:scroll-to-message', handleScrollToMessage)
+  window.removeEventListener('bond:show-agent-run', handleShowAgentRun)
   removeCreateSkillListener?.()
   removeOpacityListener?.()
   removeAccentListener?.()
@@ -561,6 +576,18 @@ onUnmounted(() => {
         title="Bond"
         :insetStart="!isFullScreen"
       >
+        <template #header-end>
+          <button
+            v-if="agentRuns.activeRuns.value.length"
+            type="button"
+            class="agent-ambient-indicator no-drag"
+            :aria-label="`${agentRuns.activeRuns.value.length} active background ${agentRuns.activeRuns.value.length === 1 ? 'task' : 'tasks'}. Open Tasks.`"
+            @click="toggleRightPanel('tasks')"
+          >
+            <span class="agent-ambient-dot" aria-hidden="true" />
+            <span>{{ agentRuns.activeRuns.value.length }} active</span>
+          </button>
+        </template>
         <div class="chat-content-wrap px-5 pb-10 flex flex-col gap-2.5 flex-1">
           <!-- revealText !== null means the first-run entrance owns the screen:
                MissionBriefing must never mount during it. Its 100vh-tall exit
@@ -683,12 +710,24 @@ onUnmounted(() => {
       <DeskView v-else-if="rightPanelContent === 'desk'" />
       <LibraryView v-else-if="rightPanelContent === 'library'" />
       <ThreadsView v-else-if="rightPanelContent === 'threads'" @open="openThreadFromList" />
+      <TasksView v-else-if="rightPanelContent === 'tasks'" :focusRunId="focusedAgentRunId" />
     </BondPanel>
   </BondPanelGroup>
 
   <!-- Threads first (it belongs to the conversation), then the onboarding
        tour order: Sense, Library, Memory, Collections. -->
   <nav class="right-panel-controls no-drag" aria-label="Panel views">
+    <BondButton
+      variant="ghost"
+      size="sm"
+      icon
+      :aria-label="rightPanelOpen && rightPanelContent === 'tasks' ? 'Close Tasks panel' : 'Open Tasks panel'"
+      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'tasks', 'agent-panel-toggle--active': agentRuns.activeRuns.value.length > 0 }"
+      @click.stop="toggleRightPanel('tasks')"
+      v-tooltip="rightPanelOpen && rightPanelContent === 'tasks' ? 'Close Tasks' : `Tasks${agentRuns.activeRuns.value.length ? ` (${agentRuns.activeRuns.value.length} active)` : ''}`"
+    >
+      <PhRobot :size="16" weight="bold" />
+    </BondButton>
     <BondButton
       variant="ghost"
       size="sm"
@@ -865,8 +904,25 @@ onUnmounted(() => {
    6 sm icon buttons (26px) + 5 gaps (4px) = 176px, minus the toolbar's own
    0.75rem inline padding already offsetting the content. */
 :root {
-  --panel-controls-clearance: 11rem;
+  --panel-controls-clearance: 13rem;
 }
+
+.agent-ambient-indicator {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--color-tint);
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+.agent-ambient-indicator:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.agent-ambient-dot { width: .45rem; height: .45rem; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 0 .2rem color-mix(in srgb, var(--color-accent) 15%, transparent); }
+.agent-panel-toggle--active:not(.panel-toggle-active) { color: var(--color-accent) !important; }
 
 .right-panel-controls {
   position: fixed;

@@ -38,7 +38,7 @@ import type { WebRenderRequest, WebRenderResult } from './web'
 import type { ModelId } from './models'
 import type { AssetBacklink, AssetKind, AssetReference, LibraryAddDocumentInput, LibraryAsset } from './library'
 import type { AgentRosterResult, AgentSettings, AgentSummary } from './agents'
-import type { AgentRun, AgentRunDetail, AgentRunPublication, AgentRunQuestion, GitHubHandoffConfig, ManagedWorkspaceInspection } from './agent-runs'
+import type { AgentRetentionConfig, AgentRun, AgentRunDetail, AgentRunPublication, AgentRunQuestion, GitHubHandoffConfig, ManagedWorkspaceInspection } from './agent-runs'
 import type {
   DeskBlockDetail,
   DeskMatcher,
@@ -328,6 +328,8 @@ export interface RpcMethods {
   /** Write-only credential setup; the value is never returned by any RPC. */
   'agentruns.setGithubCredential': { params: { value: string }; result: GitHubHandoffConfig }
   'agentruns.publish': { params: { runId: string }; result: AgentRunPublication }
+  'agentruns.retentionConfig': { params: void; result: AgentRetentionConfig }
+  'agentruns.configureRetention': { params: Partial<AgentRetentionConfig>; result: AgentRetentionConfig }
 
   // Skills
   'skills.list': { params: void; result: SkillInfo[] }
@@ -589,6 +591,8 @@ export const RPC_METHOD_NAMES = [
   'agentruns.configureGithub',
   'agentruns.setGithubCredential',
   'agentruns.publish',
+  'agentruns.retentionConfig',
+  'agentruns.configureRetention',
   'skills.list',
   'skills.refresh',
   'skills.remove',

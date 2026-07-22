@@ -1,5 +1,5 @@
-import type { AgentRun } from '../../../shared/agent-runs'
-import { getSetting } from '../../settings'
+import type { AgentRetentionConfig, AgentRun } from '../../../shared/agent-runs'
+import { getSetting, setSetting } from '../../settings'
 import {
   deleteExpiredTerminalAgentRunLogs,
   evictOldestTerminalAgentRunLogs,
@@ -32,6 +32,30 @@ function bytesSetting(): number {
   return Number.isFinite(bytes) && bytes >= 1_048_576 ? Math.floor(bytes) : DEFAULT_AGENT_RAW_LOG_MAX_BYTES
 }
 
+export function getAgentRetentionConfig(): AgentRetentionConfig {
+  return {
+    worktreeDays: daysSetting('agents.retention.worktreeDays', DEFAULT_AGENT_WORKTREE_RETENTION_DAYS),
+    rawLogRetention: rawLogRetentionSetting(),
+    maxRawLogBytes: bytesSetting(),
+  }
+}
+
+export function configureAgentRetention(input: Partial<AgentRetentionConfig>): AgentRetentionConfig {
+  if (input.worktreeDays !== undefined) {
+    if (!Number.isInteger(input.worktreeDays) || input.worktreeDays < 1 || input.worktreeDays > 365) throw new Error('worktreeDays must be an integer from 1 to 365.')
+    setSetting('agents.retention.worktreeDays', String(input.worktreeDays))
+  }
+  if (input.rawLogRetention !== undefined) {
+    if (![7, 30, 90, 'forever'].includes(input.rawLogRetention)) throw new Error('rawLogRetention must be 7, 30, 90, or forever.')
+    setSetting('agents.retention.rawLogDays', String(input.rawLogRetention))
+  }
+  if (input.maxRawLogBytes !== undefined) {
+    if (!Number.isInteger(input.maxRawLogBytes) || input.maxRawLogBytes < 1_048_576 || input.maxRawLogBytes > 10_737_418_240) throw new Error('maxRawLogBytes must be between 1 MiB and 10 GiB.')
+    setSetting('agents.retention.rawLogMaxBytes', String(input.maxRawLogBytes))
+  }
+  return getAgentRetentionConfig()
+}
+
 function olderThan(run: AgentRun, cutoffMs: number): boolean {
   const value = run.completedAt ?? run.updatedAt
   return Number.isFinite(Date.parse(value)) && Date.parse(value) < cutoffMs
@@ -47,9 +71,10 @@ export interface AgentRetentionOptions {
 
 export async function runAgentRetentionSweep(options: AgentRetentionOptions = {}): Promise<{ discarded: number; rawLogsDeleted: number; rawBytesDeleted: number; retained: number }> {
   const currentTime = options.now ?? Date.now()
-  const worktreeDays = options.worktreeDays ?? daysSetting('agents.retention.worktreeDays', DEFAULT_AGENT_WORKTREE_RETENTION_DAYS)
-  const logRetention = options.logRetention ?? rawLogRetentionSetting()
-  const maxRawLogBytes = options.maxRawLogBytes ?? bytesSetting()
+  const config = getAgentRetentionConfig()
+  const worktreeDays = options.worktreeDays ?? config.worktreeDays
+  const logRetention = options.logRetention ?? config.rawLogRetention
+  const maxRawLogBytes = options.maxRawLogBytes ?? config.maxRawLogBytes
   const discard = options.discard ?? (run => workspaceManager.discard(run))
   const worktreeCutoff = currentTime - worktreeDays * 86_400_000
   let discarded = 0
