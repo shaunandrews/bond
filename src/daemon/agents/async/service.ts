@@ -63,6 +63,7 @@ const handoff = createAgentRunHandoff({ reviewer: qAgentRunReviewer })
 const mergeUpdates = createMergeUpdateCoordinator({
   reader: configuredMergeReader,
   driver: createLocalBondUpdateDriver({
+    canApply: risk => risk === 'renderer',
     reloadRenderer: async () => { /* connected clients reconcile from durable state */ },
     restartDaemon: async () => { throw new Error('Controlled daemon restart requires the desktop host lifecycle handoff.') },
     awaitReconnect: async () => { /* desktop reconnect logic owns this boundary */ },

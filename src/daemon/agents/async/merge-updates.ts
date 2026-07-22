@@ -39,6 +39,7 @@ export interface BondCheckoutInspection {
 }
 
 export interface BondUpdateDriver {
+  canApply?(risk: AgentRunUpdateRisk): boolean
   inspect(mergeCommitSha: string): Promise<BondCheckoutInspection>
   fastForward(mergeCommitSha: string): Promise<void>
   reloadRenderer(): Promise<void>
@@ -130,6 +131,15 @@ export function createMergeUpdateCoordinator(options: MergeUpdateCoordinatorOpti
     if (!run || (run.repository && run.repository.id !== 'bond')) throw new Error('Automatic local updates are restricted to the registered Bond repository.')
     if (update.status === 'applied') return update
     if (update.risk === 'scheduled' && !confirmed) throw new Error('This broad or contract-changing update requires explicit scheduled confirmation.')
+    if (options.driver.canApply && !options.driver.canApply(update.risk)) {
+      return markAgentRunUpdate(runId, 'ready', {
+        eventType: 'local_update_host_required',
+        recoveryInstructions: update.risk === 'daemon'
+          ? 'Use the desktop host update action so it can rebuild, restart the daemon, and verify reconnect without losing this durable checkpoint.'
+          : 'Schedule this protocol/schema update from the desktop host at a break; it must coordinate rebuild, restart, renderer reload, and reconnect.',
+        data: { risk: update.risk },
+      })
+    }
     if (activeTurn()) {
       return markAgentRunUpdate(runId, 'deferred', {
         eventType: 'local_update_deferred',
@@ -201,11 +211,15 @@ export function createGitHubMergeReader(credential: string, fetcher: typeof fetc
         request(`/repos/${repository}/pulls/${prNumber}`),
         request(`/repos/${repository}/pulls/${prNumber}/files?per_page=100`),
       ])
+      const changedPaths = Array.isArray(files) ? files.map(value => String(value.filename ?? '')).filter(Boolean) : []
+      const declaredCount = Number(pr.changed_files)
       return {
         merged: pr.merged === true,
         mergeCommitSha: typeof pr.merge_commit_sha === 'string' ? pr.merge_commit_sha : null,
         mergedAt: typeof pr.merged_at === 'string' ? pr.merged_at : null,
-        changedPaths: Array.isArray(files) ? files.map(value => String(value.filename ?? '')).filter(Boolean) : [],
+        // Never classify a large PR from a partial first page. An empty set is
+        // deliberately classified as scheduled/high-risk by the coordinator.
+        changedPaths: Number.isFinite(declaredCount) && declaredCount > changedPaths.length ? [] : changedPaths,
       }
     },
   }
@@ -221,7 +235,7 @@ async function git(root: string, args: string[]): Promise<string> {
 }
 
 /** Host lifecycle hooks are injected by the app; tests never launch or restart Bond. */
-export function createLocalBondUpdateDriver(lifecycle: Pick<BondUpdateDriver, 'reloadRenderer' | 'restartDaemon' | 'awaitReconnect'>): BondUpdateDriver {
+export function createLocalBondUpdateDriver(lifecycle: Pick<BondUpdateDriver, 'reloadRenderer' | 'restartDaemon' | 'awaitReconnect' | 'canApply'>): BondUpdateDriver {
   return {
     async inspect(mergeCommitSha) {
       const root = configuredBondRepoRoot()

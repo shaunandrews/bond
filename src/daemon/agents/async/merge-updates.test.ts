@@ -6,7 +6,7 @@ import { DEFAULT_AGENT_SETTINGS } from '../../../shared/agents'
 import { closeDb, getDb } from '../../db'
 import { setDataDir } from '../../paths'
 import { setSetting } from '../../settings'
-import { classifyMergedPaths, createMergeUpdateCoordinator, type BondUpdateDriver } from './merge-updates'
+import { classifyMergedPaths, createGitHubMergeReader, createMergeUpdateCoordinator, type BondUpdateDriver } from './merge-updates'
 import {
   createAgentRunPublication,
   createAgentRunRecord,
@@ -66,6 +66,15 @@ describe('merged PR updates', () => {
     expect(classifyMergedPaths(['src/daemon/agents/async/schema.ts']).risk).toBe('scheduled')
   })
 
+  it('forces an incomplete GitHub changed-file page into the scheduled tier', async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify(String(url).includes('/files?')
+      ? [{ filename: 'src/renderer/App.vue' }]
+      : { merged: true, merge_commit_sha: sha, merged_at: '2026-07-22T12:00:00.000Z', changed_files: 101 }), { status: 200 }))
+    const state = await createGitHubMergeReader('scoped-token', fetcher as typeof fetch).getPullRequest(12)
+    expect(state.changedPaths).toEqual([])
+    expect(classifyMergedPaths(state.changedPaths).risk).toBe('scheduled')
+  })
+
   it('polls merged GitHub state and records it only once', async () => {
     publishedRun()
     const reader = { getPullRequest: vi.fn(async () => ({ merged: true, mergeCommitSha: sha, mergedAt: '2026-07-22T12:00:00.000Z', changedPaths: ['src/renderer/App.vue'] })) }
@@ -116,14 +125,24 @@ describe('merged PR updates', () => {
     expect(local.buildDaemon).not.toHaveBeenCalled()
   })
 
-  it('records build/restart/reconnect failures with recovery instructions', async () => {
+  it.each(['buildDaemon', 'restartDaemon', 'awaitReconnect'] as const)('records %s failures with recovery instructions', async (stage) => {
     publishedRun()
     recordAgentRunMerge({ runId: 'run-1', prNumber: 12, mergeCommitSha: sha, mergedAt: new Date().toISOString(), changedPaths: ['src/daemon/turns.ts'], ...classifyMergedPaths(['src/daemon/turns.ts']) })
-    const local = driver({ restartDaemon: vi.fn(async () => { throw new Error('restart failed') }) })
+    const local = driver({ [stage]: vi.fn(async () => { throw new Error(`${stage} failed`) }) })
     const result = await createMergeUpdateCoordinator({ reader: async () => ({ getPullRequest: vi.fn() }), driver: local }).apply('run-1')
-    expect(result).toMatchObject({ status: 'failed', errorMessage: 'restart failed' })
+    expect(result).toMatchObject({ status: 'failed', errorMessage: `${stage} failed` })
     expect(result.recoveryInstructions).toContain('never reset')
-    expect(local.buildDaemon).toHaveBeenCalledOnce()
-    expect(local.awaitReconnect).not.toHaveBeenCalled()
+    expect(local.fastForward).toHaveBeenCalledOnce()
+  })
+
+  it('does not mutate the checkout when the desktop lifecycle host is unavailable', async () => {
+    publishedRun()
+    recordAgentRunMerge({ runId: 'run-1', prNumber: 12, mergeCommitSha: sha, mergedAt: new Date().toISOString(), changedPaths: ['src/daemon/turns.ts'], ...classifyMergedPaths(['src/daemon/turns.ts']) })
+    const local = driver({ canApply: () => false })
+    const result = await createMergeUpdateCoordinator({ reader: async () => ({ getPullRequest: vi.fn() }), driver: local }).apply('run-1')
+    expect(result).toMatchObject({ status: 'ready' })
+    expect(result.recoveryInstructions).toContain('desktop host')
+    expect(local.inspect).not.toHaveBeenCalled()
+    expect(local.fastForward).not.toHaveBeenCalled()
   })
 })
