@@ -7,8 +7,8 @@ import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
-import { computeThreadLayoutMode, widthBudgetForMode, type ThreadLayoutMode } from './lib/panelLayout'
-import { PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhBooks, PhBrain, PhCompassRose } from '@phosphor-icons/vue'
+import { windowMinWidthForPanels, panelWidthFallback, CHAT_MIN_WIDTH } from './lib/panelLayout'
+import { PhArrowDown, PhX, PhListBullets, PhChatCircleText, PhClockCounterClockwise, PhBooks, PhBrain, PhCompassRose } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
 import MessageBubble from './components/MessageBubble.vue'
@@ -21,6 +21,7 @@ import CollectionsView from './components/CollectionsView.vue'
 import SensePanelView from './components/SensePanelView.vue'
 import MemoryView from './components/MemoryView.vue'
 import DeskView from './components/DeskView.vue'
+import ThreadsView from './components/ThreadsView.vue'
 import ThreadPanel from './components/ThreadPanel.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
@@ -134,8 +135,8 @@ const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const chatShellRef = ref<InstanceType<typeof ViewShell> | null>(null)
 const isFullScreen = ref(false)
 
-type RightPanelContent = 'collections' | 'sense' | 'library' | 'memory' | 'desk'
-const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'library', 'memory', 'desk']
+type RightPanelContent = 'collections' | 'sense' | 'library' | 'memory' | 'desk' | 'threads'
+const validRightPanels: RightPanelContent[] = ['collections', 'sense', 'library', 'memory', 'desk', 'threads']
 function savedRightPanelContent(): RightPanelContent {
   const saved = localStorage.getItem('bond:right-panel-content') as RightPanelContent | null
   return saved && validRightPanels.includes(saved) ? saved : 'collections'
@@ -144,18 +145,74 @@ const rightPanelCollapsed = ref(localStorage.getItem('bond:right-panel') === 'no
 const rightPanelContent = ref<RightPanelContent>(savedRightPanelContent())
 const rightPanelOpen = computed(() => !rightPanelCollapsed.value)
 const rightPanelRef = ref<InstanceType<typeof BondPanel> | null>(null)
+const panelGroupRef = ref<InstanceType<typeof BondPanelGroup> | null>(null)
 
 const rightPanelHidden = computed(() => rightPanelCollapsed.value)
+
+// --- Window sizing: side panels grow/shrink the window, chat keeps its width ---
+// Opening a side panel grows the OS window by that panel's width (so the chat
+// panel isn't squeezed); closing shrinks it back (so the window returns to
+// where it was). The native minimum tracks the open-panel set, so a chat-only
+// window can shrink small while an open panel can never be crushed.
+
+/** Native window minimum for the panels open after a change (overridable per call). */
+function windowMinFor(over: { thread?: boolean; utility?: boolean } = {}): number {
+  return windowMinWidthForPanels({
+    thread: over.thread ?? threadPanelOpen.value,
+    utility: over.utility ?? rightPanelOpen.value,
+  })
+}
+
+/**
+ * Grow/shrink the OS window by `deltaWidth` and set its native minimum.
+ * Returns the resulting content width. A no-op on web / older bridges, where
+ * it falls back to the real viewport width so the responsive rules still work.
+ */
+async function resizeWindow(deltaWidth: number, minimumWidth: number): Promise<number> {
+  try {
+    const { width } = await window.bond.resizeContent({ deltaWidth, minimumWidth })
+    return width
+  } catch {
+    return window.innerWidth
+  }
+}
+
+/** The width a side panel occupies — live from the group, else persisted, else default. */
+function sidePanelWidth(id: 'thread' | 'right-panel', fallback: 'thread' | 'utility'): number {
+  const live = panelGroupRef.value?.getExpandedWidth(id) ?? 0
+  if (live > 0) return live
+  // Not mounted yet (a conditionally-rendered panel opening) — read the size it
+  // will restore to from the group's own persisted layout, else the default.
+  try {
+    const raw = localStorage.getItem('bond:panels:app-layout')
+    const p = raw ? JSON.parse(raw) : null
+    const v = p?.preCollapseSize?.[id] ?? p?.sizes?.[id]
+    if (typeof v === 'number' && v > 0) return v
+  } catch { /* fall through to the default */ }
+  return panelWidthFallback(fallback)
+}
+
+async function openRightPanel() {
+  const w = sidePanelWidth('right-panel', 'utility')
+  rightPanelCollapsed.value = false
+  await resizeWindow(w, windowMinFor({ utility: true }))
+  rightPanelRef.value?.expand()
+}
+
+async function closeRightPanel() {
+  const w = sidePanelWidth('right-panel', 'utility')
+  rightPanelCollapsed.value = true
+  rightPanelRef.value?.collapse()
+  await resizeWindow(-w, windowMinFor({ utility: false }))
+}
 
 // Onboarding tour show_panel tool → open (never toggle-close) a panel.
 function handleShowPanel(event: Event) {
   const panel = (event as CustomEvent<string>).detail as RightPanelContent
   if (!validRightPanels.includes(panel)) return
+  const wasCollapsed = rightPanelCollapsed.value
   rightPanelContent.value = panel
-  if (rightPanelCollapsed.value) {
-    rightPanelCollapsed.value = false
-    rightPanelRef.value?.expand()
-  }
+  if (wasCollapsed) void openRightPanel()
   localStorage.setItem('bond:right-panel', panel)
   localStorage.setItem('bond:right-panel-content', panel)
 }
@@ -173,57 +230,57 @@ function toggleRightPanel(panel?: RightPanelContent) {
   // room for a thread — closeThread() must never fight a choice the user
   // made in the meantime.
   utilityAutoCollapsedForThread.value = false
+  const wasOpen = !rightPanelCollapsed.value
   if (panel) {
-    if (!rightPanelCollapsed.value && rightPanelContent.value === panel) {
-      // Same panel clicked while open — collapse
-      rightPanelCollapsed.value = true
-      rightPanelRef.value?.collapse()
+    if (wasOpen && rightPanelContent.value === panel) {
+      void closeRightPanel() // same panel clicked while open — close it
+    } else if (wasOpen) {
+      rightPanelContent.value = panel // switch content, panel stays the same width
     } else {
-      // Different panel or was collapsed — open/switch
       rightPanelContent.value = panel
-      if (rightPanelCollapsed.value) {
-        rightPanelCollapsed.value = false
-        rightPanelRef.value?.expand()
-      }
+      void openRightPanel()
     }
   } else {
     // Generic toggle (keyboard shortcut)
-    rightPanelCollapsed.value = !rightPanelCollapsed.value
-    if (rightPanelCollapsed.value) rightPanelRef.value?.collapse()
-    else rightPanelRef.value?.expand()
+    if (wasOpen) void closeRightPanel()
+    else void openRightPanel()
   }
+  // open/closeRightPanel set rightPanelCollapsed synchronously before awaiting,
+  // so this reflects the post-toggle state.
   localStorage.setItem('bond:right-panel', rightPanelCollapsed.value ? 'none' : rightPanelContent.value)
   localStorage.setItem('bond:right-panel-content', rightPanelContent.value)
 }
 
-// --- Chat threads: middle panel + responsive layout ---
+// --- Chat threads: middle panel ---
 const threadPanelOpen = computed(() => threads.activeThreadId.value !== null)
 // True only while Bond itself collapsed the utility panel to make room for a
 // thread — toggleRightPanel() clears this the instant the user acts, so
 // closeThread() never re-expands a panel the user deliberately closed.
 const utilityAutoCollapsedForThread = ref(false)
-const layoutMode = ref<ThreadLayoutMode>('three-panel')
 const threadAutoFocus = ref(true)
 
+/**
+ * A thread always opens as a column and the window grows to fit it — never a
+ * full-window drawer that hides the conversation. The window widens to at
+ * least chat + thread (and keeps the utility panel too when it fits), only
+ * collapsing utility if the display itself is too narrow for all three.
+ */
 async function ensureThreadWindowFit() {
-  const budget = widthBudgetForMode('three-panel')
-  try {
-    const result = await window.bond.ensureContentWidth({ preferredWidth: budget.preferred, minimumWidth: budget.minimum })
-    layoutMode.value = computeThreadLayoutMode(result.width)
-  } catch {
-    // No native resize available (web, or an older bridge) — the responsive
-    // rules still work from whatever the viewport actually is.
-    layoutMode.value = computeThreadLayoutMode(window.innerWidth)
-  }
+  const threadW = sidePanelWidth('thread', 'thread')
+  const utilityOpen = rightPanelOpen.value
+  const columnsMin = windowMinWidthForPanels({ thread: true, utility: utilityOpen })
+  // Grow for the thread column while keeping chat's width; force the window to
+  // at least the combined column minimum so the thread is always a panel.
+  const width = await resizeWindow(threadW, columnsMin)
 
-  if (layoutMode.value === 'two-panel' && !rightPanelCollapsed.value) {
+  // Only when the display itself can't fit every column (the forced minimum
+  // got clamped to the work area) do we collapse the utility panel.
+  if (utilityOpen && width < columnsMin - 1) {
+    const utilW = sidePanelWidth('right-panel', 'utility')
     utilityAutoCollapsedForThread.value = true
     rightPanelCollapsed.value = true
     rightPanelRef.value?.collapse()
-  } else if (layoutMode.value === 'three-panel' && utilityAutoCollapsedForThread.value && rightPanelCollapsed.value) {
-    utilityAutoCollapsedForThread.value = false
-    rightPanelCollapsed.value = false
-    rightPanelRef.value?.expand()
+    await resizeWindow(-utilW, windowMinWidthForPanels({ thread: true, utility: false }))
   }
 }
 
@@ -231,21 +288,40 @@ async function openThread(anchorMessageId: string) {
   // A failed thread.create leaves activeThreadId untouched — nothing to fit
   // a window around, and the error already surfaced next to the Discuss
   // button that was clicked (useThreads.createErrorFor).
+  const wasOpen = threadPanelOpen.value
   const thread = await threads.openThread(anchorMessageId)
   if (!thread) return
-  await ensureThreadWindowFit()
+  // Only size the window when a thread wasn't already open — switching between
+  // threads reuses the existing column and must not grow the window again.
+  if (!wasOpen) await ensureThreadWindowFit()
+}
+
+/** A row picked in the Threads panel — open by id, same window-fit rules as Discuss. */
+async function openThreadFromList(threadId: string) {
+  const wasOpen = threadPanelOpen.value
+  const thread = await threads.openThreadById(threadId)
+  if (!thread) return
+  if (!wasOpen) await ensureThreadWindowFit()
 }
 
 async function closeThread() {
   const id = threads.activeThreadId.value
+  // Read the thread column's width BEFORE closeActiveThread() unmounts it.
+  const threadW = threadPanelOpen.value ? sidePanelWidth('thread', 'thread') : 0
   threads.closeActiveThread()
+  let reexpandW = 0
   if (utilityAutoCollapsedForThread.value) {
     utilityAutoCollapsedForThread.value = false
     if (rightPanelCollapsed.value) {
+      reexpandW = sidePanelWidth('right-panel', 'utility')
       rightPanelCollapsed.value = false
       rightPanelRef.value?.expand()
     }
   }
+  // Lose the thread column, regain any utility column we auto-collapsed — the
+  // net shrink returns the window to its pre-thread size and drops the native
+  // minimum back so it can shrink freely again.
+  await resizeWindow(reexpandW - threadW, windowMinFor({ thread: false }))
   // An empty draft (opened, never sent) is disposable; a real thread persists.
   if (id) threads.deleteDraftIfEmpty(id)
 }
@@ -272,25 +348,20 @@ async function restoreLastThreadIfAny() {
     threadAutoFocus.value = true
     return
   }
-  layoutMode.value = computeThreadLayoutMode(window.innerWidth)
-  if (layoutMode.value === 'two-panel' && !rightPanelCollapsed.value) {
+  // The thread restores as a column. If the current window is too narrow to
+  // also fit the utility panel, collapse it (boot never grows the window).
+  if (rightPanelOpen.value && window.innerWidth < windowMinWidthForPanels({ thread: true, utility: true })) {
     utilityAutoCollapsedForThread.value = true
     rightPanelCollapsed.value = true
     rightPanelRef.value?.collapse()
   }
   await nextTick()
+  // Match the native minimum to the restored layout — clamped to the current
+  // width so boot never grows the window, only lets it shrink appropriately.
+  await resizeWindow(0, Math.min(windowMinFor(), Math.round(window.innerWidth)))
   threadAutoFocus.value = true
 }
 
-// A manual OS window resize while a thread is open can cross a responsive
-// threshold (e.g. into drawer mode) without the user touching the thread at
-// all — keep layoutMode current. Deliberately does NOT touch the utility
-// panel's collapsed state here; that's only ever an open-time decision, so a
-// live resize never fights a manual drag.
-function handleWindowResize() {
-  if (!threadPanelOpen.value) return
-  layoutMode.value = computeThreadLayoutMode(window.innerWidth)
-}
 
 const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
 const { isAtBottom, scrollToBottom } = useAutoScroll(scrollEl)
@@ -372,7 +443,6 @@ function handleBeforeUnload() {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
-  window.addEventListener('resize', handleWindowResize)
   window.addEventListener('beforeunload', handleBeforeUnload)
   window.addEventListener('bond:show-panel', handleShowPanel)
   window.addEventListener('bond:scroll-to-message', handleScrollToMessage)
@@ -453,12 +523,16 @@ onMounted(async () => {
     }
   }
   nextTick(scrollToBottom)
+  // Match the native window minimum to whatever panels are open at boot so a
+  // chat-only window can shrink small. Clamped to the current width so it only
+  // lowers the floor, never forces the window to grow. restoreLastThreadIfAny
+  // re-runs this with the thread-aware minimum when a thread is restored.
+  void resizeWindow(0, Math.min(windowMinFor(), Math.round(window.innerWidth)))
   if (!sandboxed.value) void restoreLastThreadIfAny()
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
-  window.removeEventListener('resize', handleWindowResize)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('bond:show-panel', handleShowPanel)
   window.removeEventListener('bond:scroll-to-message', handleScrollToMessage)
@@ -479,8 +553,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <BondPanelGroup direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;">
-    <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="420">
+  <BondPanelGroup ref="panelGroupRef" direction="horizontal" autoSaveId="app-layout" style="width: 100%; height: 100vh;">
+    <BondPanel id="main" :defaultSize="80" :minSize="30" :minSizePx="CHAT_MIN_WIDTH">
       <div class="main-panel-wrap">
       <ViewShell
         ref="chatShellRef"
@@ -563,9 +637,17 @@ onUnmounted(() => {
       </div>
     </BondPanel>
 
-    <template v-if="threadPanelOpen && layoutMode !== 'thread-drawer'">
+    <template v-if="threadPanelOpen">
       <BondPanelHandle id="main-thread" beforePanelId="main" afterPanelId="thread" />
-      <BondPanel id="thread" unit="px" :defaultSize="360" :minSize="320" :maxSize="99999">
+      <BondPanel
+        id="thread"
+        unit="px"
+        :defaultSize="360"
+        :minSize="320"
+        :maxSize="99999"
+        class="thread-panel"
+        :class="{ 'thread-panel--rightmost': rightPanelHidden }"
+      >
         <ThreadPanel
           :key="threads.activeThreadId.value ?? undefined"
           :threadId="threads.activeThreadId.value!"
@@ -580,8 +662,8 @@ onUnmounted(() => {
 
     <BondPanelHandle
       v-show="!rightPanelHidden"
-      :id="threadPanelOpen && layoutMode !== 'thread-drawer' ? 'thread-right' : 'main-right'"
-      :beforePanelId="threadPanelOpen && layoutMode !== 'thread-drawer' ? 'thread' : 'main'"
+      :id="threadPanelOpen ? 'thread-right' : 'main-right'"
+      :beforePanelId="threadPanelOpen ? 'thread' : 'main'"
       afterPanelId="right-panel"
     />
 
@@ -600,27 +682,24 @@ onUnmounted(() => {
       <MemoryView v-else-if="rightPanelContent === 'memory'" />
       <DeskView v-else-if="rightPanelContent === 'desk'" />
       <LibraryView v-else-if="rightPanelContent === 'library'" />
+      <ThreadsView v-else-if="rightPanelContent === 'threads'" @open="openThreadFromList" />
     </BondPanel>
   </BondPanelGroup>
 
-  <!-- Below ~800px content width the thread replaces main entirely rather
-       than squeezing three panels into no room — an overlay is simplest
-       here since main+utility stay mounted underneath, untouched. -->
-  <div v-if="threadPanelOpen && layoutMode === 'thread-drawer'" class="thread-drawer-overlay">
-    <ThreadPanel
-      :key="threads.activeThreadId.value ?? undefined"
-      :threadId="threads.activeThreadId.value!"
-      :model="selectedModel"
-      :autoFocus="threadAutoFocus"
-      drawer
-      @close="closeThread"
-      @update:model="handleModelChange"
-      @summarySent="handleThreadSummarySent"
-    />
-  </div>
-
-  <!-- Order mirrors the onboarding tour: Sense, Library, Memory, Collections. -->
+  <!-- Threads first (it belongs to the conversation), then the onboarding
+       tour order: Sense, Library, Memory, Collections. -->
   <nav class="right-panel-controls no-drag" aria-label="Panel views">
+    <BondButton
+      variant="ghost"
+      size="sm"
+      icon
+      :aria-label="rightPanelOpen && rightPanelContent === 'threads' ? 'Close Threads panel' : 'Open Threads panel'"
+      :class="{ 'panel-toggle-active': rightPanelOpen && rightPanelContent === 'threads' }"
+      @click.stop="toggleRightPanel('threads')"
+      v-tooltip="rightPanelOpen && rightPanelContent === 'threads' ? 'Close Threads' : 'Threads'"
+    >
+      <PhChatCircleText :size="16" weight="bold" />
+    </BondButton>
     <BondButton
       variant="ghost"
       size="sm"
@@ -768,11 +847,25 @@ onUnmounted(() => {
   background: var(--color-bg);
 }
 
-.thread-drawer-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 30;
-  background: var(--color-bg);
+/* Same seam every right-panel view draws for itself (border-left on its
+   root) — the thread panel's ViewShell has none, so the main/thread edge
+   was invisible without this. */
+.thread-panel {
+  border-left: 1px solid var(--color-border);
+}
+
+/* When the utility panel is collapsed the thread panel is the rightmost
+   surface, and its toolbar-end actions would sit underneath the fixed
+   .right-panel-controls nav — same clearance the utility panel gets. */
+.thread-panel--rightmost .bond-toolbar__end {
+  margin-right: var(--panel-controls-clearance);
+}
+
+/* Toolbar-end content in the rightmost panel clears the fixed nav below:
+   6 sm icon buttons (26px) + 5 gaps (4px) = 176px, minus the toolbar's own
+   0.75rem inline padding already offsetting the content. */
+:root {
+  --panel-controls-clearance: 11rem;
 }
 
 .right-panel-controls {
@@ -787,7 +880,7 @@ onUnmounted(() => {
 }
 
 .right-panel .bond-toolbar__end {
-  margin-right: 8.5rem;
+  margin-right: var(--panel-controls-clearance);
 }
 
 .panel-toggle-active {

@@ -59,7 +59,7 @@ const electronLocalMethods: ElectronBondSurface = {
   // Permissions
   hasScreenRecordingPermission: () => ipcRenderer.invoke('sense:hasPermission'),
 
-  ensureContentWidth: (options) => ipcRenderer.invoke('window:ensureContentWidth', options),
+  resizeContent: (options) => ipcRenderer.invoke('window:resizeContent', options),
 }
 
 const surface: BondSurface = {

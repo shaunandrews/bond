@@ -928,43 +928,58 @@ describe('BondPanelGroup', () => {
   })
 
   describe('container resize reconciliation', () => {
-    it('reconciles a px panel to its rendered width when the container resizes, and persists the correction', async () => {
+    function withFakeResizeObserver() {
       let observerCallback: (() => void) | null = null
       const observe = vi.fn()
-      const disconnect = vi.fn()
       const OriginalRO = global.ResizeObserver
       function FakeResizeObserver(this: unknown, cb: () => void) {
         observerCallback = cb
-        return { observe, disconnect, unobserve: vi.fn() }
+        return { observe, disconnect: vi.fn(), unobserve: vi.fn() }
       }
       // @ts-expect-error test double
       global.ResizeObserver = FakeResizeObserver
+      return {
+        observe,
+        fire: () => observerCallback?.(),
+        registered: () => observerCallback !== null,
+        restore: () => { global.ResizeObserver = OriginalRO },
+      }
+    }
+
+    function mountReconcileFixture() {
+      return mount(
+        defineComponent({
+          components: { BondPanelGroup, BondPanel, BondPanelHandle },
+          template: `
+            <BondPanelGroup direction="horizontal" autoSaveId="resize-reconcile-test">
+              <BondPanel id="main" :defaultSize="80" />
+              <BondPanelHandle id="handle-0" beforePanelId="main" afterPanelId="sidebar" />
+              <BondPanel id="sidebar" unit="px" :defaultSize="320" :minSize="220" :maxSize="99999" />
+            </BondPanelGroup>
+          `,
+        }),
+        { attachTo: document.body },
+      )
+    }
+
+    it('reconciles a px panel to its rendered width once the resize settles, and persists the correction', async () => {
+      vi.useFakeTimers()
+      const ro = withFakeResizeObserver()
 
       try {
-        const w = mount(
-          defineComponent({
-            components: { BondPanelGroup, BondPanel, BondPanelHandle },
-            template: `
-              <BondPanelGroup direction="horizontal" autoSaveId="resize-reconcile-test">
-                <BondPanel id="main" :defaultSize="80" />
-                <BondPanelHandle id="handle-0" beforePanelId="main" afterPanelId="sidebar" />
-                <BondPanel id="sidebar" unit="px" :defaultSize="320" :minSize="220" :maxSize="99999" />
-              </BondPanelGroup>
-            `,
-          }),
-          { attachTo: document.body },
-        )
+        const w = mountReconcileFixture()
         await nextTick()
 
-        expect(observe).toHaveBeenCalled()
-        expect(observerCallback).not.toBeNull()
+        expect(ro.observe).toHaveBeenCalled()
+        expect(ro.registered()).toBe(true)
 
         // Simulate CSS having shrunk the pixel panel below its JS-known size
         // (e.g. the window narrowed) without going through drag/collapse.
         const sidebarEl = w.find('[data-panel-id="sidebar"]').element as HTMLElement
         Object.defineProperty(sidebarEl, 'offsetWidth', { configurable: true, value: 260 })
 
-        observerCallback!()
+        ro.fire()
+        vi.advanceTimersByTime(200)
         await nextTick()
 
         const sidebarStyle = w.find('[data-panel-id="sidebar"]').attributes('style') ?? ''
@@ -975,7 +990,48 @@ describe('BondPanelGroup', () => {
 
         w.unmount()
       } finally {
-        global.ResizeObserver = OriginalRO
+        ro.restore()
+        vi.useRealTimers()
+      }
+    })
+
+    it('debounces reconciliation until the resize settles — per-tick flex-basis rewrites are what made a manual window resize jitter', async () => {
+      vi.useFakeTimers()
+      const ro = withFakeResizeObserver()
+
+      try {
+        const w = mountReconcileFixture()
+        await nextTick()
+
+        const sidebarEl = w.find('[data-panel-id="sidebar"]').element as HTMLElement
+        Object.defineProperty(sidebarEl, 'offsetWidth', { configurable: true, value: 260 })
+
+        // A live window drag: observer ticks keep arriving faster than the
+        // settle window closes.
+        ro.fire()
+        vi.advanceTimersByTime(100)
+        ro.fire()
+        vi.advanceTimersByTime(100)
+        ro.fire()
+        await nextTick()
+
+        // Mid-resize: JS state untouched (CSS flexbox owns the live layout),
+        // nothing persisted.
+        expect(getFlexBasisPx(w.find('[data-panel-id="sidebar"]').attributes('style') ?? '')).toBe(320)
+        expect(localStorage.getItem('bond:panels:resize-reconcile-test')).toBeNull()
+
+        vi.advanceTimersByTime(200)
+        await nextTick()
+
+        // Settled: one reconciliation to the rendered truth, one save.
+        expect(getFlexBasisPx(w.find('[data-panel-id="sidebar"]').attributes('style') ?? '')).toBe(260)
+        const stored = JSON.parse(localStorage.getItem('bond:panels:resize-reconcile-test')!)
+        expect(stored.sizes.sidebar).toBe(260)
+
+        w.unmount()
+      } finally {
+        ro.restore()
+        vi.useRealTimers()
       }
     })
   })
@@ -1032,6 +1088,38 @@ describe('BondPanelGroup', () => {
 
       const panels = w.findAll('.bond-panel')
       expect(getFlexGrow(panels[0].attributes('style') ?? '')).toBe(20)
+      w.unmount()
+    })
+
+    it('getExpandedWidth returns a px panel\'s live width, and its restore width once collapsed', async () => {
+      const w = mount(
+        defineComponent({
+          components: { BondPanelGroup, BondPanel, BondPanelHandle },
+          template: `
+            <BondPanelGroup ref="group" direction="horizontal">
+              <BondPanel id="main" :defaultSize="80"><div>M</div></BondPanel>
+              <BondPanelHandle id="handle-0" beforePanelId="main" afterPanelId="side" />
+              <BondPanel id="side" ref="sidePanel" unit="px" :defaultSize="320" :minSize="220" :maxSize="99999" collapsible :collapsedSize="0"><div>S</div></BondPanel>
+            </BondPanelGroup>
+          `,
+          setup() {
+            return { group: ref(), sidePanel: ref() }
+          },
+        }),
+        { attachTo: document.body },
+      )
+      await nextTick()
+
+      // Expanded: reports its live px width.
+      expect(w.vm.group.getExpandedWidth('side')).toBe(320)
+      // Unregistered id: 0, so a caller falls back to persisted/default.
+      expect(w.vm.group.getExpandedWidth('nope')).toBe(0)
+
+      // Collapsed: still reports the width it will restore to, not 0 — this is
+      // what lets the window grow back by the right amount when it reopens.
+      w.vm.sidePanel.collapse()
+      await flushPanelAnimation()
+      expect(w.vm.group.getExpandedWidth('side')).toBe(320)
       w.unmount()
     })
   })

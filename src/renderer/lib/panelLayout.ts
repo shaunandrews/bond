@@ -13,39 +13,34 @@ export const PANEL_WIDTHS = {
   handle: { preferred: 8, minimum: 4 },
 } as const
 
-export type ThreadLayoutMode = 'three-panel' | 'two-panel' | 'thread-drawer'
-
-/** Below this, even main + thread (no utility) don't comfortably fit. */
-export const TWO_PANEL_MIN_WIDTH = 800
-/** At or above this, main + thread + utility all fit comfortably. */
-export const THREE_PANEL_MIN_WIDTH = 1180
+/**
+ * The window's content-width floor when only the chat panel is visible — the
+ * main panel's own `minSizePx`, so the composer never breaks. This is what
+ * lets a chat-only window shrink well below the old fixed 640: the native
+ * minimum is derived per open-panel set (see `windowMinWidthForPanels`), not
+ * pinned to the widest layout. Kept in sync with `MAIN_WINDOW_MIN_WIDTH` in
+ * `src/main/index.ts` (separate process, can't share the constant) and with
+ * the `main` BondPanel's `minSizePx` in `App.vue`.
+ */
+export const CHAT_MIN_WIDTH = 400
 
 /**
- * Which thread layout an open thread should use for the given available
- * content width. Only meaningful while a thread is open — the ordinary
- * main+utility two-panel layout is unaffected by this and unconditional.
+ * The native window minimum content width for a given set of visible side
+ * panels: the chat floor plus each open panel's own hard minimum. With
+ * nothing open it's just `CHAT_MIN_WIDTH`; each panel that opens raises the
+ * floor by exactly its minimum and each that closes lowers it again, so the
+ * window can always shrink back to fit whatever is actually on screen.
+ * Handles net ~0px width (their negative margins absorb the 8px bar), so they
+ * don't figure into the floor.
  */
-export function computeThreadLayoutMode(availableWidth: number): ThreadLayoutMode {
-  if (availableWidth >= THREE_PANEL_MIN_WIDTH) return 'three-panel'
-  if (availableWidth >= TWO_PANEL_MIN_WIDTH) return 'two-panel'
-  return 'thread-drawer'
+export function windowMinWidthForPanels(visible: { thread: boolean; utility: boolean }): number {
+  let min = CHAT_MIN_WIDTH
+  if (visible.thread) min += PANEL_WIDTHS.thread.minimum
+  if (visible.utility) min += PANEL_WIDTHS.utility.minimum
+  return min
 }
 
-/**
- * Sum of preferred/minimum widths for the panels that would be visible in a
- * given thread layout mode, plus one handle per seam between visible panels.
- * Feeds `ensureContentWidth` — the window should grow to fit `preferred`,
- * clamped by the display, and never below `minimum`.
- */
-export function widthBudgetForMode(mode: ThreadLayoutMode): { preferred: number; minimum: number } {
-  const surfaces =
-    mode === 'three-panel' ? (['main', 'thread', 'utility'] as const)
-    : mode === 'two-panel' ? (['main', 'thread'] as const)
-    : (['thread'] as const) // thread-drawer replaces main; no seams to size
-
-  const handles = Math.max(0, surfaces.length - 1)
-  return {
-    preferred: surfaces.reduce((sum, s) => sum + PANEL_WIDTHS[s].preferred, 0) + handles * PANEL_WIDTHS.handle.preferred,
-    minimum: surfaces.reduce((sum, s) => sum + PANEL_WIDTHS[s].minimum, 0) + handles * PANEL_WIDTHS.handle.minimum,
-  }
+/** The px width to grow/shrink the window by when a side panel opens/closes. */
+export function panelWidthFallback(panel: 'thread' | 'utility'): number {
+  return PANEL_WIDTHS[panel].preferred
 }

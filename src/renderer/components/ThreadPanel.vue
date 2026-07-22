@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, onUnmounted } from 'vue'
 import { useThreadConversation } from '../composables/useChat'
-import { useThreads } from '../composables/useThreads'
 import { useAutoScroll } from '../composables/useAutoScroll'
 import type { Message, ModelId, AttachedImage } from '../types/message'
 import type { EditMode } from '../../shared/session'
@@ -15,16 +14,14 @@ import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
 import BondFlyoutMenu from './BondFlyoutMenu.vue'
 import BondTextarea from './BondTextarea.vue'
-import { PhArrowDown, PhArrowSquareOut, PhClockCounterClockwise, PhDotsThree, PhPaperPlaneTilt, PhX } from '@phosphor-icons/vue'
+import { PhArrowDown, PhArrowSquareOut, PhDotsThree, PhPaperPlaneTilt, PhX } from '@phosphor-icons/vue'
 
 const props = withDefaults(defineProps<{
   threadId: string
   model: ModelId
   /** False only when restoring the last-open thread on launch — never steal focus then. */
   autoFocus?: boolean
-  /** True below the three/two-panel width threshold, where the thread replaces main as a full-height drawer. */
-  drawer?: boolean
-}>(), { autoFocus: true, drawer: false })
+}>(), { autoFocus: true })
 
 const emit = defineEmits<{
   close: []
@@ -36,7 +33,6 @@ const emit = defineEmits<{
 // Fresh instance per thread — App.vue keys this component by threadId, so a
 // switch between threads always remounts rather than reusing state.
 const threadChat = useThreadConversation(props.threadId)
-const threads = useThreads()
 
 const thread = ref<ChatThread | null>(null)
 // Distinguishes "still loading" from "confirmed gone" — getThread returns
@@ -108,21 +104,6 @@ function restoreDraft() {
     const saved = localStorage.getItem(draftKey.value)
     if (saved) chatInputRef.value?.setText(saved)
   } catch { /* best effort */ }
-}
-
-const recentOpen = ref(false)
-const recentAnchorEl = ref<HTMLElement | null>(null)
-
-function toggleRecent() {
-  if (!recentOpen.value) void threads.loadRecent()
-  recentOpen.value = !recentOpen.value
-}
-
-async function selectRecent(threadId: string) {
-  recentOpen.value = false
-  if (threadId === props.threadId) return
-  saveDraft()
-  await threads.openThreadById(threadId)
 }
 
 function showRootInConversation() {
@@ -218,6 +199,12 @@ onMounted(async () => {
   nextTick(checkRootOverflow)
 })
 
+// Switching threads from the Threads panel remounts this component without
+// going through handleClose — save the in-progress draft here too. Before
+// unmount, not after: the composer's template ref is already null by
+// onUnmounted, so getText() would read an empty draft.
+onBeforeUnmount(saveDraft)
+
 onUnmounted(() => {
   threadChat.unsubscribe()
 })
@@ -228,31 +215,11 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
 <template>
   <ViewShell ref="chatShellRef" title="Thread" tabindex="-1" @keydown="handleKeydown">
     <template #header-start>
-      <BondButton variant="ghost" size="sm" icon :aria-label="drawer ? 'Back to conversation' : 'Close thread'" v-tooltip="drawer ? 'Back' : 'Close'" @click="handleClose">
+      <BondButton variant="ghost" size="sm" icon aria-label="Close thread" v-tooltip="'Close'" @click="handleClose">
         <PhX :size="16" />
       </BondButton>
     </template>
     <template #header-end>
-      <div ref="recentAnchorEl">
-        <BondButton variant="ghost" size="sm" icon aria-label="Recent threads" v-tooltip="'Recent threads'" @click="toggleRecent">
-          <PhClockCounterClockwise :size="16" />
-        </BondButton>
-      </div>
-      <BondFlyoutMenu :open="recentOpen" :anchor="recentAnchorEl" placement="bottom-end" padding @close="recentOpen = false">
-        <BondText v-if="!threads.recentThreads.value.length" as="div" size="xs" color="muted" class="recent-thread-empty">No threads yet</BondText>
-        <button
-          v-for="t in threads.recentThreads.value"
-          :key="t.id"
-          type="button"
-          class="recent-thread-row"
-          :class="{ 'recent-thread-row--active': t.id === threadId }"
-          @click="selectRecent(t.id)"
-        >
-          <BondText size="sm" truncate class="flex-1 min-w-0">{{ t.title || 'Thread' }}</BondText>
-          <BondText size="xs" color="muted">{{ t.replyCount }}</BondText>
-        </button>
-      </BondFlyoutMenu>
-
       <div ref="overflowAnchorEl">
         <BondButton variant="ghost" size="sm" icon aria-label="Thread options" v-tooltip="'More'" @click="toggleOverflow">
           <PhDotsThree :size="18" />
@@ -269,7 +236,7 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
     <div v-if="anchorGone" class="thread-content-wrap px-4 pb-8 flex flex-col gap-2.5 flex-1">
       <div class="thread-anchor-gone">
         <BondText size="sm" color="muted">This response is no longer available.</BondText>
-        <BondButton variant="secondary" size="sm" @click="handleClose">{{ drawer ? 'Back to conversation' : 'Close' }}</BondButton>
+        <BondButton variant="secondary" size="sm" @click="handleClose">Close</BondButton>
       </div>
     </div>
     <div v-else class="thread-content-wrap px-4 pb-8 flex flex-col gap-2.5 flex-1">
@@ -282,7 +249,7 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
           </button>
         </div>
         <div ref="rootContentEl" class="thread-root-content" :class="{ 'thread-root-content--clamped': rootOverflowing }">
-          <MessageBubble :msg="rootMessage" />
+          <MessageBubble :msg="rootMessage" :threadsEnabled="false" />
         </div>
         <button v-if="rootOverflowing || rootExpanded" type="button" class="thread-root-expand" @click="rootExpanded = !rootExpanded; nextTick(checkRootOverflow)">
           {{ rootExpanded ? 'Show less' : 'Show full response' }}
@@ -290,11 +257,14 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
         <BondText size="xs" color="muted" class="thread-context-marker">{{ contextAsOf }}</BondText>
       </div>
 
+      <!-- threadsEnabled=false: a thread can't be discussed into another
+           thread — nested threads are deliberately impossible. -->
       <MessageBubble
         v-for="msg in threadChat.messages.value"
         :id="`thread-msg-${msg.id}`"
         :key="msg.id"
         :msg="msg"
+        :threadsEnabled="false"
         @approve="threadChat.respondToApproval"
       />
     </div>
@@ -448,32 +418,6 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
 
 .thread-context-marker {
   opacity: 0.7;
-}
-
-.recent-thread-empty {
-  padding: 0.375rem 0.5rem;
-}
-
-.recent-thread-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  padding: 0.375rem 0.5rem;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  transition: background var(--transition-fast);
-}
-
-.recent-thread-row:hover {
-  background: var(--color-bg);
-}
-
-.recent-thread-row--active {
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
 .overflow-menu-item {

@@ -269,13 +269,29 @@ function syncPxStateToDom(): boolean {
 // window resize, a sibling panel opening/closing elsewhere in the layout.
 // Reconcile JS state (and what's persisted) to whatever CSS actually
 // rendered, so a later drag starts from truth instead of a stale px number.
+//
+// Debounced until the resize settles: reconciling on every observer tick
+// rewrites px flex-bases mid-resize, and each write lags the rendered width
+// by a Vue tick — the flex shrink distribution jumps frame to frame and the
+// panel seams visibly jitter during a manual OS window resize (plus a
+// synchronous localStorage write per frame). CSS flexbox already renders the
+// live resize correctly on its own; JS state only needs the end result.
 let containerResizeObserver: ResizeObserver | null = null
+let containerResizeSettleTimer: ReturnType<typeof setTimeout> | null = null
+const CONTAINER_RESIZE_SETTLE_MS = 150
 
 function handleContainerResize() {
-  if (syncPxStateToDom()) {
-    emit('layoutChanged', { ...sizes.value })
-    saveLayout()
-  }
+  if (containerResizeSettleTimer) clearTimeout(containerResizeSettleTimer)
+  containerResizeSettleTimer = setTimeout(() => {
+    containerResizeSettleTimer = null
+    // A drag in progress synced at startResize and saves at endResize —
+    // reconciling under it would yank the handle out of the user's hand.
+    if (resizePair) return
+    if (syncPxStateToDom()) {
+      emit('layoutChanged', { ...sizes.value })
+      saveLayout()
+    }
+  }, CONTAINER_RESIZE_SETTLE_MS)
 }
 
 onMounted(() => {
@@ -286,6 +302,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   containerResizeObserver?.disconnect()
+  if (containerResizeSettleTimer) clearTimeout(containerResizeSettleTimer)
 })
 
 // --- Resize logic ---
@@ -643,6 +660,16 @@ defineExpose({
   setLayout: (layout: Record<string, number>) => {
     sizes.value = { ...layout }
     saveLayout()
+  },
+  // The width a panel occupies (or would, if currently collapsed) — its live
+  // size when expanded, else the size it will restore to. Lets a consumer
+  // grow/shrink the window by exactly a panel's width on open/close. Returns
+  // 0 for an unregistered id (e.g. a conditionally-rendered panel not mounted).
+  getExpandedWidth: (id: string): number => {
+    const reg = getPanelReg(id)
+    if (!reg) return 0
+    if (collapsed.value.has(id)) return preCollapseSize.value[id] ?? reg.constraints.defaultSize
+    return sizes.value[id] ?? reg.constraints.defaultSize
   },
 })
 </script>

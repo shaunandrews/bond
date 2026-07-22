@@ -89,7 +89,7 @@ describe('ThreadPanel', () => {
     localStorage.clear()
   })
 
-  function mountPanel(props: Partial<{ threadId: string; model: string; autoFocus: boolean; drawer: boolean }> = {}) {
+  function mountPanel(props: Partial<{ threadId: string; model: string; autoFocus: boolean }> = {}) {
     return shallowMount(ThreadPanel, {
       props: { threadId: 'thread-1', model: 'balanced', ...props } as any,
       // ViewShell owns the actual DOM structure (slots for header/content/footer)
@@ -107,6 +107,20 @@ describe('ThreadPanel', () => {
     expect(bond.getThread).toHaveBeenCalledWith('thread-1')
     expect(wrapper.text()).toContain('From the main conversation')
     expect(wrapper.text()).toContain('context as of')
+  })
+
+  it('disables the Discuss/Thread footer on every bubble it renders — nested threads are impossible', async () => {
+    // Regression: the root card and thread replies rendered MessageBubble
+    // with the default threadsEnabled=true, offering "Discuss" inside a
+    // thread — a thread about a thread, which the design forbids.
+    const wrapper = mountPanel()
+    await flush()
+
+    const bubbles = wrapper.findAllComponents({ name: 'MessageBubble' })
+    expect(bubbles.length).toBeGreaterThan(0)
+    for (const bubble of bubbles) {
+      expect(bubble.props('threadsEnabled')).toBe(false)
+    }
   })
 
   it('subscribes and loads the thread-scoped transcript on mount', async () => {
@@ -149,12 +163,6 @@ describe('ThreadPanel', () => {
     expect(closeButton.exists()).toBe(true)
     await closeButton.trigger('click')
     expect(wrapper.emitted('close')).toBeTruthy()
-  })
-
-  it('uses "Back to conversation" as the close label in drawer mode', async () => {
-    const wrapper = mountPanel({ drawer: true })
-    await flush()
-    expect(wrapper.find('[aria-label="Back to conversation"]').exists()).toBe(true)
   })
 
   it('fetches a summary and shows the confirmation sheet when "Send summary to main" is chosen', async () => {
@@ -265,6 +273,25 @@ describe('ThreadPanel', () => {
 
       await (wrapper.vm as any).handleSubmit('about to send', [])
       expect(localStorage.getItem('bond:thread-draft:thread-1')).toBeNull()
+    })
+
+    it('unmounting saves the draft too — switching threads from the Threads panel never goes through close', async () => {
+      const DraftStub = defineComponent({
+        props: ['busy', 'model', 'editMode', 'contextUsage', 'placeholder'],
+        emits: ['submit', 'cancel', 'update:model', 'update:editMode'],
+        setup(_props, { expose }) {
+          expose({ focus: () => {}, getText: () => 'mid-thought', setText: () => {} })
+          return () => null
+        },
+      })
+      const wrapper = shallowMount(ThreadPanel, {
+        props: { threadId: 'thread-1', model: 'balanced' } as any,
+        global: { stubs: { Teleport: true, ViewShell: false, BondButton: false, BondText: false, BondTextarea: false, BondFlyoutMenu: false, BondToolbar: false, ChatInput: DraftStub } },
+      })
+      await flush()
+
+      wrapper.unmount()
+      expect(localStorage.getItem('bond:thread-draft:thread-1')).toBe('mid-thought')
     })
   })
 })

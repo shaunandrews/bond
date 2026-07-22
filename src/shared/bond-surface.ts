@@ -291,19 +291,17 @@ export interface ElectronBondSurface {
   hasScreenRecordingPermission(): Promise<boolean>
 
   /**
-   * Grow the main window's content area so it fits `preferredWidth` (e.g. the
-   * sum of every visible panel's preferred width plus handles), clamped to
-   * the current display's work area. Never shrinks — only called when
-   * opening a panel needs more room than the window currently has. Also
-   * raises the window's native minimum width to `minimumWidth` so a manual
-   * resize can't crush a visible panel below its hard floor. A no-op in
+   * Grow or shrink the main window's content width by `deltaWidth` (positive
+   * when a side panel opens, negative when it closes) so the chat panel keeps
+   * its size, clamped to the current display's work area. Also sets the
+   * window's native minimum width to `minimumWidth` — the chat floor plus
+   * whatever panels remain open — so a manual resize can't crush a visible
+   * panel, yet a chat-only window can shrink small. Returns the resulting
+   * content width so the caller can pick a responsive layout mode. A no-op in
    * fullscreen (native bounds never change there) and on the web client
    * (which reports its real viewport width and never resizes natively).
    */
-  ensureContentWidth(options: { preferredWidth: number; minimumWidth: number }): Promise<{
-    width: number
-    reachedPreferred: boolean
-  }>
+  resizeContent(options: { deltaWidth: number; minimumWidth: number }): Promise<{ width: number }>
 }
 
 export type BondSurface = DaemonBondSurface & ElectronBondSurface

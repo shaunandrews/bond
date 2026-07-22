@@ -95,7 +95,7 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     // The web client can't resize its own browser tab/window — report the
     // real viewport width and let the renderer's responsive layout rules
     // pick a mode from it, rather than pretending a native resize happened.
-    ensureContentWidth: async () => ({ width: window.innerWidth, reachedPreferred: false }),
+    resizeContent: async () => ({ width: window.innerWidth }),
   }
 
   return {
