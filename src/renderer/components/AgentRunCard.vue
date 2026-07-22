@@ -15,6 +15,7 @@ const status = computed(() => run.value?.status ?? props.data.status)
 const latest = computed(() => detail.value?.events.at(-1))
 const pendingQuestion = computed(() => detail.value?.questions.find(question => question.status === 'pending'))
 const publication = computed(() => detail.value?.publication)
+const update = computed(() => detail.value?.update)
 const isActive = computed(() => ACTIVE_AGENT_RUN_STATES.has(status.value))
 
 function openTasks() {
@@ -49,10 +50,12 @@ function openPr(url: string) { void window.bond.openExternal(url) }
         </div>
       </div>
       <BondText v-if="store.errors.value.get(data.runId)" size="xs" color="err">{{ store.errors.value.get(data.runId) }}</BondText>
+      <BondText v-if="update" size="xs" color="muted">Merged · {{ update.risk }} update · {{ update.status }}</BondText>
       <div class="agent-run-card-actions">
         <BondButton size="sm" variant="ghost" @click="openTasks"><PhListBullets :size="13" /> Details</BondButton>
         <BondButton v-if="isActive" size="sm" variant="ghost" @click="store.cancel(data.runId)"><PhStop :size="13" /> Cancel</BondButton>
         <BondButton v-if="publication?.prUrl ?? data.prUrl" size="sm" variant="ghost" @click="openPr((publication?.prUrl ?? data.prUrl)!)"><PhArrowSquareOut :size="13" /> Draft PR</BondButton>
+        <BondButton v-if="update && update.status !== 'applied'" size="sm" variant="primary" @click="store.applyUpdate(data.runId, update.risk === 'scheduled')">Update Bond</BondButton>
       </div>
     </div>
   </article>

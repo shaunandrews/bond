@@ -115,6 +115,22 @@ export function ensureAgentRunSchema(db: Database.Database): void {
       published_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS agent_run_updates (
+      run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+      pr_number INTEGER NOT NULL CHECK(pr_number > 0),
+      merge_commit_sha TEXT NOT NULL,
+      merged_at TEXT NOT NULL,
+      changed_paths_json TEXT NOT NULL CHECK(json_valid(changed_paths_json)),
+      risk TEXT NOT NULL CHECK(risk IN ('renderer','daemon','scheduled')),
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('detected','deferred','ready','updating','applied','failed')),
+      recovery_instructions TEXT,
+      error_message TEXT,
+      detected_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      applied_at TEXT
+    );
+
     CREATE TRIGGER IF NOT EXISTS agent_run_events_no_update
     BEFORE UPDATE ON agent_run_events
     BEGIN

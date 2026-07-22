@@ -90,10 +90,13 @@ onMounted(() => void store.reconcile())
           <div v-if="selected.baseSha"><dt>Base</dt><dd class="mono">{{ selected.baseSha.slice(0, 10) }}</dd></div>
           <div><dt>Budget</dt><dd>{{ selected.resourceCaps.budgetPreset ?? selected.settings.budgetPreset }}</dd></div>
           <div v-if="detail?.publication"><dt>PR</dt><dd>{{ detail.publication.status }}<template v-if="detail.publication.prNumber"> · #{{ detail.publication.prNumber }}</template></dd></div>
+          <div v-if="detail?.update"><dt>Merge</dt><dd>{{ detail.update.risk }} · {{ detail.update.status }}</dd></div>
         </dl>
 
         <BondText size="sm" class="tasks-brief">{{ selected.brief }}</BondText>
         <BondText v-if="selected.errorMessage" size="xs" color="err">{{ selected.errorMessage }}</BondText>
+        <BondText v-if="detail?.update?.reason" size="xs" color="muted">{{ detail.update.reason }}</BondText>
+        <BondText v-if="detail?.update?.errorMessage" size="xs" color="err">{{ detail.update.errorMessage }}</BondText>
 
         <div v-if="pendingQuestion" class="tasks-question">
           <BondText size="xs" weight="medium">Approval needed</BondText>
@@ -108,6 +111,7 @@ onMounted(() => void store.reconcile())
         <div class="tasks-actions">
           <BondButton v-if="ACTIVE_AGENT_RUN_STATES.has(selected.status)" size="sm" variant="danger" @click="store.cancel(selected.id)"><PhStop :size="13" /> Cancel</BondButton>
           <BondButton v-if="detail?.publication?.prUrl" size="sm" variant="secondary" @click="openPr(detail.publication.prUrl)"><PhArrowSquareOut :size="13" /> Open draft PR</BondButton>
+          <BondButton v-if="detail?.update && detail.update.status !== 'applied'" size="sm" variant="primary" @click="store.applyUpdate(selected.id, detail.update.risk === 'scheduled')">{{ detail.update.risk === 'scheduled' ? 'Apply scheduled update' : 'Apply merged update' }}</BondButton>
           <BondButton v-if="selected.workspace.isolation === 'worktree' && selected.workspaceState.status === 'retained' && !ACTIVE_AGENT_RUN_STATES.has(selected.status)" size="sm" variant="ghost" @click="store.discard(selected.id)"><PhTrash :size="13" /> Discard worktree</BondButton>
         </div>
         <BondText v-if="store.errors.value.get(selected.id)" size="xs" color="err">{{ store.errors.value.get(selected.id) }}</BondText>

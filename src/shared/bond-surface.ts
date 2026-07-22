@@ -169,6 +169,8 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     /** Write-only: no Bond surface returns the credential value. */
     setAgentRunGitHubCredential: (value: string) => invoke('agentruns.setGithubCredential', { value }),
     publishAgentRun: (runId: string) => invoke('agentruns.publish', { runId }),
+    pollAgentRunMerges: () => invoke('agentruns.pollMerges'),
+    applyAgentRunUpdate: (runId: string, confirmed = false) => invoke('agentruns.applyUpdate', { runId, confirmed }),
     getAgentRetentionConfig: () => invoke('agentruns.retentionConfig'),
     configureAgentRetention: (config: Partial<AgentRetentionConfig>) => invoke('agentruns.configureRetention', config),
 

@@ -1,7 +1,7 @@
 import type { AgentRun, AgentRunQuestion } from '../../../shared/agent-runs'
 import { upsertMessages } from '../../transcript'
 import { queueWhenNoActiveTurns } from '../../turns'
-import { getAgentRun, getAgentRunPublication, listAgentRuns, listPendingAgentRunQuestions, markAgentRunCompletionInserted, runsAwaitingCompletion } from './store'
+import { getAgentRun, getAgentRunPublication, getAgentRunUpdate, listAgentRuns, listPendingAgentRunQuestions, markAgentRunCompletionInserted, runsAwaitingCompletion } from './store'
 
 export interface AgentRunCompletionOptions {
   deferUntilTurnsIdle?: (task: () => void) => void
@@ -42,6 +42,7 @@ export function createAgentRunCompletionCoordinator(options: AgentRunCompletionO
 
   const upsertCard = (run: AgentRun, question?: AgentRunQuestion): void => {
     const publication = getAgentRunPublication(run.id)
+    const update = getAgentRunUpdate(run.id)
     upsertMessages([{
       id: cardId(run),
       role: 'meta',
@@ -57,6 +58,7 @@ export function createAgentRunCompletionCoordinator(options: AgentRunCompletionO
         prNumber: publication?.prNumber ?? null, prUrl: publication?.prUrl ?? null,
         qReviewStatus: publication?.qReviewStatus ?? null, qCommentUrl: publication?.qCommentUrl ?? null,
         publishError: publication?.errorMessage ?? null,
+        updateRisk: update?.risk ?? null, updateStatus: update?.status ?? null,
       },
     }])
     if (['succeeded', 'failed', 'cancelled'].includes(run.status)) {

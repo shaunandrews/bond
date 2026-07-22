@@ -16,6 +16,7 @@ import {
   listAgentRunEvents,
   listAgentRunQuestions,
   getAgentRunPublication,
+  getAgentRunUpdate,
   listAgentRuns,
   updateAgentRunWorkspaceState,
 } from './store'
@@ -33,6 +34,7 @@ import { qAgentRunReviewer } from './q-review'
 import { githubConfigService } from './github-config'
 import { runAgentRetentionSweep } from './retention'
 import { AGENT_BUDGET_PRESET_CAPS, resolveAgentRunBudget } from '../../../shared/agent-budgets'
+import { configuredMergeReader, createLocalBondUpdateDriver, createMergeUpdateCoordinator } from './merge-updates'
 
 const execFileAsync = promisify(execFile)
 export const ASYNC_AGENT_COMMAND_POLICY_VERSION = 'phase0-readonly-no-shell-v1'
@@ -57,6 +59,15 @@ function emit(run: AgentRun): void {
 
 const completion = createAgentRunCompletionCoordinator({ onChanged: emit })
 const handoff = createAgentRunHandoff({ reviewer: qAgentRunReviewer })
+const mergeUpdates = createMergeUpdateCoordinator({
+  reader: configuredMergeReader,
+  driver: createLocalBondUpdateDriver({
+    reloadRenderer: async () => { /* connected clients reconcile from durable state */ },
+    restartDaemon: async () => { throw new Error('Controlled daemon restart requires the desktop host lifecycle handoff.') },
+    awaitReconnect: async () => { /* desktop reconnect logic owns this boundary */ },
+  }),
+  onChanged: emit,
+})
 const terminalTasks = new Set<Promise<void>>()
 
 function retainWorkspace(run: AgentRun): AgentRun {
@@ -154,6 +165,7 @@ export function startAgentRunService(): void {
   setAgentRunApi({ dispatch: dispatchAgentRun, check: checkAgentRun, answer: answerAgentQuestion })
   completion.reconcile()
   worker.start()
+  mergeUpdates.start()
   void runAgentRetentionSweep().catch(error => console.warn('[agents/retention] sweep failed:', error))
 }
 
@@ -161,6 +173,7 @@ export async function stopAgentRunService(): Promise<void> {
   if (!started) return
   started = false
   setAgentRunApi(null)
+  mergeUpdates.stop()
   await worker.stop()
   await Promise.allSettled([...terminalTasks])
 }
@@ -266,7 +279,16 @@ export function checkAgentRun(runId: string): AgentRunDetail | null {
     events: listAgentRunEvents(run.id),
     questions: listAgentRunQuestions(run.id),
     publication: getAgentRunPublication(run.id),
+    update: getAgentRunUpdate(run.id),
   } : null
+}
+
+export function pollAgentRunMerges() {
+  return mergeUpdates.poll()
+}
+
+export function applyAgentRunUpdate(runId: string, confirmed = false) {
+  return mergeUpdates.apply(runId, confirmed)
 }
 
 export async function answerAgentQuestion(

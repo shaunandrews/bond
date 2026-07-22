@@ -28,6 +28,8 @@ export interface ReadOnlyAgentWorkspace {
 }
 
 export interface ManagedWorktreeWorkspace {
+  /** Immutable registered repository identity. Legacy Bond runs omit it. */
+  repositoryId?: string
   repoRoot: string
   isolation: 'worktree'
   branch: string
@@ -118,6 +120,25 @@ export interface AgentRunPublication {
   publishedAt: string | null
 }
 
+export type AgentRunUpdateRisk = 'renderer' | 'daemon' | 'scheduled'
+export type AgentRunUpdateStatus = 'detected' | 'deferred' | 'ready' | 'updating' | 'applied' | 'failed'
+
+export interface AgentRunUpdate {
+  runId: string
+  prNumber: number
+  mergeCommitSha: string
+  mergedAt: string
+  changedPaths: string[]
+  risk: AgentRunUpdateRisk
+  reason: string
+  status: AgentRunUpdateStatus
+  recoveryInstructions: string | null
+  errorMessage: string | null
+  detectedAt: string
+  updatedAt: string
+  appliedAt: string | null
+}
+
 export interface GitHubHandoffConfig {
   enabled: boolean
   repository: 'shaunandrews/bond'
@@ -183,6 +204,11 @@ export interface DispatchAgentRunInput {
   parentModel?: string
   /** Required for write-capable agents after the immutable brief is shown. */
   confirmed?: boolean
+  /** Registered repository target. Bond is the compatibility default. */
+  repositoryId?: string
+  targetConfirmed?: boolean
+  isolation?: 'worktree' | 'in-place'
+  inPlaceConfirmed?: boolean
 }
 
 export interface AgentRunDetail {
@@ -190,6 +216,7 @@ export interface AgentRunDetail {
   events: AgentRunEvent[]
   questions: AgentRunQuestion[]
   publication: AgentRunPublication | null
+  update?: AgentRunUpdate | null
 }
 
 export interface AgentRetentionConfig {
@@ -211,4 +238,6 @@ export interface AgentRunCardData {
   qReviewStatus?: AgentRunQReviewStatus | null
   qCommentUrl?: string | null
   publishError?: string | null
+  updateRisk?: AgentRunUpdateRisk | null
+  updateStatus?: AgentRunUpdateStatus | null
 }

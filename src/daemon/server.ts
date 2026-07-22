@@ -74,6 +74,8 @@ import {
   configureGitHubHandoff,
   setGitHubHandoffCredential,
   publishAgentRun,
+  pollAgentRunMerges,
+  applyAgentRunUpdate,
 } from './agents/async/service'
 import { configureAgentRetention, getAgentRetentionConfig } from './agents/async/retention'
 import * as desk from './desk/service'
@@ -1082,6 +1084,15 @@ const handlers: RpcHandlers = {
     const runId = getStringParam(raw(params), 'runId')
     if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
     return publishAgentRun(runId)
+  },
+
+  'agentruns.pollMerges': () => pollAgentRunMerges(),
+
+  'agentruns.applyUpdate': async (params) => {
+    const p = raw(params)
+    const runId = getStringParam(p, 'runId')
+    if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
+    return applyAgentRunUpdate(runId, getParam(p, 'confirmed') === true)
   },
 
   'agentruns.retentionConfig': () => getAgentRetentionConfig(),

@@ -8,6 +8,7 @@ export interface AgentRunSurface {
   cancelAgentRun(runId: string): Promise<AgentRun | null>
   answerAgentRunQuestion(runId: string, questionId: string, approved: boolean, response?: string): Promise<{ run: AgentRun }>
   discardAgentRunWorkspace(runId: string): Promise<AgentRun>
+  applyAgentRunUpdate?(runId: string, confirmed?: boolean): Promise<unknown>
   onChunk(fn: (chunk: TaggedChunk) => void): () => void
 }
 
@@ -99,6 +100,9 @@ export function useAgentRuns(surface?: AgentRunSurface) {
       : Promise.resolve(),
     discard: (runId: string) => resolved
       ? action(resolved, runId, () => resolved.discardAgentRunWorkspace(runId))
+      : Promise.resolve(),
+    applyUpdate: (runId: string, confirmed = false) => resolved?.applyAgentRunUpdate
+      ? action(resolved, runId, () => resolved.applyAgentRunUpdate!(runId, confirmed))
       : Promise.resolve(),
   }
 }

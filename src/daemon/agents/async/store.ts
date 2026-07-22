@@ -9,6 +9,7 @@ import {
   type AgentRunPublication,
   type AgentRunResourceCaps,
   type AgentRunSummary,
+  type AgentRunUpdate,
   type AgentRunState,
   type AgentRunWorkspace,
   type AgentRunWorkspaceState,
@@ -99,6 +100,22 @@ type PublicationRow = {
   created_at: string
   updated_at: string
   published_at: string | null
+}
+
+type UpdateRow = {
+  run_id: string
+  pr_number: number
+  merge_commit_sha: string
+  merged_at: string
+  changed_paths_json: string
+  risk: AgentRunUpdate['risk']
+  reason: string
+  status: AgentRunUpdate['status']
+  recovery_instructions: string | null
+  error_message: string | null
+  detected_at: string
+  updated_at: string
+  applied_at: string | null
 }
 
 export interface CreateAgentRunRecord {
@@ -238,6 +255,24 @@ function rowToPublication(row: PublicationRow): AgentRunPublication {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     publishedAt: row.published_at,
+  }
+}
+
+function rowToUpdate(row: UpdateRow): AgentRunUpdate {
+  return {
+    runId: row.run_id,
+    prNumber: row.pr_number,
+    mergeCommitSha: row.merge_commit_sha,
+    mergedAt: row.merged_at,
+    changedPaths: parseJson<string[]>(row.changed_paths_json),
+    risk: row.risk,
+    reason: row.reason,
+    status: row.status,
+    recoveryInstructions: row.recovery_instructions,
+    errorMessage: row.error_message,
+    detectedAt: row.detected_at,
+    updatedAt: row.updated_at,
+    appliedAt: row.applied_at,
   }
 }
 
@@ -408,6 +443,67 @@ export function getAgentRunPublication(runId: string, dbArg?: Database.Database)
   const db = dbFor(dbArg)
   const row = db.prepare('SELECT * FROM agent_run_publications WHERE run_id = ?').get(runId) as PublicationRow | undefined
   return row ? rowToPublication(row) : null
+}
+
+export function getAgentRunUpdate(runId: string, dbArg?: Database.Database): AgentRunUpdate | null {
+  const db = dbFor(dbArg)
+  const row = db.prepare('SELECT * FROM agent_run_updates WHERE run_id = ?').get(runId) as UpdateRow | undefined
+  return row ? rowToUpdate(row) : null
+}
+
+export function recordAgentRunMerge(input: {
+  runId: string
+  prNumber: number
+  mergeCommitSha: string
+  mergedAt: string
+  changedPaths: string[]
+  risk: AgentRunUpdate['risk']
+  reason: string
+}, now = nowIso(), dbArg?: Database.Database): { update: AgentRunUpdate; created: boolean } {
+  const db = dbFor(dbArg)
+  const existing = getAgentRunUpdate(input.runId, db)
+  if (existing) {
+    if (existing.prNumber !== input.prNumber || existing.mergeCommitSha !== input.mergeCommitSha) {
+      throw new Error('The durable merge provenance for this run is immutable.')
+    }
+    return { update: existing, created: false }
+  }
+  db.transaction(() => {
+    const run = getAgentRun(input.runId, db)
+    if (!run) throw new Error(`Unknown agent run "${input.runId}".`)
+    db.prepare(`INSERT INTO agent_run_updates (
+      run_id, pr_number, merge_commit_sha, merged_at, changed_paths_json, risk,
+      reason, status, detected_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'detected', ?, ?)`)
+      .run(input.runId, input.prNumber, input.mergeCommitSha, input.mergedAt,
+        JSON.stringify(redactAgentValue(input.changedPaths)), input.risk, redactAgentText(input.reason), now, now)
+    insertEvent(db, input.runId, 'github_merge_detected', run.status, run.status, {
+      prNumber: input.prNumber, mergeCommitSha: input.mergeCommitSha,
+      changedPaths: input.changedPaths, risk: input.risk, reason: input.reason,
+    }, now)
+  })()
+  return { update: getAgentRunUpdate(input.runId, db)!, created: true }
+}
+
+export function markAgentRunUpdate(runId: string, status: AgentRunUpdate['status'], input: {
+  errorMessage?: string | null
+  recoveryInstructions?: string | null
+  eventType: string
+  data?: Record<string, unknown>
+}, now = nowIso(), dbArg?: Database.Database): AgentRunUpdate {
+  const db = dbFor(dbArg)
+  db.transaction(() => {
+    const run = getAgentRun(runId, db)
+    const update = getAgentRunUpdate(runId, db)
+    if (!run || !update) throw new Error(`Unknown merged agent run "${runId}".`)
+    insertEvent(db, runId, input.eventType, run.status, run.status, input.data ?? {}, now)
+    db.prepare(`UPDATE agent_run_updates SET status = ?, error_message = ?, recovery_instructions = ?,
+      updated_at = ?, applied_at = CASE WHEN ? = 'applied' THEN ? ELSE applied_at END WHERE run_id = ?`)
+      .run(status, input.errorMessage ? redactAgentText(input.errorMessage) : null,
+        input.recoveryInstructions ? redactAgentText(input.recoveryInstructions) : null,
+        now, status, now, runId)
+  })()
+  return getAgentRunUpdate(runId, db)!
 }
 
 export function createAgentRunPublication(input: {

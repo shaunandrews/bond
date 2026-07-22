@@ -91,6 +91,10 @@ const activeByScope = new Map<ScopeKey, ActiveTurn>()
 const sendChainByScope = new Map<ScopeKey, Promise<void>>()
 const whenIdleTasks: Array<() => void> = []
 
+export function hasActiveTurns(): boolean {
+  return activeByScope.size > 0
+}
+
 function flushWhenIdleTasks(): void {
   if (activeByScope.size > 0 || whenIdleTasks.length === 0) return
   const tasks = whenIdleTasks.splice(0)
