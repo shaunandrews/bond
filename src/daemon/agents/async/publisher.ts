@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { AgentRun, AgentRunPublication } from '../../../shared/agent-runs'
-import type { SecretStore } from '../../mcp/keychain'
+import { getSecretStore, type SecretStore } from '../../mcp/keychain'
 import { SAFE_COMMAND_PATH } from './command-runner'
 import { BOND_GITHUB_REMOTE, BOND_GITHUB_REPOSITORY, githubConfigService } from './github-config'
 import { configuredBondRepoRoot } from './workspace'
@@ -35,7 +35,7 @@ export interface LocalGitPublisher {
 }
 
 export interface GitHubDraftPullRequest {
-  repository: 'shaunandrews/bond'
+  repository: string
   number: number
   nodeId: string
   url: string
@@ -89,7 +89,7 @@ export const localGitPublisher: LocalGitPublisher = {
       git(cwd, ['status', '--porcelain=v1']),
       git(cwd, ['diff', '--name-only', `${run.baseSha}...HEAD`]),
       git(cwd, ['rev-list', '--count', `${run.baseSha}..HEAD`]),
-      git(cwd, ['remote', 'get-url', BOND_GITHUB_REMOTE]),
+      git(cwd, ['remote', 'get-url', run.repository?.remote ?? BOND_GITHUB_REMOTE]),
     ])
     return {
       branch,
@@ -105,7 +105,7 @@ export const localGitPublisher: LocalGitPublisher = {
     if (run.workspace.isolation !== 'worktree') throw new Error('Only a managed worktree can be published.')
     const authorization = Buffer.from(`x-access-token:${credential}`, 'utf8').toString('base64')
     await git(run.workspace.worktreePath, [
-      'push', '--porcelain', BOND_GITHUB_REMOTE,
+      'push', '--porcelain', run.repository?.remote ?? BOND_GITHUB_REMOTE,
       `refs/heads/${run.workspace.branch}:refs/heads/${run.workspace.branch}`,
     ], {
       GIT_CONFIG_COUNT: '2',
@@ -119,9 +119,9 @@ export const localGitPublisher: LocalGitPublisher = {
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 
-export function createGitHubDraftTransport(credential: string, fetcher: FetchLike = fetch): GitHubDraftTransport {
+export function createGitHubDraftTransport(credential: string, fetcher: FetchLike = fetch, repository: string = BOND_GITHUB_REPOSITORY): GitHubDraftTransport {
   const request = async (method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<any> => {
-    if (!path.startsWith(`/repos/${BOND_GITHUB_REPOSITORY}/`)) throw new Error('GitHub request escaped the configured repository.')
+    if (!path.startsWith(`/repos/${repository}/`)) throw new Error('GitHub request escaped the configured repository.')
     const response = await fetcher(`https://api.github.com${path}`, {
       method,
       headers: {
@@ -139,7 +139,7 @@ export function createGitHubDraftTransport(credential: string, fetcher: FetchLik
   }
 
   const parse = (value: any): GitHubDraftPullRequest => ({
-    repository: BOND_GITHUB_REPOSITORY,
+    repository,
     number: Number(value.number),
     nodeId: String(value.node_id),
     url: String(value.html_url),
@@ -150,36 +150,37 @@ export function createGitHubDraftTransport(credential: string, fetcher: FetchLik
 
   return {
     async findPullRequest(headRef, baseRef) {
-      const query = new URLSearchParams({ state: 'open', head: `shaunandrews:${headRef}`, base: baseRef, per_page: '10' })
-      const values = await request('GET', `/repos/${BOND_GITHUB_REPOSITORY}/pulls?${query}`)
+      const owner = repository.split('/')[0]
+      const query = new URLSearchParams({ state: 'open', head: `${owner}:${headRef}`, base: baseRef, per_page: '10' })
+      const values = await request('GET', `/repos/${repository}/pulls?${query}`)
       if (!Array.isArray(values) || !values.length) return null
       if (values.length > 1) throw new Error('Multiple open pull requests matched this run branch.')
       return parse(values[0])
     },
     async createDraft(input) {
-      return parse(await request('POST', `/repos/${BOND_GITHUB_REPOSITORY}/pulls`, {
+      return parse(await request('POST', `/repos/${repository}/pulls`, {
         title: input.title, body: input.body, head: input.headRef, base: input.baseRef,
         draft: true, maintainer_can_modify: false,
       }))
     },
     async updateDraft(prNumber, input) {
-      return parse(await request('PATCH', `/repos/${BOND_GITHUB_REPOSITORY}/pulls/${prNumber}`, {
+      return parse(await request('PATCH', `/repos/${repository}/pulls/${prNumber}`, {
         title: input.title, body: input.body,
       }))
     },
     async findQComment(prNumber, marker) {
-      const values = await request('GET', `/repos/${BOND_GITHUB_REPOSITORY}/issues/${prNumber}/comments?per_page=100`)
+      const values = await request('GET', `/repos/${repository}/issues/${prNumber}/comments?per_page=100`)
       if (!Array.isArray(values)) throw new Error('GitHub returned invalid PR comments.')
       const matches = values.filter(value => typeof value.body === 'string' && value.body.includes(marker))
       if (matches.length > 1) throw new Error('Multiple Q advisory comments matched this run.')
       return matches.length ? { id: Number(matches[0].id), url: String(matches[0].html_url) } : null
     },
     async createQComment(prNumber, body) {
-      const value = await request('POST', `/repos/${BOND_GITHUB_REPOSITORY}/issues/${prNumber}/comments`, { body })
+      const value = await request('POST', `/repos/${repository}/issues/${prNumber}/comments`, { body })
       return { id: Number(value.id), url: String(value.html_url) }
     },
     async updateQComment(commentId, body) {
-      const value = await request('PATCH', `/repos/${BOND_GITHUB_REPOSITORY}/issues/comments/${commentId}`, { body })
+      const value = await request('PATCH', `/repos/${repository}/issues/comments/${commentId}`, { body })
       return { id: Number(value.id), url: String(value.html_url) }
     },
   }
@@ -196,11 +197,13 @@ function validateRun(run: AgentRun, inspection: LocalPublishInspection, expected
   if (run.agent !== 'mathis' || run.status !== 'succeeded') throw new Error('Only a successful Mathis run can publish.')
   if (run.workspace.isolation !== 'worktree' || run.workspace.readOnly) throw new Error('Publishing requires the run managed worktree.')
   if (run.workspaceState.status !== 'retained') throw new Error('The successful worktree must be retained before publishing.')
-  if (resolve(run.workspace.repoRoot) !== resolve(expectedRepoRoot)) throw new Error('The run does not target the configured local Bond repository.')
-  if (run.workspace.baseRef !== 'main') throw new Error('GitHub handoff is restricted to the main base branch.')
+  if (resolve(run.workspace.repoRoot) !== resolve(expectedRepoRoot)) throw new Error('The run does not target its registered local repository.')
+  const expectedBase = run.repository?.baseRef ?? 'main'
+  if (run.workspace.baseRef !== expectedBase) throw new Error(`GitHub handoff is restricted to the registered ${expectedBase} base branch.`)
   if (!/^bond-agent\/[a-z0-9-]{1,24}$/.test(run.workspace.branch)) throw new Error('The run branch is outside the managed branch namespace.')
   if (run.workspace.branch !== inspection.branch) throw new Error('The inspected branch does not match the run workspace.')
-  if (inspection.remoteUrl !== EXPECTED_REMOTE_URL) throw new Error(`origin must be exactly ${EXPECTED_REMOTE_URL}.`)
+  const expectedRemote = run.repository?.expectedRemoteUrl ?? EXPECTED_REMOTE_URL
+  if (!expectedRemote || inspection.remoteUrl !== expectedRemote) throw new Error(`The registered remote must be exactly ${expectedRemote}.`)
   if (!run.baseSha || !/^[a-f0-9]{40,64}$/i.test(run.baseSha)) throw new Error('The run has no valid immutable base SHA.')
   if (!/^[a-f0-9]{40,64}$/i.test(inspection.headSha) || inspection.aheadBy < 1) throw new Error('The run branch has no committed change to publish.')
   if (inspection.porcelain) throw new Error('The run worktree has uncommitted changes; commit them before publishing.')
@@ -215,11 +218,12 @@ function validateRun(run: AgentRun, inspection: LocalPublishInspection, expected
 
 function validatePullRequest(run: AgentRun, pr: GitHubDraftPullRequest): void {
   if (run.workspace.isolation !== 'worktree') throw new Error('Run has no publishable branch.')
-  if (pr.repository !== BOND_GITHUB_REPOSITORY || pr.baseRef !== run.workspace.baseRef || pr.headRef !== run.workspace.branch) {
+  const repository = run.repository?.githubRepository ?? BOND_GITHUB_REPOSITORY
+  if (pr.repository !== repository || pr.baseRef !== run.workspace.baseRef || pr.headRef !== run.workspace.branch) {
     throw new Error('GitHub returned a pull request outside this run contract.')
   }
   if (!pr.draft) throw new Error('Refusing to alter a pull request that is no longer a draft.')
-  if (!Number.isSafeInteger(pr.number) || pr.number < 1 || !pr.url.startsWith(`https://github.com/${BOND_GITHUB_REPOSITORY}/pull/`)) {
+  if (!Number.isSafeInteger(pr.number) || pr.number < 1 || !pr.url.startsWith(`https://github.com/${repository}/pull/`)) {
     throw new Error('GitHub returned invalid pull request identity data.')
   }
 }
@@ -230,14 +234,22 @@ export interface AgentRunHandoffOptions {
   github?: (credential: string) => GitHubDraftTransport
   repoRoot?: () => string
   reviewer?: AgentRunQReviewer
+  credentialFor?: (run: AgentRun) => Promise<string>
 }
 
 export function createAgentRunHandoff(options: AgentRunHandoffOptions = {}) {
   const config = options.config ?? githubConfigService
   const gitPublisher = options.git ?? localGitPublisher
-  const github = options.github ?? ((credential: string) => createGitHubDraftTransport(credential))
+  const github = options.github
   const repoRoot = options.repoRoot ?? configuredBondRepoRoot
   const reviewer = options.reviewer
+  const credentialFor = options.credentialFor ?? (async (run: AgentRun) => {
+    if (!run.repository || run.repository.id === 'bond') return config.credential()
+    if (!run.repository.credentialRef) throw new Error('The registered repository has no credential reference.')
+    const value = await getSecretStore().get(run.repository.credentialRef)
+    if (!value) throw new Error(`GitHub credential is missing from Keychain reference "${run.repository.credentialRef}".`)
+    return value
+  })
 
   const postQReview = async (
     run: AgentRun,
@@ -274,13 +286,18 @@ export function createAgentRunHandoff(options: AgentRunHandoffOptions = {}) {
       if (existing?.status === 'published' && (!existing.qReviewRequired || existing.qReviewStatus === 'posted')) return existing
       let publication = existing
       try {
-        const configured = await config.getConfig()
-        if (configured.repository !== BOND_GITHUB_REPOSITORY || configured.remote !== BOND_GITHUB_REMOTE) throw new Error('GitHub configuration escaped the Bond repository boundary.')
-        const credential = await config.credential()
+        const repository = run.repository?.githubRepository ?? BOND_GITHUB_REPOSITORY
+        const remote = run.repository?.remote ?? BOND_GITHUB_REMOTE
+        if (run.repository?.id === 'bond' || !run.repository) {
+          const configured = await config.getConfig()
+          if (configured.repository !== repository || configured.remote !== remote) throw new Error('GitHub configuration escaped the run repository boundary.')
+        }
+        if (!repository || !remote) throw new Error('The registered repository has no GitHub publication mapping.')
+        const credential = await credentialFor(run)
         const inspection = await gitPublisher.inspect(run)
-        validateRun(run, inspection, repoRoot())
+        validateRun(run, inspection, run.repository?.repoRoot ?? repoRoot())
+        const transport = github ? github(credential) : createGitHubDraftTransport(credential, fetch, repository)
         if (existing?.status === 'published') {
-          const transport = github(credential)
           return postQReview(run, existing, inspection.changedPaths, transport)
         }
         publication ??= createAgentRunPublication({
@@ -289,10 +306,10 @@ export function createAgentRunHandoff(options: AgentRunHandoffOptions = {}) {
           headRef: run.workspace.branch,
           idempotencyKey: `github-draft:${run.id}`,
           qReviewRequired: requiresQReview(inspection.changedPaths),
+          repository, remote,
         })
         publication = markAgentRunPublishing(run.id)
         await gitPublisher.pushRunBranch(run, credential)
-        const transport = github(credential)
         const title = `[Mathis] ${run.brief.split('\n')[0].slice(0, 120)}`
         const body = `Automated draft from Bond run \`${run.id}\`.\n\n${run.brief}\n\nBase: \`${run.baseSha}\``
         const found = await transport.findPullRequest(run.workspace.branch, run.workspace.baseRef)
@@ -305,13 +322,16 @@ export function createAgentRunHandoff(options: AgentRunHandoffOptions = {}) {
         return postQReview(run, publication, inspection.changedPaths, transport)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        const errorClass = /credential|disabled|Keychain/i.test(message) ? 'credential' : /branch|worktree|check|origin|repository|draft|pull request/i.test(message) ? 'validation' : 'transport'
+        const errorClass = /credential|disabled|Keychain/i.test(message) ? 'credential' : /branch|worktree|check|origin|remote|repository|draft|pull request/i.test(message) ? 'validation' : 'transport'
+        if (run.repository && (!run.repository.githubRepository || !run.repository.remote)) throw error
         publication ??= createAgentRunPublication({
           runId: run.id,
           baseRef: run.workspace.baseRef,
           headRef: run.workspace.branch,
           idempotencyKey: `github-draft:${run.id}`,
           qReviewRequired: false,
+          repository: run.repository?.githubRepository ?? BOND_GITHUB_REPOSITORY,
+          remote: run.repository?.remote ?? BOND_GITHUB_REMOTE,
         })
         return markAgentRunPublishFailed(run.id, errorClass, message)
       }

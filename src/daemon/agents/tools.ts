@@ -135,6 +135,10 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
       paths: Type.Optional(Type.Array(Type.String(), { description: 'Read-only files/directories in scope' })),
       idempotencyKey: Type.String({ description: 'Stable unique key for this confirmed task; reuse on retries' }),
       confirmed: Type.Boolean({ description: 'True only after the user explicitly confirmed this exact immutable brief' }),
+      repositoryId: Type.Optional(Type.String({ description: 'Registered target repository id; omit for Bond' })),
+      targetConfirmed: Type.Optional(Type.Boolean({ description: 'True only after the user confirmed the selected repository' })),
+      isolation: Type.Optional(Type.Union([Type.Literal('worktree'), Type.Literal('in-place')])),
+      inPlaceConfirmed: Type.Optional(Type.Boolean({ description: 'Additional confirmation required for every trusted in-place dispatch' })),
     }),
     async execute(_toolCallId, params) {
       const dispatched = await dispatchRun({
@@ -145,6 +149,10 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
         idempotencyKey: params.idempotencyKey,
         parentModel: options.model,
         confirmed: params.confirmed,
+        repositoryId: params.repositoryId,
+        targetConfirmed: params.targetConfirmed,
+        isolation: params.isolation,
+        inPlaceConfirmed: params.inPlaceConfirmed,
       })
       return {
         content: [{
@@ -169,6 +177,7 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
       const detail = checkRun(params.runId)
       if (!detail) throw new Error(`Unknown agent run "${params.runId}".`)
       const run = detail.run
+      const target = run.repository ? ` Repository: ${run.repository.label} (${run.repository.id}).` : ''
       const result = run.status === 'succeeded' && run.result ? `\n\n${run.result}` : ''
       const error = run.errorMessage ? `\n\nError: ${run.errorMessage}` : ''
       const pending = detail.questions.filter(question => question.status === 'pending')
@@ -183,8 +192,9 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
           : publication
             ? `\n\nGitHub handoff: ${publication.status}`
             : ''
+      const update = detail.update ? `\n\nMerged update: ${detail.update.risk} / ${detail.update.status}. ${detail.update.reason}` : ''
       return {
-        content: [{ type: 'text' as const, text: `${run.agentLabel} ${run.verb}: ${run.status}.${result}${error}${questions}${handoff}` }],
+        content: [{ type: 'text' as const, text: `${run.agentLabel} ${run.verb}: ${run.status}.${target}${result}${error}${questions}${handoff}${update}` }],
         details: detail,
       }
     },
@@ -228,7 +238,8 @@ export function buildAgentRosterPrompt(loadRoster: typeof loadAgentRoster = load
   let prompt = '\nSPECIALIST AGENTS:\n' +
     'Bond can consult specialist agents via the consult_agent tool. They run isolated and read-only, and return a cited report; you apply any changes yourself through your normal tools. ' +
     'A consult can take a minute or two — that is normal. Always pass a specific brief and the paths in scope. Relay their QUESTIONS and ESCALATIONS to the user before acting on them. ' +
-    'For work that should continue off-turn, first show the user the exact brief and wait for confirmation, then use dispatch_agent with a stable idempotency key; use check_agent for status. Phase 0 background tasks are also read-only.\n'
+    'For work that should continue off-turn, first show the user the exact brief and wait for confirmation, then use dispatch_agent with a stable idempotency key; use check_agent for status. ' +
+    'For a non-Bond registered repository, name the repository target and wait for explicit target confirmation. Worktrees are the default. In-place work additionally requires a trusted registration and a separate confirmation for that dispatch.\n'
 
   for (const agent of agents) {
     const settings = effectiveAgentSettings(agent)
@@ -239,7 +250,7 @@ export function buildAgentRosterPrompt(loadRoster: typeof loadAgentRoster = load
         ? 'Offer to consult them when their specialty is in play; consult when the user asks.'
         : 'Consult only when the user explicitly asks.'
     const mode = settings.workspace === 'write'
-      ? 'Write-capable: dispatch only after explicit brief confirmation; it works in a managed retained worktree.'
+      ? 'Write-capable: dispatch only after explicit brief and repository-target confirmation; it defaults to a managed retained worktree.'
       : 'Read-only; use consult_agent for synchronous work or dispatch_agent for durable background work.'
     prompt += `- ${agent.label} (${agent.name})${agent.role ? ` — ${agent.role}` : ''}. Verbs: ${verbs}. ${mode} ${policy}\n`
   }

@@ -13,6 +13,7 @@ import {
   type AgentRunState,
   type AgentRunWorkspace,
   type AgentRunWorkspaceState,
+  type AgentRepositorySnapshot,
 } from '../../../shared/agent-runs'
 import { normalizeAgentSettings, type AgentSettings } from '../../../shared/agents'
 import { getDb } from '../../db'
@@ -28,6 +29,7 @@ type RunRow = {
   task_brief: string
   paths_json: string
   workspace_json: string
+  repository_json: string | null
   workspace_state_json: string
   base_sha: string | null
   allowed_paths_json: string
@@ -82,8 +84,8 @@ type QuestionRow = {
 
 type PublicationRow = {
   run_id: string
-  repository: 'shaunandrews/bond'
-  remote: 'origin'
+  repository: string
+  remote: string
   base_ref: string
   head_ref: string
   idempotency_key: string
@@ -127,6 +129,7 @@ export interface CreateAgentRunRecord {
   brief: string
   paths: string[]
   workspace: AgentRunWorkspace
+  repository?: AgentRepositorySnapshot | null
   workspaceState?: AgentRunWorkspaceState
   baseSha: string | null
   allowedPaths: string[]
@@ -177,6 +180,7 @@ function rowToRun(row: RunRow): AgentRun {
     brief: row.task_brief,
     paths: parseJson<string[]>(row.paths_json),
     workspace: parseJson<AgentRunWorkspace>(row.workspace_json),
+    repository: row.repository_json ? parseJson<AgentRepositorySnapshot>(row.repository_json) : null,
     workspaceState: parseJson<AgentRunWorkspaceState>(row.workspace_state_json),
     baseSha: row.base_sha,
     allowedPaths: parseJson<string[]>(row.allowed_paths_json),
@@ -326,6 +330,7 @@ function assertMatchingDispatch(existing: AgentRun, input: CreateAgentRunRecord)
     brief: redactAgentText(input.brief),
     paths: redactAgentValue(input.paths),
     workspace: redactAgentValue(input.workspace),
+    repository: redactAgentValue(input.repository ?? null),
     baseSha: input.baseSha,
     allowedPaths: redactAgentValue(input.allowedPaths),
     settings: redactAgentValue(input.settings),
@@ -341,6 +346,7 @@ function assertMatchingDispatch(existing: AgentRun, input: CreateAgentRunRecord)
     brief: existing.brief,
     paths: existing.paths,
     workspace: existing.workspace,
+    repository: existing.repository ?? null,
     baseSha: existing.baseSha,
     allowedPaths: existing.allowedPaths,
     settings: existing.settings,
@@ -369,13 +375,13 @@ export function createAgentRunRecord(input: CreateAgentRunRecord, dbArg?: Databa
       db.prepare(`
         INSERT INTO agent_runs (
           id, idempotency_key, agent_name, agent_label, verb, task_brief,
-          paths_json, workspace_json, workspace_state_json, base_sha, allowed_paths_json,
+          paths_json, workspace_json, repository_json, workspace_state_json, base_sha, allowed_paths_json,
           settings_json, agent_definition_version, command_policy_version,
           acceptance_checks_json, resource_caps_json, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
       `).run(
         id, input.idempotencyKey, input.agent, input.agentLabel, input.verb, redactAgentText(input.brief),
-        JSON.stringify(redactAgentValue(input.paths)), JSON.stringify(redactAgentValue(input.workspace)), JSON.stringify(input.workspaceState ?? {
+        JSON.stringify(redactAgentValue(input.paths)), JSON.stringify(redactAgentValue(input.workspace)), input.repository ? JSON.stringify(redactAgentValue(input.repository)) : null, JSON.stringify(input.workspaceState ?? {
           status: input.workspace.isolation === 'worktree' ? 'pending' : 'ready',
           createdAt: null,
           retainedAt: null,
@@ -512,6 +518,8 @@ export function createAgentRunPublication(input: {
   headRef: string
   idempotencyKey: string
   qReviewRequired: boolean
+  repository?: string
+  remote?: string
 }, now = nowIso(), dbArg?: Database.Database): AgentRunPublication {
   const db = dbFor(dbArg)
   db.transaction(() => {
@@ -524,17 +532,20 @@ export function createAgentRunPublication(input: {
       }
       return
     }
+    const repository = input.repository ?? run.repository?.githubRepository ?? 'shaunandrews/bond'
+    const remote = input.remote ?? run.repository?.remote ?? 'origin'
+    if (!repository || !remote) throw new Error('The run repository has no GitHub publication mapping.')
     db.prepare(`
       INSERT INTO agent_run_publications (
         run_id, repository, remote, base_ref, head_ref, idempotency_key,
         status, q_review_required, q_review_status, created_at, updated_at
-      ) VALUES (?, 'shaunandrews/bond', 'origin', ?, ?, ?, 'pending', ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
     `).run(
-      input.runId, input.baseRef, input.headRef, input.idempotencyKey,
+      input.runId, repository, remote, input.baseRef, input.headRef, input.idempotencyKey,
       input.qReviewRequired ? 1 : 0, input.qReviewRequired ? 'pending' : 'not-required', now, now,
     )
     insertEvent(db, input.runId, 'github_publish_queued', run.status, run.status, {
-      repository: 'shaunandrews/bond', remote: 'origin', baseRef: input.baseRef,
+      repository, remote, baseRef: input.baseRef,
       headRef: input.headRef, qReviewRequired: input.qReviewRequired,
     }, now)
   })()

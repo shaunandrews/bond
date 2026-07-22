@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateMathisCommand, exactCommandGrant } from './command-policy'
+import { applyRepositoryCommandProfile, evaluateMathisCommand, exactCommandGrant } from './command-policy'
 
 describe('Mathis command policy', () => {
+  it('intersects normal allowances with a repository profile while preserving hard denies and exact run grants', () => {
+    expect(applyRepositoryCommandProfile(['npm', 'run', 'build'], evaluateMathisCommand(['npm', 'run', 'build']), ['git status'])).toMatchObject({ kind: 'question' })
+    expect(applyRepositoryCommandProfile(['git', 'status'], evaluateMathisCommand(['git', 'status']), ['git status'])).toEqual({ kind: 'allow', rule: 'git status' })
+    expect(applyRepositoryCommandProfile(['git', 'push'], evaluateMathisCommand(['git', 'push']), ['*'])).toMatchObject({ kind: 'deny' })
+    const argv = ['custom-tool', '--check']
+    expect(applyRepositoryCommandProfile(argv, evaluateMathisCommand(argv, new Set([exactCommandGrant(argv)])), [])).toEqual({ kind: 'allow', rule: 'run-scoped exact grant' })
+  })
   it('allows broad local Bond development commands', () => {
     expect(evaluateMathisCommand(['npm', 'run', 'typecheck']).kind).toBe('allow')
     expect(evaluateMathisCommand(['npm', 'run', 'build:daemon']).kind).toBe('allow')

@@ -171,6 +171,9 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     publishAgentRun: (runId: string) => invoke('agentruns.publish', { runId }),
     pollAgentRunMerges: () => invoke('agentruns.pollMerges'),
     applyAgentRunUpdate: (runId: string, confirmed = false) => invoke('agentruns.applyUpdate', { runId, confirmed }),
+    listAgentRepositories: () => invoke('agentruns.repositories'),
+    registerAgentRepository: (input: RpcParams<'agentruns.registerRepository'>) => invoke('agentruns.registerRepository', input),
+    removeAgentRepository: (id: string) => invoke('agentruns.removeRepository', { id }),
     getAgentRetentionConfig: () => invoke('agentruns.retentionConfig'),
     configureAgentRetention: (config: Partial<AgentRetentionConfig>) => invoke('agentruns.configureRetention', config),
 

@@ -15,7 +15,7 @@ export interface AsyncAgentExecutionContext {
 
 export type AsyncAgentExecutor = (run: AgentRun, context: AsyncAgentExecutionContext) => Promise<string>
 
-export const executeAgentRun: AsyncAgentExecutor = (run, context) => run.workspace.isolation === 'worktree'
+export const executeAgentRun: AsyncAgentExecutor = (run, context) => !run.workspace.readOnly
   ? runMathis({
       run,
       signal: context.signal,

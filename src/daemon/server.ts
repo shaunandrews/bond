@@ -76,6 +76,9 @@ import {
   publishAgentRun,
   pollAgentRunMerges,
   applyAgentRunUpdate,
+  getAgentRepositories,
+  addAgentRepository,
+  deleteAgentRepository,
 } from './agents/async/service'
 import { configureAgentRetention, getAgentRetentionConfig } from './agents/async/retention'
 import * as desk from './desk/service'
@@ -1093,6 +1096,30 @@ const handlers: RpcHandlers = {
     const runId = getStringParam(p, 'runId')
     if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
     return applyAgentRunUpdate(runId, getParam(p, 'confirmed') === true)
+  },
+
+  'agentruns.repositories': () => ({ repositories: getAgentRepositories() }),
+
+  'agentruns.registerRepository': async (params) => {
+    const p = raw(params)
+    const id = getStringParam(p, 'id'), label = getStringParam(p, 'label'), repoRoot = getStringParam(p, 'repoRoot'), baseRef = getStringParam(p, 'baseRef')
+    const allowedPathPrefixes = getParam(p, 'allowedPathPrefixes'), commandRules = getParam(p, 'commandRules'), acceptanceChecks = getParam(p, 'acceptanceChecks')
+    if (!id || !label || !repoRoot || !baseRef || !Array.isArray(allowedPathPrefixes) || !Array.isArray(commandRules) || !Array.isArray(acceptanceChecks)) {
+      throw new RpcError(RPC_INVALID_PARAMS, 'id, label, repoRoot, baseRef, allowedPathPrefixes, commandRules, and acceptanceChecks are required')
+    }
+    return addAgentRepository({
+      id, label, repoRoot, baseRef, allowedPathPrefixes: allowedPathPrefixes as string[],
+      githubRepository: getStringParam(p, 'githubRepository'), remote: getStringParam(p, 'remote'),
+      expectedRemoteUrl: getStringParam(p, 'expectedRemoteUrl'), credentialRef: getStringParam(p, 'credentialRef'),
+      commandRules: commandRules as string[], acceptanceChecks: acceptanceChecks as string[],
+      trustedInPlace: getParam(p, 'trustedInPlace') === true, confirmed: getParam(p, 'confirmed') === true,
+    })
+  },
+
+  'agentruns.removeRepository': (params) => {
+    const id = getStringParam(raw(params), 'id')
+    if (!id) throw new RpcError(RPC_INVALID_PARAMS, 'id is required')
+    return deleteAgentRepository(id)
   },
 
   'agentruns.retentionConfig': () => getAgentRetentionConfig(),

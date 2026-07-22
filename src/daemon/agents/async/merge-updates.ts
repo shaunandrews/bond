@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { promisify } from 'node:util'
-import type { AgentRun, AgentRunUpdate, AgentRunUpdateRisk } from '../../../shared/agent-runs'
+import type { AgentRun, AgentRunPublication, AgentRunUpdate, AgentRunUpdateRisk } from '../../../shared/agent-runs'
+import { getSecretStore } from '../../mcp/keychain'
 import { hasActiveTurns } from '../../turns'
 import { SAFE_COMMAND_PATH } from './command-runner'
 import { BOND_GITHUB_REPOSITORY, githubConfigService } from './github-config'
@@ -77,7 +78,7 @@ function validateMergeState(run: AgentRun, prNumber: number, state: GitHubMergeS
 }
 
 export interface MergeUpdateCoordinatorOptions {
-  reader: () => Promise<GitHubMergeReader>
+  reader: (run: AgentRun, publication: AgentRunPublication) => Promise<GitHubMergeReader>
   driver: BondUpdateDriver
   activeTurn?: () => boolean
   onChanged?: (run: AgentRun) => void
@@ -101,9 +102,9 @@ export function createMergeUpdateCoordinator(options: MergeUpdateCoordinatorOpti
           return publication?.status === 'published' && publication.prNumber && !getAgentRunUpdate(run.id)
         })
       if (!candidates.length) return detected
-      const reader = await options.reader()
       for (const run of candidates) {
         const publication = getAgentRunPublication(run.id)!
+        const reader = await options.reader(run, publication)
         const state = await reader.getPullRequest(publication.prNumber!)
         validateMergeState(run, publication.prNumber!, state)
         if (!state.merged) continue
@@ -125,6 +126,8 @@ export function createMergeUpdateCoordinator(options: MergeUpdateCoordinatorOpti
   async function apply(runId: string, confirmed = false): Promise<AgentRunUpdate> {
     const update = getAgentRunUpdate(runId)
     if (!update) throw new Error(`Run "${runId}" has no detected merge.`)
+    const run = getAgentRun(runId)
+    if (!run || (run.repository && run.repository.id !== 'bond')) throw new Error('Automatic local updates are restricted to the registered Bond repository.')
     if (update.status === 'applied') return update
     if (update.risk === 'scheduled' && !confirmed) throw new Error('This broad or contract-changing update requires explicit scheduled confirmation.')
     if (activeTurn()) {
@@ -182,9 +185,9 @@ export function createMergeUpdateCoordinator(options: MergeUpdateCoordinatorOpti
   }
 }
 
-export function createGitHubMergeReader(credential: string, fetcher: typeof fetch = fetch): GitHubMergeReader {
+export function createGitHubMergeReader(credential: string, fetcher: typeof fetch = fetch, repository: string = BOND_GITHUB_REPOSITORY): GitHubMergeReader {
   const request = async (path: string): Promise<any> => {
-    if (!path.startsWith(`/repos/${BOND_GITHUB_REPOSITORY}/`)) throw new Error('GitHub merge read escaped the configured repository.')
+    if (!path.startsWith(`/repos/${repository}/`)) throw new Error('GitHub merge read escaped the configured repository.')
     const response = await fetcher(`https://api.github.com${path}`, {
       headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${credential}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'Bond-Mathis' },
       signal: AbortSignal.timeout(30_000),
@@ -195,8 +198,8 @@ export function createGitHubMergeReader(credential: string, fetcher: typeof fetc
   return {
     async getPullRequest(prNumber) {
       const [pr, files] = await Promise.all([
-        request(`/repos/${BOND_GITHUB_REPOSITORY}/pulls/${prNumber}`),
-        request(`/repos/${BOND_GITHUB_REPOSITORY}/pulls/${prNumber}/files?per_page=100`),
+        request(`/repos/${repository}/pulls/${prNumber}`),
+        request(`/repos/${repository}/pulls/${prNumber}/files?per_page=100`),
       ])
       return {
         merged: pr.merged === true,
@@ -236,6 +239,10 @@ export function createLocalBondUpdateDriver(lifecycle: Pick<BondUpdateDriver, 'r
   }
 }
 
-export async function configuredMergeReader(): Promise<GitHubMergeReader> {
-  return createGitHubMergeReader(await githubConfigService.credential())
+export async function configuredMergeReader(run: AgentRun, publication: AgentRunPublication): Promise<GitHubMergeReader> {
+  if (!run.repository || run.repository.id === 'bond') return createGitHubMergeReader(await githubConfigService.credential(), fetch, publication.repository)
+  if (!run.repository.credentialRef) throw new Error('The registered repository has no credential reference.')
+  const credential = await getSecretStore().get(run.repository.credentialRef)
+  if (!credential) throw new Error(`GitHub credential is missing from Keychain reference "${run.repository.credentialRef}".`)
+  return createGitHubMergeReader(credential, fetch, publication.repository)
 }

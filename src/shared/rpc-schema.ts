@@ -38,7 +38,7 @@ import type { WebRenderRequest, WebRenderResult } from './web'
 import type { ModelId } from './models'
 import type { AssetBacklink, AssetKind, AssetReference, LibraryAddDocumentInput, LibraryAsset } from './library'
 import type { AgentRosterResult, AgentSettings, AgentSummary } from './agents'
-import type { AgentRetentionConfig, AgentRun, AgentRunDetail, AgentRunPublication, AgentRunQuestion, AgentRunUpdate, GitHubHandoffConfig, ManagedWorkspaceInspection } from './agent-runs'
+import type { AgentRetentionConfig, AgentRun, AgentRunDetail, AgentRunPublication, AgentRunQuestion, AgentRunUpdate, GitHubHandoffConfig, ManagedWorkspaceInspection, RegisteredAgentRepository } from './agent-runs'
 import type {
   DeskBlockDetail,
   DeskMatcher,
@@ -330,6 +330,13 @@ export interface RpcMethods {
   'agentruns.publish': { params: { runId: string }; result: AgentRunPublication }
   'agentruns.pollMerges': { params: void; result: AgentRunUpdate[] }
   'agentruns.applyUpdate': { params: { runId: string; confirmed?: boolean }; result: AgentRunUpdate }
+  'agentruns.repositories': { params: void; result: { repositories: RegisteredAgentRepository[] } }
+  'agentruns.registerRepository': { params: {
+    id: string; label: string; repoRoot: string; baseRef: string; allowedPathPrefixes: string[]
+    githubRepository?: string; remote?: string; expectedRemoteUrl?: string; credentialRef?: string
+    commandRules: string[]; acceptanceChecks: string[]; trustedInPlace?: boolean; confirmed: boolean
+  }; result: RegisteredAgentRepository }
+  'agentruns.removeRepository': { params: { id: string }; result: { ok: boolean } }
   'agentruns.retentionConfig': { params: void; result: AgentRetentionConfig }
   'agentruns.configureRetention': { params: Partial<AgentRetentionConfig>; result: AgentRetentionConfig }
 
@@ -595,6 +602,9 @@ export const RPC_METHOD_NAMES = [
   'agentruns.publish',
   'agentruns.pollMerges',
   'agentruns.applyUpdate',
+  'agentruns.repositories',
+  'agentruns.registerRepository',
+  'agentruns.removeRepository',
   'agentruns.retentionConfig',
   'agentruns.configureRetention',
   'skills.list',

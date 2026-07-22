@@ -21,10 +21,20 @@ export const TERMINAL_AGENT_RUN_STATES: readonly AgentRunState[] = [
 
 /** Phase 0 reads an existing directory in place and never grants write tools. */
 export interface ReadOnlyAgentWorkspace {
+  repositoryId?: string
   repoRoot: string
   isolation: 'in-place'
   branch: null
   readOnly: true
+}
+
+export interface TrustedInPlaceWorkspace {
+  repositoryId: string
+  repoRoot: string
+  isolation: 'in-place'
+  branch: string
+  baseRef: string
+  readOnly: false
 }
 
 export interface ManagedWorktreeWorkspace {
@@ -38,7 +48,27 @@ export interface ManagedWorktreeWorkspace {
   readOnly: false
 }
 
-export type AgentRunWorkspace = ReadOnlyAgentWorkspace | ManagedWorktreeWorkspace
+export type AgentRunWorkspace = ReadOnlyAgentWorkspace | TrustedInPlaceWorkspace | ManagedWorktreeWorkspace
+
+export interface RegisteredAgentRepository {
+  id: string
+  label: string
+  repoRoot: string
+  baseRef: string
+  allowedPathPrefixes: string[]
+  githubRepository: string | null
+  remote: string | null
+  expectedRemoteUrl: string | null
+  credentialRef: string | null
+  commandRules: string[]
+  acceptanceChecks: string[]
+  trustedInPlace: boolean
+  builtIn: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type AgentRepositorySnapshot = Omit<RegisteredAgentRepository, 'createdAt' | 'updatedAt'>
 
 export interface AgentRunWorkspaceState {
   status: 'pending' | 'ready' | 'retained' | 'discarded'
@@ -100,8 +130,8 @@ export type AgentRunQReviewStatus = 'not-required' | 'pending' | 'posted' | 'fai
 
 export interface AgentRunPublication {
   runId: string
-  repository: 'shaunandrews/bond'
-  remote: 'origin'
+  repository: string
+  remote: string
   baseRef: string
   headRef: string
   idempotencyKey: string
@@ -156,6 +186,7 @@ export interface AgentRun {
   brief: string
   paths: string[]
   workspace: AgentRunWorkspace
+  repository?: AgentRepositorySnapshot | null
   workspaceState: AgentRunWorkspaceState
   baseSha: string | null
   allowedPaths: string[]

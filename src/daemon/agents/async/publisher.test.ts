@@ -26,11 +26,11 @@ afterEach(() => {
   setDataDir(null as never)
 })
 
-function successfulRun(id: string = randomUUID(), acceptanceChecks = [JSON.stringify(['npm', 'run', 'typecheck'])]): AgentRun {
+function successfulRun(id: string = randomUUID(), acceptanceChecks = [JSON.stringify(['npm', 'run', 'typecheck'])], repository?: AgentRun['repository']): AgentRun {
   const baseSha = 'a'.repeat(40)
   let run = createAgentRunRecord({
     id, idempotencyKey: id, agent: 'mathis', agentLabel: 'Mathis', verb: 'build', brief: 'Build the requested change.', paths: [repoRoot],
-    workspace: { repoRoot, isolation: 'worktree', branch: `bond-agent/${id.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 24)}`, baseRef: 'main', worktreePath: join(dataDir, 'worktree'), readOnly: false },
+    workspace: { repositoryId: repository?.id, repoRoot, isolation: 'worktree', branch: `bond-agent/${id.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 24)}`, baseRef: 'main', worktreePath: join(dataDir, 'worktree'), readOnly: false }, repository,
     baseSha, allowedPaths: [repoRoot], settings: { ...DEFAULT_AGENT_SETTINGS, workspace: 'write' }, agentDefinitionVersion: 'v1', commandPolicyVersion: 'v1',
     acceptanceChecks, resourceCaps: { wallClockSeconds: 100, maxOutputChars: 1000 },
   }).run
@@ -43,13 +43,13 @@ function successfulRun(id: string = randomUUID(), acceptanceChecks = [JSON.strin
 
 const cleanInspection = (run: AgentRun, changedPaths = ['src/renderer/App.vue']) => ({
   branch: run.workspace.isolation === 'worktree' ? run.workspace.branch : '', headSha: 'b'.repeat(40), porcelain: '', changedPaths, aheadBy: 1,
-  remoteUrl: 'https://github.com/shaunandrews/bond.git',
+  remoteUrl: run.repository?.expectedRemoteUrl ?? 'https://github.com/shaunandrews/bond.git',
 })
 
 function pr(run: AgentRun, overrides: Partial<GitHubDraftPullRequest> = {}): GitHubDraftPullRequest {
   if (run.workspace.isolation !== 'worktree') throw new Error('fixture')
   return {
-    repository: 'shaunandrews/bond', number: 12, nodeId: 'PR_node', url: 'https://github.com/shaunandrews/bond/pull/12',
+    repository: run.repository?.githubRepository ?? 'shaunandrews/bond', number: 12, nodeId: 'PR_node', url: `https://github.com/${run.repository?.githubRepository ?? 'shaunandrews/bond'}/pull/12`,
     draft: true, baseRef: run.workspace.baseRef, headRef: run.workspace.branch, ...overrides,
   }
 }
@@ -112,6 +112,25 @@ describe('draft PR handoff', () => {
     await handoff.publish(run)
     expect(git.pushRunBranch).toHaveBeenCalledTimes(1)
     expect(transport.createDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('publishes a registered repository with its immutable remote mapping and repo-scoped credential boundary', async () => {
+    const repository = {
+      id: 'studio', label: 'Studio', repoRoot, baseRef: 'main', allowedPathPrefixes: ['src'], githubRepository: 'example/studio',
+      remote: 'upstream', expectedRemoteUrl: 'https://github.com/example/studio.git', credentialRef: 'github-studio-agent',
+      commandRules: ['git status'], acceptanceChecks: [JSON.stringify(['npm', 'run', 'typecheck'])], trustedInPlace: false, builtIn: false,
+    }
+    const run = successfulRun('studio-run', undefined, repository)
+    const transport: GitHubDraftTransport = {
+      findPullRequest: vi.fn(async () => null), createDraft: vi.fn(async () => pr(run)), updateDraft: vi.fn(async () => pr(run)),
+      findQComment: vi.fn(async () => null), createQComment: vi.fn(), updateQComment: vi.fn(),
+    }
+    const git: LocalGitPublisher = { inspect: vi.fn(async () => cleanInspection(run)), pushRunBranch: vi.fn(async () => {}) }
+    const credentialFor = vi.fn(async () => 'studio-scoped-token')
+    const handoff = createAgentRunHandoff({ git, github: () => transport, credentialFor })
+    expect(await handoff.publish(run)).toMatchObject({ repository: 'example/studio', remote: 'upstream', status: 'published' })
+    expect(credentialFor).toHaveBeenCalledWith(expect.objectContaining({ id: run.id }))
+    expect(git.pushRunBranch).toHaveBeenCalledWith(expect.objectContaining({ id: run.id }), 'studio-scoped-token')
   })
 
   it('records push failure and can retain the idempotent contract', async () => {

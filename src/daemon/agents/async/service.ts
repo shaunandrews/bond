@@ -35,6 +35,7 @@ import { githubConfigService } from './github-config'
 import { runAgentRetentionSweep } from './retention'
 import { AGENT_BUDGET_PRESET_CAPS, resolveAgentRunBudget } from '../../../shared/agent-budgets'
 import { configuredMergeReader, createLocalBondUpdateDriver, createMergeUpdateCoordinator } from './merge-updates'
+import { assertRepositoryRelativePath, getAgentRepository, inspectInPlaceRepository, listAgentRepositories, registerAgentRepository, removeAgentRepository, snapshotAgentRepository, type RegisterAgentRepositoryInput } from './repository-registry'
 
 const execFileAsync = promisify(execFile)
 export const ASYNC_AGENT_COMMAND_POLICY_VERSION = 'phase0-readonly-no-shell-v1'
@@ -87,7 +88,8 @@ function retainWorkspace(run: AgentRun): AgentRun {
 function retainAndComplete(run: AgentRun): Promise<void> {
   const terminal = retainWorkspace(run)
   const task = (async () => {
-    if (terminal.status === 'succeeded' && terminal.agent === 'mathis' && terminal.workspace.isolation === 'worktree') {
+    if (terminal.status === 'succeeded' && terminal.agent === 'mathis' && terminal.workspace.isolation === 'worktree'
+      && (!terminal.repository || terminal.repository.githubRepository)) {
       await handoff.publish(terminal)
       const current = getAgentRun(terminal.id)
       if (current) emit(current)
@@ -188,6 +190,8 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
     if (prior.workspace.isolation === 'worktree' && input.confirmed !== true) {
       throw new Error('Mathis requires explicit user confirmation of the immutable task brief before dispatch.')
     }
+    if (prior.repository && input.repositoryId && input.targetConfirmed !== true) throw new Error('Repository target selection requires explicit user confirmation.')
+    if (prior.workspace.isolation === 'in-place' && !prior.workspace.readOnly && input.inPlaceConfirmed !== true) throw new Error('Trusted in-place dispatch requires an extra per-run confirmation.')
     const priorWorkspace = prior.workspace
     const retryPaths = priorWorkspace.isolation === 'worktree'
       ? ((input.paths ?? []).length
@@ -200,6 +204,8 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
     const sameRequest = prior.agent === agentName
       && prior.verb === verbName
       && prior.brief === input.brief.trim()
+      && (prior.repository?.id ?? 'bond') === (input.repositoryId?.trim().toLowerCase() ?? 'bond')
+      && (prior.workspace.readOnly || prior.workspace.isolation === (input.isolation ?? 'worktree'))
       && JSON.stringify(prior.paths) === JSON.stringify(retryPaths)
     if (!sameRequest) throw new Error(`Idempotency key "${input.idempotencyKey}" already belongs to a different agent run.`)
     return { run: prior, created: false }
@@ -225,18 +231,43 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
   let baseSha: string | null
   let allowedPaths: string[]
   if (settings.workspace === 'write') {
-    const repoRoot = configuredBondRepoRoot()
-    const baseRef = configuredBondBaseRef()
+    const repositoryId = input.repositoryId?.trim().toLowerCase() || 'bond'
+    if (input.repositoryId && input.targetConfirmed !== true) throw new Error('Repository target selection requires explicit user confirmation.')
+    const repository = getAgentRepository(repositoryId)
+    if (!repository) throw new Error(`Unknown registered repository "${repositoryId}".`)
+    const repoRoot = repository.repoRoot
+    const baseRef = repository.baseRef
     baseSha = await workspaceManager.resolveBase(repoRoot, baseRef)
-    const writeWorkspace = plannedWorktree(id, repoRoot, baseRef)
-    workspace = writeWorkspace
-    const sourcePaths = (input.paths ?? []).map(path => isAbsolute(path) ? resolve(path) : resolve(repoRoot, path))
+    const isolation = input.isolation ?? 'worktree'
+    if (isolation === 'in-place') {
+      if (!repository.trustedInPlace) throw new Error(`Repository "${repository.id}" is not trusted for in-place agent work.`)
+      if (input.inPlaceConfirmed !== true) throw new Error('Trusted in-place dispatch requires an extra per-run confirmation.')
+      const inspection = await inspectInPlaceRepository(repository)
+      if (inspection.branch !== baseRef) throw new Error(`In-place checkout must be on ${baseRef}.`)
+      if (inspection.porcelain) throw new Error('In-place checkout must be clean before dispatch.')
+      workspace = { repositoryId, repoRoot, isolation: 'in-place', branch: baseRef, baseRef, readOnly: false }
+    } else {
+      workspace = { ...plannedWorktree(id, repoRoot, baseRef), repositoryId }
+    }
+    const sourcePaths = (input.paths ?? []).map(path => assertRepositoryRelativePath(repository, isAbsolute(path) ? relative(repoRoot, resolve(path)) : path))
+    const writeRoot = workspace.isolation === 'worktree' ? workspace.worktreePath : workspace.repoRoot
     paths = sourcePaths.length ? sourcePaths.map(path => {
       const rel = relative(repoRoot, path)
-      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error(`Mathis path is outside the configured Bond repository: ${path}`)
-      return resolve(writeWorkspace.worktreePath, rel)
-    }) : [writeWorkspace.worktreePath]
-    allowedPaths = [writeWorkspace.worktreePath]
+      return resolve(writeRoot, rel)
+    }) : repository.allowedPathPrefixes.map(prefix => resolve(writeRoot, prefix))
+    allowedPaths = repository.allowedPathPrefixes.map(prefix => resolve(writeRoot, prefix))
+    const repositorySnapshot = snapshotAgentRepository(repository)
+    const created = createAgentRunRecord({
+      id, idempotencyKey: input.idempotencyKey.trim(), agent: definition.name, agentLabel: definition.label,
+      verb: verb.name, brief: input.brief.trim(), paths, workspace, repository: repositorySnapshot, baseSha, allowedPaths, settings,
+      agentDefinitionVersion: definitionVersion({ definition, settings }), commandPolicyVersion: `${MATHIS_COMMAND_POLICY_VERSION}:${repository.id}`,
+      acceptanceChecks: repository.acceptanceChecks,
+      resourceCaps: resolveAgentRunBudget(settings.budgetPreset, { wallClockSeconds: Math.min(settings.leash, AGENT_BUDGET_PRESET_CAPS[settings.budgetPreset].wallClockSeconds) }),
+    })
+    if (created.created) {
+      emit(created.run); completion.track(created.run); if (started) void worker.wake()
+    }
+    return created
   } else {
     const docs = paths.length ? resolveContextDocs(paths, definition.contextDocs) : { root: homedir(), docs: {} }
     const repoRoot = docs.root ?? homedir()
@@ -258,8 +289,8 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
     allowedPaths,
     settings,
     agentDefinitionVersion: definitionVersion({ definition, settings }),
-    commandPolicyVersion: workspace.isolation === 'worktree' ? MATHIS_COMMAND_POLICY_VERSION : ASYNC_AGENT_COMMAND_POLICY_VERSION,
-    acceptanceChecks: workspace.isolation === 'worktree' ? MATHIS_ACCEPTANCE_CHECKS : [],
+    commandPolicyVersion: ASYNC_AGENT_COMMAND_POLICY_VERSION,
+    acceptanceChecks: [],
     resourceCaps: resolveAgentRunBudget(settings.budgetPreset, {
       wallClockSeconds: Math.min(settings.leash, AGENT_BUDGET_PRESET_CAPS[settings.budgetPreset].wallClockSeconds),
     }),
@@ -271,6 +302,10 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
   }
   return created
 }
+
+export function getAgentRepositories() { return listAgentRepositories() }
+export function addAgentRepository(input: RegisterAgentRepositoryInput) { return registerAgentRepository(input) }
+export function deleteAgentRepository(id: string) { return { ok: removeAgentRepository(id) } }
 
 export function checkAgentRun(runId: string): AgentRunDetail | null {
   const run = getAgentRun(runId)

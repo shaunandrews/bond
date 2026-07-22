@@ -42,6 +42,19 @@ describe('Mathis worktree tools', () => {
     }
   })
 
+  it('confines trusted in-place file tools to the registered allowed prefixes', async () => {
+    const run = runFixture()
+    mkdirSync(join(run.workspace.repoRoot, 'src'))
+    run.workspace = { repositoryId: 'studio', repoRoot: run.workspace.repoRoot, isolation: 'in-place', branch: 'main', baseRef: 'main', readOnly: false }
+    run.allowedPaths = [join(run.workspace.repoRoot, 'src')]
+    const hooks = new Map<string, (event: any) => Promise<any>>()
+    createMathisExtensionFactory({ run, signal: new AbortController().signal, onQuestion: vi.fn() })({
+      on: (name: string, value: any) => { hooks.set(name, value) }, registerTool: vi.fn(),
+    } as any)
+    expect(await hooks.get('tool_call')!({ toolName: 'write', input: { path: 'src/inside.ts' } })).toBeUndefined()
+    expect((await hooks.get('tool_call')!({ toolName: 'write', input: { path: 'outside.ts' } })).block).toBe(true)
+  })
+
   it('provides conservative step, command, and loop guard hooks', () => {
     const guard = new MathisResourceGuard(2, 1, 1)
     guard.recordTool('read', { path: 'a' })

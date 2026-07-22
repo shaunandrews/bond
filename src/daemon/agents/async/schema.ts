@@ -14,6 +14,7 @@ export function ensureAgentRunSchema(db: Database.Database): void {
       task_brief TEXT NOT NULL,
       paths_json TEXT NOT NULL CHECK(json_valid(paths_json)),
       workspace_json TEXT NOT NULL CHECK(json_valid(workspace_json)),
+      repository_json TEXT CHECK(repository_json IS NULL OR json_valid(repository_json)),
       workspace_state_json TEXT NOT NULL DEFAULT '{"status":"pending","createdAt":null,"retainedAt":null,"discardedAt":null}' CHECK(json_valid(workspace_state_json)),
       base_sha TEXT,
       allowed_paths_json TEXT NOT NULL CHECK(json_valid(allowed_paths_json)),
@@ -95,8 +96,8 @@ export function ensureAgentRunSchema(db: Database.Database): void {
 
     CREATE TABLE IF NOT EXISTS agent_run_publications (
       run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
-      repository TEXT NOT NULL CHECK(repository = 'shaunandrews/bond'),
-      remote TEXT NOT NULL CHECK(remote = 'origin'),
+      repository TEXT NOT NULL,
+      remote TEXT NOT NULL,
       base_ref TEXT NOT NULL,
       head_ref TEXT NOT NULL,
       idempotency_key TEXT NOT NULL UNIQUE,
@@ -131,6 +132,24 @@ export function ensureAgentRunSchema(db: Database.Database): void {
       applied_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS agent_repositories (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      repo_root TEXT NOT NULL UNIQUE,
+      base_ref TEXT NOT NULL,
+      allowed_path_prefixes_json TEXT NOT NULL CHECK(json_valid(allowed_path_prefixes_json)),
+      github_repository TEXT,
+      remote TEXT,
+      expected_remote_url TEXT,
+      credential_ref TEXT,
+      command_rules_json TEXT NOT NULL CHECK(json_valid(command_rules_json)),
+      acceptance_checks_json TEXT NOT NULL CHECK(json_valid(acceptance_checks_json)),
+      trusted_in_place INTEGER NOT NULL DEFAULT 0 CHECK(trusted_in_place IN (0,1)),
+      built_in INTEGER NOT NULL DEFAULT 0 CHECK(built_in IN (0,1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TRIGGER IF NOT EXISTS agent_run_events_no_update
     BEFORE UPDATE ON agent_run_events
     BEGIN
@@ -147,7 +166,7 @@ export function ensureAgentRunSchema(db: Database.Database): void {
     CREATE TRIGGER IF NOT EXISTS agent_runs_immutable_dispatch
     BEFORE UPDATE OF
       idempotency_key, agent_name, agent_label, verb, task_brief, paths_json,
-      workspace_json, base_sha, allowed_paths_json, settings_json,
+      workspace_json, repository_json, base_sha, allowed_paths_json, settings_json,
       agent_definition_version, command_policy_version,
       acceptance_checks_json, resource_caps_json, created_at
     ON agent_runs
@@ -164,6 +183,26 @@ export function ensureAgentRunSchema(db: Database.Database): void {
   if (!columns.some(column => column.name === 'retry_count')) db.exec('ALTER TABLE agent_runs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0')
   if (!columns.some(column => column.name === 'next_retry_at')) db.exec('ALTER TABLE agent_runs ADD COLUMN next_retry_at TEXT')
   if (!columns.some(column => column.name === 'summary_json')) db.exec('ALTER TABLE agent_runs ADD COLUMN summary_json TEXT CHECK(summary_json IS NULL OR json_valid(summary_json))')
+  if (!columns.some(column => column.name === 'repository_json')) db.exec('ALTER TABLE agent_runs ADD COLUMN repository_json TEXT CHECK(repository_json IS NULL OR json_valid(repository_json))')
+
+  const publicationTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_run_publications'").get() as { sql?: string } | undefined
+  if (publicationTable?.sql?.includes("repository = 'shaunandrews/bond'")) db.exec(`
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE agent_run_publications_v2 (
+      run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+      repository TEXT NOT NULL, remote TEXT NOT NULL, base_ref TEXT NOT NULL, head_ref TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL CHECK(status IN ('pending','publishing','published','failed')),
+      pr_number INTEGER, pr_node_id TEXT, pr_url TEXT,
+      q_review_required INTEGER NOT NULL DEFAULT 0 CHECK(q_review_required IN (0,1)),
+      q_review_status TEXT NOT NULL DEFAULT 'not-required' CHECK(q_review_status IN ('not-required','pending','posted','failed')),
+      q_comment_id INTEGER, q_comment_url TEXT, error_class TEXT, error_message TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, published_at TEXT
+    );
+    INSERT INTO agent_run_publications_v2 SELECT * FROM agent_run_publications;
+    DROP TABLE agent_run_publications;
+    ALTER TABLE agent_run_publications_v2 RENAME TO agent_run_publications;
+    PRAGMA foreign_keys = ON;
+  `)
 
   if (!hadRawLogTable) db.exec(`
     INSERT OR IGNORE INTO agent_run_event_logs (event_id, run_id, data, byte_count, created_at)

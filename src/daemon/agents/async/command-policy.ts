@@ -48,6 +48,15 @@ export function exactCommandGrant(argv: string[]): string {
   return JSON.stringify(argv)
 }
 
+export function applyRepositoryCommandProfile(
+  argv: string[],
+  decision: CommandPolicyDecision,
+  rules: readonly string[] | undefined,
+): CommandPolicyDecision {
+  if (decision.kind !== 'allow' || !rules || rules.includes('*') || decision.rule === 'run-scoped exact grant' || rules.includes(decision.rule)) return decision
+  return question(argv, `The registered repository profile does not allow "${decision.rule}".`)
+}
+
 export function evaluateMathisCommand(argv: string[], exactGrants: ReadonlySet<string> = new Set()): CommandPolicyDecision {
   if (!argv.length || !argv[0]?.trim()) return { kind: 'deny', reason: 'A command must contain an executable.' }
   if (argv.length > 128) return { kind: 'deny', reason: 'Command argv exceeds the 128-argument cap.' }

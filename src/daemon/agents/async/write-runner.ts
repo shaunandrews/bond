@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -16,7 +16,7 @@ import { selectModel } from '../../pi/model'
 import { buildAgentSystemPrompt, buildAgentUserPrompt } from '../prompt'
 import { findAgent } from '../registry'
 import { thinkingLevelFor } from '../run-agent'
-import { evaluateMathisCommand } from './command-policy'
+import { applyRepositoryCommandProfile, evaluateMathisCommand } from './command-policy'
 import { runArgvCommand, SAFE_COMMAND_PATH } from './command-runner'
 import { assertContainedPath } from './workspace'
 import { AgentResourceLimitError } from './failures'
@@ -133,13 +133,14 @@ export function packageScriptsMatch(currentPackage: string, basePackage: string)
 
 function assertNpmScriptsUnchanged(run: AgentRun, argv: string[]): void {
   if (argv[0] !== 'npm' || !['run', 'test'].includes(argv[1] ?? '')) return
-  if (run.workspace.isolation !== 'worktree' || !run.baseSha) throw new Error('Cannot validate npm scripts without a managed base commit.')
-  const current = readFileSync(join(run.workspace.worktreePath, 'package.json'), 'utf8')
-  const base = execFileSync('git', ['-C', run.workspace.worktreePath, 'show', `${run.baseSha}:package.json`], {
+  if (run.workspace.readOnly || !run.baseSha) throw new Error('Cannot validate npm scripts without a writable git workspace and immutable base commit.')
+  const root = run.workspace.isolation === 'worktree' ? run.workspace.worktreePath : run.workspace.repoRoot
+  const current = readFileSync(join(root, 'package.json'), 'utf8')
+  const base = execFileSync('git', ['-C', root, 'show', `${run.baseSha}:package.json`], {
     encoding: 'utf8',
     env: {
       PATH: SAFE_COMMAND_PATH,
-      HOME: run.workspace.worktreePath,
+      HOME: root,
       LANG: 'C',
       LC_ALL: 'C',
       GIT_CONFIG_NOSYSTEM: '1',
@@ -173,8 +174,8 @@ export function latestMathisResourceSnapshot(events: AgentRunEvent[]): MathisRes
 }
 
 export function createMathisExtensionFactory(options: MathisExtensionOptions) {
-  if (options.run.workspace.isolation !== 'worktree') throw new Error('Mathis requires a managed worktree.')
-  const worktree = options.run.workspace.worktreePath
+  if (options.run.workspace.readOnly) throw new Error('Mathis requires a writable registered workspace.')
+  const worktree = options.run.workspace.isolation === 'worktree' ? options.run.workspace.worktreePath : options.run.workspace.repoRoot
   const caps = options.run.resourceCaps
   const guard = options.guard ?? new MathisResourceGuard(
     caps.maxSteps ?? 80,
@@ -193,7 +194,14 @@ export function createMathisExtensionFactory(options: MathisExtensionOptions) {
       if (!FILE_TOOLS.has(toolName)) return
       const target = input.path ?? input.file_path
       if (typeof target === 'string') {
-        try { assertContainedPath(worktree, target) }
+        try {
+          const resolved = assertContainedPath(worktree, target)
+          const allowed = options.run.allowedPaths.some(prefix => {
+            const rel = relative(resolve(prefix), resolved)
+            return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+          })
+          if (!allowed) throw new Error(`Path is outside this run's registered allowed paths: ${target}`)
+        }
         catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) } }
       }
     })
@@ -219,7 +227,7 @@ export function createMathisExtensionFactory(options: MathisExtensionOptions) {
       }),
       async execute(_id, params) {
         const argv = params.argv.map(value => String(value))
-        const decision = evaluateMathisCommand(argv, options.exactGrants)
+        const decision = applyRepositoryCommandProfile(argv, evaluateMathisCommand(argv, options.exactGrants), options.run.repository?.commandRules)
         if (decision.kind === 'deny') throw new Error(`Command denied: ${decision.reason}`)
         if (decision.kind === 'question') {
           const question = { argv, reason: `${decision.reason} Requested because: ${params.reason}`, proposedAllowlistAddition: decision.proposedAllowlistAddition }
@@ -264,7 +272,8 @@ export function pendingMathisAcceptanceChecks(run: AgentRun, events: AgentRunEve
 
 export async function runMathis(input: RunMathisInput): Promise<string> {
   const { run } = input
-  if (run.workspace.isolation !== 'worktree') throw new Error('Mathis requires a managed worktree.')
+  if (run.workspace.readOnly) throw new Error('Mathis requires a writable registered workspace.')
+  const workspaceRoot = run.workspace.isolation === 'worktree' ? run.workspace.worktreePath : run.workspace.repoRoot
   const definition = findAgent(run.agent)
   if (!definition) throw new Error(`Agent "${run.agent}" is no longer available.`)
   const verb = definition.verbs.find(entry => entry.name === run.verb)
@@ -286,7 +295,7 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
     }),
   )
   const loader = new DefaultResourceLoader({
-    cwd: run.workspace.worktreePath,
+    cwd: workspaceRoot,
     agentDir: getAgentDir(),
     noExtensions: true,
     noSkills: true,
@@ -324,7 +333,7 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
   await loader.reload()
   const { model, modelRuntime } = await selectModel(run.settings.model === 'inherit' ? undefined : run.settings.model)
   const { session } = await createAgentSession({
-    cwd: run.workspace.worktreePath,
+    cwd: workspaceRoot,
     model,
     modelRuntime,
     thinkingLevel: thinkingLevelFor(run.settings.thinking),
@@ -340,13 +349,13 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
   try {
     input.onStarted({
       phase: 'mathis-session-started',
-      worktree: run.workspace.worktreePath,
+      worktree: workspaceRoot,
       lastCompletedAction: 'workspace-ready',
       previousCheckpoint: run.checkpoint,
     })
     const pendingChecks = pendingMathisAcceptanceChecks(run, input.events ?? [])
     const resume = run.checkpoint
-      ? `\n\nRESUME CHECKPOINT:\nStart a fresh session for this same durable run in worktree ${run.workspace.worktreePath} at immutable base ${run.baseSha ?? '(unavailable)'}. Previous checkpoint: ${JSON.stringify(run.checkpoint)}. Last completed action: ${String(run.checkpoint.lastCompletedAction ?? '(unknown)')}. Pending acceptance checks: ${pendingChecks.join(', ') || '(none)'}. Exact run-scoped command grants: ${JSON.stringify([...input.exactGrants ?? []])}. Never revive a previous child PID; its outcome is unknown unless a command_completed event exists. Re-inspect git status and current files; preserve completed edits and do not repeat work blindly.`
+      ? `\n\nRESUME CHECKPOINT:\nStart a fresh session for this same durable run in workspace ${workspaceRoot} at immutable base ${run.baseSha ?? '(unavailable)'}. Previous checkpoint: ${JSON.stringify(run.checkpoint)}. Last completed action: ${String(run.checkpoint.lastCompletedAction ?? '(unknown)')}. Pending acceptance checks: ${pendingChecks.join(', ') || '(none)'}. Exact run-scoped command grants: ${JSON.stringify([...input.exactGrants ?? []])}. Never revive a previous child PID; its outcome is unknown unless a command_completed event exists. Re-inspect git status and current files; preserve completed edits and do not repeat work blindly.`
       : ''
     await session.prompt(buildAgentUserPrompt({ brief: `${run.brief}${resume}`, paths: run.paths }))
     if (pendingQuestion) throw new CommandApprovalRequired(pendingQuestion)

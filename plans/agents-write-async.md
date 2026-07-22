@@ -259,15 +259,21 @@ session is used by the local tranche.
 - **Phase 2 — Robustness.** `needs-input` park/resume (runId-scoped questions,
   incl. the novel-command pause), per-error-class retry, the four runaway caps +
   loop detection.
-- **Phase 3 — Surface.** The conversation activity redesign (persistent
+- **Phase 3 — Resilience and operations.** Automatic fresh-session recovery,
+  bounded retry, CLI parity, configurable budget presets clamped by Bond-owned
+  hard ceilings, permanent compact/redacted summaries and provenance, and
+  independently configurable raw-log retention/disk eviction.
+- **Phase 4 — Surface.** The conversation activity redesign (persistent
   "N agents working" chip + `meta/agent-run` card, §5a), Tasks panel + controls,
-  tray notification, `bond agent` CLI.
-- **Phase 4 — Apply flow.** Q review + risk-tier classification + the
-  daemon-safe rebuild/restart path.
-- **Phase 5 — Beyond the Bond repo.** Target arbitrary repos (studio, any
-  project) via the workspace descriptor; then optional `isolation: 'in-place'`
-  + a `git` tool grant for trusted agents that work in a main folder and control
-  git themselves.
+  tray notification, and reconnect reconciliation.
+- **Phase 5 — Merged PR updates.** Poll GitHub as source of truth, persist merge
+  detection, classify renderer/daemon/contract risk, and gate safe local Bond
+  updates behind clean-branch/fast-forward/idle-turn preflight and durable
+  recovery instructions.
+- **Phase 6 — Beyond the Bond repo.** Registered repository identities with
+  immutable per-run path, remote, credential-reference, command, and check
+  profiles. Worktrees remain the default; trusted in-place dispatch requires a
+  clean expected branch and an extra confirmation every time.
 
 ---
 
