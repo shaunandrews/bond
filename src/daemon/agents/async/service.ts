@@ -24,6 +24,7 @@ import {
   plannedWorktree,
   workspaceManager,
 } from './workspace'
+import { MATHIS_COMMAND_POLICY_VERSION } from './command-policy'
 
 const execFileAsync = promisify(execFile)
 export const ASYNC_AGENT_COMMAND_POLICY_VERSION = 'phase0-readonly-no-shell-v1'
@@ -199,7 +200,7 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
     allowedPaths,
     settings,
     agentDefinitionVersion: definitionVersion({ definition, settings }),
-    commandPolicyVersion: ASYNC_AGENT_COMMAND_POLICY_VERSION,
+    commandPolicyVersion: workspace.isolation === 'worktree' ? MATHIS_COMMAND_POLICY_VERSION : ASYNC_AGENT_COMMAND_POLICY_VERSION,
     acceptanceChecks: [],
     resourceCaps: { wallClockSeconds: settings.leash, maxOutputChars: 100_000 },
   })

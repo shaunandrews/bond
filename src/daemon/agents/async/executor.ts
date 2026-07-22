@@ -3,6 +3,7 @@ import { resolveContextDocs } from '../context-docs'
 import { findAgent } from '../registry'
 import { runAgentConsult } from '../run-agent'
 import type { AgentRun, AgentRunEvent } from '../../../shared/agent-runs'
+import { runMathis } from './write-runner'
 
 export interface AsyncAgentExecutionContext {
   signal: AbortSignal
@@ -11,6 +12,10 @@ export interface AsyncAgentExecutionContext {
 }
 
 export type AsyncAgentExecutor = (run: AgentRun, context: AsyncAgentExecutionContext) => Promise<string>
+
+export const executeAgentRun: AsyncAgentExecutor = (run, context) => run.workspace.isolation === 'worktree'
+  ? runMathis({ run, signal: context.signal, onStarted: context.onStarted })
+  : executeReadOnlyAgentRun(run, context)
 
 function recoveryEnvelope(run: AgentRun, events: AgentRunEvent[]): string {
   const isRecovery = run.recoveryCount > 0 || run.status === 'interrupted' || events.some(event => event.type === 'recovery_preparing')

@@ -5,7 +5,7 @@ import {
   listAgentRuns,
   transitionAgentRun,
 } from './store'
-import { executeReadOnlyAgentRun, type AsyncAgentExecutor } from './executor'
+import { executeAgentRun, type AsyncAgentExecutor } from './executor'
 
 export interface AgentRunWorkerOptions {
   execute?: AsyncAgentExecutor
@@ -29,7 +29,7 @@ export interface AgentRunWorker {
 const DEFAULT_INTERVAL_MS = 1_000
 
 export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): AgentRunWorker {
-  const execute = options.execute ?? executeReadOnlyAgentRun
+  const execute = options.execute ?? executeAgentRun
   const prepare = options.prepare ?? (async run => run)
   const logger = options.logger ?? console
   let timer: ReturnType<typeof setInterval> | null = null
