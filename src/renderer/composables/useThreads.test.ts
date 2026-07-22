@@ -97,9 +97,34 @@ describe('useThreads', () => {
     const { openThread, activeThreadId } = useThreads()
 
     const result = await openThread('anchor-1')
-    expect(result.id).toBe('thread-1')
+    expect(result?.id).toBe('thread-1')
     expect(activeThreadId.value).toBe('thread-1')
     expect(localStorage.getItem('bond:active-thread-id')).toBe('thread-1')
+  })
+
+  // plans/chat-threads.md Failure behavior: "If thread.create fails, leave
+  // the main UI unchanged and show a non-destructive inline error near the action."
+  it('a failed thread.create leaves activeThreadId untouched and records a per-anchor error instead of throwing', async () => {
+    bond.createThread.mockRejectedValue(new Error('network error'))
+    const { openThread, activeThreadId, createErrorFor } = useThreads()
+
+    const result = await openThread('anchor-1')
+    expect(result).toBeNull()
+    expect(activeThreadId.value).toBeNull()
+    expect(localStorage.getItem('bond:active-thread-id')).toBeNull()
+    expect(createErrorFor('anchor-1')).toBeTruthy()
+  })
+
+  it('a later successful openThread for the same anchor clears its earlier create error', async () => {
+    bond.createThread.mockRejectedValueOnce(new Error('network error'))
+    const { openThread, createErrorFor } = useThreads()
+
+    await openThread('anchor-1')
+    expect(createErrorFor('anchor-1')).toBeTruthy()
+
+    bond.createThread.mockResolvedValue(makeThread())
+    await openThread('anchor-1')
+    expect(createErrorFor('anchor-1')).toBeUndefined()
   })
 
   it('openThread is idempotent by anchor — reopens the cached thread without calling createThread again', async () => {

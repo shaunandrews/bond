@@ -13,6 +13,8 @@ const threadsByAnchor = ref<Map<string, ChatThread>>(new Map())
 const recentThreads = ref<ThreadSummary[]>([])
 const activeThreadId = ref<string | null>(null)
 const loadingRecent = ref(false)
+/** thread.create failures, keyed by anchor — read by MessageBubble to show a non-destructive inline error next to Discuss. */
+const createErrors = ref<Map<string, string>>(new Map())
 
 const ACTIVE_THREAD_KEY = 'bond:active-thread-id'
 
@@ -81,19 +83,43 @@ function persistActiveThreadId() {
   } catch { /* best effort */ }
 }
 
-/** Idempotent by anchor — reopens the existing thread if one is already there. */
-async function openThread(anchorMessageId: string): Promise<ChatThread> {
+function clearCreateError(anchorMessageId: string) {
+  if (!createErrors.value.has(anchorMessageId)) return
+  const next = new Map(createErrors.value)
+  next.delete(anchorMessageId)
+  createErrors.value = next
+}
+
+function createErrorFor(anchorMessageId: string): string | undefined {
+  return createErrors.value.get(anchorMessageId)
+}
+
+/**
+ * Idempotent by anchor — reopens the existing thread if one is already there.
+ * Returns null on a failed `thread.create` rather than throwing: the main UI
+ * must stay unchanged (nothing here mutates state before the RPC settles),
+ * and the failure surfaces as a non-destructive inline message next to the
+ * Discuss action instead of an uncaught rejection.
+ */
+async function openThread(anchorMessageId: string): Promise<ChatThread | null> {
   const existing = threadForAnchor(anchorMessageId)
   if (existing) {
+    clearCreateError(anchorMessageId)
     activeThreadId.value = existing.id
     persistActiveThreadId()
     return existing
   }
-  const thread = await window.bond.createThread(anchorMessageId)
-  cacheThread(thread)
-  activeThreadId.value = thread.id
-  persistActiveThreadId()
-  return thread
+  try {
+    const thread = await window.bond.createThread(anchorMessageId)
+    clearCreateError(anchorMessageId)
+    cacheThread(thread)
+    activeThreadId.value = thread.id
+    persistActiveThreadId()
+    return thread
+  } catch {
+    createErrors.value = new Map(createErrors.value).set(anchorMessageId, 'Couldn’t start a thread. Try again.')
+    return null
+  }
 }
 
 /** For the Recent threads picker and relaunch restore. */
@@ -147,6 +173,7 @@ export function resetThreadsForTest(): void {
   recentThreads.value = []
   activeThreadId.value = null
   loadingRecent.value = false
+  createErrors.value = new Map()
   anchorLookupsInFlight.clear()
   unsubscribe?.()
   unsubscribe = undefined
@@ -160,6 +187,7 @@ export function useThreads() {
     activeThreadId,
     loadingRecent,
     threadForAnchor,
+    createErrorFor,
     ensureAnchorChecked,
     loadRecent,
     openThread,

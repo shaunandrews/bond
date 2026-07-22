@@ -115,6 +115,32 @@ describe('ThreadPanel', () => {
     wrapper.unmount()
   })
 
+  // plans/chat-threads.md Failure behavior: "If the anchor was deleted or
+  // cannot be loaded, show 'This response is no longer available'..."
+  it('shows "no longer available" and skips subscribing when the thread record is gone (anchor deleted)', async () => {
+    bond.getThread.mockResolvedValue(null)
+    const wrapper = mountPanel()
+    await flush()
+
+    expect(wrapper.text()).toContain('This response is no longer available')
+    expect(bond.subscribe).not.toHaveBeenCalled()
+    // The header close button (a different slot) still works independent of the fallback.
+    expect(wrapper.find('[aria-label="Close thread"]').exists()).toBe(true)
+    // The fallback offers its own close action too, and it emits close like the header one does.
+    const fallbackClose = wrapper.findAll('button').find(b => b.text() === 'Close')
+    expect(fallbackClose).toBeTruthy()
+    await fallbackClose!.trigger('click')
+    expect(wrapper.emitted('close')).toBeTruthy()
+  })
+
+  it('also shows the fallback when getThread rejects outright, rather than leaving a silently broken panel', async () => {
+    bond.getThread.mockRejectedValue(new Error('socket closed'))
+    const wrapper = mountPanel()
+    await flush()
+
+    expect(wrapper.text()).toContain('This response is no longer available')
+  })
+
   it('emits close when the close button is clicked', async () => {
     const wrapper = mountPanel()
     await flush()

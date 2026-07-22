@@ -245,4 +245,23 @@ describe('MessageBubble thread footer', () => {
     await wrapper.find('.thread-footer-action').trigger('click')
     expect(wrapper.emitted('openThread')).toEqual([['b4']])
   })
+
+  // plans/chat-threads.md Failure behavior: a failed thread.create shows a
+  // non-destructive inline error next to Discuss rather than doing nothing.
+  it('shows an inline error next to Discuss when this anchor has a recorded create failure', async () => {
+    const { useThreads } = await import('../composables/useThreads')
+    ;(window as unknown as { bond: any }).bond.createThread = vi.fn().mockRejectedValue(new Error('boom'))
+    const { openThread } = useThreads()
+    await openThread('b5')
+
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: 'b5', role: 'bond' as const, text: 'done', streaming: false } },
+      global: { stubs: { BondText: false } }, // default auto-stub drops slot content — assert real text
+    })
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.thread-footer-error').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Try again')
+  })
 })

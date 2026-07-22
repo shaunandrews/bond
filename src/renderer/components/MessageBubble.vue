@@ -7,6 +7,7 @@ import { imageDataUri, type AttachedImage } from '../../shared/session'
 import { ISSUE_KEY_RE } from '../../shared/fields'
 import { useIssueReferences } from '../composables/useIssueReferences'
 import { useThreads } from '../composables/useThreads'
+import BondText from './BondText.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 import ArtifactFrame from './ArtifactFrame.vue'
 import EmbedRenderer from './EmbedRenderer.vue'
@@ -64,6 +65,9 @@ const threadFooterAriaLabel = computed(() => {
     ? `Open thread with ${t.replyCount} ${t.replyCount === 1 ? 'reply' : 'replies'}`
     : 'Start a thread about this response'
 })
+// A failed thread.create surfaces here, next to the action it belongs to,
+// instead of an uncaught rejection — the main UI itself never changes.
+const threadCreateError = computed(() => threads.createErrorFor(props.msg.id))
 
 // Lazy per-anchor lookup (cached) — fires once a response completes, and
 // again if it was already complete on mount (loaded from history).
@@ -210,6 +214,7 @@ function formatTime(ts: number | undefined): string {
         <PhChatCircleText :size="13" />
         <span>{{ threadFooterLabel }}</span>
       </button>
+      <BondText v-if="threadCreateError" as="span" size="xs" color="err" class="thread-footer-error">{{ threadCreateError }}</BondText>
     </div>
   </div>
 
@@ -441,7 +446,13 @@ function formatTime(ts: number | undefined): string {
 
 .message-thread-footer {
   display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 0 0.875rem 0.375rem;
+}
+
+.thread-footer-error {
+  opacity: 0.85;
 }
 
 .thread-footer-action {

@@ -228,7 +228,11 @@ async function ensureThreadWindowFit() {
 }
 
 async function openThread(anchorMessageId: string) {
-  await threads.openThread(anchorMessageId)
+  // A failed thread.create leaves activeThreadId untouched — nothing to fit
+  // a window around, and the error already surfaced next to the Discuss
+  // button that was clicked (useThreads.createErrorFor).
+  const thread = await threads.openThread(anchorMessageId)
+  if (!thread) return
   await ensureThreadWindowFit()
 }
 

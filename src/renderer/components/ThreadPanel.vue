@@ -39,8 +39,21 @@ const threadChat = useThreadConversation(props.threadId)
 const threads = useThreads()
 
 const thread = ref<ChatThread | null>(null)
+// Distinguishes "still loading" from "confirmed gone" — getThread returns
+// null once the anchor message (and, via ON DELETE CASCADE, the thread row
+// itself) has been deleted. Both start false/null; only a resolved lookup
+// that came back empty means the thread is genuinely unrecoverable.
+const threadLookupDone = ref(false)
+const anchorGone = computed(() => threadLookupDone.value && !thread.value)
+
 async function loadThread() {
-  thread.value = await window.bond.getThread(props.threadId)
+  try {
+    thread.value = await window.bond.getThread(props.threadId)
+  } catch {
+    thread.value = null // treated the same as "gone" — there's nothing to view either way
+  } finally {
+    threadLookupDone.value = true
+  }
 }
 
 // The root card renders from the thread's OWN frozen snapshot — the anchor's
@@ -197,6 +210,7 @@ function handleKeydown(e: KeyboardEvent) {
 
 onMounted(async () => {
   await loadThread()
+  if (anchorGone.value) return // nothing to subscribe to — the anchor (and thus the thread) is gone
   threadChat.subscribe()
   await threadChat.init()
   restoreDraft()
@@ -252,7 +266,13 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
       </BondFlyoutMenu>
     </template>
 
-    <div class="thread-content-wrap px-4 pb-8 flex flex-col gap-2.5 flex-1">
+    <div v-if="anchorGone" class="thread-content-wrap px-4 pb-8 flex flex-col gap-2.5 flex-1">
+      <div class="thread-anchor-gone">
+        <BondText size="sm" color="muted">This response is no longer available.</BondText>
+        <BondButton variant="secondary" size="sm" @click="handleClose">{{ drawer ? 'Back to conversation' : 'Close' }}</BondButton>
+      </div>
+    </div>
+    <div v-else class="thread-content-wrap px-4 pb-8 flex flex-col gap-2.5 flex-1">
       <div v-if="rootMessage" class="thread-root-card">
         <div class="thread-root-label">
           <BondText size="xs" color="muted">From the main conversation</BondText>
@@ -279,7 +299,7 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
       />
     </div>
 
-    <template #footer>
+    <template v-if="!anchorGone" #footer>
       <div class="thread-content-wrap px-3 relative">
         <Transition name="scroll-btn">
           <div v-if="!isAtBottom" class="scroll-to-bottom-wrap" @click="scrollToBottom">
@@ -371,6 +391,14 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
+}
+
+.thread-anchor-gone {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-top: 2rem;
 }
 
 .thread-root-label {
