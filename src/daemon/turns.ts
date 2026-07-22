@@ -89,6 +89,28 @@ type ActiveTurn = {
 const activeByScope = new Map<ScopeKey, ActiveTurn>()
 /** Same-scope queue only — a second thread's send is never blocked by main's queue or vice versa. */
 const sendChainByScope = new Map<ScopeKey, Promise<void>>()
+const whenIdleTasks: Array<() => void> = []
+
+function flushWhenIdleTasks(): void {
+  if (activeByScope.size > 0 || whenIdleTasks.length === 0) return
+  const tasks = whenIdleTasks.splice(0)
+  for (const task of tasks) {
+    try { task() } catch (error) { console.warn('[bond] deferred off-turn task failed:', error) }
+  }
+}
+
+/**
+ * Run a synchronous transcript mutation only when no user turn is active.
+ * The queue is intentionally in-memory; the agent run's durable completion
+ * marker lets startup safely retry anything lost with the daemon process.
+ */
+export function queueWhenNoActiveTurns(task: () => void): void {
+  if (activeByScope.size === 0) {
+    task()
+    return
+  }
+  whenIdleTasks.push(task)
+}
 
 /**
  * Serialize the check-abort-start sequence, but only against other sends in
@@ -305,6 +327,7 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
         clearTurnQuestions(turnId)
         broadcast(sessionId, { kind: 'query_end', succeeded }, tags)
         settle()
+        flushWhenIdleTasks()
       })
 
       return { ok: true, queued: false, imageIds, turnId, epochId: epoch.id }
@@ -314,6 +337,7 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       clearTurnApprovals(turnId)
       clearTurnQuestions(turnId)
       settle()
+      flushWhenIdleTasks()
       throw error
     }
   })
@@ -368,4 +392,6 @@ export function abortActiveTurnForShutdown(): void {
     clearTurnQuestions(entry.turnId)
   }
   activeByScope.clear()
+  // Durable producers retry uninserted completions on the next boot.
+  whenIdleTasks.length = 0
 }

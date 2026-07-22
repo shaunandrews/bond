@@ -362,6 +362,16 @@ export function useChat(deps: ChatDeps = window.bond, options: UseChatOptions = 
       return
     }
 
+    // The worker inserts completion off-turn before broadcasting this marker.
+    // Reloading from the daemon gives every live main-conversation client the
+    // same durable card; reconnect follows the same transcript-load path.
+    if (chunk.kind === 'agent_run_changed') {
+      if (myScope.type === 'main' && chunk.run.completionMessageId) {
+        void loadTranscript().catch(error => console.warn('[bond] agent completion reconciliation failed:', error))
+      }
+      return
+    }
+
     // One useChat instance is exactly one conversation scope (main, or one
     // thread). The old sessionId check below is a no-op whenever
     // currentSessionId is null (the common continuous-Bond case), which

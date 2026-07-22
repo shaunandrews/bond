@@ -1,6 +1,7 @@
 import type { AttachedImage, EditMode } from './session'
 import type { QuestionAnswer, QuestionOption } from './questions'
 import type { ConversationScope } from './threads'
+import type { AgentRun } from './agent-runs'
 
 export interface BondSendInput {
   /** Omitted means the main conversation — see ConversationScope in shared/threads.ts. */
@@ -49,6 +50,8 @@ export type BondStreamChunk =
   | { kind: 'user_question'; questionId: string; question: string; header?: string; options: QuestionOption[] }
   /** A pending question was answered (possibly by another client or the CLI). */
   | { kind: 'question_resolved'; questionId: string; answer: QuestionAnswer }
+  /** Durable background-agent state changed; completionMessageId signals a persisted transcript insertion. */
+  | { kind: 'agent_run_changed'; run: AgentRun }
 
 /** Chunk tagged with global turn/epoch metadata for renderer routing. */
 export type TaggedChunk = BondStreamChunk & {

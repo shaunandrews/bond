@@ -10,6 +10,8 @@ import { setDataDir } from './paths'
 import { getDb } from './db'
 import { listMessages as listTranscriptMessages } from './transcript'
 import { registerApproval } from './approvals'
+import { DEFAULT_AGENT_SETTINGS } from '../shared/agents'
+import { createAgentRunRecord } from './agents/async/store'
 
 const { runBondQueryMock, runPiTextPromptMock } = vi.hoisted(() => ({
   runBondQueryMock: vi.fn(),
@@ -54,6 +56,41 @@ afterEach(async () => {
   client.close()
   await server.close()
   rmSync(tempDir, { recursive: true, force: true })
+})
+
+describe('async agent run RPC', () => {
+  it('reconciles persisted runs and broadcasts cancellation to subscribers', async () => {
+    createAgentRunRecord({
+      id: 'rpc-run',
+      idempotencyKey: 'rpc-run',
+      agent: 'felix',
+      agentLabel: 'Felix',
+      verb: 'critique',
+      brief: 'read only',
+      paths: [],
+      workspace: { repoRoot: tempDir, isolation: 'in-place', branch: null, readOnly: true },
+      baseSha: null,
+      allowedPaths: [],
+      settings: DEFAULT_AGENT_SETTINGS,
+      agentDefinitionVersion: 'v1',
+      commandPolicyVersion: 'phase0-readonly-no-shell-v1',
+      acceptanceChecks: [],
+      resourceCaps: { wallClockSeconds: 300, maxOutputChars: 100_000 },
+    })
+    await client.call('bond.subscribe')
+    const changed = vi.fn()
+    const off = client.onNotification('bond.chunk', chunk => {
+      if (chunk.kind === 'agent_run_changed') changed(chunk.run)
+    })
+
+    expect((await client.call('agentruns.list')).runs).toEqual([
+      expect.objectContaining({ id: 'rpc-run', status: 'queued' }),
+    ])
+    expect(await client.call('agentruns.cancel', { runId: 'rpc-run' }))
+      .toMatchObject({ id: 'rpc-run', status: 'cancelled' })
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith(expect.objectContaining({ id: 'rpc-run', status: 'cancelled' })))
+    off()
+  })
 })
 
 describe('onboarding RPC', () => {

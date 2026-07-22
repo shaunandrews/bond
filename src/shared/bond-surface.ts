@@ -155,6 +155,9 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     listAgents: () => invoke('agents.list'),
     updateAgentSettings: (name: string, settings: Partial<AgentSettings>) => invoke('agents.updateSettings', { name, settings }),
     revokeAgentRunner: (command: string) => invoke('agents.revokeRunner', { command }),
+    listAgentRuns: () => invoke('agentruns.list'),
+    getAgentRun: (runId: string) => invoke('agentruns.get', { runId }),
+    cancelAgentRun: (runId: string) => invoke('agentruns.cancel', { runId }),
 
     // --- Skills ---
     listSkills: () => invoke('skills.list'),

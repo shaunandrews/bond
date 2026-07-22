@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { getDataDir, getDbPath } from './paths'
 import { ensureTranscriptSchema, messagesTableDdl, transcriptPrereqDdl } from './transcript'
 import { ensureMemorySchema } from './memory/store'
+import { ensureAgentRunSchema } from './agents/async/schema'
 
 /** Increment when the persisted Bond product schema is intentionally replaced. */
 export const APP_SCHEMA_VERSION = 2
@@ -62,6 +63,7 @@ export function getDb(): Database.Database {
   migrateResetDeskOnSignatureChange(_db)
   ensureTranscriptSchema(_db)
   ensureMemorySchema(_db)
+  ensureAgentRunSchema(_db)
 
   return _db
 }

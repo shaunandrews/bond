@@ -17,8 +17,9 @@ import { collectEvidence } from './evidence'
 import { resolveContextDocs } from './context-docs'
 import { effectiveAgentSettings, loadAgentRoster } from './registry'
 import { runAgentConsult } from './run-agent'
+import { checkAgentRunFromTool, dispatchAgentRunFromTool } from './async/api'
 
-export const AGENT_TOOL_NAMES = ['consult_agent']
+export const AGENT_TOOL_NAMES = ['consult_agent', 'dispatch_agent', 'check_agent']
 
 export interface AgentToolOptions {
   /** Parent turn's capability tier, inherited when the agent's model is 'inherit'. */
@@ -32,6 +33,8 @@ export interface AgentToolOptions {
   runConsult?: typeof runAgentConsult
   gatherEvidence?: typeof collectEvidence
   resolveDocs?: typeof resolveContextDocs
+  dispatchRun?: typeof dispatchAgentRunFromTool
+  checkRun?: typeof checkAgentRunFromTool
 }
 
 export function expandPath(path: string): string {
@@ -44,6 +47,8 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
   const runConsult = options.runConsult ?? runAgentConsult
   const gatherEvidence = options.gatherEvidence ?? collectEvidence
   const resolveDocs = options.resolveDocs ?? resolveContextDocs
+  const dispatchRun = options.dispatchRun ?? dispatchAgentRunFromTool
+  const checkRun = options.checkRun ?? checkAgentRunFromTool
 
   pi.registerTool({
     name: 'consult_agent',
@@ -111,6 +116,60 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
       }
     },
   })
+
+  pi.registerTool({
+    name: 'dispatch_agent',
+    label: 'Dispatch Agent',
+    description:
+      'Queue a durable read-only specialist task and return immediately. Use only after the user confirms the exact brief. ' +
+      'Supply a stable idempotency key and reuse it for retries so a reconnect cannot create duplicate work.',
+    parameters: Type.Object({
+      agent: Type.String({ description: 'Agent name, e.g. "felix" or "q"' }),
+      verb: Type.String({ description: 'One of that agent\'s verbs' }),
+      brief: Type.String({ description: 'The immutable user-confirmed task brief' }),
+      paths: Type.Optional(Type.Array(Type.String(), { description: 'Read-only files/directories in scope' })),
+      idempotencyKey: Type.String({ description: 'Stable unique key for this confirmed task; reuse on retries' }),
+    }),
+    async execute(_toolCallId, params) {
+      const dispatched = await dispatchRun({
+        agent: params.agent,
+        verb: params.verb,
+        brief: params.brief,
+        paths: params.paths,
+        idempotencyKey: params.idempotencyKey,
+        parentModel: options.model,
+      })
+      return {
+        content: [{
+          type: 'text' as const,
+          text: dispatched.created
+            ? `Queued ${dispatched.run.agentLabel} in the background. Run id: ${dispatched.run.id}.`
+            : `That task was already dispatched. Existing run id: ${dispatched.run.id}.`,
+        }],
+        details: { run: dispatched.run, created: dispatched.created },
+      }
+    },
+  })
+
+  pi.registerTool({
+    name: 'check_agent',
+    label: 'Check Agent',
+    description: 'Read the durable status and append-only event history for a background agent run.',
+    parameters: Type.Object({
+      runId: Type.String({ description: 'Run id returned by dispatch_agent' }),
+    }),
+    async execute(_toolCallId, params) {
+      const detail = checkRun(params.runId)
+      if (!detail) throw new Error(`Unknown agent run "${params.runId}".`)
+      const run = detail.run
+      const result = run.status === 'succeeded' && run.result ? `\n\n${run.result}` : ''
+      const error = run.errorMessage ? `\n\nError: ${run.errorMessage}` : ''
+      return {
+        content: [{ type: 'text' as const, text: `${run.agentLabel} ${run.verb}: ${run.status}.${result}${error}` }],
+        details: detail,
+      }
+    },
+  })
 }
 
 export function createAgentExtensionFactory(options: AgentToolOptions = {}) {
@@ -128,7 +187,8 @@ export function buildAgentRosterPrompt(loadRoster: typeof loadAgentRoster = load
 
   let prompt = '\nSPECIALIST AGENTS:\n' +
     'Bond can consult specialist agents via the consult_agent tool. They run isolated and read-only, and return a cited report; you apply any changes yourself through your normal tools. ' +
-    'A consult can take a minute or two — that is normal. Always pass a specific brief and the paths in scope. Relay their QUESTIONS and ESCALATIONS to the user before acting on them.\n'
+    'A consult can take a minute or two — that is normal. Always pass a specific brief and the paths in scope. Relay their QUESTIONS and ESCALATIONS to the user before acting on them. ' +
+    'For work that should continue off-turn, first show the user the exact brief and wait for confirmation, then use dispatch_agent with a stable idempotency key; use check_agent for status. Phase 0 background tasks are also read-only.\n'
 
   for (const agent of agents) {
     const settings = effectiveAgentSettings(agent)

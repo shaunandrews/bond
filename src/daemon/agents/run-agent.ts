@@ -40,6 +40,8 @@ export interface RunAgentInput extends AgentUserPromptInput {
   /** Parent turn's capability tier, used when the agent's model is 'inherit'. */
   parentModel?: string
   signal?: AbortSignal
+  /** Durable async runs use this checkpoint only after Pi created a session. */
+  onSessionStarted?: () => void
 }
 
 export async function runAgentConsult(input: RunAgentInput): Promise<string> {
@@ -82,6 +84,7 @@ export async function runAgentConsult(input: RunAgentInput): Promise<string> {
   input.signal?.addEventListener('abort', abort, { once: true })
 
   try {
+    input.onSessionStarted?.()
     await session.prompt(buildAgentUserPrompt(input))
     if (leashed) throw new Error(`${input.definition.label} hit the ${input.settings.leash}s leash and was stopped. Narrow the scope or raise the leash in Settings → Agents.`)
     if (input.signal?.aborted) throw new Error(`${input.definition.label}'s consultation was cancelled.`)

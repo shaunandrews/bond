@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { setDataDir } from './paths'
 import { getDb, closeDb } from './db'
 import { registerApproval } from './approvals'
-import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, getActiveTurn, abortActiveTurnForShutdown } from './turns'
+import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, getActiveTurn, abortActiveTurnForShutdown, queueWhenNoActiveTurns } from './turns'
 import type { TaggedChunk } from '../shared/stream'
 import { threadScope } from '../shared/threads'
 
@@ -92,6 +92,19 @@ function seedThread(id: string, anchorId = `anchor-${id}`) {
 }
 
 describe('turn runner serialization', () => {
+  it('holds off-turn insertions until the active user turn settles', async () => {
+    let finish!: (value: { succeeded: boolean; piSessionId: string }) => void
+    runBondQueryMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await startBondTurn({ text: 'keep talking', turnId: 'active-turn', model: 'balanced' })
+    const insertion = vi.fn()
+
+    queueWhenNoActiveTurns(insertion)
+    expect(insertion).not.toHaveBeenCalled()
+
+    finish({ succeeded: true, piSessionId: 'pi-test' })
+    await vi.waitFor(() => expect(insertion).toHaveBeenCalledTimes(1))
+  })
+
   it('serializes racing sends — the second aborts the first and queries never overlap', async () => {
     // Regression: two clients (desktop + phone) sending near-simultaneously
     // both passed the old activeQuery check across its await points and ran

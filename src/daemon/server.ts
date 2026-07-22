@@ -60,6 +60,14 @@ import { getRemoteStatus } from './remote'
 import { createPairingCode, listDevices, revokeAllDevices, revokeDevice } from './pairing'
 import { removeSkill } from './skills'
 import { listAgents, revokeAgentRunner, updateAgentSettings } from './agents/service'
+import {
+  cancelAgentRun,
+  checkAgentRun,
+  reconnectAgentRuns,
+  setAgentRunTransport,
+  startAgentRunService,
+  stopAgentRunService,
+} from './agents/async/service'
 import * as desk from './desk/service'
 import { createDeskWorker, type DeskWorker } from './desk/worker'
 import { getRuntime as getDeskRuntime } from './desk/store'
@@ -1008,6 +1016,20 @@ const handlers: RpcHandlers = {
     return revokeAgentRunner(command)
   },
 
+  'agentruns.list': () => ({ runs: reconnectAgentRuns() }),
+
+  'agentruns.get': (params) => {
+    const runId = getStringParam(raw(params), 'runId')
+    if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
+    return checkAgentRun(runId)
+  },
+
+  'agentruns.cancel': (params) => {
+    const runId = getStringParam(raw(params), 'runId')
+    if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
+    return cancelAgentRun(runId)
+  },
+
   // --- Skills ---
   'skills.list': () => getCachedSkills(),
 
@@ -1889,6 +1911,11 @@ export function startServer(socketPath: string, authToken?: string, health?: Dae
     },
   })
 
+  setAgentRunTransport({
+    changed: run => broadcastChunk(undefined, { kind: 'agent_run_changed', run }),
+  })
+  startAgentRunService()
+
   // Web tools ask connected app clients to render pages in a hidden browser
   // window. Delivery is a broadcast — only the Electron main process listens.
   setRenderTransport((request) => {
@@ -1932,7 +1959,9 @@ export function startServer(socketPath: string, authToken?: string, health?: Dae
 
   return {
     wss,
-    close: () => new Promise<void>((resolve) => {
+    close: async () => {
+      await stopAgentRunService()
+      setAgentRunTransport(null)
       abortActiveTurnForShutdown()
       setTurnTransport(null)
       globalSubscribers.clear()
@@ -1944,16 +1973,18 @@ export function startServer(socketPath: string, authToken?: string, health?: Dae
       }
       setRenderTransport(null)
 
-      wss.close(() => {
-        httpServer.close(() => {
-          // Clean up the socket file — only if it is still the one we bound
-          closeDb()
-          if (boundIdentity && !socketLost(socketPath, boundIdentity)) {
-            try { unlinkSync(socketPath) } catch { /* ignore */ }
-          }
-          resolve()
+      return new Promise<void>((resolve) => {
+        wss.close(() => {
+          httpServer.close(() => {
+            // Clean up the socket file — only if it is still the one we bound
+            closeDb()
+            if (boundIdentity && !socketLost(socketPath, boundIdentity)) {
+              try { unlinkSync(socketPath) } catch { /* ignore */ }
+            }
+            resolve()
+          })
         })
       })
-    })
+    }
   }
 }

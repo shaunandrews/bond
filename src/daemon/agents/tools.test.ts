@@ -108,6 +108,30 @@ describe('consult_agent', () => {
   })
 })
 
+describe('async agent tools', () => {
+  it('dispatches immediately and reports idempotent duplicates', async () => {
+    const run = { id: 'run-1', agentLabel: 'Felix', status: 'queued' }
+    const dispatchRun = vi.fn()
+      .mockResolvedValueOnce({ run, created: true })
+      .mockResolvedValueOnce({ run, created: false })
+    const tool = collectTools(fakes({ dispatchRun: dispatchRun as any })).get('dispatch_agent')!
+    const params = { agent: 'felix', verb: 'critique', brief: 'Read it', paths: ['/p'], idempotencyKey: 'same-key' }
+
+    expect((await tool.execute('c1', params)).content[0].text).toContain('Queued')
+    expect((await tool.execute('c2', params)).content[0].text).toContain('already dispatched')
+    expect(dispatchRun).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'same-key' }))
+  })
+
+  it('checks durable status and rejects an unknown run', async () => {
+    const detail = { run: { id: 'run-1', agentLabel: 'Felix', verb: 'critique', status: 'succeeded', result: 'report', errorMessage: null }, events: [] }
+    const checkRun = vi.fn((id: string) => id === 'run-1' ? detail : null)
+    const tool = collectTools(fakes({ checkRun: checkRun as any })).get('check_agent')!
+
+    expect((await tool.execute('c1', { runId: 'run-1' })).content[0].text).toContain('succeeded')
+    await expect(tool.execute('c2', { runId: 'missing' })).rejects.toThrow('Unknown agent run')
+  })
+})
+
 describe('buildAgentRosterPrompt', () => {
   it('lists each agent with role, verbs, and policy guidance', () => {
     const prompt = buildAgentRosterPrompt(() => ({ agents: [definition], problems: [] }))
