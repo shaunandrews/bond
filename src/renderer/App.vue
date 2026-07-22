@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useChat } from './composables/useChat'
+import { useThreads } from './composables/useThreads'
 import { useAutoScroll } from './composables/useAutoScroll'
 import { useCollections } from './composables/useCollections'
 import { useAccentColor } from './composables/useAccentColor'
 import type { ModelId, AttachedImage, Message } from './types/message'
 import type { EditMode } from '../shared/session'
+import { computeThreadLayoutMode, widthBudgetForMode, type ThreadLayoutMode } from './lib/panelLayout'
 import { PhArrowDown, PhX, PhListBullets, PhClockCounterClockwise, PhBooks, PhBrain, PhCompassRose } from '@phosphor-icons/vue'
 import BondButton from './components/BondButton.vue'
 import BondText from './components/BondText.vue'
@@ -19,6 +21,7 @@ import CollectionsView from './components/CollectionsView.vue'
 import SensePanelView from './components/SensePanelView.vue'
 import MemoryView from './components/MemoryView.vue'
 import DeskView from './components/DeskView.vue'
+import ThreadPanel from './components/ThreadPanel.vue'
 import ViewShell from './components/ViewShell.vue'
 import BondPanelGroup from './components/BondPanelGroup.vue'
 import BondPanel from './components/BondPanel.vue'
@@ -28,6 +31,7 @@ import { shouldPersistOnUnload } from './lib/persistGuard'
 import { playTypewriter } from './lib/typewriter'
 
 const chat = useChat()
+const threads = useThreads()
 const collections = useCollections()
 const { load: loadAccent, applyExternal: applyExternalAccent } = useAccentColor()
 
@@ -165,6 +169,10 @@ function handleScrollToMessage(event: Event) {
 }
 
 function toggleRightPanel(panel?: RightPanelContent) {
+  // Any user-initiated toggle overrides whatever Bond auto-collapsed to make
+  // room for a thread — closeThread() must never fight a choice the user
+  // made in the meantime.
+  utilityAutoCollapsedForThread.value = false
   if (panel) {
     if (!rightPanelCollapsed.value && rightPanelContent.value === panel) {
       // Same panel clicked while open — collapse
@@ -186,6 +194,88 @@ function toggleRightPanel(panel?: RightPanelContent) {
   }
   localStorage.setItem('bond:right-panel', rightPanelCollapsed.value ? 'none' : rightPanelContent.value)
   localStorage.setItem('bond:right-panel-content', rightPanelContent.value)
+}
+
+// --- Chat threads: middle panel + responsive layout ---
+const threadPanelOpen = computed(() => threads.activeThreadId.value !== null)
+// True only while Bond itself collapsed the utility panel to make room for a
+// thread — toggleRightPanel() clears this the instant the user acts, so
+// closeThread() never re-expands a panel the user deliberately closed.
+const utilityAutoCollapsedForThread = ref(false)
+const layoutMode = ref<ThreadLayoutMode>('three-panel')
+const threadAutoFocus = ref(true)
+
+async function ensureThreadWindowFit() {
+  const budget = widthBudgetForMode('three-panel')
+  try {
+    const result = await window.bond.ensureContentWidth({ preferredWidth: budget.preferred, minimumWidth: budget.minimum })
+    layoutMode.value = computeThreadLayoutMode(result.width)
+  } catch {
+    // No native resize available (web, or an older bridge) — the responsive
+    // rules still work from whatever the viewport actually is.
+    layoutMode.value = computeThreadLayoutMode(window.innerWidth)
+  }
+
+  if (layoutMode.value === 'two-panel' && !rightPanelCollapsed.value) {
+    utilityAutoCollapsedForThread.value = true
+    rightPanelCollapsed.value = true
+    rightPanelRef.value?.collapse()
+  } else if (layoutMode.value === 'three-panel' && utilityAutoCollapsedForThread.value && rightPanelCollapsed.value) {
+    utilityAutoCollapsedForThread.value = false
+    rightPanelCollapsed.value = false
+    rightPanelRef.value?.expand()
+  }
+}
+
+async function openThread(anchorMessageId: string) {
+  await threads.openThread(anchorMessageId)
+  await ensureThreadWindowFit()
+}
+
+async function closeThread() {
+  const id = threads.activeThreadId.value
+  threads.closeActiveThread()
+  if (utilityAutoCollapsedForThread.value) {
+    utilityAutoCollapsedForThread.value = false
+    if (rightPanelCollapsed.value) {
+      rightPanelCollapsed.value = false
+      rightPanelRef.value?.expand()
+    }
+  }
+  // An empty draft (opened, never sent) is disposable; a real thread persists.
+  if (id) threads.deleteDraftIfEmpty(id)
+}
+
+/** Boot restore — adapts to whatever the window currently is; never grows it. */
+async function restoreLastThreadIfAny() {
+  const id = threads.lastActiveThreadId()
+  if (!id) return
+  threadAutoFocus.value = false
+  const thread = await threads.openThreadById(id)
+  if (!thread) {
+    // Anchor (and therefore the thread) is gone — nothing to restore.
+    threads.closeActiveThread()
+    threadAutoFocus.value = true
+    return
+  }
+  layoutMode.value = computeThreadLayoutMode(window.innerWidth)
+  if (layoutMode.value === 'two-panel' && !rightPanelCollapsed.value) {
+    utilityAutoCollapsedForThread.value = true
+    rightPanelCollapsed.value = true
+    rightPanelRef.value?.collapse()
+  }
+  await nextTick()
+  threadAutoFocus.value = true
+}
+
+// A manual OS window resize while a thread is open can cross a responsive
+// threshold (e.g. into drawer mode) without the user touching the thread at
+// all — keep layoutMode current. Deliberately does NOT touch the utility
+// panel's collapsed state here; that's only ever an open-time decision, so a
+// live resize never fights a manual drag.
+function handleWindowResize() {
+  if (!threadPanelOpen.value) return
+  layoutMode.value = computeThreadLayoutMode(window.innerWidth)
 }
 
 const scrollEl = computed(() => chatShellRef.value?.scrollAreaEl ?? null)
@@ -268,6 +358,7 @@ function handleBeforeUnload() {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('resize', handleWindowResize)
   window.addEventListener('beforeunload', handleBeforeUnload)
   window.addEventListener('bond:show-panel', handleShowPanel)
   window.addEventListener('bond:scroll-to-message', handleScrollToMessage)
@@ -348,10 +439,12 @@ onMounted(async () => {
     }
   }
   nextTick(scrollToBottom)
+  if (!sandboxed.value) void restoreLastThreadIfAny()
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('resize', handleWindowResize)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('bond:show-panel', handleShowPanel)
   window.removeEventListener('bond:scroll-to-message', handleScrollToMessage)
@@ -392,6 +485,7 @@ onUnmounted(() => {
               :key="msg.id"
               :msg="msg"
               @approve="chat.respondToApproval"
+              @openThread="openThread"
             />
           </template>
         </div>
@@ -455,7 +549,26 @@ onUnmounted(() => {
       </div>
     </BondPanel>
 
-    <BondPanelHandle v-show="!rightPanelHidden" id="main-right" beforePanelId="main" afterPanelId="right-panel" />
+    <template v-if="threadPanelOpen && layoutMode !== 'thread-drawer'">
+      <BondPanelHandle id="main-thread" beforePanelId="main" afterPanelId="thread" />
+      <BondPanel id="thread" unit="px" :defaultSize="360" :minSize="320" :maxSize="99999">
+        <ThreadPanel
+          :key="threads.activeThreadId.value ?? undefined"
+          :threadId="threads.activeThreadId.value!"
+          :model="selectedModel"
+          :autoFocus="threadAutoFocus"
+          @close="closeThread"
+          @update:model="handleModelChange"
+        />
+      </BondPanel>
+    </template>
+
+    <BondPanelHandle
+      v-show="!rightPanelHidden"
+      :id="threadPanelOpen && layoutMode !== 'thread-drawer' ? 'thread-right' : 'main-right'"
+      :beforePanelId="threadPanelOpen && layoutMode !== 'thread-drawer' ? 'thread' : 'main'"
+      afterPanelId="right-panel"
+    />
 
     <BondPanel ref="rightPanelRef" id="right-panel" class="right-panel" unit="px" :defaultSize="320" :minSize="['sense', 'memory'].includes(rightPanelContent) ? 300 : 260" :maxSize="99999" collapsible :collapsedSize="0" :startCollapsed="rightPanelCollapsed">
       <CollectionsView v-if="rightPanelContent === 'collections'"
@@ -474,6 +587,21 @@ onUnmounted(() => {
       <LibraryView v-else-if="rightPanelContent === 'library'" />
     </BondPanel>
   </BondPanelGroup>
+
+  <!-- Below ~800px content width the thread replaces main entirely rather
+       than squeezing three panels into no room — an overlay is simplest
+       here since main+utility stay mounted underneath, untouched. -->
+  <div v-if="threadPanelOpen && layoutMode === 'thread-drawer'" class="thread-drawer-overlay">
+    <ThreadPanel
+      :key="threads.activeThreadId.value ?? undefined"
+      :threadId="threads.activeThreadId.value!"
+      :model="selectedModel"
+      :autoFocus="threadAutoFocus"
+      drawer
+      @close="closeThread"
+      @update:model="handleModelChange"
+    />
+  </div>
 
   <!-- Order mirrors the onboarding tour: Sense, Library, Memory, Collections. -->
   <nav class="right-panel-controls no-drag" aria-label="Panel views">
@@ -621,6 +749,13 @@ onUnmounted(() => {
 
 .right-panel {
   position: relative;
+  background: var(--color-bg);
+}
+
+.thread-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
   background: var(--color-bg);
 }
 

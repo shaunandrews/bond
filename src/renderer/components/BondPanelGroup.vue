@@ -134,49 +134,41 @@ function loadLayout(): SavedLayout | null {
 }
 
 // --- Layout computation ---
+/**
+ * Matched PER PANEL, not all-or-nothing — a panel that's never been seen
+ * before (the thread panel, first time it opens mid-session) falls back to
+ * its own default without discarding every OTHER panel's saved size. The
+ * previous "every registered panel needs a saved entry or default them all"
+ * rule meant a single new panel id reset the whole group back to defaults.
+ */
 function distributeDefaults() {
   const regs = panels.value
   if (regs.length === 0) return
 
   const saved = loadLayout()
-  if (saved && regs.every((r) => saved.sizes[r.id] !== undefined)) {
-    // Check units match — if a panel changed units, discard saved data for it
-    const unitsMatch = regs.every((r) => {
-      const savedUnit = saved.units?.[r.id] ?? '%'
-      return savedUnit === r.constraints.unit
-    })
-
-    if (unitsMatch) {
-      const collapsedSet = new Set(saved.collapsed.filter((id) => regs.some((r) => r.id === id)))
-      const clamped: Record<string, number> = {}
-      for (const r of regs) {
-        const s = saved.sizes[r.id]
-        if (collapsedSet.has(r.id)) {
-          clamped[r.id] = s
-        } else {
-          clamped[r.id] = Math.min(r.constraints.maxSize, Math.max(r.constraints.minSize, s))
-        }
-      }
-      // Normalize % panels so their flex-grow weights sum correctly
-      normalizePercentPanels(clamped, regs)
-      sizes.value = clamped
-      collapsed.value = collapsedSet
-      if (saved.preCollapseSize) {
-        preCollapseSize.value = { ...saved.preCollapseSize }
-      }
-      return
-    }
-    // Units changed — fall through to defaults
-  }
-
-  // Use defaultSizes
   const newSizes: Record<string, number> = {}
+  const collapsedSet = new Set<string>()
+
   for (const r of regs) {
-    newSizes[r.id] = r.constraints.defaultSize
+    const savedSize = saved?.sizes[r.id]
+    const savedUnit = saved?.units?.[r.id] ?? '%'
+    const hasSavedMatch = savedSize !== undefined && savedUnit === r.constraints.unit
+    if (hasSavedMatch) {
+      const wasCollapsed = saved!.collapsed.includes(r.id)
+      newSizes[r.id] = wasCollapsed ? savedSize : Math.min(r.constraints.maxSize, Math.max(r.constraints.minSize, savedSize))
+      if (wasCollapsed) collapsedSet.add(r.id)
+    } else {
+      newSizes[r.id] = r.constraints.defaultSize
+    }
   }
-  // Normalize % panels
+
+  // Normalize % panels so their flex-grow weights sum correctly
   normalizePercentPanels(newSizes, regs)
   sizes.value = newSizes
+  collapsed.value = collapsedSet
+  if (saved?.preCollapseSize) {
+    preCollapseSize.value = { ...saved.preCollapseSize }
+  }
 }
 
 /** Normalize percentage panels so their flex-grow weights sum to 100 */
@@ -212,6 +204,7 @@ function registerPanel(reg: PanelRegistration) {
     panels.value[existing] = reg
     return
   }
+
   panels.value = [...panels.value, reg]
   distributeDefaults()
 

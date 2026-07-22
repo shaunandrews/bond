@@ -195,7 +195,11 @@ function setText(text: string) {
   })
 }
 
-defineExpose({ focus, setText })
+function getText(): string {
+  return inputText.value
+}
+
+defineExpose({ focus, setText, getText })
 
 function autoResize() {
   const el = inputEl.value

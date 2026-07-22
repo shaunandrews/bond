@@ -704,6 +704,62 @@ describe('BondPanelGroup', () => {
       expect(getFlexBasisPx(panels[0].attributes('style') ?? '')).toBe(260)
       w.unmount()
     })
+
+    it('a panel joining later (no saved entry) does not reset panels that already have saved sizes', async () => {
+      // Simulates a user who already resized main+utility (saved), then later
+      // opens a third panel (e.g. a chat thread) with no history at all.
+      localStorage.setItem(
+        'bond:panels:late-join-test',
+        JSON.stringify({
+          sizes: { main: 65, 'right-panel': 400 },
+          units: { main: '%', 'right-panel': 'px' },
+          collapsed: [],
+        }),
+      )
+
+      const showThird = ref(false)
+      const w = mount(
+        defineComponent({
+          components: { BondPanelGroup, BondPanel, BondPanelHandle },
+          setup() { return { showThird } },
+          template: `
+            <BondPanelGroup direction="horizontal" autoSaveId="late-join-test">
+              <BondPanel id="main" :defaultSize="80" :minSize="30">
+                <div>Main</div>
+              </BondPanel>
+              <BondPanelHandle v-if="showThird" id="main-thread" beforePanelId="main" afterPanelId="thread" />
+              <BondPanel v-if="showThird" id="thread" unit="px" :defaultSize="360" :minSize="320" :maxSize="99999">
+                <div>Thread</div>
+              </BondPanel>
+              <BondPanelHandle id="main-right" :beforePanelId="showThird ? 'thread' : 'main'" afterPanelId="right-panel" />
+              <BondPanel id="right-panel" unit="px" :defaultSize="320" :minSize="260" :maxSize="99999">
+                <div>Right</div>
+              </BondPanel>
+            </BondPanelGroup>
+          `,
+        }),
+        { attachTo: document.body },
+      )
+      await nextTick()
+
+      // 'main' is the only %-unit panel present, so normalization forces it
+      // to 100 (a lone flex-grow panel always fills the remaining space) —
+      // that's expected, not what this test is about. right-panel (px) is
+      // the one whose saved value must survive untouched.
+      let panels = w.findAll('.bond-panel')
+      expect(getFlexBasisPx(panels[1].attributes('style') ?? '')).toBe(400)
+
+      // Now the thread panel joins mid-session — right-panel must keep its
+      // saved size; only the new panel gets its own default.
+      showThird.value = true
+      await nextTick()
+
+      panels = w.findAll('.bond-panel')
+      expect(panels).toHaveLength(3)
+      expect(getFlexBasisPx(w.find('[data-panel-id="thread"]').attributes('style') ?? '')).toBe(360)
+      expect(getFlexBasisPx(w.find('[data-panel-id="right-panel"]').attributes('style') ?? '')).toBe(400)
+      w.unmount()
+    })
   })
 
   describe('pixel-unit panels', () => {

@@ -973,6 +973,34 @@ export const componentInventory = [
     "events": []
   },
   {
+    "name": "ThreadPanel",
+    "file": "components/ThreadPanel.vue",
+    "props": [
+      {
+        "name": "threadId",
+        "type": "string"
+      },
+      {
+        "name": "model",
+        "type": "ModelId"
+      },
+      {
+        "name": "autoFocus",
+        "type": "boolean | undefined"
+      },
+      {
+        "name": "drawer",
+        "type": "boolean | undefined"
+      }
+    ],
+    "events": [
+      {
+        "name": "close",
+        "payload": "void"
+      }
+    ]
+  },
+  {
     "name": "TurnActivity",
     "file": "components/TurnActivity.vue",
     "props": [
