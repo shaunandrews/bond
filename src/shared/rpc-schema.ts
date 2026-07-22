@@ -47,7 +47,7 @@ import type {
   DeskStatus,
   DeskThread,
 } from './desk'
-import type { ChatThread, ThreadSummary } from './threads'
+import type { ChatThread, ConversationScope, ThreadSummary } from './threads'
 
 // --- Named wire shapes ---
 
@@ -222,7 +222,7 @@ export interface RpcMethods {
 
   // Chat
   'bond.send': { params: Partial<BondSendInput> & { sessionId?: string }; result: BondSendResult }
-  'bond.cancel': { params: { sessionId?: string } | void; result: { ok: true } }
+  'bond.cancel': { params: { sessionId?: string; scope?: ConversationScope } | void; result: { ok: true } }
   'bond.approvalResponse': { params: { requestId: string; approved: boolean }; result: { ok: true } }
   'bond.questionResponse': { params: { questionId: string; answer: QuestionAnswer }; result: { ok: true } }
   'bond.ping': { params: void; result: { ok: true; protocolVersion: number } }
@@ -240,8 +240,8 @@ export interface RpcMethods {
   'remote.revokeAllDevices': { params: void; result: { ok: true; revoked: number } }
 
   // Subscriptions
-  'bond.subscribe': { params: { sessionId?: string } | void; result: { ok: true } }
-  'bond.unsubscribe': { params: { sessionId?: string } | void; result: { ok: true } }
+  'bond.subscribe': { params: { sessionId?: string; scope?: ConversationScope } | void; result: { ok: true } }
+  'bond.unsubscribe': { params: { sessionId?: string; scope?: ConversationScope } | void; result: { ok: true } }
 
   // Model
   'bond.setModel': { params: { model: ModelId }; result: { ok: true } }

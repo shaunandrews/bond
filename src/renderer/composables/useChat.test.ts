@@ -68,6 +68,24 @@ describe('useChat continuous transcript', () => {
     expect(assistant && 'text' in assistant ? assistant.text : '').toContain('streamed here too')
   })
 
+  it('ignores a thread turn_start — useChat is the main conversation only', () => {
+    // Regression: currentSessionId is null for continuous Bond, which made
+    // the old sessionId-only filter a no-op — a thread's turn_start would
+    // otherwise inject a fake user message straight into the main transcript.
+    handler({
+      kind: 'turn_start',
+      turnId: 'thread-turn',
+      userMessageId: 'u-thread',
+      assistantMessageId: 'a-thread',
+      activityMessageId: 'm-thread',
+      text: 'a thread message',
+      scope: { type: 'thread', threadId: 'thread-1' },
+    })
+
+    expect(chat.messages.value.some(m => m.id === 'u-thread')).toBe(false)
+    expect(chat.messages.value.some(m => m.id === 'a-thread')).toBe(false)
+  })
+
   it('still processes untagged chunks (legacy compatibility)', async () => {
     await chat.submit('hello')
     handler({ kind: 'assistant_text', text: 'no tags on me' })

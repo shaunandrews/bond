@@ -1,7 +1,10 @@
 import type { AttachedImage, EditMode } from './session'
 import type { QuestionAnswer, QuestionOption } from './questions'
+import type { ConversationScope } from './threads'
 
 export interface BondSendInput {
+  /** Omitted means the main conversation — see ConversationScope in shared/threads.ts. */
+  scope?: ConversationScope
   text: string
   images?: AttachedImage[]
   turnId: string
@@ -53,4 +56,11 @@ export type TaggedChunk = BondStreamChunk & {
   turnId?: string
   /** @deprecated Legacy per-chat routing field. Continuous transcript clients should ignore it. */
   sessionId?: string
+  /**
+   * Omitted/main means the main conversation. Every turn-scoped chunk (see
+   * the four multi-device sync chunks below) carries this so a renderer
+   * conversation instance can accept only its own scope's chunks. Truly
+   * global events (connection status, edit_mode_changed) omit it.
+   */
+  scope?: ConversationScope
 }

@@ -809,3 +809,98 @@ describe('attachConnection device-credential gate', () => {
     expect(ws.closed).toBe(true)
   })
 })
+
+describe('scoped subscription routing (chat threads)', () => {
+  async function sendAndGetAnchorId(sender: BondClient, text: string, reply: string): Promise<string> {
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: reply })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await sender.send(text)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const anchor = [...rows].reverse().find(m => m.role === 'bond' && m.text === reply)
+    if (!anchor) throw new Error('anchor message not found')
+    return anchor.id
+  }
+
+  it('a main-only subscriber never receives a thread turn\'s chunks', async () => {
+    const anchorId = await sendAndGetAnchorId(client, 'q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    // A fresh client subscribes to main only and never itself sends into
+    // the thread — sending auto-subscribes the sender to its own scope, so
+    // testing this with `client` (which created the anchor) would be moot.
+    const observer = new BondClient(socketPath)
+    await observer.connect()
+    await observer.subscribe()
+    const mainChunks: unknown[] = []
+    observer.onChunk((c) => mainChunks.push(c))
+
+    const sender = new BondClient(socketPath)
+    await sender.connect()
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'thread reply' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await sender.call('bond.send', { text: 'thread question', scope: { type: 'thread', threadId: thread.id } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    expect(mainChunks.some(c => (c as { text?: string }).text === 'thread reply')).toBe(false)
+    observer.close()
+    sender.close()
+  })
+
+  it('thread A never receives thread B\'s or main\'s chunks', async () => {
+    const anchorA = await sendAndGetAnchorId(client, 'qa', 'aa')
+    const anchorB = await sendAndGetAnchorId(client, 'qb', 'ab')
+    const threadA = await client.call('thread.create', { anchorMessageId: anchorA })
+    const threadB = await client.call('thread.create', { anchorMessageId: anchorB })
+
+    const observer = new BondClient(socketPath)
+    await observer.connect()
+    await observer.subscribe(undefined, { type: 'thread', threadId: threadA.id })
+    const threadAChunks: unknown[] = []
+    observer.onChunk((c) => threadAChunks.push(c))
+
+    const sender = new BondClient(socketPath)
+    await sender.connect()
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'reply for B' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await sender.call('bond.send', { text: 'question for B', scope: { type: 'thread', threadId: threadB.id } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(threadAChunks.some(c => (c as { text?: string }).text === 'reply for B')).toBe(false)
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'main reply' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await sender.send('main question')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(threadAChunks.some(c => (c as { text?: string }).text === 'main reply')).toBe(false)
+
+    observer.close()
+    sender.close()
+  })
+
+  it('a client subscribed to a thread receives that thread\'s own chunks', async () => {
+    const anchorId = await sendAndGetAnchorId(client, 'q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    await client.subscribe(undefined, { type: 'thread', threadId: thread.id })
+    const threadChunks: unknown[] = []
+    client.onChunk((c) => threadChunks.push(c))
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'thread reply' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await client.call('bond.send', { text: 'thread question', scope: { type: 'thread', threadId: thread.id } })
+    await vi.waitFor(() => {
+      expect(threadChunks.some(c => (c as { text?: string }).text === 'thread reply')).toBe(true)
+    })
+  })
+})

@@ -325,6 +325,13 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   function handleChunk(chunk: TaggedChunk) {
+    // useChat is the MAIN conversation only — a thread's turn now streams
+    // real chunks (chat threads), and the old sessionId check below is a
+    // no-op whenever currentSessionId is null (the common continuous-Bond
+    // case), which would let a thread's turn_start inject a fake user
+    // message into the main transcript. Every conversation-scoped chunk
+    // carries `scope` explicitly now; reject anything that isn't main's.
+    if (chunk.scope && chunk.scope.type === 'thread') return
     if (currentSessionId.value && chunk.sessionId && chunk.sessionId !== currentSessionId.value) return
 
     if (chunk.kind === 'turn_start') {

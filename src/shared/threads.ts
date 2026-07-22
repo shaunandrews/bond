@@ -32,6 +32,18 @@ export function scopesEqual(a: ConversationScope, b: ConversationScope): boolean
   return scopeToThreadId(a) === scopeToThreadId(b)
 }
 
+/** Defensive wire-boundary parse (mirrors parseEditMode in shared/session.ts) — anything malformed defaults to main. */
+export function parseConversationScope(raw: unknown): ConversationScope {
+  if (raw && typeof raw === 'object') {
+    const candidate = raw as { type?: unknown; threadId?: unknown }
+    if (candidate.type === 'thread' && typeof candidate.threadId === 'string' && candidate.threadId) {
+      return { type: 'thread', threadId: candidate.threadId }
+    }
+    if (candidate.type === 'main') return MAIN_SCOPE
+  }
+  return MAIN_SCOPE
+}
+
 /** A single message carried in a thread's frozen context snapshot. */
 export interface ThreadContextMessage {
   id: string

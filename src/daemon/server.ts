@@ -9,8 +9,9 @@ import type { SessionMessage, AttachedImage, EditMode, FieldDefInput } from '../
 import type { DetectedWindow } from '../shared/sense'
 import { parseEditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
-import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, getSourceMessages, reconcileInterruptedTurns } from './transcript'
+import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, getSourceMessages, getTurnThreadId, reconcileInterruptedTurns } from './transcript'
 import { closeThread, createThread, deleteDraftThread, getThread, getThreadForAnchor, listRecentThreads, markThreadRead, touchThread } from './threads'
+import { MAIN_SCOPE, parseConversationScope, threadIdToScope, type ConversationScope } from '../shared/threads'
 import type { ModelId } from '../shared/models'
 import type { DispatchableMethod, RpcParams, RpcResult } from '../shared/rpc-schema'
 import {
@@ -33,8 +34,8 @@ import {
   buildSystemPromptPreview,
 } from './agent'
 import { getPiAuthStatus, startPiOAuth } from './pi/runtime'
-import { resolveApproval } from './approvals'
-import { resolveQuestion, currentPendingQuestion } from './questions'
+import { resolveApproval, peekApprovalTurnId } from './approvals'
+import { resolveQuestion, currentPendingQuestion, peekQuestionTurnId } from './questions'
 import { parseQuestionAnswer } from '../shared/questions'
 import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, abortActiveTurnForShutdown } from './turns'
 import { setRenderTransport, onRenderReady } from './web/broker'
@@ -167,9 +168,14 @@ function wakeAfterDataSwap(): void {
   senseController?.wake()
 }
 
-// Track which clients are subscribed to which sessions; global subscribers receive all tagged chunks.
+// Track which clients are subscribed to which sessions/threads. globalSubscribers
+// is the main conversation's subscriber set — despite the name, it has never
+// meant "every client sees everything"; thread chunks route through
+// threadSubscribers instead, exactly so a thread never reaches a client that
+// only asked for main (plans/chat-threads.md "Subscription routing").
 const sessionSubscribers = new Map<string, Set<WebSocket>>()
 const globalSubscribers = new Set<WebSocket>()
+const threadSubscribers = new Map<string, Set<WebSocket>>()
 
 // Authenticated connections across all listeners (unix socket + remote TCP)
 const authenticatedClients = new WeakSet<WebSocket>()
@@ -196,7 +202,16 @@ function eachOpenClient(fn: (ws: WebSocket) => void): void {
   }
 }
 
-function subscribeTo(sessionId: string | undefined, ws: WebSocket): void {
+function subscribeTo(sessionId: string | undefined, ws: WebSocket, scope: ConversationScope = MAIN_SCOPE): void {
+  if (scope.type === 'thread') {
+    let subs = threadSubscribers.get(scope.threadId)
+    if (!subs) {
+      subs = new Set()
+      threadSubscribers.set(scope.threadId, subs)
+    }
+    subs.add(ws)
+    return
+  }
   if (!sessionId) {
     globalSubscribers.add(ws)
     return
@@ -209,7 +224,15 @@ function subscribeTo(sessionId: string | undefined, ws: WebSocket): void {
   subs.add(ws)
 }
 
-function unsubscribeFrom(sessionId: string | undefined, ws: WebSocket): void {
+function unsubscribeFrom(sessionId: string | undefined, ws: WebSocket, scope: ConversationScope = MAIN_SCOPE): void {
+  if (scope.type === 'thread') {
+    const subs = threadSubscribers.get(scope.threadId)
+    if (subs) {
+      subs.delete(ws)
+      if (subs.size === 0) threadSubscribers.delete(scope.threadId)
+    }
+    return
+  }
   if (!sessionId) {
     globalSubscribers.delete(ws)
     return
@@ -225,17 +248,28 @@ function unsubscribeAll(ws: WebSocket): void {
   for (const subs of sessionSubscribers.values()) {
     subs.delete(ws)
   }
+  for (const subs of threadSubscribers.values()) {
+    subs.delete(ws)
+  }
   globalSubscribers.delete(ws)
 }
 
-function broadcastChunk(sessionId: string | undefined, chunk: BondStreamChunk, tags?: { epochId?: string; turnId?: string; assistantMessageId?: string }): void {
+function broadcastChunk(sessionId: string | undefined, chunk: BondStreamChunk, tags?: { epochId?: string; turnId?: string; assistantMessageId?: string; scope?: ConversationScope }): void {
   const tagged: TaggedChunk = { ...chunk, ...(sessionId ? { sessionId } : {}), ...tags }
   const msg = JSON.stringify(makeNotification('bond.chunk', tagged))
-  const recipients = new Set<WebSocket>(globalSubscribers)
-  const subs = sessionId ? sessionSubscribers.get(sessionId) : undefined
-  if (subs) {
-    for (const ws of subs) recipients.add(ws)
+
+  const recipients = new Set<WebSocket>()
+  if (tags?.scope?.type === 'thread') {
+    // Never falls through to globalSubscribers — a thread chunk reaching a
+    // client that only asked for main is exactly the leak this guards against.
+    const subs = threadSubscribers.get(tags.scope.threadId)
+    if (subs) for (const ws of subs) recipients.add(ws)
+  } else {
+    for (const ws of globalSubscribers) recipients.add(ws)
+    const subs = sessionId ? sessionSubscribers.get(sessionId) : undefined
+    if (subs) for (const ws of subs) recipients.add(ws)
   }
+
   for (const ws of recipients) {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(msg)
@@ -452,9 +486,11 @@ const handlers: RpcHandlers = {
     const session = sessionId ? getSession(sessionId) : null
     if (sessionId && !session) throw new RpcError(RPC_INVALID_PARAMS, 'session not found')
 
-    subscribeTo(sessionId, ws)
+    const scope = parseConversationScope(input.scope)
+    subscribeTo(sessionId, ws, scope)
 
     return await startBondTurn({
+      scope,
       text,
       sessionId,
       images,
@@ -468,7 +504,8 @@ const handlers: RpcHandlers = {
   },
 
   'bond.cancel': async (params) => {
-    await cancelActiveTurn(getStringParam(raw(params), 'sessionId'))
+    const scope = parseConversationScope(getParam(raw(params), 'scope'))
+    await cancelActiveTurn(scope)
     return { ok: true }
   },
 
@@ -478,10 +515,12 @@ const handlers: RpcHandlers = {
     const approved = getBoolParam(p, 'approved')
     if (!requestId) throw new RpcError(RPC_INVALID_PARAMS, 'requestId is required')
     if (approved === undefined) throw new RpcError(RPC_INVALID_PARAMS, 'approved is required')
+    // Looked up BEFORE resolving — the pending entry (and its turnId) is gone once resolved.
+    const turnId = peekApprovalTurnId(requestId)
     resolveApproval(requestId, approved)
     // Let every other live viewer flip its pending approval prompt —
     // otherwise a second client shows a stale prompt until query_end.
-    broadcastChunk(undefined, { kind: 'approval_resolved', requestId, approved })
+    broadcastChunk(undefined, { kind: 'approval_resolved', requestId, approved }, turnId ? { turnId, scope: threadIdToScope(getTurnThreadId(turnId)) } : undefined)
     return { ok: true }
   },
 
@@ -495,11 +534,12 @@ const handlers: RpcHandlers = {
     } catch (error) {
       throw new RpcError(RPC_INVALID_PARAMS, error instanceof Error ? error.message : 'invalid answer')
     }
+    const turnId = peekQuestionTurnId(questionId)
     // An unknown questionId still resolves and broadcasts — same forgiving
     // shape as approvals; the broadcast is what un-sticks a stale card on
     // another device that already saw this question answered.
     resolveQuestion(questionId, answer)
-    broadcastChunk(undefined, { kind: 'question_resolved', questionId, answer })
+    broadcastChunk(undefined, { kind: 'question_resolved', questionId, answer }, turnId ? { turnId, scope: threadIdToScope(getTurnThreadId(turnId)) } : undefined)
     return { ok: true }
   },
 
@@ -527,13 +567,15 @@ const handlers: RpcHandlers = {
     // Pending approvals need no replay here: clients reconstruct them
     // from persisted activity rows, and a daemon restart voids the
     // resolver anyway — replaying such a prompt would strand the user.
-    subscribeTo(getStringParam(raw(params), 'sessionId'), ws)
+    const p = raw(params)
+    subscribeTo(getStringParam(p, 'sessionId'), ws, parseConversationScope(getParam(p, 'scope')))
     return { ok: true }
   },
 
   'bond.unsubscribe': (params, { ws }) => {
-    const sessionId = getStringParam(raw(params), 'sessionId')
-    unsubscribeFrom(sessionId, ws)
+    const p = raw(params)
+    const sessionId = getStringParam(p, 'sessionId')
+    unsubscribeFrom(sessionId, ws, parseConversationScope(getParam(p, 'scope')))
     return { ok: true }
   },
 

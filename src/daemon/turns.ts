@@ -3,6 +3,7 @@ import type { AttachedImage, EditMode } from '../shared/session'
 import type { BondSendResult } from '../shared/rpc-schema'
 import type { BondStreamChunk } from '../shared/stream'
 import { parseEditMode } from '../shared/session'
+import { MAIN_SCOPE, scopeToThreadId, type ConversationScope } from '../shared/threads'
 import { runBondQuery, buildAgentContextEnvelope } from './agent'
 import { clearTurnApprovals } from './approvals'
 import { clearTurnQuestions } from './questions'
@@ -14,16 +15,19 @@ import { getSetting } from './settings'
 import { completeTurn, getMaxMessageSeq, insertTurnStart, startTurn, upsertMessages } from './transcript'
 
 /**
- * The turn runner owns the active Bond turn: one query at a time, "a new send
- * aborts the running turn", check-abort-start made atomic by a promise-chain
- * mutex. Broadcasting and Sense stay in server.ts and reach the runner via
- * the transport (same seam style as web/broker.ts's render transport).
+ * The turn runner owns every scope's active Bond turn — main and each
+ * thread run their own query concurrently (plans/chat-threads.md "Turn
+ * scheduling"). Within one scope it's still "a new send aborts the running
+ * turn, check-abort-start made atomic by a promise-chain mutex"; starting or
+ * cancelling one scope never touches another. Broadcasting and Sense stay in
+ * server.ts and reach the runner via the transport (same seam style as
+ * web/broker.ts's render transport).
  */
 export interface TurnTransport {
   broadcastChunk(
     sessionId: string | undefined,
     chunk: BondStreamChunk,
-    tags?: { epochId?: string; turnId?: string; assistantMessageId?: string },
+    tags?: { epochId?: string; turnId?: string; assistantMessageId?: string; scope?: ConversationScope },
   ): void
   imagesChanged(): void
   enableSense?: () => { enabled: boolean; state?: string }
@@ -38,12 +42,14 @@ export function setTurnTransport(t: TurnTransport | null): void {
 function broadcast(
   sessionId: string | undefined,
   chunk: BondStreamChunk,
-  tags?: { epochId?: string; turnId?: string; assistantMessageId?: string },
+  tags?: { epochId?: string; turnId?: string; assistantMessageId?: string; scope?: ConversationScope },
 ): void {
   transport?.broadcastChunk(sessionId, chunk, tags)
 }
 
 export interface StartTurnInput {
+  /** Omitted means the main conversation. */
+  scope?: ConversationScope
   /** Already-trimmed user text. */
   text: string
   sessionId?: string
@@ -59,7 +65,15 @@ export interface StartTurnInput {
 
 export type StartTurnResult = BondSendResult
 
+/** One in-flight turn per scope; scopes run fully concurrently — no global gate. */
+type ScopeKey = 'main' | `thread:${string}`
+
+function scopeKey(scope: ConversationScope): ScopeKey {
+  return scope.type === 'main' ? 'main' : `thread:${scope.threadId}`
+}
+
 type ActiveTurn = {
+  scope: ConversationScope
   sessionId?: string
   turnId: string
   epochId?: string
@@ -68,48 +82,58 @@ type ActiveTurn = {
   settled: Promise<void>
 }
 
-let active: ActiveTurn | null = null
-let sendChain: Promise<void> = Promise.resolve()
+const activeByScope = new Map<ScopeKey, ActiveTurn>()
+/** Same-scope queue only — a second thread's send is never blocked by main's queue or vice versa. */
+const sendChainByScope = new Map<ScopeKey, Promise<void>>()
 
 /**
- * Serialize the whole check-abort-start sequence. Without this, two clients
- * sending near-simultaneously (desktop + phone) both passed the active-query
- * check across its await points and ran two concurrent Pi queries against
- * the same epoch session file — one of them uncancellable.
+ * Serialize the check-abort-start sequence, but only against other sends in
+ * the SAME scope. Without this, two clients sending near-simultaneously into
+ * the same scope (desktop + phone) both passed the active-query check across
+ * its await points and ran two concurrent Pi queries against the same epoch
+ * session file — one of them uncancellable. A different scope's send is
+ * never queued behind this chain at all.
  */
-function enqueue<T>(task: () => Promise<T>): Promise<T> {
-  const result = sendChain.then(task, task)
-  sendChain = result.then(() => undefined, () => undefined)
+function enqueueForScope<T>(key: ScopeKey, task: () => Promise<T>): Promise<T> {
+  const prevChain = sendChainByScope.get(key) ?? Promise.resolve()
+  const result = prevChain.then(task, task)
+  sendChainByScope.set(key, result.then(() => undefined, () => undefined))
   return result
 }
 
-export function getActiveTurn(): { turnId: string; epochId?: string; sessionId?: string } | null {
-  return active ? { turnId: active.turnId, epochId: active.epochId, sessionId: active.sessionId } : null
+export function getActiveTurn(scope: ConversationScope = MAIN_SCOPE): { turnId: string; epochId?: string; sessionId?: string } | null {
+  const entry = activeByScope.get(scopeKey(scope))
+  return entry ? { turnId: entry.turnId, epochId: entry.epochId, sessionId: entry.sessionId } : null
 }
 
 /** Resolves when the turn has STARTED — the query keeps streaming in the background. */
 export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
-  return enqueue(async () => {
-    const prev = active
+  const scope = input.scope ?? MAIN_SCOPE
+  const key = scopeKey(scope)
+  const threadId = scopeToThreadId(scope)
+
+  return enqueueForScope(key, async () => {
+    const prev = activeByScope.get(key)
     if (prev) {
       prev.ac.abort()
       clearTurnApprovals(prev.turnId)
       clearTurnQuestions(prev.turnId)
       await prev.settled.catch(() => {})
-      if (active === prev) active = null
+      if (activeByScope.get(key) === prev) activeByScope.delete(key)
     }
 
     const turnId = input.turnId ?? randomUUID()
     const ac = new AbortController()
     let settle!: () => void
     const entry: ActiveTurn = {
+      scope,
       sessionId: input.sessionId,
       turnId,
       ac,
       settled: new Promise<void>((resolve) => { settle = resolve }),
     }
     // Claim before any slow await so cancel/settle can reach a starting turn.
-    active = entry
+    activeByScope.set(key, entry)
 
     try {
       const sessionId = input.sessionId
@@ -123,12 +147,17 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       }
 
       const cleanText = input.text.replace(/@\[([^\]]+)\]\(project:[a-f0-9-]+\)/g, '@$1')
+      // Automatic memory observation is main-only (plans/chat-threads.md rule
+      // 11) — a thread epoch's markers are seeded to never advance anyway
+      // (epochs.ts NEVER_OBSERVED_MARKER), but omitting the hooks here means
+      // a thread turn never even attempts the work.
       const epochResult = await ensureActiveEpoch({
-        finalObserver: finalObserverHook,
-        memoryFlush: memoryFlushHook,
+        threadId,
+        finalObserver: threadId ? undefined : finalObserverHook,
+        memoryFlush: threadId ? undefined : memoryFlushHook,
         // Rollover observer/reflector work runs on the memory queue instead
         // of blocking this send behind LLM round-trips.
-        deferHookWork: (task) => enqueueMemoryTask(task, console),
+        deferHookWork: threadId ? undefined : (task) => enqueueMemoryTask(task, console),
         logger: console,
       })
       const epoch = epochResult.epoch
@@ -136,10 +165,11 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       const userMessageId = input.userMessageId ?? randomUUID()
       const assistantMessageId = input.assistantMessageId ?? randomUUID()
       const activityMessageId = input.activityMessageId ?? randomUUID()
-      const tags = { epochId: epoch.id, turnId, assistantMessageId }
+      const tags = { epochId: epoch.id, turnId, assistantMessageId, scope }
 
       insertTurnStart({
         epochId: epoch.id,
+        threadId,
         turnId,
         userMessageId,
         assistantMessageId,
@@ -206,7 +236,7 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
           })
           const succeeded = result.succeeded
           if (assistantText.trim()) {
-            upsertMessages([{ id: assistantMessageId, epochId: epoch.id, turnId, role: 'bond', text: assistantText }])
+            upsertMessages([{ id: assistantMessageId, epochId: epoch.id, turnId, threadId, role: 'bond', text: assistantText }])
           }
           completeTurn({
             turnId,
@@ -214,7 +244,8 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
             contextTokens: result.contextTokens,
             contextWindow: result.contextWindow,
           })
-          if (succeeded && !ac.signal.aborted) {
+          if (succeeded && !ac.signal.aborted && !threadId) {
+            // Memory observation/reflection scheduling is main-only.
             const toSeq = getMaxMessageSeq()
             scheduleEpochObservation({
               epochId: epoch.id,
@@ -238,7 +269,7 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       broadcast(sessionId, { kind: 'query_start' }, tags)
 
       void queryPromise.then((succeeded) => {
-        if (active === entry) active = null
+        if (activeByScope.get(key) === entry) activeByScope.delete(key)
         clearTurnApprovals(turnId)
         clearTurnQuestions(turnId)
         broadcast(sessionId, { kind: 'query_end', succeeded }, tags)
@@ -248,7 +279,7 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       return { ok: true, queued: false, imageIds, turnId, epochId: epoch.id }
     } catch (error) {
       // Startup failed before the query launched (epoch/insert threw).
-      if (active === entry) active = null
+      if (activeByScope.get(key) === entry) activeByScope.delete(key)
       clearTurnApprovals(turnId)
       clearTurnQuestions(turnId)
       settle()
@@ -257,44 +288,53 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
   })
 }
 
-/** bond.cancel semantics: abort the active turn (optionally scoped to a legacy session id). */
-export async function cancelActiveTurn(sessionId?: string): Promise<void> {
-  const entry = active
+/** bond.cancel semantics: abort the active turn in the given scope (main by default). */
+export async function cancelActiveTurn(scope: ConversationScope = MAIN_SCOPE): Promise<void> {
+  const key = scopeKey(scope)
+  const entry = activeByScope.get(key)
   if (!entry) return
-  if (sessionId && entry.sessionId !== sessionId) return
   entry.ac.abort()
   clearTurnApprovals(entry.turnId)
   clearTurnQuestions(entry.turnId)
   await entry.settled.catch(() => {})
-  if (active === entry) active = null
+  if (activeByScope.get(key) === entry) activeByScope.delete(key)
 }
 
 /**
- * Quiesce for a data-dir swap: abort the running turn AND drain anything a
- * client managed to queue behind it, so no query touches the swapped store.
+ * Quiesce for a data-dir swap: abort every scope's running turn AND drain
+ * anything a client managed to queue behind any of them, so no query touches
+ * the swapped store. Loops until a full pass finds nothing active and no
+ * scope's queue (including a brand-new scope that raced in) moved.
  */
 export async function settleTurns(): Promise<void> {
   for (;;) {
-    const entry = active
-    if (entry) {
+    const activeEntries = [...activeByScope.entries()]
+    const chainEntries = [...sendChainByScope.entries()]
+    if (activeEntries.length === 0 && chainEntries.length === 0) return
+
+    for (const [key, entry] of activeEntries) {
       entry.ac.abort()
       clearTurnApprovals(entry.turnId)
       clearTurnQuestions(entry.turnId)
       await entry.settled.catch(() => {})
-      if (active === entry) active = null
+      if (activeByScope.get(key) === entry) activeByScope.delete(key)
     }
-    const chainAtStart = sendChain
-    await chainAtStart.catch(() => {})
-    if (!active && sendChain === chainAtStart) return
+    for (const [, chain] of chainEntries) {
+      await chain.catch(() => {})
+    }
+
+    const nothingNew = sendChainByScope.size === chainEntries.length
+      && chainEntries.every(([key, chain]) => sendChainByScope.get(key) === chain)
+    if (activeByScope.size === 0 && nothingNew) return
   }
 }
 
-/** Synchronous best-effort abort for server close — no draining. */
+/** Synchronous best-effort abort for server close — no draining, every scope. */
 export function abortActiveTurnForShutdown(): void {
-  if (active) {
-    active.ac.abort()
-    clearTurnApprovals(active.turnId)
-    clearTurnQuestions(active.turnId)
-    active = null
+  for (const entry of activeByScope.values()) {
+    entry.ac.abort()
+    clearTurnApprovals(entry.turnId)
+    clearTurnQuestions(entry.turnId)
   }
+  activeByScope.clear()
 }

@@ -8,6 +8,7 @@ import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
 import type { WebRenderResult } from './web'
 import type { QuestionAnswer } from './questions'
 import type { ModelId } from './models'
+import type { ConversationScope } from './threads'
 import type {
   BondSendResult,
   CollectionUpdates,
@@ -219,8 +220,8 @@ export class BondClient {
     return this.call('bond.send', params)
   }
 
-  async cancel(sessionId?: string): Promise<RpcResult<'bond.cancel'>> {
-    return this.call('bond.cancel', sessionId ? { sessionId } : undefined)
+  async cancel(sessionId?: string, scope?: ConversationScope): Promise<RpcResult<'bond.cancel'>> {
+    return this.call('bond.cancel', (sessionId || scope) ? { sessionId, scope } : undefined)
   }
 
   async respondToApproval(requestId: string, approved: boolean): Promise<RpcResult<'bond.approvalResponse'>> {
@@ -237,12 +238,12 @@ export class BondClient {
 
   // --- Subscriptions ---
 
-  async subscribe(sessionId?: string): Promise<RpcResult<'bond.subscribe'>> {
-    return this.call('bond.subscribe', sessionId ? { sessionId } : undefined)
+  async subscribe(sessionId?: string, scope?: ConversationScope): Promise<RpcResult<'bond.subscribe'>> {
+    return this.call('bond.subscribe', (sessionId || scope) ? { sessionId, scope } : undefined)
   }
 
-  async unsubscribe(sessionId?: string): Promise<RpcResult<'bond.unsubscribe'>> {
-    return this.call('bond.unsubscribe', sessionId ? { sessionId } : undefined)
+  async unsubscribe(sessionId?: string, scope?: ConversationScope): Promise<RpcResult<'bond.unsubscribe'>> {
+    return this.call('bond.unsubscribe', (sessionId || scope) ? { sessionId, scope } : undefined)
   }
 
   // --- Model ---

@@ -484,6 +484,13 @@ export function startTurn(turnId: string, epochId: string): void {
   })()
 }
 
+/** null covers both "main scope" and "unknown turn" — safe for broadcast tagging, where an unknown turn defaults to main. */
+export function getTurnThreadId(turnId: string, db: Database.Database = getDb()): string | null {
+  ensureTranscriptSchema(db)
+  const row = db.prepare('SELECT thread_id FROM turns WHERE id = ?').get(turnId) as { thread_id: string | null } | undefined
+  return row?.thread_id ?? null
+}
+
 const LIVE_ACTIVITY_STATUSES = ['working', 'responding', 'awaiting_approval', 'awaiting_question']
 
 /**
