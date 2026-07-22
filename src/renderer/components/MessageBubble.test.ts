@@ -3,6 +3,8 @@ import { nextTick } from 'vue'
 import { shallowMount } from '@vue/test-utils'
 import MessageBubble from './MessageBubble.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
+import ArtifactFrame from './ArtifactFrame.vue'
+import EmbedRenderer from './EmbedRenderer.vue'
 import { resetIssueReferencesForTest } from '../composables/useIssueReferences'
 import { resetThreadsForTest } from '../composables/useThreads'
 
@@ -213,6 +215,29 @@ describe('MessageBubble thread footer', () => {
     const action = wrapper.find('.thread-footer-action')
     expect(action.text()).toBe('Thread · 3')
     expect(action.attributes('aria-label')).toBe('Open thread with 3 replies')
+  })
+
+  // plans/chat-threads.md Renderer behavior: "Plain markdown, artifacts,
+  // embeds, and generated content place the action correctly" — below the
+  // entire response, not per-segment.
+  it('places the footer below the whole response even when it contains artifacts and embeds', async () => {
+    const text = 'Some intro text\n\n<bond-artifact title="A">content</bond-artifact>\n\n<bond-embed type="link" url="https://example.com"></bond-embed>'
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: 'b-rich', role: 'bond' as const, text, streaming: false } },
+    })
+    await Promise.resolve()
+    await nextTick()
+
+    // The rich content actually parsed into segments (not a plain-markdown fallback)...
+    expect(wrapper.findComponent(ArtifactFrame).exists()).toBe(true)
+    expect(wrapper.findComponent(EmbedRenderer).exists()).toBe(true)
+    // ...and the footer is a sibling of the whole segments block, not nested inside it.
+    const bubble = wrapper.find('.message-bubble--bond')
+    const footer = bubble.find('.thread-footer-action')
+    expect(footer.exists()).toBe(true)
+    const children = Array.from(bubble.element.children)
+    const footerWrapperIndex = children.findIndex(c => c.classList.contains('message-thread-footer'))
+    expect(footerWrapperIndex).toBe(children.length - 1) // last child — below everything else
   })
 
   it('never shows the footer on the onboarding intro message', async () => {
