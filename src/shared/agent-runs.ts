@@ -81,6 +81,39 @@ export interface AgentRunQuestion {
   answeredAt: string | null
 }
 
+export type AgentRunPublishStatus = 'pending' | 'publishing' | 'published' | 'failed'
+export type AgentRunQReviewStatus = 'not-required' | 'pending' | 'posted' | 'failed'
+
+export interface AgentRunPublication {
+  runId: string
+  repository: 'shaunandrews/bond'
+  remote: 'origin'
+  baseRef: string
+  headRef: string
+  idempotencyKey: string
+  status: AgentRunPublishStatus
+  prNumber: number | null
+  prNodeId: string | null
+  prUrl: string | null
+  qReviewRequired: boolean
+  qReviewStatus: AgentRunQReviewStatus
+  qCommentId: number | null
+  qCommentUrl: string | null
+  errorClass: string | null
+  errorMessage: string | null
+  createdAt: string
+  updatedAt: string
+  publishedAt: string | null
+}
+
+export interface GitHubHandoffConfig {
+  enabled: boolean
+  repository: 'shaunandrews/bond'
+  remote: 'origin'
+  credentialRef: string
+  credentialConfigured: boolean
+}
+
 export interface AgentRun {
   id: string
   idempotencyKey: string
@@ -139,4 +172,5 @@ export interface AgentRunDetail {
   run: AgentRun
   events: AgentRunEvent[]
   questions: AgentRunQuestion[]
+  publication: AgentRunPublication | null
 }

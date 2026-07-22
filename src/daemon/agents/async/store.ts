@@ -6,6 +6,7 @@ import {
   type AgentRun,
   type AgentRunEvent,
   type AgentRunQuestion,
+  type AgentRunPublication,
   type AgentRunResourceCaps,
   type AgentRunState,
   type AgentRunWorkspace,
@@ -69,6 +70,28 @@ type QuestionRow = {
   response: string | null
   created_at: string
   answered_at: string | null
+}
+
+type PublicationRow = {
+  run_id: string
+  repository: 'shaunandrews/bond'
+  remote: 'origin'
+  base_ref: string
+  head_ref: string
+  idempotency_key: string
+  status: AgentRunPublication['status']
+  pr_number: number | null
+  pr_node_id: string | null
+  pr_url: string | null
+  q_review_required: number
+  q_review_status: AgentRunPublication['qReviewStatus']
+  q_comment_id: number | null
+  q_comment_url: string | null
+  error_class: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+  published_at: string | null
 }
 
 export interface CreateAgentRunRecord {
@@ -179,6 +202,30 @@ function rowToQuestion(row: QuestionRow): AgentRunQuestion {
     response: row.response,
     createdAt: row.created_at,
     answeredAt: row.answered_at,
+  }
+}
+
+function rowToPublication(row: PublicationRow): AgentRunPublication {
+  return {
+    runId: row.run_id,
+    repository: row.repository,
+    remote: row.remote,
+    baseRef: row.base_ref,
+    headRef: row.head_ref,
+    idempotencyKey: row.idempotency_key,
+    status: row.status,
+    prNumber: row.pr_number,
+    prNodeId: row.pr_node_id,
+    prUrl: row.pr_url,
+    qReviewRequired: row.q_review_required === 1,
+    qReviewStatus: row.q_review_status,
+    qCommentId: row.q_comment_id,
+    qCommentUrl: row.q_comment_url,
+    errorClass: row.error_class,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    publishedAt: row.published_at,
   }
 }
 
@@ -325,6 +372,114 @@ export function listAgentRunQuestions(runId: string, dbArg?: Database.Database):
 export function listPendingAgentRunQuestions(dbArg?: Database.Database): AgentRunQuestion[] {
   const db = dbFor(dbArg)
   return (db.prepare("SELECT * FROM agent_run_questions WHERE status = 'pending' ORDER BY created_at ASC").all() as QuestionRow[]).map(rowToQuestion)
+}
+
+export function getAgentRunPublication(runId: string, dbArg?: Database.Database): AgentRunPublication | null {
+  const db = dbFor(dbArg)
+  const row = db.prepare('SELECT * FROM agent_run_publications WHERE run_id = ?').get(runId) as PublicationRow | undefined
+  return row ? rowToPublication(row) : null
+}
+
+export function createAgentRunPublication(input: {
+  runId: string
+  baseRef: string
+  headRef: string
+  idempotencyKey: string
+  qReviewRequired: boolean
+}, now = nowIso(), dbArg?: Database.Database): AgentRunPublication {
+  const db = dbFor(dbArg)
+  db.transaction(() => {
+    const run = getAgentRun(input.runId, db)
+    if (!run) throw new Error(`Unknown agent run "${input.runId}".`)
+    const existing = getAgentRunPublication(input.runId, db)
+    if (existing) {
+      if (existing.baseRef !== input.baseRef || existing.headRef !== input.headRef || existing.idempotencyKey !== input.idempotencyKey) {
+        throw new Error('The durable publication contract for this run is immutable.')
+      }
+      return
+    }
+    db.prepare(`
+      INSERT INTO agent_run_publications (
+        run_id, repository, remote, base_ref, head_ref, idempotency_key,
+        status, q_review_required, q_review_status, created_at, updated_at
+      ) VALUES (?, 'shaunandrews/bond', 'origin', ?, ?, ?, 'pending', ?, ?, ?, ?)
+    `).run(
+      input.runId, input.baseRef, input.headRef, input.idempotencyKey,
+      input.qReviewRequired ? 1 : 0, input.qReviewRequired ? 'pending' : 'not-required', now, now,
+    )
+    insertEvent(db, input.runId, 'github_publish_queued', run.status, run.status, {
+      repository: 'shaunandrews/bond', remote: 'origin', baseRef: input.baseRef,
+      headRef: input.headRef, qReviewRequired: input.qReviewRequired,
+    }, now)
+  })()
+  return getAgentRunPublication(input.runId, db)!
+}
+
+export function markAgentRunPublishing(runId: string, now = nowIso(), dbArg?: Database.Database): AgentRunPublication {
+  const db = dbFor(dbArg)
+  db.transaction(() => {
+    const run = getAgentRun(runId, db)
+    const publication = getAgentRunPublication(runId, db)
+    if (!run || !publication) throw new Error(`Unknown agent run publication "${runId}".`)
+    if (publication.status === 'published') return
+    insertEvent(db, runId, 'github_publish_started', run.status, run.status, {}, now)
+    db.prepare("UPDATE agent_run_publications SET status = 'publishing', error_class = NULL, error_message = NULL, updated_at = ? WHERE run_id = ?").run(now, runId)
+  })()
+  return getAgentRunPublication(runId, db)!
+}
+
+export function markAgentRunPublished(runId: string, pr: { number: number; nodeId: string; url: string }, now = nowIso(), dbArg?: Database.Database): AgentRunPublication {
+  const db = dbFor(dbArg)
+  db.transaction(() => {
+    const run = getAgentRun(runId, db)
+    const publication = getAgentRunPublication(runId, db)
+    if (!run || !publication) throw new Error(`Unknown agent run publication "${runId}".`)
+    if (publication.status === 'published') return
+    insertEvent(db, runId, 'github_draft_published', run.status, run.status, { prNumber: pr.number, prUrl: pr.url }, now)
+    db.prepare(`UPDATE agent_run_publications SET
+      status = 'published', pr_number = ?, pr_node_id = ?, pr_url = ?,
+      error_class = NULL, error_message = NULL, updated_at = ?, published_at = ?
+      WHERE run_id = ?
+    `).run(pr.number, pr.nodeId, pr.url, now, now, runId)
+  })()
+  return getAgentRunPublication(runId, db)!
+}
+
+export function markAgentRunPublishFailed(runId: string, errorClass: string, errorMessage: string, now = nowIso(), dbArg?: Database.Database): AgentRunPublication {
+  const db = dbFor(dbArg)
+  db.transaction(() => {
+    const run = getAgentRun(runId, db)
+    const publication = getAgentRunPublication(runId, db)
+    if (!run || !publication) throw new Error(`Unknown agent run publication "${runId}".`)
+    insertEvent(db, runId, 'github_publish_failed', run.status, run.status, { errorClass, errorMessage }, now)
+    db.prepare("UPDATE agent_run_publications SET status = 'failed', error_class = ?, error_message = ?, updated_at = ? WHERE run_id = ?")
+      .run(errorClass, errorMessage, now, runId)
+  })()
+  return getAgentRunPublication(runId, db)!
+}
+
+export function markAgentRunQReview(runId: string, input: {
+  status: 'posted' | 'failed'
+  commentId?: number
+  commentUrl?: string
+  errorMessage?: string
+}, now = nowIso(), dbArg?: Database.Database): AgentRunPublication {
+  const db = dbFor(dbArg)
+  db.transaction(() => {
+    const run = getAgentRun(runId, db)
+    const publication = getAgentRunPublication(runId, db)
+    if (!run || !publication) throw new Error(`Unknown agent run publication "${runId}".`)
+    const type = input.status === 'posted' ? 'q_review_posted' : 'q_review_failed'
+    insertEvent(db, runId, type, run.status, run.status, {
+      commentUrl: input.commentUrl ?? null, errorMessage: input.errorMessage ?? null,
+    }, now)
+    db.prepare(`UPDATE agent_run_publications SET
+      q_review_status = ?, q_comment_id = COALESCE(?, q_comment_id),
+      q_comment_url = COALESCE(?, q_comment_url), updated_at = ?
+      WHERE run_id = ?
+    `).run(input.status, input.commentId ?? null, input.commentUrl ?? null, now, runId)
+  })()
+  return getAgentRunPublication(runId, db)!
 }
 
 export function approvedAgentRunCommandGrants(runId: string, dbArg?: Database.Database): Set<string> {

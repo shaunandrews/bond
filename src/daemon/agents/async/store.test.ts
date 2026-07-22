@@ -4,9 +4,15 @@ import { DEFAULT_AGENT_SETTINGS } from '../../../shared/agents'
 import { ensureAgentRunSchema } from './schema'
 import {
   createAgentRunRecord,
+  createAgentRunPublication,
   getAgentRun,
+  getAgentRunPublication,
   listAgentRunEvents,
   transitionAgentRun,
+  markAgentRunPublished,
+  markAgentRunPublishing,
+  markAgentRunPublishFailed,
+  markAgentRunQReview,
 } from './store'
 
 function input(overrides: Record<string, unknown> = {}) {
@@ -76,6 +82,36 @@ describe('agent run store', () => {
     createAgentRunRecord(input(), db)
     expect(() => db.prepare("UPDATE agent_run_events SET type = 'rewritten'").run()).toThrow('append-only')
     expect(() => db.prepare('DELETE FROM agent_run_events').run()).toThrow('append-only')
+    db.close()
+  })
+
+  it('persists one idempotent publication contract and its PR/Q outcomes', () => {
+    const db = memoryDb()
+    createAgentRunRecord(input(), db)
+    const contract = { runId: 'run-1', baseRef: 'main', headRef: 'bond-agent/run-1', idempotencyKey: 'publish-run-1', qReviewRequired: true }
+    expect(createAgentRunPublication(contract, undefined, db)).toMatchObject({ status: 'pending', qReviewStatus: 'pending' })
+    expect(createAgentRunPublication(contract, undefined, db)).toMatchObject({ status: 'pending' })
+    expect(() => createAgentRunPublication({ ...contract, headRef: 'other' }, undefined, db)).toThrow('immutable')
+
+    markAgentRunPublishing('run-1', undefined, db)
+    markAgentRunPublished('run-1', { number: 42, nodeId: 'PR_node', url: 'https://github.com/shaunandrews/bond/pull/42' }, undefined, db)
+    markAgentRunQReview('run-1', { status: 'posted', commentId: 9, commentUrl: 'https://github.com/shaunandrews/bond/pull/42#issuecomment-9' }, undefined, db)
+    expect(getAgentRunPublication('run-1', db)).toMatchObject({
+      status: 'published', prNumber: 42, qReviewStatus: 'posted', qCommentId: 9,
+    })
+    expect(listAgentRunEvents('run-1', db).map(event => event.type)).toEqual(expect.arrayContaining([
+      'github_publish_queued', 'github_publish_started', 'github_draft_published', 'q_review_posted',
+    ]))
+    db.close()
+  })
+
+  it('persists actionable publish failures', () => {
+    const db = memoryDb()
+    createAgentRunRecord(input(), db)
+    createAgentRunPublication({ runId: 'run-1', baseRef: 'main', headRef: 'branch', idempotencyKey: 'p1', qReviewRequired: false }, undefined, db)
+    expect(markAgentRunPublishFailed('run-1', 'credential', 'Configure the scoped credential.', undefined, db)).toMatchObject({
+      status: 'failed', errorClass: 'credential', errorMessage: 'Configure the scoped credential.',
+    })
     db.close()
   })
 })

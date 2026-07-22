@@ -15,6 +15,7 @@ import {
   getAgentRunByIdempotencyKey,
   listAgentRunEvents,
   listAgentRunQuestions,
+  getAgentRunPublication,
   listAgentRuns,
   updateAgentRunWorkspaceState,
 } from './store'
@@ -232,7 +233,12 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
 
 export function checkAgentRun(runId: string): AgentRunDetail | null {
   const run = getAgentRun(runId)
-  return run ? { run, events: listAgentRunEvents(run.id), questions: listAgentRunQuestions(run.id) } : null
+  return run ? {
+    run,
+    events: listAgentRunEvents(run.id),
+    questions: listAgentRunQuestions(run.id),
+    publication: getAgentRunPublication(run.id),
+  } : null
 }
 
 export async function answerAgentQuestion(

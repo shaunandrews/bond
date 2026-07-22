@@ -71,6 +71,28 @@ export function ensureAgentRunSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_agent_run_questions_run_status
       ON agent_run_questions(run_id, status, created_at);
 
+    CREATE TABLE IF NOT EXISTS agent_run_publications (
+      run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+      repository TEXT NOT NULL CHECK(repository = 'shaunandrews/bond'),
+      remote TEXT NOT NULL CHECK(remote = 'origin'),
+      base_ref TEXT NOT NULL,
+      head_ref TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL CHECK(status IN ('pending','publishing','published','failed')),
+      pr_number INTEGER,
+      pr_node_id TEXT,
+      pr_url TEXT,
+      q_review_required INTEGER NOT NULL DEFAULT 0 CHECK(q_review_required IN (0,1)),
+      q_review_status TEXT NOT NULL DEFAULT 'not-required' CHECK(q_review_status IN ('not-required','pending','posted','failed')),
+      q_comment_id INTEGER,
+      q_comment_url TEXT,
+      error_class TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      published_at TEXT
+    );
+
     CREATE TRIGGER IF NOT EXISTS agent_run_events_no_update
     BEFORE UPDATE ON agent_run_events
     BEGIN
