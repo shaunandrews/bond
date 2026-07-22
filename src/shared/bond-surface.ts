@@ -274,6 +274,21 @@ export interface ElectronBondSurface {
 
   // Permissions
   hasScreenRecordingPermission(): Promise<boolean>
+
+  /**
+   * Grow the main window's content area so it fits `preferredWidth` (e.g. the
+   * sum of every visible panel's preferred width plus handles), clamped to
+   * the current display's work area. Never shrinks — only called when
+   * opening a panel needs more room than the window currently has. Also
+   * raises the window's native minimum width to `minimumWidth` so a manual
+   * resize can't crush a visible panel below its hard floor. A no-op in
+   * fullscreen (native bounds never change there) and on the web client
+   * (which reports its real viewport width and never resizes natively).
+   */
+  ensureContentWidth(options: { preferredWidth: number; minimumWidth: number }): Promise<{
+    width: number
+    reachedPreferred: boolean
+  }>
 }
 
 export type BondSurface = DaemonBondSurface & ElectronBondSurface

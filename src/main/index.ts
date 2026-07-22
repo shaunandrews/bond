@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } from 'electron'
 import { join, resolve } from 'node:path'
 import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync, appendFileSync, watch, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
@@ -14,6 +14,7 @@ import { initTray, destroyTray } from './tray'
 import { markDeskReady, openDesk, registerDeskWindowHost, setDeskHotRects } from './desk'
 import { createDeskWindowHost } from './desk-window'
 import { registerWindow, registerSessionWindow, routeChunk, broadcast } from './window-router'
+import { computeEnsuredContentWidth } from './window-layout'
 import type { TaggedChunk } from '../shared/stream'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -669,6 +670,32 @@ app.whenReady().then(async () => {
   // --- Settings window ---
   ipcMain.handle('window:openSettings', () => {
     createSettingsWindow()
+  })
+
+  // --- Content-width growth (chat threads' middle panel, first) ---
+  ipcMain.handle('window:ensureContentWidth', (event, options: { preferredWidth: number; minimumWidth: number }) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isDestroyed()) return { width: options.minimumWidth, reachedPreferred: false }
+
+    // Native bounds never change in fullscreen — the responsive panel rules
+    // handle it there instead.
+    if (win.isFullScreen()) {
+      const width = win.getContentBounds().width
+      return { width, reachedPreferred: width >= options.preferredWidth }
+    }
+
+    const current = win.getContentBounds()
+    const workArea = screen.getDisplayMatching(win.getBounds()).workArea
+    const { bounds, width, reachedPreferred } = computeEnsuredContentWidth(current, workArea, options)
+
+    // Raised (never lowered here) so a manual resize can't crush a visible
+    // panel below its hard minimum; a caller shrinks it back down by calling
+    // again with a smaller minimumWidth once the panel closes.
+    const [, minHeight] = win.getMinimumSize()
+    win.setMinimumSize(Math.round(options.minimumWidth), minHeight)
+
+    if (bounds) win.setContentBounds(bounds)
+    return { width, reachedPreferred }
   })
 
   // --- Desk ---

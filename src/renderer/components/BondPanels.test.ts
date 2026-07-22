@@ -871,6 +871,59 @@ describe('BondPanelGroup', () => {
     })
   })
 
+  describe('container resize reconciliation', () => {
+    it('reconciles a px panel to its rendered width when the container resizes, and persists the correction', async () => {
+      let observerCallback: (() => void) | null = null
+      const observe = vi.fn()
+      const disconnect = vi.fn()
+      const OriginalRO = global.ResizeObserver
+      function FakeResizeObserver(this: unknown, cb: () => void) {
+        observerCallback = cb
+        return { observe, disconnect, unobserve: vi.fn() }
+      }
+      // @ts-expect-error test double
+      global.ResizeObserver = FakeResizeObserver
+
+      try {
+        const w = mount(
+          defineComponent({
+            components: { BondPanelGroup, BondPanel, BondPanelHandle },
+            template: `
+              <BondPanelGroup direction="horizontal" autoSaveId="resize-reconcile-test">
+                <BondPanel id="main" :defaultSize="80" />
+                <BondPanelHandle id="handle-0" beforePanelId="main" afterPanelId="sidebar" />
+                <BondPanel id="sidebar" unit="px" :defaultSize="320" :minSize="220" :maxSize="99999" />
+              </BondPanelGroup>
+            `,
+          }),
+          { attachTo: document.body },
+        )
+        await nextTick()
+
+        expect(observe).toHaveBeenCalled()
+        expect(observerCallback).not.toBeNull()
+
+        // Simulate CSS having shrunk the pixel panel below its JS-known size
+        // (e.g. the window narrowed) without going through drag/collapse.
+        const sidebarEl = w.find('[data-panel-id="sidebar"]').element as HTMLElement
+        Object.defineProperty(sidebarEl, 'offsetWidth', { configurable: true, value: 260 })
+
+        observerCallback!()
+        await nextTick()
+
+        const sidebarStyle = w.find('[data-panel-id="sidebar"]').attributes('style') ?? ''
+        expect(getFlexBasisPx(sidebarStyle)).toBe(260)
+
+        const stored = JSON.parse(localStorage.getItem('bond:panels:resize-reconcile-test')!)
+        expect(stored.sizes.sidebar).toBe(260)
+
+        w.unmount()
+      } finally {
+        global.ResizeObserver = OriginalRO
+      }
+    })
+  })
+
   describe('group imperative API', () => {
     it('getLayout returns current sizes', async () => {
       const w = mount(

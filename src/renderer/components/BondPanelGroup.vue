@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, provide, computed, watch } from 'vue'
+import { ref, provide, computed, watch, onMounted, onUnmounted } from 'vue'
 import { PANEL_GROUP_KEY, type PanelDirection, type PanelRegistration, type PanelGroupContext, type PanelUnit } from './panelTypes'
 
 const props = withDefaults(defineProps<{
@@ -249,8 +249,8 @@ function getPanelIds(): string[] {
 // --- DOM sync ---
 // When CSS flexbox shrinks px panels below their JS state (due to window resize),
 // sync JS state to the actual rendered sizes so drags/animations start correctly.
-function syncPxStateToDom() {
-  if (!groupEl.value) return
+function syncPxStateToDom(): boolean {
+  if (!groupEl.value) return false
   const isH = props.direction === 'horizontal'
   const newSizes = { ...sizes.value }
   let changed = false
@@ -269,7 +269,31 @@ function syncPxStateToDom() {
   }
 
   if (changed) sizes.value = newSizes
+  return changed
 }
+
+// The container can resize for reasons no drag/collapse triggers — an OS
+// window resize, a sibling panel opening/closing elsewhere in the layout.
+// Reconcile JS state (and what's persisted) to whatever CSS actually
+// rendered, so a later drag starts from truth instead of a stale px number.
+let containerResizeObserver: ResizeObserver | null = null
+
+function handleContainerResize() {
+  if (syncPxStateToDom()) {
+    emit('layoutChanged', { ...sizes.value })
+    saveLayout()
+  }
+}
+
+onMounted(() => {
+  if (typeof ResizeObserver === 'undefined' || !groupEl.value) return
+  containerResizeObserver = new ResizeObserver(handleContainerResize)
+  containerResizeObserver.observe(groupEl.value)
+})
+
+onUnmounted(() => {
+  containerResizeObserver?.disconnect()
+})
 
 // --- Resize logic ---
 function startResize(beforePanelId: string, afterPanelId: string) {
