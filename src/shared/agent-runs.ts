@@ -137,6 +137,9 @@ export interface AgentRun {
   errorClass: string | null
   errorMessage: string | null
   recoveryCount: number
+  attemptCount: number
+  retryCount: number
+  nextRetryAt: string | null
   completionMessageId: string | null
   completionInsertedAt: string | null
   createdAt: string

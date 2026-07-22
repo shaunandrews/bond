@@ -18,6 +18,7 @@ import { thinkingLevelFor } from '../run-agent'
 import { evaluateMathisCommand } from './command-policy'
 import { runArgvCommand, SAFE_COMMAND_PATH } from './command-runner'
 import { assertContainedPath } from './workspace'
+import { AgentResourceLimitError } from './failures'
 
 export const MATHIS_TOOLS = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'run_command']
 const FILE_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'edit', 'write'])
@@ -52,22 +53,22 @@ export class MathisResourceGuard {
 
   recordTool(name: string, input: unknown): void {
     this.steps += 1
-    if (this.steps > this.maxSteps) throw new Error(`Mathis exceeded the ${this.maxSteps}-step resource cap.`)
-    if (name === 'run_command' && ++this.commands > this.maxCommands) throw new Error(`Mathis exceeded the ${this.maxCommands}-command resource cap.`)
+    if (this.steps > this.maxSteps) throw new AgentResourceLimitError(`Mathis exceeded the ${this.maxSteps}-step resource cap.`)
+    if (name === 'run_command' && ++this.commands > this.maxCommands) throw new AgentResourceLimitError(`Mathis exceeded the ${this.maxCommands}-command resource cap.`)
   }
 
   recordResult(name: string, input: unknown, result: unknown): void {
     const fingerprint = `${name}:${JSON.stringify(input)}:${JSON.stringify(result)}`
     const count = (this.fingerprints.get(fingerprint) ?? 0) + 1
     this.fingerprints.set(fingerprint, count)
-    if (count > this.maxRepeats) throw new Error(`Mathis repeated the same ${name} action too many times.`)
+    if (count > this.maxRepeats) throw new AgentResourceLimitError(`Mathis repeated the same ${name} action too many times.`)
   }
 
   recordUsage(tokens: number, costUsd: number): void {
     this.tokens += Math.max(0, tokens)
     this.costUsd += Math.max(0, costUsd)
-    if (this.tokens > this.maxTokens) throw new Error(`Mathis exceeded the ${this.maxTokens}-token resource cap.`)
-    if (this.costUsd > this.maxCostUsd) throw new Error(`Mathis exceeded the $${this.maxCostUsd} resource cap.`)
+    if (this.tokens > this.maxTokens) throw new AgentResourceLimitError(`Mathis exceeded the ${this.maxTokens}-token resource cap.`)
+    if (this.costUsd > this.maxCostUsd) throw new AgentResourceLimitError(`Mathis exceeded the $${this.maxCostUsd} resource cap.`)
   }
 }
 
@@ -183,7 +184,7 @@ export function createMathisExtensionFactory(options: MathisExtensionOptions) {
         }
         assertNpmScriptsUnchanged(options.run, argv)
         const diskCap = options.run.resourceCaps.maxDiskBytes ?? 2 * 1024 * 1024 * 1024
-        if (directoryBytes(worktree, diskCap) > diskCap) throw new Error(`Mathis exceeded the ${diskCap}-byte worktree resource cap.`)
+        if (directoryBytes(worktree, diskCap) > diskCap) throw new AgentResourceLimitError(`Mathis exceeded the ${diskCap}-byte worktree resource cap.`)
         const result = await runArgvCommand(argv, { cwd: worktree, signal: options.signal, caps: options.run.resourceCaps })
         options.onCommandCompleted?.({ argv, rule: decision.rule, exitCode: result.exitCode, signal: result.signal })
         const text = [result.stdout, result.stderr].filter(Boolean).join('\n')

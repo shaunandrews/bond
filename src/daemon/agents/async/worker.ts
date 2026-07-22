@@ -5,12 +5,15 @@ import {
   appendAgentRunEvent,
   listAgentRunEvents,
   listAgentRuns,
+  listInterruptedAgentRuns,
   parkAgentRunForCommand,
   runsReadyToResume,
+  scheduleAgentRunRetry,
   transitionAgentRun,
 } from './store'
 import { executeAgentRun, type AsyncAgentExecutor } from './executor'
 import { CommandApprovalRequired } from './write-runner'
+import { classifyAgentRunFailure } from './failures'
 
 export interface AgentRunWorkerOptions {
   execute?: AsyncAgentExecutor
@@ -20,6 +23,9 @@ export interface AgentRunWorkerOptions {
   onTerminal?: (run: AgentRun) => void | Promise<void>
   onQuestion?: (run: AgentRun, question: AgentRunQuestion) => void
   logger?: Pick<Console, 'error' | 'warn' | 'log'>
+  maxTransientRetries?: number
+  retryDelayMs?: (retryNumber: number) => number
+  now?: () => number
 }
 
 export interface AgentRunWorker {
@@ -45,6 +51,10 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
   let pendingRecoveryIds: string[] = []
   let pendingResumeIds: string[] = []
   let stopping = false
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const maxTransientRetries = options.maxTransientRetries ?? 2
+  const now = options.now ?? Date.now
+  const retryDelayMs = options.retryDelayMs ?? (retryNumber => Math.min(30_000, 1_000 * 2 ** (retryNumber - 1)) + Math.floor(Math.random() * 500))
 
   const emit = (run: AgentRun): void => options.onChanged?.(run)
   const terminal = async (run: AgentRun): Promise<void> => {
@@ -57,6 +67,22 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
       logger.error('[agents/worker] task failed:', error)
     })
     return queue
+  }
+
+  const scheduleRecovery = (run: AgentRun): void => {
+    if (pendingRecoveryIds.includes(run.id) || retryTimers.has(run.id)) return
+    const delay = run.nextRetryAt ? Math.max(0, Date.parse(run.nextRetryAt) - now()) : 0
+    if (delay <= 0) {
+      pendingRecoveryIds.push(run.id)
+      return
+    }
+    const timer = setTimeout(() => {
+      retryTimers.delete(run.id)
+      if (!pendingRecoveryIds.includes(run.id)) pendingRecoveryIds.push(run.id)
+      void enqueue(drainOne)
+    }, delay)
+    timer.unref?.()
+    retryTimers.set(run.id, timer)
   }
 
   function change(runId: string, to: AgentRunState, eventType: string, data: Record<string, unknown> = {}): AgentRun {
@@ -123,20 +149,28 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
       // Graceful daemon shutdown leaves the durable state live. The next boot
       // marks it interrupted and re-enters from the checkpoint.
       if (stopping && controller.signal.aborted) return
-      const message = error instanceof Error ? error.message : String(error)
+      const failure = classifyAgentRunFailure(error)
+      const message = failure.message
+      if (failure.retryable && current.retryCount < maxTransientRetries && ['preparing-workspace', 'running'].includes(current.status)) {
+        const retryNumber = current.retryCount + 1
+        const nextRetryAt = new Date(now() + retryDelayMs(retryNumber)).toISOString()
+        const interrupted = scheduleAgentRunRetry(prepared.id, failure.errorClass, message, nextRetryAt)
+        emit(interrupted)
+        scheduleRecovery(interrupted)
+        return
+      }
       if (recovering && !started && current.status === 'preparing-workspace') {
-        const interrupted = transitionAgentRun(prepared.id, 'interrupted', {
+        await terminal(transitionAgentRun(prepared.id, 'failed', {
           eventType: 'recovery_failed',
           errorClass: 'recovery',
           errorMessage: message,
-        })
-        emit(interrupted)
+        }))
         return
       }
       if (current.status === 'preparing-workspace' || current.status === 'running') {
         await terminal(transitionAgentRun(prepared.id, 'failed', {
           eventType: 'failed',
-          errorClass: 'execution',
+          errorClass: failure.errorClass,
           errorMessage: message,
         }))
       }
@@ -183,7 +217,18 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
     }
     // Existing interrupted rows and the rows just reconciled each receive one
     // recovery attempt this boot. A failed checkpoint recovery stays parked.
-    pendingRecoveryIds = listAgentRuns({ statuses: ['interrupted'], limit: 500 }).map(run => run.id)
+    pendingRecoveryIds = []
+    for (const run of listInterruptedAgentRuns()) {
+      if (run.recoveryCount >= 3) {
+        void terminal(transitionAgentRun(run.id, 'failed', {
+          eventType: 'recovery_exhausted',
+          errorClass: 'recovery',
+          errorMessage: 'The run was interrupted repeatedly and exhausted its recovery budget.',
+        }))
+      } else {
+        scheduleRecovery(run)
+      }
+    }
     pendingResumeIds = runsReadyToResume().map(run => run.id)
   }
 
@@ -209,6 +254,8 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
       active?.controller.abort()
       pendingRecoveryIds = []
       pendingResumeIds = []
+      for (const timer of retryTimers.values()) clearTimeout(timer)
+      retryTimers.clear()
       await queue
     },
 

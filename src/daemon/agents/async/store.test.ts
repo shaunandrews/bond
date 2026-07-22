@@ -45,6 +45,16 @@ function memoryDb(): Database.Database {
 }
 
 describe('agent run store', () => {
+  it('redacts secrets before durable rows and events are written', () => {
+    const db = memoryDb()
+    const secret = 'github_pat_abcdefghijklmnopqrstuvwxyz'
+    const run = createAgentRunRecord(input({ brief: `Use ${secret}` }), db).run
+    transitionAgentRun(run.id, 'preparing-workspace', { eventType: 'preparing', data: { authorization: secret } }, db)
+    const stored = getAgentRun(run.id, db)!
+    expect(stored.brief).not.toContain(secret)
+    expect(JSON.stringify(listAgentRunEvents(run.id, db))).not.toContain(secret)
+    db.close()
+  })
   it('creates an immutable dispatch and returns it for an identical idempotent retry', () => {
     const db = memoryDb()
     const first = createAgentRunRecord(input(), db)

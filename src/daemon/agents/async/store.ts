@@ -15,6 +15,7 @@ import {
 import type { AgentSettings } from '../../../shared/agents'
 import { getDb } from '../../db'
 import { ensureAgentRunSchema } from './schema'
+import { redactAgentText, redactAgentValue } from './redaction'
 
 type RunRow = {
   id: string
@@ -39,6 +40,9 @@ type RunRow = {
   error_class: string | null
   error_message: string | null
   recovery_count: number
+  attempt_count: number
+  retry_count: number
+  next_retry_at: string | null
   completion_message_id: string | null
   completion_inserted_at: string | null
   created_at: string
@@ -167,6 +171,9 @@ function rowToRun(row: RunRow): AgentRun {
     errorClass: row.error_class,
     errorMessage: row.error_message,
     recoveryCount: row.recovery_count,
+    attemptCount: row.attempt_count,
+    retryCount: row.retry_count,
+    nextRetryAt: row.next_retry_at,
     completionMessageId: row.completion_message_id,
     completionInsertedAt: row.completion_inserted_at,
     createdAt: row.created_at,
@@ -252,7 +259,7 @@ function insertEvent(
   db.prepare(`
     INSERT INTO agent_run_events (run_id, sequence, type, from_state, to_state, data, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(runId, nextSequence(db, runId), type, fromState, toState, JSON.stringify(data), now)
+  `).run(runId, nextSequence(db, runId), type, fromState, toState, JSON.stringify(redactAgentValue(data)), now)
 }
 
 function assertMatchingDispatch(existing: AgentRun, input: CreateAgentRunRecord): void {
@@ -260,12 +267,12 @@ function assertMatchingDispatch(existing: AgentRun, input: CreateAgentRunRecord)
     agent: input.agent,
     agentLabel: input.agentLabel,
     verb: input.verb,
-    brief: input.brief,
-    paths: input.paths,
-    workspace: input.workspace,
+    brief: redactAgentText(input.brief),
+    paths: redactAgentValue(input.paths),
+    workspace: redactAgentValue(input.workspace),
     baseSha: input.baseSha,
-    allowedPaths: input.allowedPaths,
-    settings: input.settings,
+    allowedPaths: redactAgentValue(input.allowedPaths),
+    settings: redactAgentValue(input.settings),
     agentDefinitionVersion: input.agentDefinitionVersion,
     commandPolicyVersion: input.commandPolicyVersion,
     acceptanceChecks: input.acceptanceChecks,
@@ -311,14 +318,14 @@ export function createAgentRunRecord(input: CreateAgentRunRecord, dbArg?: Databa
           acceptance_checks_json, resource_caps_json, status, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
       `).run(
-        id, input.idempotencyKey, input.agent, input.agentLabel, input.verb, input.brief,
-        JSON.stringify(input.paths), JSON.stringify(input.workspace), JSON.stringify(input.workspaceState ?? {
+        id, input.idempotencyKey, input.agent, input.agentLabel, input.verb, redactAgentText(input.brief),
+        JSON.stringify(redactAgentValue(input.paths)), JSON.stringify(redactAgentValue(input.workspace)), JSON.stringify(input.workspaceState ?? {
           status: input.workspace.isolation === 'worktree' ? 'pending' : 'ready',
           createdAt: null,
           retainedAt: null,
           discardedAt: null,
         }), input.baseSha,
-        JSON.stringify(input.allowedPaths), JSON.stringify(input.settings),
+        JSON.stringify(redactAgentValue(input.allowedPaths)), JSON.stringify(redactAgentValue(input.settings)),
         input.agentDefinitionVersion, input.commandPolicyVersion,
         JSON.stringify(input.acceptanceChecks), JSON.stringify(input.resourceCaps), now, now,
       )
@@ -451,9 +458,10 @@ export function markAgentRunPublishFailed(runId: string, errorClass: string, err
     const run = getAgentRun(runId, db)
     const publication = getAgentRunPublication(runId, db)
     if (!run || !publication) throw new Error(`Unknown agent run publication "${runId}".`)
-    insertEvent(db, runId, 'github_publish_failed', run.status, run.status, { errorClass, errorMessage }, now)
+    const message = redactAgentText(errorMessage)
+    insertEvent(db, runId, 'github_publish_failed', run.status, run.status, { errorClass, errorMessage: message }, now)
     db.prepare("UPDATE agent_run_publications SET status = 'failed', error_class = ?, error_message = ?, updated_at = ? WHERE run_id = ?")
-      .run(errorClass, errorMessage, now, runId)
+      .run(errorClass, message, now, runId)
   })()
   return getAgentRunPublication(runId, db)!
 }
@@ -501,6 +509,36 @@ export function runsReadyToResume(dbArg?: Database.Database): AgentRun[] {
   `).all() as RunRow[]).map(rowToRun)
 }
 
+export function listInterruptedAgentRuns(dbArg?: Database.Database): AgentRun[] {
+  return listAgentRuns({ statuses: ['interrupted'], limit: 500 }, dbArg)
+}
+
+export function scheduleAgentRunRetry(
+  id: string,
+  errorClass: string,
+  errorMessage: string,
+  nextRetryAt: string,
+  now = nowIso(),
+  dbArg?: Database.Database,
+): AgentRun {
+  const db = dbFor(dbArg)
+  db.transaction(() => {
+    const current = getAgentRun(id, db)
+    if (!current) throw new Error(`Unknown agent run "${id}".`)
+    if (!['preparing-workspace', 'running'].includes(current.status)) throw new Error(`Cannot schedule retry while run is ${current.status}.`)
+    const message = redactAgentText(errorMessage)
+    insertEvent(db, id, 'retry_scheduled', current.status, 'interrupted', {
+      errorClass, errorMessage: message, retryNumber: current.retryCount + 1, nextRetryAt,
+    }, now)
+    db.prepare(`UPDATE agent_runs SET
+      status = 'interrupted', error_class = ?, error_message = ?,
+      retry_count = retry_count + 1, next_retry_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(errorClass, message, nextRetryAt, now, id)
+  })()
+  return getAgentRun(id, db)!
+}
+
 export function parkAgentRunForCommand(
   id: string,
   question: { argv: string[]; reason: string; proposedAllowlistAddition: string },
@@ -519,13 +557,13 @@ export function parkAgentRunForCommand(
         id, run_id, kind, command_argv_json, reason, proposed_allowlist_addition,
         status, created_at
       ) VALUES (?, ?, 'command-allowlist', ?, ?, ?, 'pending', ?)
-    `).run(questionId, id, JSON.stringify(question.argv), question.reason, question.proposedAllowlistAddition, now)
+    `).run(questionId, id, JSON.stringify(redactAgentValue(question.argv)), redactAgentText(question.reason), redactAgentText(question.proposedAllowlistAddition), now)
     insertEvent(db, id, 'command_question_asked', 'running', 'needs-input', {
       questionId, argv: question.argv, reason: question.reason,
       proposedAllowlistAddition: question.proposedAllowlistAddition,
     }, now)
     db.prepare(`UPDATE agent_runs SET status = 'needs-input', checkpoint_json = ?, updated_at = ? WHERE id = ?`)
-      .run(JSON.stringify(checkpoint), now, id)
+      .run(JSON.stringify(redactAgentValue(checkpoint)), now, id)
   })()
   const row = db.prepare('SELECT * FROM agent_run_questions WHERE id = ?').get(questionId) as QuestionRow
   return { run: getAgentRun(id, db)!, question: rowToQuestion(row) }
@@ -554,14 +592,14 @@ export function answerAgentRunQuestion(
     if (run.status !== 'needs-input') throw new Error(`Run is ${run.status}, not waiting for input.`)
     changed = true
     db.prepare('UPDATE agent_run_questions SET status = ?, response = ?, answered_at = ? WHERE id = ?')
-      .run(desired, response, now, questionId)
+      .run(desired, redactAgentText(response), now, questionId)
     if (approved) {
       insertEvent(db, runId, 'command_approved', 'needs-input', 'needs-input', { questionId, argv: parseJson<string[]>(row.command_argv_json), response }, now)
       db.prepare('UPDATE agent_runs SET updated_at = ? WHERE id = ?').run(now, runId)
     } else {
       insertEvent(db, runId, 'command_denied', 'needs-input', 'failed', { questionId, argv: parseJson<string[]>(row.command_argv_json), response }, now)
       db.prepare(`UPDATE agent_runs SET status = 'failed', error_class = 'policy', error_message = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
-        .run(`Command approval denied: ${response || row.reason}`, now, now, runId)
+        .run(redactAgentText(`Command approval denied: ${response || row.reason}`), now, now, runId)
     }
   })()
   const question = db.prepare('SELECT * FROM agent_run_questions WHERE id = ?').get(questionId) as QuestionRow
@@ -590,6 +628,8 @@ export function transitionAgentRun(id: string, to: AgentRunState, options: Trans
         error_message = ?,
         checkpoint_json = COALESCE(?, checkpoint_json),
         recovery_count = recovery_count + CASE WHEN ? = 'recovery_started' THEN 1 ELSE 0 END,
+        attempt_count = attempt_count + CASE WHEN ? = 'running' THEN 1 ELSE 0 END,
+        next_retry_at = CASE WHEN ? = 'running' THEN NULL ELSE next_retry_at END,
         started_at = CASE WHEN ? = 'running' THEN COALESCE(started_at, ?) ELSE started_at END,
         completed_at = CASE WHEN ? THEN ? ELSE completed_at END,
         cancelled_at = CASE WHEN ? = 'cancelled' THEN ? ELSE cancelled_at END,
@@ -597,11 +637,13 @@ export function transitionAgentRun(id: string, to: AgentRunState, options: Trans
       WHERE id = ?
     `).run(
       to,
-      options.result ?? null,
+      options.result == null ? null : redactAgentText(options.result),
       options.errorClass ?? null,
-      options.errorMessage ?? null,
-      options.checkpoint === undefined ? null : JSON.stringify(options.checkpoint),
+      options.errorMessage == null ? null : redactAgentText(options.errorMessage),
+      options.checkpoint === undefined ? null : JSON.stringify(redactAgentValue(options.checkpoint)),
       options.eventType,
+      to,
+      to,
       to,
       now,
       terminal ? 1 : 0,
@@ -629,7 +671,7 @@ export function appendAgentRunEvent(
     if (!current) throw new Error(`Unknown agent run "${id}".`)
     insertEvent(db, id, type, current.status, current.status, data, now)
     db.prepare('UPDATE agent_runs SET checkpoint_json = COALESCE(?, checkpoint_json), updated_at = ? WHERE id = ?')
-      .run(options.checkpoint === undefined ? null : JSON.stringify(options.checkpoint), now, id)
+      .run(options.checkpoint === undefined ? null : JSON.stringify(redactAgentValue(options.checkpoint)), now, id)
   })()
   return getAgentRun(id, db)!
 }

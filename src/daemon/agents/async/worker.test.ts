@@ -173,4 +173,39 @@ describe('agent run worker', () => {
     expect(answered.run).toMatchObject({ status: 'failed', errorClass: 'policy' })
     await parkedWorker.stop()
   })
+
+  it('retries transient failures with a bounded durable schedule', async () => {
+    seed('retry-transient')
+    let attempts = 0
+    const worker = createAgentRunWorker({
+      retryDelayMs: () => 0,
+      execute: async (_run, context) => {
+        context.onStarted({ phase: 'attempt' })
+        attempts += 1
+        if (attempts < 3) throw new Error('HTTP 503 network unavailable')
+        return 'recovered after retry'
+      },
+    })
+    await worker.tickNow()
+    await worker.tickNow()
+    await worker.tickNow()
+
+    expect(getAgentRun('retry-transient')).toMatchObject({
+      status: 'succeeded', retryCount: 2, attemptCount: 3, result: 'recovered after retry',
+    })
+    expect(listAgentRunEvents('retry-transient').filter(event => event.type === 'retry_scheduled')).toHaveLength(2)
+  })
+
+  it('does not retry policy or resource failures', async () => {
+    seed('no-retry-policy')
+    const execute = vi.fn(async (_run, context) => {
+      context.onStarted({ phase: 'attempt' })
+      throw new Error('Command denied by policy')
+    })
+    const worker = createAgentRunWorker({ execute, retryDelayMs: () => 0 })
+    await worker.tickNow()
+    await worker.tickNow()
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(getAgentRun('no-retry-policy')).toMatchObject({ status: 'failed', errorClass: 'policy', retryCount: 0 })
+  })
 })

@@ -27,6 +27,9 @@ export function ensureAgentRunSchema(db: Database.Database): void {
       error_class TEXT,
       error_message TEXT,
       recovery_count INTEGER NOT NULL DEFAULT 0,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      next_retry_at TEXT,
       completion_message_id TEXT UNIQUE,
       completion_inserted_at TEXT,
       created_at TEXT NOT NULL,
@@ -121,4 +124,7 @@ export function ensureAgentRunSchema(db: Database.Database): void {
   if (!columns.some(column => column.name === 'workspace_state_json')) {
     db.exec(`ALTER TABLE agent_runs ADD COLUMN workspace_state_json TEXT NOT NULL DEFAULT '{"status":"pending","createdAt":null,"retainedAt":null,"discardedAt":null}' CHECK(json_valid(workspace_state_json))`)
   }
+  if (!columns.some(column => column.name === 'attempt_count')) db.exec('ALTER TABLE agent_runs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0')
+  if (!columns.some(column => column.name === 'retry_count')) db.exec('ALTER TABLE agent_runs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0')
+  if (!columns.some(column => column.name === 'next_retry_at')) db.exec('ALTER TABLE agent_runs ADD COLUMN next_retry_at TEXT')
 }

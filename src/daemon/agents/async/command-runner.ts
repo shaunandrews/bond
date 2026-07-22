@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentRunResourceCaps } from '../../../shared/agent-runs'
+import { AgentResourceLimitError } from './failures'
 
 export interface ArgvCommandResult {
   exitCode: number | null
@@ -21,7 +22,7 @@ export interface ArgvCommandRunnerOptions {
 
 export const SAFE_COMMAND_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 
-export class CommandOutputLimitError extends Error {
+export class CommandOutputLimitError extends AgentResourceLimitError {
   constructor(readonly limit: number) {
     super(`Command output exceeded the ${limit}-character cap.`)
     this.name = 'CommandOutputLimitError'
@@ -104,7 +105,7 @@ export function runArgvCommand(argv: string[], options: ArgvCommandRunnerOptions
       options.signal?.removeEventListener('abort', abort)
       options.onProcess?.(null)
       if (exceeded) return reject(new CommandOutputLimitError(outputCap))
-      if (timedOut) return reject(new Error(`Command exceeded the ${options.caps.wallClockSeconds}s wall-clock cap.`))
+      if (timedOut) return reject(new AgentResourceLimitError(`Command exceeded the ${options.caps.wallClockSeconds}s wall-clock cap.`))
       if (options.signal?.aborted) return reject(new Error('Command cancelled.'))
       resolve({ exitCode, signal, stdout, stderr, truncated: false })
     })
