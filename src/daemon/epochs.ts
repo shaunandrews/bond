@@ -20,6 +20,8 @@ export interface Epoch {
   id: string
   piSessionId: string
   piSessionFile: string | null
+  /** null means the main conversation. */
+  threadId: string | null
   status: EpochStatus
   startedAt: string
   endedAt: string | null
@@ -34,6 +36,8 @@ export interface CreateEpochInput {
   id?: string
   piSessionId?: string
   piSessionFile?: string | null
+  /** null/omitted means the main conversation. */
+  threadId?: string | null
   now?: string
 }
 
@@ -53,6 +57,8 @@ export interface EpochHookContext {
 export type EpochHook = (context: EpochHookContext) => void | Promise<void>
 
 export interface EnsureActiveEpochOptions {
+  /** null/omitted means the main conversation. */
+  threadId?: string | null
   contextTokens?: number | null
   contextWindow?: number | null
   softLimitRatio?: number
@@ -87,6 +93,7 @@ type EpochRow = {
   id: string
   pi_session_id: string
   pi_session_file: string | null
+  thread_id: string | null
   status: EpochStatus
   started_at: string
   ended_at: string | null
@@ -106,6 +113,7 @@ function toEpoch(row: EpochRow): Epoch {
     id: row.id,
     piSessionId: row.pi_session_id,
     piSessionFile: row.pi_session_file,
+    threadId: row.thread_id,
     status: row.status,
     startedAt: row.started_at,
     endedAt: row.ended_at,
@@ -144,9 +152,16 @@ export function findEpoch(id: string, db?: Database.Database): Epoch | null {
   return row ? toEpoch(row) : null
 }
 
-export function findActiveEpoch(db?: Database.Database): Epoch | null {
+/**
+ * `threadId` is required, not defaulted — main and each thread may each have
+ * one active epoch at once (concurrently), so silently defaulting scope here
+ * is exactly the kind of bug that would resume the wrong conversation's epoch.
+ */
+export function findActiveEpoch(threadId: string | null, db?: Database.Database): Epoch | null {
   const actual = dbOrDefault(db)
-  const row = actual.prepare("SELECT * FROM epochs WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get() as EpochRow | undefined
+  const row = threadId == null
+    ? actual.prepare("SELECT * FROM epochs WHERE status = 'active' AND thread_id IS NULL ORDER BY started_at DESC LIMIT 1").get() as EpochRow | undefined
+    : actual.prepare("SELECT * FROM epochs WHERE status = 'active' AND thread_id = ? ORDER BY started_at DESC LIMIT 1").get(threadId) as EpochRow | undefined
   return row ? toEpoch(row) : null
 }
 
@@ -160,17 +175,28 @@ export function findActiveEpoch(db?: Database.Database): Epoch | null {
  * new epoch re-observed the entire transcript from seq 1 (measured: 521
  * messages / ~38k tokens in one background run) and every rollover reflected
  * over all of history, growing forever.
+ *
+ * A THREAD epoch seeds its markers at NEVER_OBSERVED_MARKER instead — memory
+ * observation is main-only (plans/chat-threads.md rule 11), and seeding at
+ * the global high-water mark like a main epoch would be actively misleading
+ * (it implies "everything up to here was already observed", which is false —
+ * nothing in a thread ever gets observed at all). The sentinel guarantees
+ * `fromSeq > toSeq` forever, so runHook's short-circuit means no observer or
+ * reflector call is ever even attempted for a thread epoch.
  */
+export const NEVER_OBSERVED_MARKER = Number.MAX_SAFE_INTEGER
+
 export function createEpoch(input: CreateEpochInput = {}, db?: Database.Database): Epoch {
   const actual = dbOrDefault(db)
   const id = input.id ?? randomUUID()
   const piSessionId = input.piSessionId ?? randomUUID()
   const startedAt = input.now ?? nowIso()
-  const seedSeq = maxMessageSeq(actual)
+  const threadId = input.threadId ?? null
+  const seedSeq = threadId != null ? NEVER_OBSERVED_MARKER : maxMessageSeq(actual)
   actual.prepare(`
-    INSERT INTO epochs (id, pi_session_id, pi_session_file, status, started_at, observed_through_seq, reflected_through_seq)
-    VALUES (?, ?, ?, 'active', ?, ?, ?)
-  `).run(id, piSessionId, input.piSessionFile ?? null, startedAt, seedSeq, seedSeq)
+    INSERT INTO epochs (id, pi_session_id, pi_session_file, thread_id, status, started_at, observed_through_seq, reflected_through_seq)
+    VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+  `).run(id, piSessionId, input.piSessionFile ?? null, threadId, startedAt, seedSeq, seedSeq)
   const created = findEpoch(id, actual)
   if (!created) throw new Error(`Failed to create epoch ${id}`)
   return created
@@ -264,9 +290,11 @@ async function runRolloverHookWork(
 
 export async function ensureActiveEpoch(options: EnsureActiveEpochOptions = {}, db?: Database.Database): Promise<EnsureActiveEpochResult> {
   const actual = dbOrDefault(db)
-  let active = findActiveEpoch(actual)
+  const threadId = options.threadId ?? null
+  let active = findActiveEpoch(threadId, actual)
   if (!active) {
     const epoch = createEpoch({
+      threadId,
       piSessionId: options.piSessionId,
       piSessionFile: options.piSessionFile,
       now: options.now,
@@ -289,6 +317,7 @@ export async function ensureActiveEpoch(options: EnsureActiveEpochOptions = {}, 
     const closedId = active.id
     const closed = closeEpoch({ id: closedId, reason: options.rolloverReason ?? 'context_soft_limit', now: options.now }, actual) ?? active
     const epoch = createEpoch({
+      threadId,
       piSessionId: options.piSessionId,
       piSessionFile: options.piSessionFile,
       now: options.now,

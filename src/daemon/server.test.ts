@@ -391,6 +391,76 @@ describe('library RPC', () => {
   })
 })
 
+describe('chat threads RPC', () => {
+  async function sendAndGetAnchor(text: string, reply: string): Promise<string> {
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: reply })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await client.send(text)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const anchor = [...rows].reverse().find(m => m.role === 'bond' && m.text === reply)
+    if (!anchor) throw new Error('anchor message not found')
+    return anchor.id
+  }
+
+  it('creates a thread from an anchor, idempotently, and lists it as recent once touched', async () => {
+    const anchorId = await sendAndGetAnchor('what is bond?', 'bond is a chat app')
+
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+    expect(thread.status).toBe('draft')
+    expect(thread.anchorMessageId).toBe(anchorId)
+
+    const again = await client.call('thread.create', { anchorMessageId: anchorId })
+    expect(again.id).toBe(thread.id)
+
+    const byAnchor = await client.call('thread.getForAnchor', { anchorMessageId: anchorId })
+    expect(byAnchor?.id).toBe(thread.id)
+
+    // Still a draft — not in the recent list yet.
+    expect((await client.call('thread.listRecent')).threads.map(t => t.id)).not.toContain(thread.id)
+
+    await client.call('thread.touch', { threadId: thread.id })
+    const recent = await client.call('thread.listRecent')
+    expect(recent.threads.map(t => t.id)).toContain(thread.id)
+
+    const fetched = await client.call('thread.get', { threadId: thread.id })
+    expect(fetched?.status).toBe('open')
+  })
+
+  it('rejects creating a thread from a nonexistent anchor', async () => {
+    await expect(client.call('thread.create', { anchorMessageId: 'no-such-message' })).rejects.toThrow()
+  })
+
+  it('closes and deletes draft threads, refusing to delete a non-draft', async () => {
+    const anchorId = await sendAndGetAnchor('q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    await client.call('thread.touch', { threadId: thread.id })
+    expect((await client.call('thread.deleteDraft', { threadId: thread.id })).ok).toBe(false)
+
+    await client.call('thread.close', { threadId: thread.id })
+    expect((await client.call('thread.get', { threadId: thread.id }))?.status).toBe('closed')
+  })
+
+  it('broadcasts thread.changed to other live clients on create/touch/close', async () => {
+    const client2 = new BondClient(socketPath)
+    await client2.connect()
+    await client2.subscribe()
+    const events: unknown[] = []
+    client2.onThreadChanged(() => events.push('changed'))
+
+    const anchorId = await sendAndGetAnchor('q2', 'a2')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+    await client.call('thread.touch', { threadId: thread.id })
+    await client.call('thread.close', { threadId: thread.id })
+
+    await vi.waitFor(() => { expect(events.length).toBeGreaterThanOrEqual(3) })
+    client2.close()
+  })
+})
+
 describe('multiple clients', () => {
   it('supports concurrent connections', async () => {
     const client2 = new BondClient(socketPath)

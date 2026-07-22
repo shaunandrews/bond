@@ -32,6 +32,7 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     onLibraryChanged: (fn) => client.onNotification('library.changed', () => fn()),
     onMcpChanged: (fn) => client.onNotification('mcp.changed', () => fn()),
     onDeskChanged: (fn) => client.onNotification('desk.changed', () => fn()),
+    onThreadChanged: (fn) => client.onNotification('thread.changed', () => fn()),
     onConnectionLost: (fn) => client.onStateChange((state) => { if (state === 'disconnected') fn() }),
     onConnectionRestored: (fn) => {
       let wasLost = false

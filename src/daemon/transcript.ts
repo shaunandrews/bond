@@ -13,6 +13,7 @@ type MessageRow = {
   id: string
   epoch_id: string | null
   turn_id: string | null
+  thread_id: string | null
   seq: number | null
   role: TranscriptRole
   kind: string | null
@@ -46,6 +47,7 @@ export function messagesTableDdl(tableName: string): string {
       data TEXT,
       epoch_id TEXT REFERENCES epochs(id),
       turn_id TEXT REFERENCES turns(id),
+      thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE,
       seq INTEGER UNIQUE,
       image_ids TEXT,
       created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -54,11 +56,38 @@ export function messagesTableDdl(tableName: string): string {
   `
 }
 
-const EPOCHS_DDL = `
+/**
+ * threads' own indexes are safe to create inline — unlike epochs/turns below,
+ * nothing here depends on a column a migration adds later.
+ */
+const THREADS_DDL = `
+  CREATE TABLE IF NOT EXISTS threads (
+    id TEXT PRIMARY KEY,
+    anchor_message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+    context_snapshot TEXT NOT NULL,
+    title TEXT,
+    status TEXT NOT NULL CHECK(status IN ('draft', 'open', 'closed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_read_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_threads_updated ON threads(updated_at DESC);
+`
+
+/**
+ * Bare CREATE TABLE only — no indexes. On an existing (pre-threads) database
+ * these tables already exist without a thread_id column, so any index built
+ * on that column has to wait until the ALTER-column migration in
+ * ensureTranscriptSchema has actually run; bundling them into this DDL (which
+ * db.ts also execs directly for fresh installs, before that migration step)
+ * would fail with "no such column: thread_id" on every upgrade.
+ */
+const EPOCHS_TABLE_DDL = `
   CREATE TABLE IF NOT EXISTS epochs (
     id TEXT PRIMARY KEY,
     pi_session_id TEXT NOT NULL UNIQUE,
     pi_session_file TEXT,
+    thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE,
     status TEXT NOT NULL CHECK(status IN ('active','closed')),
     started_at TEXT NOT NULL,
     ended_at TEXT,
@@ -68,13 +97,13 @@ const EPOCHS_DDL = `
     observed_through_seq INTEGER NOT NULL DEFAULT 0,
     reflected_through_seq INTEGER NOT NULL DEFAULT 0
   );
-  CREATE UNIQUE INDEX IF NOT EXISTS one_active_epoch ON epochs(status) WHERE status = 'active';
 `
 
-const TURNS_DDL = `
+const TURNS_TABLE_DDL = `
   CREATE TABLE IF NOT EXISTS turns (
     id TEXT PRIMARY KEY,
     epoch_id TEXT REFERENCES epochs(id),
+    thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE,
     user_message_id TEXT NOT NULL,
     assistant_message_id TEXT NOT NULL,
     activity_message_id TEXT NOT NULL,
@@ -85,17 +114,20 @@ const TURNS_DDL = `
     context_tokens INTEGER,
     context_window INTEGER
   );
-  CREATE INDEX IF NOT EXISTS idx_turns_epoch ON turns(epoch_id, started_at);
 `
 
 /**
- * Epochs and turns DDL, exported so db.ts createSchema can create them BEFORE
- * the canonical messages table: messages carries REFERENCES epochs(id) /
- * turns(id), and with PRAGMA foreign_keys = ON, SQLite refuses ANY insert into
- * a table whose FK parent is missing — even for NULL FK values.
+ * threads + bare epochs/turns tables, exported so db.ts createSchema can
+ * create them BEFORE the canonical messages table: messages carries
+ * REFERENCES epochs(id) / turns(id) / threads(id), and with
+ * PRAGMA foreign_keys = ON, SQLite refuses ANY insert into a table whose FK
+ * parent is missing — even for NULL FK values. threads.anchor_message_id in
+ * turn carries REFERENCES messages(id); that circularity is fine because
+ * CREATE TABLE never validates FK targets, only DML does, and by the time
+ * anything is inserted every table in this chain already exists.
  */
 export function transcriptPrereqDdl(): string {
-  return EPOCHS_DDL + TURNS_DDL
+  return THREADS_DDL + EPOCHS_TABLE_DDL + TURNS_TABLE_DDL
 }
 
 /**
@@ -111,15 +143,37 @@ const ensured = new WeakSet<Database.Database>()
 export function ensureTranscriptSchema(db = getDb()): void {
   if (ensured.has(db)) return
 
-  db.exec(EPOCHS_DDL)
+  db.exec(THREADS_DDL)
+
+  // thread_id must land on epochs/turns BEFORE any index referencing it is
+  // created below — an existing (pre-threads) database has the tables
+  // without the column until this ALTER runs.
+  addColumnIfTableExists(db, 'epochs', 'thread_id', 'thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE')
+  addColumnIfTableExists(db, 'turns', 'thread_id', 'thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE')
+
+  db.exec(EPOCHS_TABLE_DDL)
+  // Superseded by the two per-scope indexes below — concurrent main+thread
+  // epochs are exactly what this single global uniqueness constraint forbade.
+  db.exec('DROP INDEX IF EXISTS one_active_epoch')
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS one_active_main_epoch ON epochs(status) WHERE status = 'active' AND thread_id IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS one_active_epoch_per_thread ON epochs(thread_id) WHERE status = 'active' AND thread_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_epochs_thread_status ON epochs(thread_id, status);
+  `)
   dropRetiredEpochColumns(db)
-  db.exec(TURNS_DDL)
+
+  db.exec(TURNS_TABLE_DDL)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_turns_epoch ON turns(epoch_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_turns_thread_started ON turns(thread_id, started_at);
+  `)
 
   ensureMessagesTableShape(db)
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_messages_cursor ON messages(seq DESC);
     CREATE INDEX IF NOT EXISTS idx_messages_epoch ON messages(epoch_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_messages_thread_cursor ON messages(thread_id, seq DESC);
     CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
       message_id UNINDEXED,
       text,
@@ -129,6 +183,13 @@ export function ensureTranscriptSchema(db = getDb()): void {
   `)
 
   ensured.add(db)
+}
+
+function addColumnIfTableExists(db: Database.Database, table: string, name: string, ddl: string): void {
+  const cols = db.pragma(`table_info(${table})`) as Array<{ name: string }>
+  if (cols.length > 0 && !cols.some(c => c.name === name)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`)
+  }
 }
 
 /** observed_at_context_tokens was written by nothing and read by nothing. */
@@ -164,6 +225,7 @@ function ensureMessagesTableShape(db: Database.Database): void {
   }
   addColumn('epoch_id', 'epoch_id TEXT REFERENCES epochs(id)')
   addColumn('turn_id', 'turn_id TEXT REFERENCES turns(id)')
+  addColumn('thread_id', 'thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE')
   addColumn('seq', 'seq INTEGER UNIQUE')
   addColumn('image_ids', 'image_ids TEXT')
   addColumn('created_at', "created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))")
@@ -257,26 +319,46 @@ function updateMessageFts(db: Database.Database, message: Pick<TranscriptMessage
   db.prepare('INSERT INTO message_fts (message_id, text, kind) VALUES (?, ?, ?)').run(message.id, text, message.kind ?? null)
 }
 
+/**
+ * A turn's scope must match its epoch's scope — a thread turn resuming
+ * main's epoch (or vice versa) would silently merge two conversations that
+ * are supposed to stay isolated. Checked here (not just trusted from the
+ * caller) because this is the one place a turn actually gets attached to an
+ * epoch. Raw SQL rather than importing epochs.ts, which already imports this
+ * module (getMessagesForRange) — avoiding a circular module dependency for a
+ * single-column lookup.
+ */
+function assertEpochScopeMatches(db: Database.Database, epochId: string | null | undefined, threadId: string | null): void {
+  if (!epochId) return
+  const row = db.prepare('SELECT thread_id FROM epochs WHERE id = ?').get(epochId) as { thread_id: string | null } | undefined
+  if (row && row.thread_id !== threadId) {
+    throw new Error(`Turn scope (thread_id=${threadId ?? 'main'}) does not match epoch ${epochId}'s scope (thread_id=${row.thread_id ?? 'main'})`)
+  }
+}
+
 export function insertTurnStart(input: InsertTurnStartInput): void {
   const db = getDb()
   ensureTranscriptSchema(db)
   const now = input.now ?? nowIso()
+  const threadId = input.threadId ?? null
+  assertEpochScopeMatches(db, input.epochId, threadId)
   const activityData = input.activityData ?? { turnId: input.turnId, userMessageId: input.userMessageId, assistantMessageId: input.assistantMessageId, status: 'working', startedAt: Date.now(), events: [] }
 
   db.transaction(() => {
     db.prepare(`
-      INSERT INTO turns (id, epoch_id, user_message_id, assistant_message_id, activity_message_id, status, model, started_at)
-      VALUES (?, ?, ?, ?, ?, 'running', ?, ?)
-    `).run(input.turnId, input.epochId, input.userMessageId, input.assistantMessageId, input.activityMessageId, input.model ?? null, now)
+      INSERT INTO turns (id, epoch_id, thread_id, user_message_id, assistant_message_id, activity_message_id, status, model, started_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)
+    `).run(input.turnId, input.epochId, threadId, input.userMessageId, input.assistantMessageId, input.activityMessageId, input.model ?? null, now)
 
     const insert = db.prepare(`
-      INSERT INTO messages (id, epoch_id, turn_id, seq, role, kind, text, data, image_ids, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, epoch_id, turn_id, thread_id, seq, role, kind, text, data, image_ids, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     const user: TranscriptMessage = {
       id: input.userMessageId,
       epochId: input.epochId,
       turnId: input.turnId,
+      threadId,
       seq: nextSeq(db),
       role: 'user',
       text: input.text,
@@ -284,13 +366,14 @@ export function insertTurnStart(input: InsertTurnStartInput): void {
       createdAt: now,
       updatedAt: now,
     }
-    insert.run(user.id, input.epochId, input.turnId, user.seq, user.role, null, input.text, null, encodeJson(input.imageIds ?? []), now, now)
+    insert.run(user.id, input.epochId, input.turnId, threadId, user.seq, user.role, null, input.text, null, encodeJson(input.imageIds ?? []), now, now)
     updateMessageFts(db, user)
 
     const activity: TranscriptMessage = {
       id: input.activityMessageId,
       epochId: input.epochId,
       turnId: input.turnId,
+      threadId,
       seq: nextSeq(db),
       role: 'meta',
       kind: 'activity',
@@ -298,20 +381,21 @@ export function insertTurnStart(input: InsertTurnStartInput): void {
       createdAt: now,
       updatedAt: now,
     }
-    insert.run(activity.id, input.epochId, input.turnId, activity.seq, activity.role, activity.kind, null, encodeJson(activityData), null, now, now)
+    insert.run(activity.id, input.epochId, input.turnId, threadId, activity.seq, activity.role, activity.kind, null, encodeJson(activityData), null, now, now)
     updateMessageFts(db, activity)
 
     const assistant: TranscriptMessage = {
       id: input.assistantMessageId,
       epochId: input.epochId,
       turnId: input.turnId,
+      threadId,
       seq: nextSeq(db),
       role: 'bond',
       text: '',
       createdAt: now,
       updatedAt: now,
     }
-    insert.run(assistant.id, input.epochId, input.turnId, assistant.seq, assistant.role, null, '', null, null, now, now)
+    insert.run(assistant.id, input.epochId, input.turnId, threadId, assistant.seq, assistant.role, null, '', null, null, now, now)
     updateMessageFts(db, assistant)
   })()
 }
@@ -349,8 +433,8 @@ export function upsertMessages(messages: TranscriptMessage[]): void {
   db.transaction(() => {
     const existingStmt = db.prepare('SELECT * FROM messages WHERE id = ?')
     const insert = db.prepare(`
-      INSERT INTO messages (id, epoch_id, turn_id, seq, role, kind, text, data, image_ids, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, epoch_id, turn_id, thread_id, seq, role, kind, text, data, image_ids, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     const update = db.prepare(`
       UPDATE messages SET
@@ -371,6 +455,9 @@ export function upsertMessages(messages: TranscriptMessage[]): void {
       const createdAt = existing?.created_at ?? m.createdAt ?? now
       const epochId = existing?.epoch_id ?? m.epochId ?? null
       const turnId = existing?.turn_id ?? m.turnId ?? null
+      // Immutable, like epoch/turn ownership — a renderer upsert cannot move
+      // a message between scopes, it can only set it once at insert time.
+      const threadId = existing?.thread_id ?? m.threadId ?? null
       const role = existing?.role ?? m.role
       const kind = m.kind ?? existing?.kind ?? null
       const text = m.text ?? null
@@ -380,7 +467,7 @@ export function upsertMessages(messages: TranscriptMessage[]): void {
       if (existing) {
         update.run(kind, text, encodeJson(data), encodeJson(imageIds), now, m.id)
       } else {
-        insert.run(m.id, epochId, turnId, seq, role, kind, text, encodeJson(data), encodeJson(imageIds), createdAt, now)
+        insert.run(m.id, epochId, turnId, threadId, seq, role, kind, text, encodeJson(data), encodeJson(imageIds), createdAt, now)
       }
       updateMessageFts(db, { id: m.id, role, kind, text, data })
     }
@@ -507,28 +594,32 @@ export function reconcileInterruptedTurns(now = nowIso()): number {
   return stuck.length + repaired
 }
 
-export function listMessages(options: { beforeSeq?: number; limit?: number } = {}): TranscriptPage {
+/** `threadId` omitted/null means the main conversation — the safe default, since every existing caller wants main-only rows. */
+export function listMessages(options: { beforeSeq?: number; limit?: number; threadId?: string | null } = {}): TranscriptPage {
   const db = getDb()
   ensureTranscriptSchema(db)
   const limit = clampLimit(options.limit)
+  const threadId = options.threadId ?? null
   const rows = options.beforeSeq != null
-    ? db.prepare('SELECT * FROM messages WHERE seq IS NOT NULL AND seq < ? ORDER BY seq DESC LIMIT ?').all(options.beforeSeq, limit) as MessageRow[]
-    : db.prepare('SELECT * FROM messages WHERE seq IS NOT NULL ORDER BY seq DESC LIMIT ?').all(limit) as MessageRow[]
+    ? db.prepare('SELECT * FROM messages WHERE seq IS NOT NULL AND seq < ? AND thread_id IS ? ORDER BY seq DESC LIMIT ?').all(options.beforeSeq, threadId, limit) as MessageRow[]
+    : db.prepare('SELECT * FROM messages WHERE seq IS NOT NULL AND thread_id IS ? ORDER BY seq DESC LIMIT ?').all(threadId, limit) as MessageRow[]
   const ordered = rows.reverse()
   const messages = ordered.map(rowToMessage)
   const nextBeforeSeq = rows.length === limit && ordered[0]?.seq != null ? ordered[0].seq : null
   return { messages, nextBeforeSeq }
 }
 
+/** Global by design — messages.seq is one monotonic sequence shared by every scope. */
 export function getMaxMessageSeq(db: Database.Database = getDb()): number {
   ensureTranscriptSchema(db)
   return (db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM messages').get() as { seq: number }).seq
 }
 
-export function getMessagesForRange(fromSeq: number, toSeq: number): TranscriptMessage[] {
+/** `threadId` omitted/null means the main conversation — matches every current caller (epoch rollover hooks are main-only). */
+export function getMessagesForRange(fromSeq: number, toSeq: number, threadId: string | null = null): TranscriptMessage[] {
   const db = getDb()
   ensureTranscriptSchema(db)
-  const rows = db.prepare('SELECT * FROM messages WHERE seq >= ? AND seq <= ? ORDER BY seq ASC').all(fromSeq, toSeq) as MessageRow[]
+  const rows = db.prepare('SELECT * FROM messages WHERE seq >= ? AND seq <= ? AND thread_id IS ? ORDER BY seq ASC').all(fromSeq, toSeq, threadId) as MessageRow[]
   return rows.map(rowToMessage)
 }
 
@@ -552,6 +643,8 @@ export interface SearchMessagesFilters {
   roles?: TranscriptRole[]
   kind?: string
   limit?: number
+  /** Omitted/null means the main conversation — main history recall stays main-only so thread tangents can't dominate it. */
+  threadId?: string | null
 }
 
 /**
@@ -566,10 +659,11 @@ export function searchMessages(query: string, filters: SearchMessagesFilters = {
   const andQuery = buildFtsQuery(query)
   if (!andQuery) return []
   const limit = clampLimit(filters.limit, 20, MAX_SEARCH_LIMIT)
+  const threadId = filters.threadId ?? null
 
   const run = (ftsQuery: string): TranscriptMessage[] => {
-    const where: string[] = ['message_fts MATCH ?']
-    const params: unknown[] = [ftsQuery]
+    const where: string[] = ['message_fts MATCH ?', 'm.thread_id IS ?']
+    const params: unknown[] = [ftsQuery, threadId]
     if (filters.role) { where.push('m.role = ?'); params.push(filters.role) }
     if (filters.roles?.length) {
       where.push(`m.role IN (${filters.roles.map(() => '?').join(',')})`)
@@ -599,16 +693,17 @@ export function searchMessages(query: string, filters: SearchMessagesFilters = {
 /**
  * Newest user message with real text, skipping the ones the caller owns. Used
  * to give a deictic message ("next", "on to 9") something to search with.
+ * `threadId` omitted/null means the main conversation.
  */
-export function getLastUserMessageText(excludeIds: string[] = []): string | null {
+export function getLastUserMessageText(excludeIds: string[] = [], threadId: string | null = null): string | null {
   const db = getDb()
   ensureTranscriptSchema(db)
   const placeholders = excludeIds.length ? ` AND id NOT IN (${excludeIds.map(() => '?').join(',')})` : ''
   const row = db.prepare(`
     SELECT text FROM messages
-    WHERE role = 'user' AND text IS NOT NULL AND trim(text) != ''${placeholders}
+    WHERE role = 'user' AND text IS NOT NULL AND trim(text) != '' AND thread_id IS ?${placeholders}
     ORDER BY seq DESC LIMIT 1
-  `).get(...excludeIds) as { text: string } | undefined
+  `).get(threadId, ...excludeIds) as { text: string } | undefined
   return row?.text ?? null
 }
 
@@ -624,7 +719,7 @@ export interface ActivitySnippet {
  * Those rows are useless as conversation but excellent as evidence, so they
  * are returned as snippets rather than dropped.
  */
-export function searchActivitySnippets(query: string, limit = 3): ActivitySnippet[] {
+export function searchActivitySnippets(query: string, limit = 3, threadId: string | null = null): ActivitySnippet[] {
   const db = getDb()
   ensureTranscriptSchema(db)
   const andQuery = buildFtsQuery(query)
@@ -637,11 +732,12 @@ export function searchActivitySnippets(query: string, limit = 3): ActivitySnippe
     JOIN messages m ON m.id = f.message_id
     WHERE message_fts MATCH ?
       AND m.role = 'meta'
+      AND m.thread_id IS ?
     ORDER BY bm25(message_fts), m.seq DESC
     LIMIT ?
   `)
   const run = (ftsQuery: string): ActivitySnippet[] =>
-    (statement.all(ftsQuery, Math.max(1, limit)) as Array<{ seq: number | null; created_at: string; snippet: string }>)
+    (statement.all(ftsQuery, threadId, Math.max(1, limit)) as Array<{ seq: number | null; created_at: string; snippet: string }>)
       .map(row => ({ seq: row.seq, snippet: row.snippet, createdAt: row.created_at }))
 
   const strict = run(andQuery)

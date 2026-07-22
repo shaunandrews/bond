@@ -10,6 +10,7 @@ import type { DetectedWindow } from '../shared/sense'
 import { parseEditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
 import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, getSourceMessages, reconcileInterruptedTurns } from './transcript'
+import { closeThread, createThread, deleteDraftThread, getThread, getThreadForAnchor, listRecentThreads, markThreadRead, touchThread } from './threads'
 import type { ModelId } from '../shared/models'
 import type { DispatchableMethod, RpcParams, RpcResult } from '../shared/rpc-schema'
 import {
@@ -259,6 +260,11 @@ function broadcastLibraryChanged(): void {
 
 function broadcastMcpChanged(): void {
   const msg = JSON.stringify(makeNotification('mcp.changed', {}))
+  eachOpenClient(client => client.send(msg))
+}
+
+function broadcastThreadChanged(): void {
+  const msg = JSON.stringify(makeNotification('thread.changed', {}))
   eachOpenClient(client => client.send(msg))
 }
 
@@ -566,6 +572,80 @@ const handlers: RpcHandlers = {
     if (!query) throw new RpcError(RPC_INVALID_PARAMS, 'query is required')
     const limitValue = getParam(p, 'limit')
     return { messages: searchTranscriptMessages(query, { limit: typeof limitValue === 'number' ? limitValue : undefined }) }
+  },
+
+  // --- Chat threads ---
+  'thread.create': (params) => {
+    const anchorMessageId = getStringParam(raw(params), 'anchorMessageId')
+    if (!anchorMessageId) throw new RpcError(RPC_INVALID_PARAMS, 'anchorMessageId is required')
+    try {
+      const thread = createThread(anchorMessageId)
+      broadcastThreadChanged()
+      return thread
+    } catch (error) {
+      throw new RpcError(RPC_INVALID_PARAMS, error instanceof Error ? error.message : String(error))
+    }
+  },
+
+  'thread.get': (params) => {
+    const threadId = getStringParam(raw(params), 'threadId')
+    if (!threadId) throw new RpcError(RPC_INVALID_PARAMS, 'threadId is required')
+    return getThread(threadId)
+  },
+
+  'thread.getForAnchor': (params) => {
+    const anchorMessageId = getStringParam(raw(params), 'anchorMessageId')
+    if (!anchorMessageId) throw new RpcError(RPC_INVALID_PARAMS, 'anchorMessageId is required')
+    return getThreadForAnchor(anchorMessageId)
+  },
+
+  'thread.listRecent': (params) => {
+    const limitValue = getParam(raw(params), 'limit')
+    return { threads: listRecentThreads(typeof limitValue === 'number' ? limitValue : undefined) }
+  },
+
+  'thread.listMessages': (params) => {
+    const p = raw(params)
+    const threadId = getStringParam(p, 'threadId')
+    if (!threadId) throw new RpcError(RPC_INVALID_PARAMS, 'threadId is required')
+    const before = getParam(p, 'beforeSeq')
+    const limitValue = getParam(p, 'limit')
+    return listTranscriptMessages({
+      threadId,
+      beforeSeq: typeof before === 'number' ? before : undefined,
+      limit: typeof limitValue === 'number' ? limitValue : undefined,
+    })
+  },
+
+  'thread.touch': (params) => {
+    const threadId = getStringParam(raw(params), 'threadId')
+    if (!threadId) throw new RpcError(RPC_INVALID_PARAMS, 'threadId is required')
+    touchThread(threadId)
+    broadcastThreadChanged()
+    return { ok: true }
+  },
+
+  'thread.markRead': (params) => {
+    const threadId = getStringParam(raw(params), 'threadId')
+    if (!threadId) throw new RpcError(RPC_INVALID_PARAMS, 'threadId is required')
+    markThreadRead(threadId)
+    return { ok: true }
+  },
+
+  'thread.close': (params) => {
+    const threadId = getStringParam(raw(params), 'threadId')
+    if (!threadId) throw new RpcError(RPC_INVALID_PARAMS, 'threadId is required')
+    closeThread(threadId)
+    broadcastThreadChanged()
+    return { ok: true }
+  },
+
+  'thread.deleteDraft': (params) => {
+    const threadId = getStringParam(raw(params), 'threadId')
+    if (!threadId) throw new RpcError(RPC_INVALID_PARAMS, 'threadId is required')
+    const ok = deleteDraftThread(threadId)
+    if (ok) broadcastThreadChanged()
+    return { ok }
   },
 
   // --- Sessions ---

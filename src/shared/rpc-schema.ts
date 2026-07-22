@@ -47,6 +47,7 @@ import type {
   DeskStatus,
   DeskThread,
 } from './desk'
+import type { ChatThread, ThreadSummary } from './threads'
 
 // --- Named wire shapes ---
 
@@ -250,6 +251,20 @@ export interface RpcMethods {
   'transcript.list': { params: { beforeSeq?: number; limit?: number } | void; result: TranscriptPage }
   'transcript.upsert': { params: { messages: TranscriptMessage[] }; result: { ok: true } }
   'transcript.search': { params: { query: string; limit?: number }; result: { messages: TranscriptMessage[] } }
+
+  // Chat threads — a temporary side conversation anchored to one completed
+  // Bond response (plans/chat-threads.md). thread.create is idempotent by
+  // anchor. Sending/cancelling/subscribing a thread turn rides the same
+  // bond.* methods above, scoped (see ConversationScope in shared/threads.ts).
+  'thread.create': { params: { anchorMessageId: string }; result: ChatThread }
+  'thread.get': { params: { threadId: string }; result: ChatThread | null }
+  'thread.getForAnchor': { params: { anchorMessageId: string }; result: ChatThread | null }
+  'thread.listRecent': { params: { limit?: number } | void; result: { threads: ThreadSummary[] } }
+  'thread.listMessages': { params: { threadId: string; beforeSeq?: number; limit?: number }; result: TranscriptPage }
+  'thread.touch': { params: { threadId: string }; result: { ok: true } }
+  'thread.markRead': { params: { threadId: string }; result: { ok: true } }
+  'thread.close': { params: { threadId: string }; result: { ok: true } }
+  'thread.deleteDraft': { params: { threadId: string }; result: { ok: boolean } }
 
   // Sessions
   'session.list': { params: void; result: Session[] }
@@ -473,6 +488,8 @@ export interface RpcNotifications {
   'web.requestRender': WebRenderRequest
   /** Any block/rule/state change, so the notch and the panel stay in lockstep. */
   'desk.changed': Record<string, never>
+  /** A thread was created, touched, or closed — so a second client's Recent threads / badge stay in sync. */
+  'thread.changed': Record<string, never>
 }
 
 export type RpcNotificationName = keyof RpcNotifications
@@ -499,6 +516,15 @@ export const RPC_METHOD_NAMES = [
   'transcript.list',
   'transcript.upsert',
   'transcript.search',
+  'thread.create',
+  'thread.get',
+  'thread.getForAnchor',
+  'thread.listRecent',
+  'thread.listMessages',
+  'thread.touch',
+  'thread.markRead',
+  'thread.close',
+  'thread.deleteDraft',
   'session.list',
   'session.create',
   'session.get',

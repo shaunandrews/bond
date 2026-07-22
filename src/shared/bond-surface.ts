@@ -72,6 +72,17 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     upsertTranscript: (messages: TranscriptMessage[]) => invoke('transcript.upsert', { messages }),
     searchTranscript: (query: string, limit?: number) => invoke('transcript.search', { query, limit }),
 
+    // --- Chat threads ---
+    createThread: (anchorMessageId: string) => invoke('thread.create', { anchorMessageId }),
+    getThread: (threadId: string) => invoke('thread.get', { threadId }),
+    getThreadForAnchor: (anchorMessageId: string) => invoke('thread.getForAnchor', { anchorMessageId }),
+    listRecentThreads: (limit?: number) => invoke('thread.listRecent', { limit }),
+    listThreadMessages: (threadId: string, options?: { beforeSeq?: number; limit?: number }) => invoke('thread.listMessages', { threadId, ...options }),
+    touchThread: (threadId: string) => invoke('thread.touch', { threadId }),
+    markThreadRead: (threadId: string) => invoke('thread.markRead', { threadId }),
+    closeThread: (threadId: string) => invoke('thread.close', { threadId }),
+    deleteDraftThread: (threadId: string) => invoke('thread.deleteDraft', { threadId }),
+
     // Legacy transport session used internally by the continuous transcript runtime.
     createSession: (options?: { title?: string }) => invoke('session.create', options),
 
@@ -239,6 +250,7 @@ export interface ElectronBondSurface {
   onLibraryChanged(fn: () => void): () => void
   onMcpChanged(fn: () => void): () => void
   onDeskChanged(fn: () => void): () => void
+  onThreadChanged(fn: () => void): () => void
   onViewerFile(fn: (filePath: string, format?: 'markdown' | 'plaintext', title?: string) => void): () => void
   onCreateSkill(fn: (description: string) => void): () => void
   onFullscreenChanged(fn: (isFullScreen: boolean) => void): () => void

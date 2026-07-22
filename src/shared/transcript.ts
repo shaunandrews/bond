@@ -7,6 +7,8 @@ export interface TranscriptMessage {
   id: string
   epochId?: string | null
   turnId?: string | null
+  /** null/absent means the main conversation. */
+  threadId?: string | null
   seq?: number
   role: TranscriptRole
   kind?: string | null
@@ -20,6 +22,8 @@ export interface TranscriptMessage {
 
 export interface InsertTurnStartInput {
   epochId?: string | null
+  /** null/absent means the main conversation; must match the epoch's own scope. */
+  threadId?: string | null
   turnId: string
   userMessageId: string
   assistantMessageId: string

@@ -431,6 +431,10 @@ export class BondClient {
     return this.onNotification('library.changed', fn)
   }
 
+  onThreadChanged(fn: () => void): () => void {
+    return this.onNotification('thread.changed', fn)
+  }
+
   // --- Collection item comments ---
 
   async addItemComment(itemId: string, author: 'user' | 'bond', body: string): Promise<RpcResult<'collection.addItemComment'>> {

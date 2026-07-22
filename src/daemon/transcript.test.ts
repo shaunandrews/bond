@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { setDataDir } from './paths'
 import { getDb, closeDb } from './db'
+import { createEpoch } from './epochs'
 import {
   completeTurn,
   ensureTranscriptSchema,
@@ -551,6 +552,124 @@ describe('messages table ownership', () => {
     expect(cols).not.toContain('observed_at_context_tokens')
     const row = db.prepare("SELECT observed_through_seq FROM epochs WHERE id = 'e1'").get() as { observed_through_seq: number }
     expect(row.observed_through_seq).toBe(42)
+  })
+})
+
+describe('chat-threads scoping migration', () => {
+  let ownDir: string | null = null
+
+  function freshDataDir(): string {
+    closeDb()
+    ownDir = join(tmpdir(), `bond-test-transcript-threads-${randomUUID()}`)
+    mkdirSync(ownDir, { recursive: true })
+    setDataDir(ownDir)
+    return ownDir
+  }
+
+  afterEach(() => {
+    if (ownDir) {
+      closeDb()
+      rmSync(ownDir, { recursive: true, force: true })
+      ownDir = null
+      setDataDir(testDir)
+    }
+  })
+
+  it('gives a fresh database the threads table, thread_id columns, and per-scope indexes', () => {
+    freshDataDir()
+    const db = getDb()
+
+    const threadsCols = (db.pragma('table_info(threads)') as Array<{ name: string }>).map(c => c.name)
+    expect(threadsCols).toEqual(expect.arrayContaining(['id', 'anchor_message_id', 'context_snapshot', 'status', 'created_at', 'updated_at', 'last_read_at']))
+
+    for (const table of ['epochs', 'turns', 'messages']) {
+      const cols = (db.pragma(`table_info(${table})`) as Array<{ name: string }>).map(c => c.name)
+      expect(cols).toContain('thread_id')
+    }
+
+    const indexNames = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map(r => r.name)
+    expect(indexNames).toContain('one_active_main_epoch')
+    expect(indexNames).toContain('one_active_epoch_per_thread')
+    expect(indexNames).not.toContain('one_active_epoch')
+  })
+
+  it('migrates an existing pre-threads database without losing epoch/turn/message data', () => {
+    const dir = freshDataDir()
+    const legacy = new Database(join(dir, 'bond.db'))
+    legacy.exec(`
+      CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO app_meta VALUES ('schema_version', '2');
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'New chat', summary TEXT NOT NULL DEFAULT '',
+        archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE epochs (
+        id TEXT PRIMARY KEY,
+        pi_session_id TEXT NOT NULL UNIQUE,
+        pi_session_file TEXT,
+        status TEXT NOT NULL CHECK(status IN ('active','closed')),
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        end_reason TEXT,
+        context_tokens INTEGER NOT NULL DEFAULT 0,
+        context_window INTEGER NOT NULL DEFAULT 0,
+        observed_through_seq INTEGER NOT NULL DEFAULT 0,
+        reflected_through_seq INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE UNIQUE INDEX one_active_epoch ON epochs(status) WHERE status = 'active';
+      CREATE TABLE turns (
+        id TEXT PRIMARY KEY,
+        epoch_id TEXT REFERENCES epochs(id),
+        user_message_id TEXT NOT NULL,
+        assistant_message_id TEXT NOT NULL,
+        activity_message_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')),
+        model TEXT, started_at TEXT NOT NULL, completed_at TEXT, context_tokens INTEGER, context_window INTEGER
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+        position INTEGER, role TEXT NOT NULL, text TEXT, streaming INTEGER, kind TEXT, name TEXT,
+        summary TEXT, status TEXT, images TEXT, data TEXT,
+        epoch_id TEXT REFERENCES epochs(id), turn_id TEXT REFERENCES turns(id), seq INTEGER UNIQUE,
+        image_ids TEXT, created_at TEXT, updated_at TEXT
+      );
+      INSERT INTO epochs (id, pi_session_id, status, started_at, observed_through_seq, reflected_through_seq)
+      VALUES ('e1', 'pi-e1', 'active', '2026-01-01', 5, 5);
+      INSERT INTO turns (id, epoch_id, user_message_id, assistant_message_id, activity_message_id, status, started_at)
+      VALUES ('t1', 'e1', 'u1', 'b1', 'a1', 'done', '2026-01-01');
+      INSERT INTO messages (id, role, text, epoch_id, turn_id, seq) VALUES ('u1', 'user', 'hello', 'e1', 't1', 1);
+      INSERT INTO messages (id, role, text, epoch_id, turn_id, seq) VALUES ('b1', 'bond', 'hi there', 'e1', 't1', 2);
+    `)
+    legacy.close()
+
+    const db = getDb()
+
+    for (const table of ['epochs', 'turns', 'messages']) {
+      const cols = (db.pragma(`table_info(${table})`) as Array<{ name: string }>).map(c => c.name)
+      expect(cols).toContain('thread_id')
+    }
+    const threadsCols = (db.pragma('table_info(threads)') as Array<{ name: string }>).map(c => c.name)
+    expect(threadsCols).toContain('anchor_message_id')
+
+    const indexNames = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map(r => r.name)
+    expect(indexNames).not.toContain('one_active_epoch')
+    expect(indexNames).toContain('one_active_main_epoch')
+    expect(indexNames).toContain('one_active_epoch_per_thread')
+
+    const epoch = db.prepare("SELECT * FROM epochs WHERE id = 'e1'").get() as Record<string, unknown>
+    expect(epoch).toMatchObject({ pi_session_id: 'pi-e1', observed_through_seq: 5, thread_id: null })
+    const turn = db.prepare("SELECT * FROM turns WHERE id = 't1'").get() as Record<string, unknown>
+    expect(turn).toMatchObject({ user_message_id: 'u1', thread_id: null })
+    const bondMessage = db.prepare("SELECT * FROM messages WHERE id = 'b1'").get() as Record<string, unknown>
+    expect(bondMessage).toMatchObject({ text: 'hi there', thread_id: null })
+
+    // The migrated index still enforces exactly one active main epoch...
+    expect(() => createEpoch({ id: 'e2', piSessionId: 'pi-e2' })).toThrow(/UNIQUE constraint/)
+    // ...but once e1 closes, a new main epoch is accepted exactly like the
+    // old global one_active_epoch index would have allowed.
+    db.prepare("UPDATE epochs SET status = 'closed' WHERE id = 'e1'").run()
+    expect(() => createEpoch({ id: 'e2', piSessionId: 'pi-e2' })).not.toThrow()
   })
 })
 

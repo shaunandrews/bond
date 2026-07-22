@@ -296,6 +296,7 @@ function createWindow(): void {
   client.onMcpChanged(() => broadcast('bond:mcpChanged'))
   // registerWindow() alone does not subscribe main to a new daemon notification.
   client.onDeskChanged(() => broadcast('bond:deskChanged'))
+  client.onThreadChanged(() => broadcast('bond:threadChanged'))
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
