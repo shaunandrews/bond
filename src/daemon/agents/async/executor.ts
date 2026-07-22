@@ -10,12 +10,19 @@ export interface AsyncAgentExecutionContext {
   events: AgentRunEvent[]
   exactCommandGrants: ReadonlySet<string>
   onStarted(checkpoint: Record<string, unknown>): void
+  onProgress(type: string, data: Record<string, unknown>, checkpoint?: Record<string, unknown>): void
 }
 
 export type AsyncAgentExecutor = (run: AgentRun, context: AsyncAgentExecutionContext) => Promise<string>
 
 export const executeAgentRun: AsyncAgentExecutor = (run, context) => run.workspace.isolation === 'worktree'
-  ? runMathis({ run, signal: context.signal, exactGrants: context.exactCommandGrants, onStarted: context.onStarted })
+  ? runMathis({
+      run,
+      signal: context.signal,
+      exactGrants: context.exactCommandGrants,
+      onStarted: context.onStarted,
+      onProgress: context.onProgress,
+    })
   : executeReadOnlyAgentRun(run, context)
 
 function recoveryEnvelope(run: AgentRun, events: AgentRunEvent[]): string {

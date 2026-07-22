@@ -33,6 +33,11 @@ const execFileAsync = promisify(execFile)
 export const ASYNC_AGENT_COMMAND_POLICY_VERSION = 'phase0-readonly-no-shell-v1'
 const MAX_BRIEF_CHARS = 20_000
 const MAX_PATHS = 100
+export const MATHIS_ACCEPTANCE_CHECKS = [
+  JSON.stringify(['npm', 'run', 'typecheck']),
+  JSON.stringify(['npm', 'run', 'test:run']),
+  JSON.stringify(['npm', 'run', 'build']),
+]
 
 export interface AgentRunTransport {
   changed(run: AgentRun): void
@@ -213,7 +218,7 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
     settings,
     agentDefinitionVersion: definitionVersion({ definition, settings }),
     commandPolicyVersion: workspace.isolation === 'worktree' ? MATHIS_COMMAND_POLICY_VERSION : ASYNC_AGENT_COMMAND_POLICY_VERSION,
-    acceptanceChecks: [],
+    acceptanceChecks: workspace.isolation === 'worktree' ? MATHIS_ACCEPTANCE_CHECKS : [],
     resourceCaps: {
       wallClockSeconds: settings.leash,
       maxOutputChars: 100_000,

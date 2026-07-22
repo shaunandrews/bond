@@ -124,6 +124,7 @@ export interface MathisExtensionOptions {
   exactGrants?: ReadonlySet<string>
   guard?: MathisResourceGuard
   onQuestion(question: ProposedCommandQuestion): void
+  onCommandCompleted?: (input: { argv: string[]; rule: string; exitCode: number | null; signal: NodeJS.Signals | null }) => void
 }
 
 export function createMathisExtensionFactory(options: MathisExtensionOptions) {
@@ -184,6 +185,7 @@ export function createMathisExtensionFactory(options: MathisExtensionOptions) {
         const diskCap = options.run.resourceCaps.maxDiskBytes ?? 2 * 1024 * 1024 * 1024
         if (directoryBytes(worktree, diskCap) > diskCap) throw new Error(`Mathis exceeded the ${diskCap}-byte worktree resource cap.`)
         const result = await runArgvCommand(argv, { cwd: worktree, signal: options.signal, caps: options.run.resourceCaps })
+        options.onCommandCompleted?.({ argv, rule: decision.rule, exitCode: result.exitCode, signal: result.signal })
         const text = [result.stdout, result.stderr].filter(Boolean).join('\n')
         return {
           content: [{ type: 'text' as const, text: `${argv.join(' ')} exited ${result.exitCode ?? result.signal ?? 'unknown'}.\n${text}`.trim() }],
@@ -199,6 +201,7 @@ export interface RunMathisInput {
   signal: AbortSignal
   exactGrants?: ReadonlySet<string>
   onStarted(checkpoint: Record<string, unknown>): void
+  onProgress(type: string, data: Record<string, unknown>, checkpoint?: Record<string, unknown>): void
 }
 
 export async function runMathis(input: RunMathisInput): Promise<string> {
@@ -229,6 +232,12 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
         pendingQuestion = question
         queueMicrotask(abortSession)
       },
+      onCommandCompleted: result => input.onProgress('command_completed', result, {
+        phase: 'command-completed',
+        argv: result.argv,
+        exitCode: result.exitCode,
+        worktree: run.workspace.isolation === 'worktree' ? run.workspace.worktreePath : null,
+      }),
     })],
   })
   await loader.reload()

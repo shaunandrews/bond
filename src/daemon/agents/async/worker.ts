@@ -2,6 +2,7 @@ import type { AgentRun, AgentRunQuestion, AgentRunState } from '../../../shared/
 import {
   getAgentRun,
   approvedAgentRunCommandGrants,
+  appendAgentRunEvent,
   listAgentRunEvents,
   listAgentRuns,
   parkAgentRunForCommand,
@@ -82,6 +83,10 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
         signal: controller.signal,
         events: listAgentRunEvents(prepared.id),
         exactCommandGrants: approvedAgentRunCommandGrants(prepared.id),
+        onProgress: (type, data, checkpoint) => {
+          const updated = appendAgentRunEvent(prepared.id, type, data, { checkpoint })
+          emit(updated)
+        },
         onStarted: (checkpoint) => {
           if (started) return
           started = true

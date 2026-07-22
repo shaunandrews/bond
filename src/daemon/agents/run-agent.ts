@@ -19,6 +19,7 @@ import { createWebExtensionFactory, WEB_TOOL_NAMES } from '../web/tools'
 import { selectModel } from '../pi/model'
 import { buildAgentSystemPrompt, buildAgentUserPrompt, type AgentUserPromptInput } from './prompt'
 import type { AgentDefinition, AgentVerbDefinition } from './definition'
+import { assertContainedPath } from './async/workspace'
 
 /** Read-only base every agent gets. Write-capable tools must never appear here. */
 export const AGENT_BASE_TOOLS = ['read', 'grep', 'find', 'ls']
@@ -42,12 +43,25 @@ export interface RunAgentInput extends AgentUserPromptInput {
   signal?: AbortSignal
   /** Durable async runs use this checkpoint only after Pi created a session. */
   onSessionStarted?: () => void
+  /** Optional retained-worktree root for a narrowly scoped read-only review. */
+  cwd?: string
+  allowedRoot?: string
 }
 
 export async function runAgentConsult(input: RunAgentInput): Promise<string> {
   const tools = toolsForAgent(input.settings)
+  const cwd = input.cwd ?? homedir()
+  const scopeExtension = input.allowedRoot
+    ? (pi: any) => pi.on('tool_call', async (event: any) => {
+        if (!AGENT_BASE_TOOLS.includes(event.toolName)) return
+        const target = event.input?.path
+        if (typeof target !== 'string') return
+        try { assertContainedPath(input.allowedRoot!, target) }
+        catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) } }
+      })
+    : null
   const loader = new DefaultResourceLoader({
-    cwd: homedir(),
+    cwd,
     agentDir: getAgentDir(),
     noExtensions: true,
     noSkills: true,
@@ -56,14 +70,17 @@ export async function runAgentConsult(input: RunAgentInput): Promise<string> {
     systemPromptOverride: () => buildAgentSystemPrompt(input.definition, input.verb, input.settings),
     // Granted web tools ride the app's hidden browser — network reads only,
     // no workspace writes, so they keep the read-only invariant intact.
-    extensionFactories: input.settings.tools.length ? [createWebExtensionFactory()] : [],
+    extensionFactories: [
+      ...(input.settings.tools.length ? [createWebExtensionFactory()] : []),
+      ...(scopeExtension ? [scopeExtension] : []),
+    ],
   })
   await loader.reload()
 
   const tier = input.settings.model === 'inherit' ? input.parentModel : input.settings.model
   const { model, modelRuntime } = await selectModel(tier)
   const { session } = await createAgentSession({
-    cwd: homedir(),
+    cwd,
     model,
     modelRuntime,
     thinkingLevel: thinkingLevelFor(input.settings.thinking),
