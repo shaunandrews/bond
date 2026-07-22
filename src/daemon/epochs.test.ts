@@ -280,4 +280,24 @@ describe('per-scope active epochs (chat threads)', () => {
     expect(mainAgain.epoch.id).toBe(main.epoch.id)
     expect(threadAgain.epoch.id).toBe(thread.epoch.id)
   })
+
+  it('rolls over main at its soft limit without touching a thread\'s epoch, and vice versa', async () => {
+    seedThread('thread-1')
+    const main = await ensureActiveEpoch({ piSessionId: 'pi-main', contextTokens: 10, contextWindow: 1_000 })
+    const thread = await ensureActiveEpoch({ piSessionId: 'pi-thread', threadId: 'thread-1', contextTokens: 10, contextWindow: 1_000 })
+
+    // Push main over its soft limit — only main should roll over.
+    const mainRollover = await ensureActiveEpoch({ contextTokens: 950, contextWindow: 1_000 })
+    expect(mainRollover.rolledOver).toBe(true)
+    expect(mainRollover.epoch.id).not.toBe(main.epoch.id)
+    const threadUnchanged = findEpoch(thread.epoch.id)
+    expect(threadUnchanged).toMatchObject({ id: thread.epoch.id, status: 'active' })
+
+    // Now push the thread over its own soft limit — only the thread should roll over this time.
+    const threadRollover = await ensureActiveEpoch({ threadId: 'thread-1', contextTokens: 950, contextWindow: 1_000 })
+    expect(threadRollover.rolledOver).toBe(true)
+    expect(threadRollover.epoch.id).not.toBe(thread.epoch.id)
+    const mainUnchangedAfter = findEpoch(mainRollover.epoch.id)
+    expect(mainUnchangedAfter).toMatchObject({ id: mainRollover.epoch.id, status: 'active' })
+  })
 })

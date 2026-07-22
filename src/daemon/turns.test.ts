@@ -59,14 +59,21 @@ function turnStatuses(): string[] {
   return (getDb().prepare('SELECT status FROM turns ORDER BY started_at ASC, id ASC').all() as Array<{ status: string }>).map(t => t.status)
 }
 
-/** A thread row satisfying the FK chain (anchor message must exist first). */
+/** A thread row satisfying the FK chain (anchor message must exist first), with a well-formed snapshot. */
 function seedThread(id: string, anchorId = `anchor-${id}`) {
   const db = getDb()
-  db.prepare("INSERT INTO messages (id, role, text) VALUES (?, 'bond', 'anchor')").run(anchorId)
+  db.prepare("INSERT INTO messages (id, role, text) VALUES (?, 'bond', 'anchor text')").run(anchorId)
+  const snapshot = {
+    version: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    anchorMessageId: anchorId,
+    anchorSeq: 1,
+    messages: [{ id: anchorId, seq: 1, role: 'bond', text: 'anchor text' }],
+  }
   db.prepare(`
     INSERT INTO threads (id, anchor_message_id, context_snapshot, status, created_at, updated_at)
-    VALUES (?, ?, '{}', 'open', ?, ?)
-  `).run(id, anchorId, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+    VALUES (?, ?, ?, 'open', ?, ?)
+  `).run(id, anchorId, JSON.stringify(snapshot), '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
 }
 
 describe('turn runner serialization', () => {
@@ -186,11 +193,15 @@ describe('per-scope concurrent scheduling (chat threads)', () => {
 
     runBondQueryMock.mockImplementation((_prompt, options) => {
       if (options.turnId === 'main-turn') {
-        options.abortSignal.addEventListener('abort', () => { mainAborted = true })
-        return new Promise(resolve => { resolveMain = resolve })
+        return new Promise(resolve => {
+          resolveMain = resolve
+          options.abortSignal.addEventListener('abort', () => { mainAborted = true; resolve({ succeeded: false, piSessionId: 'pi-main' }) })
+        })
       }
-      options.abortSignal.addEventListener('abort', () => { threadAborted = true })
-      return new Promise(resolve => { resolveThread = resolve })
+      return new Promise(resolve => {
+        resolveThread = resolve
+        options.abortSignal.addEventListener('abort', () => { threadAborted = true; resolve({ succeeded: false, piSessionId: 'pi-thread' }) })
+      })
     })
 
     await startBondTurn({ text: 'main text', turnId: 'main-turn', model: 'balanced' })
@@ -282,5 +293,40 @@ describe('per-scope concurrent scheduling (chat threads)', () => {
     })
     // The two main sends never ran concurrently even though a thread send raced in alongside them.
     expect(maxConcurrentMain).toBe(1)
+  })
+
+  it('injects the frozen thread context envelope on the first turn only', async () => {
+    seedThread('thread-1')
+    const envelopes: (string | undefined)[] = []
+    runBondQueryMock.mockImplementation(async (_prompt, options) => {
+      envelopes.push(options.contextEnvelope)
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+
+    await startBondTurn({ text: 'first', turnId: 'thread-turn-1', model: 'balanced', scope: threadScope('thread-1') })
+    await vi.waitFor(() => expect(envelopes).toHaveLength(1))
+    await startBondTurn({ text: 'second', turnId: 'thread-turn-2', model: 'balanced', scope: threadScope('thread-1') })
+    await vi.waitFor(() => expect(envelopes).toHaveLength(2))
+
+    expect(envelopes[0]).toContain('<bond-thread-context>')
+    expect(envelopes[0]).toContain('anchor text')
+    expect(envelopes[1]).not.toContain('<bond-thread-context>')
+
+    // Both turns resumed the SAME thread epoch — a thread's Pi session persists across turns.
+    const epochIds = getDb().prepare("SELECT DISTINCT epoch_id FROM turns WHERE thread_id = 'thread-1'").all() as Array<{ epoch_id: string }>
+    expect(epochIds).toHaveLength(1)
+  })
+
+  it('never injects the thread context envelope into a main turn', async () => {
+    seedThread('thread-1')
+    const envelopes: (string | undefined)[] = []
+    runBondQueryMock.mockImplementation(async (_prompt, options) => {
+      envelopes.push(options.contextEnvelope)
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+
+    await startBondTurn({ text: 'main message', turnId: 'main-only-turn', model: 'balanced' })
+    await vi.waitFor(() => expect(envelopes).toHaveLength(1))
+    expect(envelopes[0] ?? '').not.toContain('<bond-thread-context>')
   })
 })

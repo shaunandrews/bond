@@ -332,6 +332,7 @@ export async function ensureActiveEpoch(options: EnsureActiveEpochOptions = {}, 
 
   const closed = closeEpoch({ id: active.id, reason: options.rolloverReason ?? 'context_soft_limit', now: options.now }, actual) ?? active
   const epoch = createEpoch({
+    threadId,
     piSessionId: options.piSessionId,
     piSessionFile: options.piSessionFile,
     now: options.now,

@@ -13,6 +13,7 @@ import { enqueueMemoryTask, finalObserverHook, memoryFlushHook, scheduleEpochObs
 import { GLOBAL_TRANSCRIPT_SESSION_ID, ensureGlobalTranscriptSession } from './sessions'
 import { getSetting } from './settings'
 import { completeTurn, getMaxMessageSeq, insertTurnStart, startTurn, upsertMessages } from './transcript'
+import { buildThreadContextEnvelope, getThread, threadHasPriorTurns, touchThread } from './threads'
 
 /**
  * The turn runner owns every scope's active Bond turn — main and each
@@ -167,6 +168,13 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       const activityMessageId = input.activityMessageId ?? randomUUID()
       const tags = { epochId: epoch.id, turnId, assistantMessageId, scope }
 
+      // Captured BEFORE insertTurnStart below — that call is what creates
+      // this turn's own row, so checking after would always see it and never
+      // find "no prior turns". The frozen anchor snapshot is injected exactly
+      // once, ever, per thread (plans/chat-threads.md "First thread prompt").
+      const isFirstThreadTurn = threadId ? !threadHasPriorTurns(threadId) : false
+      if (threadId) touchThread(threadId)
+
       insertTurnStart({
         epochId: epoch.id,
         threadId,
@@ -195,12 +203,19 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
         imageIds,
       }, tags)
 
-      const contextEnvelope = buildAgentContextEnvelope({
+      // Bond's normal envelope (memory, sense, transcript recall, epoch
+      // handoff) still applies in a thread — the frozen snapshot below is
+      // additional historical background, not a replacement for it.
+      const baseContextEnvelope = buildAgentContextEnvelope({
         query: cleanText,
         sessionId: sessionId ?? epoch.piSessionId,
         excludeMessageIds: [userMessageId, assistantMessageId, activityMessageId],
         previousEpoch: epochResult.previousEpoch,
       })
+      const threadContextBlock = isFirstThreadTurn && threadId ? getThread(threadId) : null
+      const contextEnvelope = threadContextBlock
+        ? [buildThreadContextEnvelope(threadContextBlock.contextSnapshot), baseContextEnvelope].filter(Boolean).join('\n\n')
+        : baseContextEnvelope
 
       let assistantText = ''
       const runQuery = async (): Promise<boolean> => {

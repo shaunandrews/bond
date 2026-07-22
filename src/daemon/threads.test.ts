@@ -7,6 +7,7 @@ import { setDataDir } from './paths'
 import { closeDb, getDb } from './db'
 import { ensureTranscriptSchema, insertTurnStart, upsertMessages } from './transcript'
 import {
+  buildThreadContextEnvelope,
   buildThreadContextSnapshot,
   closeThread,
   createThread,
@@ -15,6 +16,7 @@ import {
   getThreadForAnchor,
   listRecentThreads,
   markThreadRead,
+  threadHasPriorTurns,
   touchThread,
 } from './threads'
 
@@ -205,5 +207,44 @@ describe('thread CRUD', () => {
     const thread = createThread(assistantMessageId)
     getDb().prepare('DELETE FROM messages WHERE id = ?').run(assistantMessageId)
     expect(getThread(thread.id)).toBeNull()
+  })
+
+  it('threadHasPriorTurns is false until a real turn is recorded for that thread', () => {
+    const { assistantMessageId } = makeTurn(1, 'hi', 'hello there')
+    const thread = createThread(assistantMessageId)
+    expect(threadHasPriorTurns(thread.id)).toBe(false)
+
+    getDb().prepare('INSERT INTO turns (id, thread_id, user_message_id, assistant_message_id, activity_message_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('thread-turn-1', thread.id, 'tu1', 'tb1', 'ta1', 'done', '2026-01-01T00:01:00.000Z')
+    expect(threadHasPriorTurns(thread.id)).toBe(true)
+  })
+})
+
+describe('buildThreadContextEnvelope', () => {
+  it('wraps the snapshot messages in the documented bond-thread-context template', () => {
+    const { assistantMessageId } = makeTurn(1, 'what is bond?', 'bond is a chat app')
+    const snapshot = buildThreadContextSnapshot(assistantMessageId)
+    const envelope = buildThreadContextEnvelope(snapshot)
+
+    expect(envelope).toContain('<bond-thread-context>')
+    expect(envelope).toContain('This is a side conversation anchored to a response in Bond\'s main conversation.')
+    expect(envelope).toContain('<message role="user">')
+    expect(envelope).toContain('what is bond?')
+    expect(envelope).toContain('<message role="bond">')
+    expect(envelope).toContain('bond is a chat app')
+    expect(envelope.trim().endsWith('</bond-thread-context>')).toBe(true)
+  })
+
+  it('escapes historical text so it cannot be mistaken for live markup', () => {
+    const { assistantMessageId } = makeTurn(1, '<script>alert(1)</script>', 'safe reply')
+    const snapshot = buildThreadContextSnapshot(assistantMessageId)
+    const envelope = buildThreadContextEnvelope(snapshot)
+
+    expect(envelope).not.toContain('<script>')
+    expect(envelope).toContain('&lt;script&gt;')
+  })
+
+  it('tolerates a malformed/empty snapshot rather than throwing', () => {
+    expect(() => buildThreadContextEnvelope({ version: 1, createdAt: '', anchorMessageId: '', anchorSeq: 0, messages: undefined as any })).not.toThrow()
   })
 })
