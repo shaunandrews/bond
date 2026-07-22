@@ -9,6 +9,7 @@ import { ensureTranscriptSchema, insertTurnStart, upsertMessages } from './trans
 import {
   buildThreadContextEnvelope,
   buildThreadContextSnapshot,
+  buildThreadRecapEnvelope,
   closeThread,
   createThread,
   deleteDraftThread,
@@ -284,6 +285,41 @@ describe('buildThreadContextEnvelope', () => {
 
   it('tolerates a malformed/empty snapshot rather than throwing', () => {
     expect(() => buildThreadContextEnvelope({ version: 1, createdAt: '', anchorMessageId: '', anchorSeq: 0, messages: undefined as any })).not.toThrow()
+  })
+})
+
+describe('buildThreadRecapEnvelope', () => {
+  it("recaps every one of a thread's own exchanges, verbatim, without calling a model", () => {
+    const { assistantMessageId } = makeTurn(1, 'what is bond?', 'bond is a chat app')
+    const thread = createThread(assistantMessageId)
+    makeThreadTurn(thread.id, 1, 'why does it need threads?', 'to keep tangents out of the main conversation')
+
+    const envelope = buildThreadRecapEnvelope(thread.id)
+
+    expect(envelope).toContain('<bond-thread-recap>')
+    expect(envelope).toContain('<message role="user">')
+    expect(envelope).toContain('why does it need threads?')
+    expect(envelope).toContain('<message role="bond">')
+    expect(envelope).toContain('to keep tangents out of the main conversation')
+    // Never the main conversation's own content — only the thread's scoped messages.
+    expect(envelope).not.toContain('what is bond?')
+    expect(envelope.trim().endsWith('</bond-thread-recap>')).toBe(true)
+  })
+
+  it('escapes historical text so it cannot be mistaken for live markup', () => {
+    const { assistantMessageId } = makeTurn(1, 'q', 'a')
+    const thread = createThread(assistantMessageId)
+    makeThreadTurn(thread.id, 1, '<script>alert(1)</script>', 'safe reply')
+
+    const envelope = buildThreadRecapEnvelope(thread.id)
+    expect(envelope).not.toContain('<script>')
+    expect(envelope).toContain('&lt;script&gt;')
+  })
+
+  it('returns an empty string for a thread with no real messages yet', () => {
+    const { assistantMessageId } = makeTurn(1, 'q', 'a')
+    const thread = createThread(assistantMessageId)
+    expect(buildThreadRecapEnvelope(thread.id)).toBe('')
   })
 })
 

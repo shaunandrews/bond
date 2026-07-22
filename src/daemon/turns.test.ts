@@ -9,9 +9,14 @@ import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, getActi
 import type { TaggedChunk } from '../shared/stream'
 import { threadScope } from '../shared/threads'
 
-const { runBondQueryMock, scheduleEpochObservationMock } = vi.hoisted(() => ({
+const { runBondQueryMock, scheduleEpochObservationMock, piSessionFileExistsMock } = vi.hoisted(() => ({
   runBondQueryMock: vi.fn(),
   scheduleEpochObservationMock: vi.fn(),
+  // Real production behavior is "the file exists" almost all the time (a
+  // real Pi session was just created for it) — tests never spin up a real
+  // Pi session, so without this every non-first thread turn would look like
+  // a lost session. Individual tests override it to exercise recovery.
+  piSessionFileExistsMock: vi.fn().mockReturnValue(true),
 }))
 
 vi.mock('./agent', async (importOriginal) => {
@@ -19,6 +24,14 @@ vi.mock('./agent', async (importOriginal) => {
   return {
     ...actual,
     runBondQuery: runBondQueryMock,
+  }
+})
+
+vi.mock('./pi/runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./pi/runtime')>()
+  return {
+    ...actual,
+    piSessionFileExists: piSessionFileExistsMock,
   }
 })
 
@@ -36,6 +49,8 @@ let chunks: TaggedChunk[]
 beforeEach(() => {
   runBondQueryMock.mockReset()
   scheduleEpochObservationMock.mockReset()
+  piSessionFileExistsMock.mockReset()
+  piSessionFileExistsMock.mockReturnValue(true)
   runBondQueryMock.mockResolvedValue({ succeeded: true, piSessionId: 'pi-test', contextTokens: 10, contextWindow: 100 })
   tempDir = mkdtempSync(join(tmpdir(), 'bond-turns-test-'))
   setDataDir(tempDir)
@@ -315,6 +330,43 @@ describe('per-scope concurrent scheduling (chat threads)', () => {
     // Both turns resumed the SAME thread epoch — a thread's Pi session persists across turns.
     const epochIds = getDb().prepare("SELECT DISTINCT epoch_id FROM turns WHERE thread_id = 'thread-1'").all() as Array<{ epoch_id: string }>
     expect(epochIds).toHaveLength(1)
+  })
+
+  // plans/chat-threads.md Failure behavior: "If the Pi thread session file
+  // is missing, start a new Pi session from the stored snapshot and existing
+  // thread transcript summary rather than losing the visible thread."
+  it('re-primes context from the frozen snapshot AND a full recap when a later turn finds its Pi session file gone', async () => {
+    seedThread('thread-1')
+    const envelopes: (string | undefined)[] = []
+    runBondQueryMock.mockImplementation(async (_prompt, options) => {
+      envelopes.push(options.contextEnvelope)
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+
+    await startBondTurn({ text: 'first', turnId: 'thread-turn-1', model: 'balanced', scope: threadScope('thread-1') })
+    await vi.waitFor(() => expect(envelopes).toHaveLength(1))
+    expect(envelopes[0]).toContain('<bond-thread-context>')
+
+    // Simulate the session file having gone missing before the next turn.
+    piSessionFileExistsMock.mockReturnValue(false)
+    await startBondTurn({ text: 'second', turnId: 'thread-turn-2', model: 'balanced', scope: threadScope('thread-1') })
+    await vi.waitFor(() => expect(envelopes).toHaveLength(2))
+
+    // The frozen anchor snapshot is re-sent...
+    expect(envelopes[1]).toContain('<bond-thread-context>')
+    expect(envelopes[1]).toContain('anchor text')
+    // ...alongside a recap of everything the thread itself has said so far.
+    // Note this never required an LLM call (no prompt-runner mock is even
+    // wired up in this test file) — recovery can't depend on one succeeding.
+    expect(envelopes[1]).toContain('<bond-thread-recap>')
+    expect(envelopes[1]).toContain('first')
+
+    // A subsequent turn with the file back in place stops re-priming again.
+    piSessionFileExistsMock.mockReturnValue(true)
+    await startBondTurn({ text: 'third', turnId: 'thread-turn-3', model: 'balanced', scope: threadScope('thread-1') })
+    await vi.waitFor(() => expect(envelopes).toHaveLength(3))
+    expect(envelopes[2]).not.toContain('<bond-thread-context>')
+    expect(envelopes[2]).not.toContain('<bond-thread-recap>')
   })
 
   it('never injects the thread context envelope into a main turn', async () => {

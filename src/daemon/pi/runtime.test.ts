@@ -1,10 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { ONBOARDING_STAGE_TOOLS } from '../onboarding'
-import { REQUIRED_BOND_TOOL_NAMES, activateRequestedTools, composePromptWithContext, contextUsageFromSession, piEventToChunks, piResultFromState, shouldFlushDeferredPanel, textBlockSeparator, toolsForEditMode } from './runtime'
+import { REQUIRED_BOND_TOOL_NAMES, activateRequestedTools, composePromptWithContext, contextUsageFromSession, piEventToChunks, piResultFromState, piSessionFileExists, shouldFlushDeferredPanel, textBlockSeparator, toolsForEditMode } from './runtime'
 import { IMAGEGEN_TOOL_NAMES } from '../imagegen'
 import { MEMORY_TOOL_NAMES } from '../memory/tools'
 import { WEB_TOOL_NAMES } from '../web/tools'
 import { MCP_TOOL_NAMES } from '../mcp/tools'
+import { setDataDir } from '../paths'
 
 describe('piEventToChunks', () => {
   it('preserves renderer text and thinking chunks', () => {
@@ -199,5 +203,33 @@ describe('piResultFromState', () => {
 
   it('fails a turn on abort', () => {
     expect(piResultFromState({ aborted: true, agentErrorMessage: undefined, piSessionId: 'pi-1', usage }).succeeded).toBe(false)
+  })
+})
+
+// plans/chat-threads.md Failure behavior: turns.ts uses this to detect a
+// thread's Pi session file having gone missing mid-thread.
+describe('piSessionFileExists', () => {
+  let tempDir: string
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'bond-pi-runtime-test-'))
+    setDataDir(tempDir)
+  })
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true })
+    setDataDir(null as any)
+  })
+
+  it('is false when no session file matches the id', () => {
+    expect(piSessionFileExists('pi-missing')).toBe(false)
+  })
+
+  it('is true once a file ending in _<id>.jsonl exists in the sessions dir', () => {
+    const dir = join(tempDir, 'pi', 'sessions')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, '2026-01-01T00-00-00_pi-present.jsonl'), '')
+    expect(piSessionFileExists('pi-present')).toBe(true)
+    expect(piSessionFileExists('pi-present-but-not-quite')).toBe(false)
   })
 })

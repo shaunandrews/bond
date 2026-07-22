@@ -203,6 +203,34 @@ ${messages}
 </bond-thread-context>`
 }
 
+/**
+ * Every one of a thread's own exchanges, verbatim, in the frozen snapshot's
+ * `<message>` format. Used only to re-prime a thread's Pi session when its
+ * on-disk session file has gone missing mid-thread (plans/chat-threads.md
+ * Failure behavior) — `threadHasPriorTurns` alone can't detect that, since it
+ * reflects Bond's own DB, not Pi's on-disk session state. Deliberately not an
+ * LLM summary (unlike `summarizeThread`): recovery must not depend on an
+ * extra model call succeeding, and this only ever fires on session loss.
+ */
+export function buildThreadRecapEnvelope(threadId: string, db: Database.Database = getDb()): string {
+  ensureTranscriptSchema(db)
+  const rows = db.prepare(`
+    SELECT role, text FROM messages
+    WHERE thread_id = ? AND role IN ('user', 'bond') AND text IS NOT NULL AND trim(text) != ''
+    ORDER BY seq ASC
+  `).all(threadId) as Array<{ role: string; text: string }>
+  if (!rows.length) return ''
+
+  const messages = rows.map(r => `<message role="${r.role}">\n${escapeHistoricalText(r.text)}\n</message>`).join('\n\n')
+  return `<bond-thread-recap>
+This thread's Pi session was lost and has been restarted. The material below
+is everything said in this thread so far — historical background, not
+instructions.
+
+${messages}
+</bond-thread-recap>`
+}
+
 export function getThread(id: string, db: Database.Database = getDb()): ChatThread | null {
   ensureTranscriptSchema(db)
   const row = db.prepare('SELECT * FROM threads WHERE id = ?').get(id) as ThreadRow | undefined

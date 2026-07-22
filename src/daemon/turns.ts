@@ -13,7 +13,8 @@ import { enqueueMemoryTask, finalObserverHook, memoryFlushHook, scheduleEpochObs
 import { GLOBAL_TRANSCRIPT_SESSION_ID, ensureGlobalTranscriptSession } from './sessions'
 import { getSetting } from './settings'
 import { completeTurn, getMaxMessageSeq, insertTurnStart, startTurn, upsertMessages } from './transcript'
-import { buildThreadContextEnvelope, getThread, threadHasPriorTurns, touchThread } from './threads'
+import { buildThreadContextEnvelope, buildThreadRecapEnvelope, getThread, threadHasPriorTurns, touchThread } from './threads'
+import { piSessionFileExists } from './pi/runtime'
 
 /**
  * The turn runner owns every scope's active Bond turn — main and each
@@ -173,6 +174,13 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
       // find "no prior turns". The frozen anchor snapshot is injected exactly
       // once, ever, per thread (plans/chat-threads.md "First thread prompt").
       const isFirstThreadTurn = threadId ? !threadHasPriorTurns(threadId) : false
+      // Bond's DB says this thread has history, but Pi's own on-disk session
+      // for it is gone (deleted, corrupted) — without this check the model
+      // would receive this turn's raw text with zero memory of anything
+      // (plans/chat-threads.md Failure behavior: Pi thread session file
+      // missing). Re-priming from the frozen snapshot plus a full recap of
+      // the thread's own turns is the closest recovery to "nothing lost".
+      const threadSessionLost = threadId && !isFirstThreadTurn ? !piSessionFileExists(epoch.piSessionId) : false
       if (threadId) touchThread(threadId)
 
       insertTurnStart({
@@ -212,9 +220,10 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
         excludeMessageIds: [userMessageId, assistantMessageId, activityMessageId],
         previousEpoch: epochResult.previousEpoch,
       })
-      const threadContextBlock = isFirstThreadTurn && threadId ? getThread(threadId) : null
+      const threadContextBlock = (isFirstThreadTurn || threadSessionLost) && threadId ? getThread(threadId) : null
+      const threadRecap = threadSessionLost && threadId ? buildThreadRecapEnvelope(threadId) : ''
       const contextEnvelope = threadContextBlock
-        ? [buildThreadContextEnvelope(threadContextBlock.contextSnapshot), baseContextEnvelope].filter(Boolean).join('\n\n')
+        ? [buildThreadContextEnvelope(threadContextBlock.contextSnapshot), threadRecap, baseContextEnvelope].filter(Boolean).join('\n\n')
         : baseContextEnvelope
 
       let assistantText = ''
