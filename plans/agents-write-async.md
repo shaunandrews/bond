@@ -238,6 +238,15 @@ pattern as approvals/questions.
 
 ## 6. Phase plan
 
+**Implementation sequencing note (2026-07-22):** Phase 1 is split at the
+remote-write boundary. The local tranche includes Mathis, managed worktrees,
+the command policy, and the `needs-input` command-question/checkpoint mechanics
+originally grouped under Phase 2, because a parked novel command must be able
+to resume the same run before write-capable execution is safe to ship. GitHub
+authentication, push/draft-PR publishing, Q comments, and apply remain a
+separate next slice behind an interface/config boundary; no personal `gh`
+session is used by the local tranche.
+
 - **Phase 0 — Async spine.** `agent_runs` table + event log + worker loop +
   `dispatch_agent`/`check_agent` tools + `agent_run_changed` broadcast +
   crash-recovery on boot. Prove it with a trivial *read-only* background task.

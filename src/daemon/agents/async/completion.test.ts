@@ -7,7 +7,7 @@ import { closeDb, getDb } from '../../db'
 import { setDataDir } from '../../paths'
 import { listMessages } from '../../transcript'
 import { createAgentRunCompletionCoordinator } from './completion'
-import { createAgentRunRecord, getAgentRun, transitionAgentRun } from './store'
+import { createAgentRunRecord, getAgentRun, parkAgentRunForCommand, transitionAgentRun } from './store'
 
 let dir: string
 
@@ -79,5 +79,29 @@ describe('agent run completion insertion', () => {
 
     expect(listMessages().messages.filter(message => message.kind === 'agent-run')).toHaveLength(1)
     expect(getAgentRun(run.id)?.completionInsertedAt).not.toBeNull()
+  })
+
+  it('queues a run-scoped command question outside an active turn', () => {
+    const run = createAgentRunRecord({
+      id: 'question-card', idempotencyKey: 'question-card', agent: 'mathis', agentLabel: 'Mathis', verb: 'build', brief: 'brief', paths: [],
+      workspace: { repoRoot: '/repo', isolation: 'in-place', branch: null, readOnly: true }, baseSha: null, allowedPaths: [],
+      settings: DEFAULT_AGENT_SETTINGS, agentDefinitionVersion: 'v1', commandPolicyVersion: 'v1', acceptanceChecks: [],
+      resourceCaps: { wallClockSeconds: 300, maxOutputChars: 100_000 },
+    }).run
+    transitionAgentRun(run.id, 'preparing-workspace', { eventType: 'preparing' })
+    transitionAgentRun(run.id, 'running', { eventType: 'started' })
+    const parked = parkAgentRunForCommand(run.id, {
+      argv: ['node', 'check.mjs'], reason: 'Needed for the confirmed task.', proposedAllowlistAddition: 'Allow exact argv.',
+    }, { phase: 'awaiting-command-approval' })
+    const deferred: Array<() => void> = []
+    const coordinator = createAgentRunCompletionCoordinator({ deferUntilTurnsIdle: task => deferred.push(task) })
+
+    coordinator.enqueueQuestion(parked.run, parked.question)
+    expect(listMessages().messages).toHaveLength(0)
+    deferred[0]()
+    expect(listMessages().messages[0]).toMatchObject({
+      role: 'meta', kind: 'agent-run', data: { runId: run.id, questionId: parked.question.id, status: 'needs-input' },
+    })
+    expect(listMessages().messages[0].text).toContain('Allow exact argv')
   })
 })

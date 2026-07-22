@@ -14,6 +14,7 @@ describe('Mathis command policy', () => {
       ['npm', 'run', 'dev'], ['open', '.'], ['kill', '-9', '1'], ['bash', '-lc', 'pwd'],
       ['git', 'push'], ['git', 'worktree', 'add', 'x'], ['git', '-C', '..', 'status'],
       ['npm', 'test', '--', '../outside'], ['node', '-e', 'require("fs").writeFileSync("/tmp/x", "x")'],
+      ['/usr/bin/git', 'status'], ['npm', 'run', 'test', '--', '--output=/tmp/leak'],
     ]) expect(evaluateMathisCommand(argv).kind, argv.join(' ')).toBe('deny')
   })
 

@@ -158,6 +158,8 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     listAgentRuns: () => invoke('agentruns.list'),
     getAgentRun: (runId: string) => invoke('agentruns.get', { runId }),
     cancelAgentRun: (runId: string) => invoke('agentruns.cancel', { runId }),
+    answerAgentRunQuestion: (runId: string, questionId: string, approved: boolean, response?: string) =>
+      invoke('agentruns.answerQuestion', { runId, questionId, approved, response }),
     inspectAgentRunWorkspace: (runId: string) => invoke('agentruns.inspectWorkspace', { runId }),
     discardAgentRunWorkspace: (runId: string) => invoke('agentruns.discardWorkspace', { runId }),
 

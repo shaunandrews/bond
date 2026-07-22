@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { closeDb, getDb } from '../../db'
 import { setDataDir } from '../../paths'
+import { setSetting } from '../../settings'
 import { dispatchAgentRun } from './service'
 
 let dir: string
@@ -42,5 +43,21 @@ describe('async agent dispatch service', () => {
     await dispatchAgentRun({ agent: 'felix', verb: 'define', brief: 'one', idempotencyKey: 'collision' })
     await expect(dispatchAgentRun({ agent: 'felix', verb: 'define', brief: 'two', idempotencyKey: 'collision' }))
       .rejects.toThrow('different agent run')
+  })
+
+  it('requires explicit immutable-brief confirmation before dispatching Mathis', async () => {
+    setSetting('agents.bondRepoRoot', process.cwd())
+    setSetting('agents.bondBaseRef', 'main')
+    const input = { agent: 'mathis', verb: 'build', brief: 'Implement the confirmed local change.', idempotencyKey: 'mathis-confirmed' }
+    await expect(dispatchAgentRun(input)).rejects.toThrow('explicit user confirmation')
+    const dispatched = await dispatchAgentRun({ ...input, confirmed: true })
+    expect(dispatched.run).toMatchObject({
+      agent: 'mathis',
+      brief: input.brief,
+      workspace: { isolation: 'worktree', readOnly: false, repoRoot: process.cwd() },
+      workspaceState: { status: 'pending' },
+    })
+    await expect(dispatchAgentRun(input)).rejects.toThrow('explicit user confirmation')
+    expect((await dispatchAgentRun({ ...input, confirmed: true })).run.id).toBe(dispatched.run.id)
   })
 })

@@ -8,13 +8,14 @@ import { runMathis } from './write-runner'
 export interface AsyncAgentExecutionContext {
   signal: AbortSignal
   events: AgentRunEvent[]
+  exactCommandGrants: ReadonlySet<string>
   onStarted(checkpoint: Record<string, unknown>): void
 }
 
 export type AsyncAgentExecutor = (run: AgentRun, context: AsyncAgentExecutionContext) => Promise<string>
 
 export const executeAgentRun: AsyncAgentExecutor = (run, context) => run.workspace.isolation === 'worktree'
-  ? runMathis({ run, signal: context.signal, onStarted: context.onStarted })
+  ? runMathis({ run, signal: context.signal, exactGrants: context.exactCommandGrants, onStarted: context.onStarted })
   : executeReadOnlyAgentRun(run, context)
 
 function recoveryEnvelope(run: AgentRun, events: AgentRunEvent[]): string {

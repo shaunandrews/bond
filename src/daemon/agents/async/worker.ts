@@ -1,11 +1,15 @@
-import type { AgentRun, AgentRunState } from '../../../shared/agent-runs'
+import type { AgentRun, AgentRunQuestion, AgentRunState } from '../../../shared/agent-runs'
 import {
   getAgentRun,
+  approvedAgentRunCommandGrants,
   listAgentRunEvents,
   listAgentRuns,
+  parkAgentRunForCommand,
+  runsReadyToResume,
   transitionAgentRun,
 } from './store'
 import { executeAgentRun, type AsyncAgentExecutor } from './executor'
+import { CommandApprovalRequired } from './write-runner'
 
 export interface AgentRunWorkerOptions {
   execute?: AsyncAgentExecutor
@@ -13,6 +17,7 @@ export interface AgentRunWorkerOptions {
   intervalMs?: number
   onChanged?: (run: AgentRun) => void
   onTerminal?: (run: AgentRun) => void
+  onQuestion?: (run: AgentRun, question: AgentRunQuestion) => void
   logger?: Pick<Console, 'error' | 'warn' | 'log'>
 }
 
@@ -22,6 +27,7 @@ export interface AgentRunWorker {
   wake(): Promise<void>
   tickNow(): Promise<void>
   cancel(runId: string): AgentRun | null
+  resume(runId: string): Promise<void>
   activeRunId(): string | null
   isRunning(): boolean
 }
@@ -36,6 +42,7 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
   let queue: Promise<void> = Promise.resolve()
   let active: { runId: string; controller: AbortController } | null = null
   let pendingRecoveryIds: string[] = []
+  let pendingResumeIds: string[] = []
   let stopping = false
 
   const emit = (run: AgentRun): void => options.onChanged?.(run)
@@ -57,10 +64,10 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
     return run
   }
 
-  async function runOne(initial: AgentRun, recovering: boolean): Promise<void> {
+  async function runOne(initial: AgentRun, recovering: boolean, resuming = false): Promise<void> {
     let prepared: AgentRun
     try {
-      prepared = change(initial.id, 'preparing-workspace', recovering ? 'recovery_preparing' : 'workspace_preparing')
+      prepared = resuming ? initial : change(initial.id, 'preparing-workspace', recovering ? 'recovery_preparing' : 'workspace_preparing')
     } catch (error) {
       logger.warn('[agents/worker] could not prepare run:', error)
       return
@@ -74,13 +81,14 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
       const report = await execute(prepared, {
         signal: controller.signal,
         events: listAgentRunEvents(prepared.id),
+        exactCommandGrants: approvedAgentRunCommandGrants(prepared.id),
         onStarted: (checkpoint) => {
           if (started) return
           started = true
           const current = getAgentRun(prepared.id)
           if (!current || current.status === 'cancelled') return
           const running = transitionAgentRun(prepared.id, 'running', {
-            eventType: recovering ? 'recovery_started' : 'started',
+            eventType: resuming ? 'command_resume_started' : recovering ? 'recovery_started' : 'started',
             checkpoint,
           })
           emit(running)
@@ -96,6 +104,17 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
     } catch (error) {
       const current = getAgentRun(prepared.id)
       if (!current || current.status === 'cancelled') return
+      if (error instanceof CommandApprovalRequired && current.status === 'running') {
+        const parked = parkAgentRunForCommand(prepared.id, error.question, {
+          phase: 'awaiting-command-approval',
+          worktree: prepared.workspace.isolation === 'worktree' ? prepared.workspace.worktreePath : null,
+          pendingArgv: error.question.argv,
+          lastCompletedAction: 'agent-requested-command',
+        })
+        emit(parked.run)
+        options.onQuestion?.(parked.run, parked.question)
+        return
+      }
       // Graceful daemon shutdown leaves the durable state live. The next boot
       // marks it interrupted and re-enters from the checkpoint.
       if (stopping && controller.signal.aborted) return
@@ -125,6 +144,15 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
     if (active || stopping) return
     let candidate: AgentRun | null = null
     let recovering = false
+    let resuming = false
+    while (pendingResumeIds.length && !candidate) {
+      const id = pendingResumeIds.shift()!
+      const run = getAgentRun(id)
+      if (run?.status === 'needs-input' && approvedAgentRunCommandGrants(id).size) {
+        candidate = run
+        resuming = true
+      }
+    }
     while (pendingRecoveryIds.length && !candidate) {
       const id = pendingRecoveryIds.shift()!
       const run = getAgentRun(id)
@@ -134,7 +162,7 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
       }
     }
     candidate ??= listAgentRuns({ statuses: ['queued'], limit: 1 })[0] ?? null
-    if (candidate) await runOne(candidate, recovering)
+    if (candidate) await runOne(candidate, recovering, resuming)
   }
 
   function reconcileStrandedRuns(): void {
@@ -151,6 +179,7 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
     // Existing interrupted rows and the rows just reconciled each receive one
     // recovery attempt this boot. A failed checkpoint recovery stays parked.
     pendingRecoveryIds = listAgentRuns({ statuses: ['interrupted'], limit: 500 }).map(run => run.id)
+    pendingResumeIds = runsReadyToResume().map(run => run.id)
   }
 
   return {
@@ -174,6 +203,7 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
       }
       active?.controller.abort()
       pendingRecoveryIds = []
+      pendingResumeIds = []
       await queue
     },
 
@@ -188,6 +218,11 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
       if (active?.runId === runId) active.controller.abort()
       terminal(cancelled)
       return cancelled
+    },
+
+    resume(runId: string): Promise<void> {
+      if (!pendingResumeIds.includes(runId)) pendingResumeIds.push(runId)
+      return enqueue(drainOne)
     },
 
     activeRunId: () => active?.runId ?? null,

@@ -1,4 +1,5 @@
-import { readdirSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   createAgentSession,
@@ -15,7 +16,7 @@ import { buildAgentSystemPrompt, buildAgentUserPrompt } from '../prompt'
 import { findAgent } from '../registry'
 import { thinkingLevelFor } from '../run-agent'
 import { evaluateMathisCommand } from './command-policy'
-import { runArgvCommand } from './command-runner'
+import { runArgvCommand, SAFE_COMMAND_PATH } from './command-runner'
 import { assertContainedPath } from './workspace'
 
 export const MATHIS_TOOLS = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'run_command']
@@ -37,18 +38,36 @@ export class CommandApprovalRequired extends Error {
 export class MathisResourceGuard {
   private steps = 0
   private commands = 0
+  private tokens = 0
+  private costUsd = 0
   private readonly fingerprints = new Map<string, number>()
 
-  constructor(private readonly maxSteps = 80, private readonly maxCommands = 24, private readonly maxRepeats = 4) {}
+  constructor(
+    private readonly maxSteps = 80,
+    private readonly maxCommands = 24,
+    private readonly maxRepeats = 4,
+    private readonly maxTokens = 250_000,
+    private readonly maxCostUsd = 25,
+  ) {}
 
   recordTool(name: string, input: unknown): void {
     this.steps += 1
     if (this.steps > this.maxSteps) throw new Error(`Mathis exceeded the ${this.maxSteps}-step resource cap.`)
     if (name === 'run_command' && ++this.commands > this.maxCommands) throw new Error(`Mathis exceeded the ${this.maxCommands}-command resource cap.`)
-    const fingerprint = `${name}:${JSON.stringify(input)}`
+  }
+
+  recordResult(name: string, input: unknown, result: unknown): void {
+    const fingerprint = `${name}:${JSON.stringify(input)}:${JSON.stringify(result)}`
     const count = (this.fingerprints.get(fingerprint) ?? 0) + 1
     this.fingerprints.set(fingerprint, count)
     if (count > this.maxRepeats) throw new Error(`Mathis repeated the same ${name} action too many times.`)
+  }
+
+  recordUsage(tokens: number, costUsd: number): void {
+    this.tokens += Math.max(0, tokens)
+    this.costUsd += Math.max(0, costUsd)
+    if (this.tokens > this.maxTokens) throw new Error(`Mathis exceeded the ${this.maxTokens}-token resource cap.`)
+    if (this.costUsd > this.maxCostUsd) throw new Error(`Mathis exceeded the $${this.maxCostUsd} resource cap.`)
   }
 }
 
@@ -56,7 +75,7 @@ function directoryBytes(root: string, cap: number): number {
   let total = 0
   const visit = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === '.git' || entry.name === 'node_modules') continue
+      if (entry.name === '.git') continue
       const path = join(dir, entry.name)
       if (entry.isSymbolicLink()) continue
       if (entry.isDirectory()) visit(path)
@@ -66,6 +85,37 @@ function directoryBytes(root: string, cap: number): number {
   }
   visit(root)
   return total
+}
+
+export function packageScriptsMatch(currentPackage: string, basePackage: string): boolean {
+  try {
+    const current = JSON.parse(currentPackage) as { scripts?: unknown }
+    const base = JSON.parse(basePackage) as { scripts?: unknown }
+    return JSON.stringify(current.scripts ?? {}) === JSON.stringify(base.scripts ?? {})
+  } catch {
+    return false
+  }
+}
+
+function assertNpmScriptsUnchanged(run: AgentRun, argv: string[]): void {
+  if (argv[0] !== 'npm' || !['run', 'test'].includes(argv[1] ?? '')) return
+  if (run.workspace.isolation !== 'worktree' || !run.baseSha) throw new Error('Cannot validate npm scripts without a managed base commit.')
+  const current = readFileSync(join(run.workspace.worktreePath, 'package.json'), 'utf8')
+  const base = execFileSync('git', ['-C', run.workspace.worktreePath, 'show', `${run.baseSha}:package.json`], {
+    encoding: 'utf8',
+    env: {
+      PATH: SAFE_COMMAND_PATH,
+      HOME: run.workspace.worktreePath,
+      LANG: 'C',
+      LC_ALL: 'C',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (!packageScriptsMatch(current, base)) {
+    throw new Error('Command denied: package.json scripts differ from the immutable base commit; use an argv-only tool command instead.')
+  }
 }
 
 export interface MathisExtensionOptions {
@@ -79,17 +129,37 @@ export interface MathisExtensionOptions {
 export function createMathisExtensionFactory(options: MathisExtensionOptions) {
   if (options.run.workspace.isolation !== 'worktree') throw new Error('Mathis requires a managed worktree.')
   const worktree = options.run.workspace.worktreePath
-  const guard = options.guard ?? new MathisResourceGuard()
+  const caps = options.run.resourceCaps
+  const guard = options.guard ?? new MathisResourceGuard(
+    caps.maxSteps ?? 80,
+    caps.maxSubprocesses ?? 24,
+    4,
+    caps.maxTokens ?? 250_000,
+    caps.maxCostUsd ?? 25,
+  )
+  const calls = new Map<string, { name: string; input: unknown }>()
   return (pi: ExtensionAPI) => {
     pi.on('tool_call', async (event: any) => {
       const toolName = String(event.toolName)
       const input = (event.input ?? {}) as Record<string, unknown>
       guard.recordTool(toolName, input)
+      calls.set(String(event.toolCallId), { name: toolName, input })
       if (!FILE_TOOLS.has(toolName)) return
       const target = input.path ?? input.file_path
       if (typeof target === 'string') {
         try { assertContainedPath(worktree, target) }
         catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) } }
+      }
+    })
+    pi.on('tool_result', async (event: any) => {
+      const call = calls.get(String(event.toolCallId)) ?? { name: String(event.toolName), input: event.input }
+      calls.delete(String(event.toolCallId))
+      guard.recordResult(call.name, call.input, { content: event.content, isError: event.isError })
+    })
+    pi.on('message_end', async (event: any) => {
+      const message = event.message
+      if (message?.role === 'assistant' && message.usage) {
+        guard.recordUsage(Number(message.usage.totalTokens ?? 0), Number(message.usage.cost?.total ?? 0))
       }
     })
 
@@ -110,8 +180,9 @@ export function createMathisExtensionFactory(options: MathisExtensionOptions) {
           options.onQuestion(question)
           throw new CommandApprovalRequired(question)
         }
-        const diskCap = 512 * 1024 * 1024
-        if (directoryBytes(worktree, diskCap) > diskCap) throw new Error('Mathis exceeded the 512 MiB worktree resource cap.')
+        assertNpmScriptsUnchanged(options.run, argv)
+        const diskCap = options.run.resourceCaps.maxDiskBytes ?? 2 * 1024 * 1024 * 1024
+        if (directoryBytes(worktree, diskCap) > diskCap) throw new Error(`Mathis exceeded the ${diskCap}-byte worktree resource cap.`)
         const result = await runArgvCommand(argv, { cwd: worktree, signal: options.signal, caps: options.run.resourceCaps })
         const text = [result.stdout, result.stderr].filter(Boolean).join('\n')
         return {
@@ -177,8 +248,16 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
   input.signal.addEventListener('abort', abort, { once: true })
   const leash = setTimeout(abort, run.settings.leash * 1000)
   try {
-    input.onStarted({ phase: 'mathis-session-started', worktree: run.workspace.worktreePath, lastCompletedAction: 'workspace-ready' })
-    await session.prompt(buildAgentUserPrompt({ brief: run.brief, paths: run.paths }))
+    input.onStarted({
+      phase: 'mathis-session-started',
+      worktree: run.workspace.worktreePath,
+      lastCompletedAction: 'workspace-ready',
+      previousCheckpoint: run.checkpoint,
+    })
+    const resume = run.checkpoint
+      ? `\n\nRESUME CHECKPOINT:\nContinue this same durable run in the existing worktree after an approval or daemon interruption. Previous checkpoint: ${JSON.stringify(run.checkpoint)}. Exact run-scoped command grants: ${JSON.stringify([...input.exactGrants ?? []])}. Re-inspect git status and current files; preserve completed edits and do not repeat work blindly.`
+      : ''
+    await session.prompt(buildAgentUserPrompt({ brief: `${run.brief}${resume}`, paths: run.paths }))
     if (pendingQuestion) throw new CommandApprovalRequired(pendingQuestion)
     if (input.signal.aborted) throw new Error(`${definition.label}'s background task was cancelled.`)
     if (session.agent.state.errorMessage) throw new Error(`${definition.label}'s run failed: ${session.agent.state.errorMessage}`)

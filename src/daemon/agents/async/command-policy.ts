@@ -35,9 +35,9 @@ function executableName(value: string): string {
 function pathEscape(argv: string[]): string | null {
   for (const value of argv) {
     if (value.includes('\0')) return 'Command arguments may not contain NUL bytes.'
-    if (isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value)) return `Absolute paths are not allowed in agent commands: ${value}`
+    if (isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || /(^|=)\//.test(value)) return `Absolute paths are not allowed in agent commands: ${value}`
     const normalized = normalize(value)
-    if (normalized === '..' || normalized.startsWith(`..${sep}`) || normalized.includes(`${sep}..${sep}`)) {
+    if (normalized === '..' || normalized.startsWith(`..${sep}`) || normalized.includes(`${sep}..${sep}`) || /(^|[=,:])\.\.([/\\]|$)/.test(value)) {
       return `Worktree-relative path escape is not allowed: ${value}`
     }
   }
@@ -51,6 +51,7 @@ export function exactCommandGrant(argv: string[]): string {
 export function evaluateMathisCommand(argv: string[], exactGrants: ReadonlySet<string> = new Set()): CommandPolicyDecision {
   if (!argv.length || !argv[0]?.trim()) return { kind: 'deny', reason: 'A command must contain an executable.' }
   if (argv.length > 128) return { kind: 'deny', reason: 'Command argv exceeds the 128-argument cap.' }
+  if (argv[0].includes('/') || argv[0].includes('\\')) return { kind: 'deny', reason: 'Executables must be resolved from the runner\'s explicit PATH.' }
 
   const escape = pathEscape(argv.slice(1))
   if (escape) return { kind: 'deny', reason: escape }

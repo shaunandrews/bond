@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { homedir } from 'node:os'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import type { AgentRunResourceCaps } from '../../../shared/agent-runs'
 
 export interface ArgvCommandResult {
@@ -17,6 +18,8 @@ export interface ArgvCommandRunnerOptions {
   path?: string
   onProcess?: (pid: number | null) => void
 }
+
+export const SAFE_COMMAND_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 
 export class CommandOutputLimitError extends Error {
   constructor(readonly limit: number) {
@@ -38,6 +41,8 @@ function terminateGroup(child: ChildProcess): void {
 export function runArgvCommand(argv: string[], options: ArgvCommandRunnerOptions): Promise<ArgvCommandResult> {
   if (!argv.length) return Promise.reject(new Error('Command argv is empty.'))
   const outputCap = Math.max(1, options.caps.maxOutputChars)
+  const commandHome = join(options.cwd, 'node_modules', '.bond-agent-home')
+  mkdirSync(commandHome, { recursive: true })
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0], argv.slice(1), {
       cwd: options.cwd,
@@ -45,8 +50,8 @@ export function runArgvCommand(argv: string[], options: ArgvCommandRunnerOptions
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
-        PATH: options.path ?? process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
-        HOME: homedir(),
+        PATH: options.path ?? SAFE_COMMAND_PATH,
+        HOME: commandHome,
         LANG: 'C.UTF-8',
         LC_ALL: 'C.UTF-8',
         CI: '1',
@@ -56,6 +61,10 @@ export function runArgvCommand(argv: string[], options: ArgvCommandRunnerOptions
         npm_config_fund: 'false',
         GIT_CONFIG_NOSYSTEM: '1',
         GIT_TERMINAL_PROMPT: '0',
+        GIT_AUTHOR_NAME: 'Bond Mathis',
+        GIT_AUTHOR_EMAIL: 'mathis@bond.local',
+        GIT_COMMITTER_NAME: 'Bond Mathis',
+        GIT_COMMITTER_EMAIL: 'mathis@bond.local',
       },
     })
     options.onProcess?.(child.pid ?? null)

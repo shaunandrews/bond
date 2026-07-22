@@ -59,6 +59,26 @@ export interface ManagedWorkspaceInspection {
 export interface AgentRunResourceCaps {
   wallClockSeconds: number
   maxOutputChars: number
+  maxSteps?: number
+  maxSubprocesses?: number
+  maxDiskBytes?: number
+  maxTokens?: number
+  maxCostUsd?: number
+}
+
+export type AgentRunQuestionStatus = 'pending' | 'approved' | 'denied'
+
+export interface AgentRunQuestion {
+  id: string
+  runId: string
+  kind: 'command-allowlist'
+  argv: string[]
+  reason: string
+  proposedAllowlistAddition: string
+  status: AgentRunQuestionStatus
+  response: string | null
+  createdAt: string
+  answeredAt: string | null
 }
 
 export interface AgentRun {
@@ -111,9 +131,12 @@ export interface DispatchAgentRunInput {
   paths?: string[]
   idempotencyKey: string
   parentModel?: string
+  /** Required for write-capable agents after the immutable brief is shown. */
+  confirmed?: boolean
 }
 
 export interface AgentRunDetail {
   run: AgentRun
   events: AgentRunEvent[]
+  questions: AgentRunQuestion[]
 }

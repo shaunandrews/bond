@@ -17,9 +17,9 @@ import { collectEvidence } from './evidence'
 import { resolveContextDocs } from './context-docs'
 import { effectiveAgentSettings, loadAgentRoster } from './registry'
 import { runAgentConsult } from './run-agent'
-import { checkAgentRunFromTool, dispatchAgentRunFromTool } from './async/api'
+import { answerAgentQuestionFromTool, checkAgentRunFromTool, dispatchAgentRunFromTool } from './async/api'
 
-export const AGENT_TOOL_NAMES = ['consult_agent', 'dispatch_agent', 'check_agent']
+export const AGENT_TOOL_NAMES = ['consult_agent', 'dispatch_agent', 'check_agent', 'answer_agent_question']
 
 export interface AgentToolOptions {
   /** Parent turn's capability tier, inherited when the agent's model is 'inherit'. */
@@ -35,6 +35,7 @@ export interface AgentToolOptions {
   resolveDocs?: typeof resolveContextDocs
   dispatchRun?: typeof dispatchAgentRunFromTool
   checkRun?: typeof checkAgentRunFromTool
+  answerQuestion?: typeof answerAgentQuestionFromTool
 }
 
 export function expandPath(path: string): string {
@@ -49,6 +50,7 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
   const resolveDocs = options.resolveDocs ?? resolveContextDocs
   const dispatchRun = options.dispatchRun ?? dispatchAgentRunFromTool
   const checkRun = options.checkRun ?? checkAgentRunFromTool
+  const answerQuestion = options.answerQuestion ?? answerAgentQuestionFromTool
 
   pi.registerTool({
     name: 'consult_agent',
@@ -124,7 +126,7 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
     name: 'dispatch_agent',
     label: 'Dispatch Agent',
     description:
-      'Queue a durable read-only specialist task and return immediately. Use only after the user confirms the exact brief. ' +
+      'Queue a durable specialist task and return immediately. Write-capable Mathis requires the exact immutable brief to be shown and confirmed by the user. ' +
       'Supply a stable idempotency key and reuse it for retries so a reconnect cannot create duplicate work.',
     parameters: Type.Object({
       agent: Type.String({ description: 'Agent name, e.g. "felix" or "q"' }),
@@ -132,6 +134,7 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
       brief: Type.String({ description: 'The immutable user-confirmed task brief' }),
       paths: Type.Optional(Type.Array(Type.String(), { description: 'Read-only files/directories in scope' })),
       idempotencyKey: Type.String({ description: 'Stable unique key for this confirmed task; reuse on retries' }),
+      confirmed: Type.Boolean({ description: 'True only after the user explicitly confirmed this exact immutable brief' }),
     }),
     async execute(_toolCallId, params) {
       const dispatched = await dispatchRun({
@@ -141,6 +144,7 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
         paths: params.paths,
         idempotencyKey: params.idempotencyKey,
         parentModel: options.model,
+        confirmed: params.confirmed,
       })
       return {
         content: [{
@@ -167,9 +171,34 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
       const run = detail.run
       const result = run.status === 'succeeded' && run.result ? `\n\n${run.result}` : ''
       const error = run.errorMessage ? `\n\nError: ${run.errorMessage}` : ''
+      const pending = detail.questions.filter(question => question.status === 'pending')
+      const questions = pending.length
+        ? `\n\nWaiting for command approval:\n${pending.map(question => `- ${question.id}: ${question.proposedAllowlistAddition}\n  Reason: ${question.reason}`).join('\n')}`
+        : ''
       return {
-        content: [{ type: 'text' as const, text: `${run.agentLabel} ${run.verb}: ${run.status}.${result}${error}` }],
+        content: [{ type: 'text' as const, text: `${run.agentLabel} ${run.verb}: ${run.status}.${result}${error}${questions}` }],
         details: detail,
+      }
+    },
+  })
+
+  pi.registerTool({
+    name: 'answer_agent_question',
+    label: 'Answer Agent Question',
+    description: 'Approve or deny a persisted run-scoped command question after relaying the exact argv, reason, and proposed allowlist addition to the user.',
+    parameters: Type.Object({
+      runId: Type.String(),
+      questionId: Type.String(),
+      approved: Type.Boolean(),
+      response: Type.Optional(Type.String({ description: 'The user decision or constraints to persist with the answer.' })),
+    }),
+    async execute(_toolCallId, params) {
+      const answered = await answerQuestion(params.runId, params.questionId, params.approved, params.response)
+      return {
+        content: [{ type: 'text' as const, text: params.approved
+          ? `Approved that exact argv for run ${params.runId}; Mathis is resuming in the same worktree.`
+          : `Denied the command; run ${params.runId} is now failed and its worktree is retained.` }],
+        details: answered,
       }
     },
   })

@@ -1,7 +1,7 @@
-import type { AgentRun } from '../../../shared/agent-runs'
+import type { AgentRun, AgentRunQuestion } from '../../../shared/agent-runs'
 import { upsertMessages } from '../../transcript'
 import { queueWhenNoActiveTurns } from '../../turns'
-import { getAgentRun, markAgentRunCompletionInserted, runsAwaitingCompletion } from './store'
+import { getAgentRun, listPendingAgentRunQuestions, markAgentRunCompletionInserted, runsAwaitingCompletion } from './store'
 
 export interface AgentRunCompletionOptions {
   deferUntilTurnsIdle?: (task: () => void) => void
@@ -11,6 +11,7 @@ export interface AgentRunCompletionOptions {
 
 export interface AgentRunCompletionCoordinator {
   enqueue(run: AgentRun): void
+  enqueueQuestion(run: AgentRun, question: AgentRunQuestion): void
   reconcile(): void
 }
 
@@ -27,6 +28,7 @@ export function createAgentRunCompletionCoordinator(options: AgentRunCompletionO
   const defer = options.deferUntilTurnsIdle ?? queueWhenNoActiveTurns
   const logger = options.logger ?? console
   const queued = new Set<string>()
+  const queuedQuestions = new Set<string>()
 
   const enqueue = (candidate: AgentRun): void => {
     if (!['succeeded', 'failed', 'cancelled'].includes(candidate.status)) return
@@ -61,10 +63,47 @@ export function createAgentRunCompletionCoordinator(options: AgentRunCompletionO
     })
   }
 
+  const enqueueQuestion = (run: AgentRun, question: AgentRunQuestion): void => {
+    if (question.status !== 'pending' || queuedQuestions.has(question.id)) return
+    queuedQuestions.add(question.id)
+    defer(() => {
+      try {
+        const current = getAgentRun(run.id)
+        if (!current || current.status !== 'needs-input') return
+        upsertMessages([{
+          id: `agent-run:${run.id}:question:${question.id}`,
+          role: 'meta',
+          kind: 'agent-run',
+          text: `${run.agentLabel} needs approval before continuing. ${question.proposedAllowlistAddition} Reason: ${question.reason}`,
+          data: {
+            runId: run.id,
+            agent: run.agent,
+            agentLabel: run.agentLabel,
+            verb: run.verb,
+            status: 'needs-input',
+            questionId: question.id,
+            argv: question.argv,
+            reason: question.reason,
+            proposedAllowlistAddition: question.proposedAllowlistAddition,
+          },
+        }])
+      } catch (error) {
+        logger.warn('[agents/completion] question insertion failed:', error)
+      } finally {
+        queuedQuestions.delete(question.id)
+      }
+    })
+  }
+
   return {
     enqueue,
+    enqueueQuestion,
     reconcile(): void {
       for (const run of runsAwaitingCompletion()) enqueue(run)
+      for (const question of listPendingAgentRunQuestions()) {
+        const run = getAgentRun(question.runId)
+        if (run) enqueueQuestion(run, question)
+      }
     },
   }
 }

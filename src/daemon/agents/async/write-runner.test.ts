@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRun } from '../../../shared/agent-runs'
 import { DEFAULT_AGENT_SETTINGS } from '../../../shared/agents'
-import { createMathisExtensionFactory, MathisResourceGuard } from './write-runner'
+import { createMathisExtensionFactory, MathisResourceGuard, packageScriptsMatch } from './write-runner'
 
 const roots: string[] = []
 function runFixture(): AgentRun {
@@ -31,23 +31,31 @@ describe('Mathis worktree tools', () => {
     mkdirSync(outside)
     roots.push(outside)
     symlinkSync(outside, join(run.workspace.repoRoot, 'escape'))
-    let hook: (event: any) => Promise<any>
+    const hooks = new Map<string, (event: any) => Promise<any>>()
     createMathisExtensionFactory({ run, signal: new AbortController().signal, onQuestion: vi.fn() })({
-      on: (_name: string, value: any) => { hook = value },
+      on: (name: string, value: any) => { hooks.set(name, value) },
       registerTool: vi.fn(),
     } as any)
     for (const toolName of ['read', 'grep', 'find', 'ls', 'edit', 'write']) {
-      expect((await hook!({ toolName, input: { path: '../outside' } })).block).toBe(true)
-      expect((await hook!({ toolName, input: { path: 'escape/file' } })).block).toBe(true)
+      expect((await hooks.get('tool_call')!({ toolName, input: { path: '../outside' } })).block).toBe(true)
+      expect((await hooks.get('tool_call')!({ toolName, input: { path: 'escape/file' } })).block).toBe(true)
     }
   })
 
   it('provides conservative step, command, and loop guard hooks', () => {
     const guard = new MathisResourceGuard(2, 1, 1)
     guard.recordTool('read', { path: 'a' })
-    expect(() => guard.recordTool('read', { path: 'a' })).toThrow('repeated')
+    guard.recordResult('read', { path: 'a' }, 'same')
+    expect(() => guard.recordResult('read', { path: 'a' }, 'same')).toThrow('repeated')
     const other = new MathisResourceGuard(1, 1, 4)
     other.recordTool('run_command', { argv: ['git', 'status'] })
     expect(() => other.recordTool('read', { path: 'b' })).toThrow('step')
+    const usage = new MathisResourceGuard(10, 10, 4, 100, 1)
+    expect(() => usage.recordUsage(101, 0)).toThrow('token')
+  })
+
+  it('requires npm scripts to match the immutable base manifest', () => {
+    expect(packageScriptsMatch('{"scripts":{"test":"vitest"}}', '{"scripts":{"test":"vitest"}}')).toBe(true)
+    expect(packageScriptsMatch('{"scripts":{"test":"curl evil"}}', '{"scripts":{"test":"vitest"}}')).toBe(false)
   })
 })

@@ -5,6 +5,7 @@ import {
   TERMINAL_AGENT_RUN_STATES,
   type AgentRun,
   type AgentRunEvent,
+  type AgentRunQuestion,
   type AgentRunResourceCaps,
   type AgentRunState,
   type AgentRunWorkspace,
@@ -55,6 +56,19 @@ type EventRow = {
   to_state: AgentRunState | null
   data: string
   created_at: string
+}
+
+type QuestionRow = {
+  id: string
+  run_id: string
+  kind: 'command-allowlist'
+  command_argv_json: string
+  reason: string
+  proposed_allowlist_addition: string
+  status: 'pending' | 'approved' | 'denied'
+  response: string | null
+  created_at: string
+  answered_at: string | null
 }
 
 export interface CreateAgentRunRecord {
@@ -150,6 +164,21 @@ function rowToEvent(row: EventRow): AgentRunEvent {
     toState: row.to_state,
     data: parseJson<Record<string, unknown>>(row.data),
     createdAt: row.created_at,
+  }
+}
+
+function rowToQuestion(row: QuestionRow): AgentRunQuestion {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    kind: row.kind,
+    argv: parseJson<string[]>(row.command_argv_json),
+    reason: row.reason,
+    proposedAllowlistAddition: row.proposed_allowlist_addition,
+    status: row.status,
+    response: row.response,
+    createdAt: row.created_at,
+    answeredAt: row.answered_at,
   }
 }
 
@@ -286,6 +315,102 @@ export function listAgentRuns(options: { statuses?: AgentRunState[]; limit?: num
 export function listAgentRunEvents(runId: string, dbArg?: Database.Database): AgentRunEvent[] {
   const db = dbFor(dbArg)
   return (db.prepare('SELECT * FROM agent_run_events WHERE run_id = ? ORDER BY sequence ASC').all(runId) as EventRow[]).map(rowToEvent)
+}
+
+export function listAgentRunQuestions(runId: string, dbArg?: Database.Database): AgentRunQuestion[] {
+  const db = dbFor(dbArg)
+  return (db.prepare('SELECT * FROM agent_run_questions WHERE run_id = ? ORDER BY created_at ASC').all(runId) as QuestionRow[]).map(rowToQuestion)
+}
+
+export function listPendingAgentRunQuestions(dbArg?: Database.Database): AgentRunQuestion[] {
+  const db = dbFor(dbArg)
+  return (db.prepare("SELECT * FROM agent_run_questions WHERE status = 'pending' ORDER BY created_at ASC").all() as QuestionRow[]).map(rowToQuestion)
+}
+
+export function approvedAgentRunCommandGrants(runId: string, dbArg?: Database.Database): Set<string> {
+  const db = dbFor(dbArg)
+  const rows = db.prepare("SELECT command_argv_json FROM agent_run_questions WHERE run_id = ? AND status = 'approved'").all(runId) as Array<{ command_argv_json: string }>
+  return new Set(rows.map(row => row.command_argv_json))
+}
+
+export function runsReadyToResume(dbArg?: Database.Database): AgentRun[] {
+  const db = dbFor(dbArg)
+  return (db.prepare(`
+    SELECT r.* FROM agent_runs r
+    WHERE r.status = 'needs-input'
+      AND EXISTS (
+        SELECT 1 FROM agent_run_questions q
+        WHERE q.run_id = r.id AND q.status = 'approved'
+      )
+    ORDER BY r.updated_at ASC
+  `).all() as RunRow[]).map(rowToRun)
+}
+
+export function parkAgentRunForCommand(
+  id: string,
+  question: { argv: string[]; reason: string; proposedAllowlistAddition: string },
+  checkpoint: Record<string, unknown>,
+  now = nowIso(),
+  dbArg?: Database.Database,
+): { run: AgentRun; question: AgentRunQuestion } {
+  const db = dbFor(dbArg)
+  const questionId = randomUUID()
+  db.transaction(() => {
+    const current = getAgentRun(id, db)
+    if (!current) throw new Error(`Unknown agent run "${id}".`)
+    if (current.status !== 'running') throw new Error(`Cannot park command question while run is ${current.status}.`)
+    db.prepare(`
+      INSERT INTO agent_run_questions (
+        id, run_id, kind, command_argv_json, reason, proposed_allowlist_addition,
+        status, created_at
+      ) VALUES (?, ?, 'command-allowlist', ?, ?, ?, 'pending', ?)
+    `).run(questionId, id, JSON.stringify(question.argv), question.reason, question.proposedAllowlistAddition, now)
+    insertEvent(db, id, 'command_question_asked', 'running', 'needs-input', {
+      questionId, argv: question.argv, reason: question.reason,
+      proposedAllowlistAddition: question.proposedAllowlistAddition,
+    }, now)
+    db.prepare(`UPDATE agent_runs SET status = 'needs-input', checkpoint_json = ?, updated_at = ? WHERE id = ?`)
+      .run(JSON.stringify(checkpoint), now, id)
+  })()
+  const row = db.prepare('SELECT * FROM agent_run_questions WHERE id = ?').get(questionId) as QuestionRow
+  return { run: getAgentRun(id, db)!, question: rowToQuestion(row) }
+}
+
+export function answerAgentRunQuestion(
+  runId: string,
+  questionId: string,
+  approved: boolean,
+  response: string,
+  now = nowIso(),
+  dbArg?: Database.Database,
+): { run: AgentRun; question: AgentRunQuestion; changed: boolean } {
+  const db = dbFor(dbArg)
+  let changed = false
+  db.transaction(() => {
+    const run = getAgentRun(runId, db)
+    if (!run) throw new Error(`Unknown agent run "${runId}".`)
+    const row = db.prepare('SELECT * FROM agent_run_questions WHERE id = ? AND run_id = ?').get(questionId, runId) as QuestionRow | undefined
+    if (!row) throw new Error(`Unknown question "${questionId}" for this run.`)
+    const desired = approved ? 'approved' : 'denied'
+    if (row.status !== 'pending') {
+      if (row.status !== desired) throw new Error(`Question was already ${row.status}.`)
+      return
+    }
+    if (run.status !== 'needs-input') throw new Error(`Run is ${run.status}, not waiting for input.`)
+    changed = true
+    db.prepare('UPDATE agent_run_questions SET status = ?, response = ?, answered_at = ? WHERE id = ?')
+      .run(desired, response, now, questionId)
+    if (approved) {
+      insertEvent(db, runId, 'command_approved', 'needs-input', 'needs-input', { questionId, argv: parseJson<string[]>(row.command_argv_json), response }, now)
+      db.prepare('UPDATE agent_runs SET updated_at = ? WHERE id = ?').run(now, runId)
+    } else {
+      insertEvent(db, runId, 'command_denied', 'needs-input', 'failed', { questionId, argv: parseJson<string[]>(row.command_argv_json), response }, now)
+      db.prepare(`UPDATE agent_runs SET status = 'failed', error_class = 'policy', error_message = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
+        .run(`Command approval denied: ${response || row.reason}`, now, now, runId)
+    }
+  })()
+  const question = db.prepare('SELECT * FROM agent_run_questions WHERE id = ?').get(questionId) as QuestionRow
+  return { run: getAgentRun(runId, db)!, question: rowToQuestion(question), changed }
 }
 
 export function transitionAgentRun(id: string, to: AgentRunState, options: TransitionOptions, dbArg?: Database.Database): AgentRun {

@@ -3,16 +3,18 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { homedir } from 'node:os'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import type { AgentRun, AgentRunDetail, AgentRunWorkspace, DispatchAgentRunInput, ManagedWorkspaceInspection } from '../../../shared/agent-runs'
+import type { AgentRun, AgentRunDetail, AgentRunQuestion, AgentRunWorkspace, DispatchAgentRunInput, ManagedWorkspaceInspection } from '../../../shared/agent-runs'
 import { MODEL_IDS } from '../../../shared/models'
 import { resolveContextDocs } from '../context-docs'
 import { effectiveAgentSettings, findAgent } from '../registry'
 import { createAgentRunCompletionCoordinator } from './completion'
 import {
   createAgentRunRecord,
+  answerAgentRunQuestion,
   getAgentRun,
   getAgentRunByIdempotencyKey,
   listAgentRunEvents,
+  listAgentRunQuestions,
   listAgentRuns,
   updateAgentRunWorkspaceState,
 } from './store'
@@ -43,6 +45,20 @@ function emit(run: AgentRun): void {
 }
 
 const completion = createAgentRunCompletionCoordinator({ onChanged: emit })
+function retainAndComplete(run: AgentRun): void {
+  let terminal = run
+  if (run.workspace.isolation === 'worktree' && run.workspaceState.status !== 'discarded') {
+    const now = new Date().toISOString()
+    terminal = updateAgentRunWorkspaceState(run.id, {
+      ...run.workspaceState,
+      status: 'retained',
+      retainedAt: now,
+    }, 'workspace_retained', { path: run.workspace.worktreePath }, now)
+    emit(terminal)
+  }
+  completion.enqueue(terminal)
+}
+
 const worker = createAgentRunWorker({
   prepare: async (run, signal) => {
     if (run.workspace.isolation !== 'worktree') return run
@@ -60,19 +76,8 @@ const worker = createAgentRunWorker({
     return updated
   },
   onChanged: emit,
-  onTerminal: run => {
-    let terminal = run
-    if (run.workspace.isolation === 'worktree' && run.workspaceState.status !== 'discarded') {
-      const now = new Date().toISOString()
-      terminal = updateAgentRunWorkspaceState(run.id, {
-        ...run.workspaceState,
-        status: 'retained',
-        retainedAt: now,
-      }, 'workspace_retained', { path: run.workspace.worktreePath }, now)
-      emit(terminal)
-    }
-    completion.enqueue(terminal)
-  },
+  onQuestion: (run, question) => completion.enqueueQuestion(run, question),
+  onTerminal: retainAndComplete,
 })
 
 function expandPath(path: string): string {
@@ -114,7 +119,7 @@ export function setAgentRunTransport(value: AgentRunTransport | null): void {
 export function startAgentRunService(): void {
   if (started) return
   started = true
-  setAgentRunApi({ dispatch: dispatchAgentRun, check: checkAgentRun })
+  setAgentRunApi({ dispatch: dispatchAgentRun, check: checkAgentRun, answer: answerAgentQuestion })
   completion.reconcile()
   worker.start()
 }
@@ -133,6 +138,9 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
   let paths = (input.paths ?? []).map(expandPath)
   const prior = getAgentRunByIdempotencyKey(input.idempotencyKey.trim())
   if (prior) {
+    if (prior.workspace.isolation === 'worktree' && input.confirmed !== true) {
+      throw new Error('Mathis requires explicit user confirmation of the immutable task brief before dispatch.')
+    }
     const priorWorkspace = prior.workspace
     const retryPaths = priorWorkspace.isolation === 'worktree'
       ? ((input.paths ?? []).length
@@ -161,6 +169,9 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
   const settings = effective.model === 'inherit' && parentModel
     ? { ...effective, model: parentModel as typeof effective.model }
     : effective
+  if (settings.workspace === 'write' && input.confirmed !== true) {
+    throw new Error(`${definition.label} requires explicit user confirmation of the immutable task brief before dispatch.`)
+  }
 
   const id = randomUUID()
   let workspace: AgentRunWorkspace
@@ -202,7 +213,15 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
     agentDefinitionVersion: definitionVersion({ definition, settings }),
     commandPolicyVersion: workspace.isolation === 'worktree' ? MATHIS_COMMAND_POLICY_VERSION : ASYNC_AGENT_COMMAND_POLICY_VERSION,
     acceptanceChecks: [],
-    resourceCaps: { wallClockSeconds: settings.leash, maxOutputChars: 100_000 },
+    resourceCaps: {
+      wallClockSeconds: settings.leash,
+      maxOutputChars: 100_000,
+      maxSteps: 80,
+      maxSubprocesses: 24,
+      maxDiskBytes: 2 * 1024 * 1024 * 1024,
+      maxTokens: 250_000,
+      maxCostUsd: 25,
+    },
   })
   if (created.created) {
     emit(created.run)
@@ -213,7 +232,21 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
 
 export function checkAgentRun(runId: string): AgentRunDetail | null {
   const run = getAgentRun(runId)
-  return run ? { run, events: listAgentRunEvents(run.id) } : null
+  return run ? { run, events: listAgentRunEvents(run.id), questions: listAgentRunQuestions(run.id) } : null
+}
+
+export async function answerAgentQuestion(
+  runId: string,
+  questionId: string,
+  approved: boolean,
+  response = '',
+): Promise<{ run: AgentRun; question: AgentRunQuestion; changed: boolean }> {
+  const answered = answerAgentRunQuestion(runId, questionId, approved, response.trim())
+  emit(answered.run)
+  if (!answered.changed) return answered
+  if (approved) await worker.resume(runId)
+  else retainAndComplete(answered.run)
+  return answered
 }
 
 export function cancelAgentRun(runId: string): AgentRun | null {

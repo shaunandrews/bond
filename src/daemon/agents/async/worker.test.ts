@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_AGENT_SETTINGS } from '../../../shared/agents'
 import { closeDb, getDb } from '../../db'
 import { setDataDir } from '../../paths'
-import { createAgentRunRecord, getAgentRun, listAgentRunEvents, transitionAgentRun } from './store'
+import { answerAgentRunQuestion, createAgentRunRecord, getAgentRun, listAgentRunEvents, listAgentRunQuestions, transitionAgentRun } from './store'
 import { createAgentRunWorker } from './worker'
+import { CommandApprovalRequired } from './write-runner'
 
 let dir: string
 
@@ -111,5 +112,65 @@ describe('agent run worker', () => {
     expect(worker.activeRunId()).toBeNull()
     expect(getAgentRun('cancel-me')?.status).toBe('cancelled')
     expect(listAgentRunEvents('cancel-me').at(-1)?.type).toBe('cancelled')
+  })
+
+  it('durably parks an unknown command and resumes the same run after restart approval', async () => {
+    seed('park-resume')
+    const argv = ['node', 'scripts/special-check.mjs']
+    const firstWorker = createAgentRunWorker({
+      execute: async (_run, context) => {
+        context.onStarted({ phase: 'first-session' })
+        throw new CommandApprovalRequired({
+          argv,
+          reason: 'node is not allowlisted; needed for the task',
+          proposedAllowlistAddition: `Allow this exact argv for this run only: ${JSON.stringify(argv)}`,
+        })
+      },
+    })
+    await firstWorker.tickNow()
+    await firstWorker.stop()
+
+    const question = listAgentRunQuestions('park-resume')[0]
+    expect(getAgentRun('park-resume')).toMatchObject({
+      status: 'needs-input',
+      checkpoint: { phase: 'awaiting-command-approval', pendingArgv: argv },
+    })
+    expect(question).toMatchObject({ status: 'pending', argv })
+    answerAgentRunQuestion('park-resume', question.id, true, 'Approved for this run only.')
+
+    const resumed = vi.fn(async (run, context) => {
+      expect(run.id).toBe('park-resume')
+      expect(context.exactCommandGrants.has(JSON.stringify(argv))).toBe(true)
+      context.onStarted({ phase: 'resumed-session' })
+      return 'finished in same run'
+    })
+    const restartedWorker = createAgentRunWorker({ execute: resumed, intervalMs: 60_000 })
+    restartedWorker.start()
+    await restartedWorker.tickNow()
+    await restartedWorker.stop()
+
+    expect(resumed).toHaveBeenCalledTimes(1)
+    expect(getAgentRun('park-resume')).toMatchObject({ status: 'succeeded', result: 'finished in same run' })
+    expect(listAgentRunEvents('park-resume').map(event => event.type)).toEqual(expect.arrayContaining([
+      'command_question_asked', 'command_approved', 'command_resume_started', 'succeeded',
+    ]))
+  })
+
+  it('fails a parked run when the command is denied', async () => {
+    seed('deny-command')
+    transitionAgentRun('deny-command', 'preparing-workspace', { eventType: 'preparing' })
+    transitionAgentRun('deny-command', 'running', { eventType: 'started' })
+    const parkedWorker = createAgentRunWorker({
+      execute: async () => 'unused',
+    })
+    // Use the same public parking path exercised above, then deny its question.
+    const { parkAgentRunForCommand } = await import('./store')
+    parkAgentRunForCommand('deny-command', {
+      argv: ['node', 'x.mjs'], reason: 'unknown', proposedAllowlistAddition: 'exact grant',
+    }, { phase: 'awaiting-command-approval' })
+    const question = listAgentRunQuestions('deny-command')[0]
+    const answered = answerAgentRunQuestion('deny-command', question.id, false, 'Do not run it.')
+    expect(answered.run).toMatchObject({ status: 'failed', errorClass: 'policy' })
+    await parkedWorker.stop()
   })
 })

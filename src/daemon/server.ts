@@ -62,6 +62,7 @@ import { removeSkill } from './skills'
 import { listAgents, revokeAgentRunner, updateAgentSettings } from './agents/service'
 import {
   cancelAgentRun,
+  answerAgentQuestion,
   checkAgentRun,
   reconnectAgentRuns,
   inspectAgentRunWorkspace,
@@ -1030,6 +1031,16 @@ const handlers: RpcHandlers = {
     const runId = getStringParam(raw(params), 'runId')
     if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
     return cancelAgentRun(runId)
+  },
+
+  'agentruns.answerQuestion': async (params) => {
+    const p = raw(params)
+    const runId = getStringParam(p, 'runId')
+    const questionId = getStringParam(p, 'questionId')
+    const approved = getParam(p, 'approved')
+    const response = getStringParam(p, 'response')
+    if (!runId || !questionId || typeof approved !== 'boolean') throw new RpcError(RPC_INVALID_PARAMS, 'runId, questionId, and approved are required')
+    return answerAgentQuestion(runId, questionId, approved, response)
   },
 
   'agentruns.inspectWorkspace': async (params) => {

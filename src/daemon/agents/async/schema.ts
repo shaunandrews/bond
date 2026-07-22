@@ -54,6 +54,23 @@ export function ensureAgentRunSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_sequence
       ON agent_run_events(run_id, sequence);
 
+    CREATE TABLE IF NOT EXISTS agent_run_questions (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('command-allowlist')),
+      command_argv_json TEXT NOT NULL CHECK(json_valid(command_argv_json)),
+      reason TEXT NOT NULL,
+      proposed_allowlist_addition TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
+      response TEXT,
+      created_at TEXT NOT NULL,
+      answered_at TEXT,
+      UNIQUE(run_id, command_argv_json)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_run_questions_run_status
+      ON agent_run_questions(run_id, status, created_at);
+
     CREATE TRIGGER IF NOT EXISTS agent_run_events_no_update
     BEFORE UPDATE ON agent_run_events
     BEGIN
