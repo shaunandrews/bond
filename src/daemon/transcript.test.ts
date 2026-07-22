@@ -90,6 +90,33 @@ describe('transcript store', () => {
     expect(page.messages.every(m => m.threadId === 'thread-1')).toBe(true)
   })
 
+  it('a renderer upsert cannot move an existing message between scopes — thread_id is set once at insert and pinned thereafter', () => {
+    getDb().prepare("INSERT INTO messages (id, role, text) VALUES ('thread-anchor-2', 'bond', 'anchor')").run()
+    getDb().prepare(`
+      INSERT INTO threads (id, anchor_message_id, context_snapshot, status, created_at, updated_at)
+      VALUES ('thread-2', 'thread-anchor-2', '{}', 'open', '2026-01-01', '2026-01-01')
+    `).run()
+
+    // A plain main-scope message, inserted with no threadId.
+    upsertMessages([{ id: 'main-msg-1', epochId: 'epoch-1', role: 'bond', text: 'main scoped' }])
+    expect(listMessages().messages.find(m => m.id === 'main-msg-1')?.threadId).toBeNull()
+
+    // A later upsert for the SAME id claims a thread scope — must be ignored.
+    upsertMessages([{ id: 'main-msg-1', epochId: 'epoch-1', role: 'bond', text: 'main scoped, edited', threadId: 'thread-2' }])
+    const afterAttempt = listMessages().messages.find(m => m.id === 'main-msg-1')
+    expect(afterAttempt?.threadId).toBeNull()
+    expect(afterAttempt?.text).toBe('main scoped, edited') // the edit itself still applies — only the scope is pinned
+
+    // And the reverse: a thread-scoped message can't be claimed back into main.
+    insertTurnStart({
+      threadId: 'thread-2', turnId: 'thread-turn-2', userMessageId: 'thread-user-2',
+      assistantMessageId: 'thread-bond-2', activityMessageId: 'thread-activity-2', text: 'thread question 2',
+    })
+    upsertMessages([{ id: 'thread-bond-2', threadId: null, role: 'bond', text: 'reply, attempted scope swap' }])
+    const threadMessage = listMessages({ threadId: 'thread-2' }).messages.find(m => m.id === 'thread-bond-2')
+    expect(threadMessage?.threadId).toBe('thread-2')
+  })
+
   it('upserts supplied messages without deleting absent rows', () => {
     insertTurnStart({
       epochId: 'epoch-1', turnId: 'turn-1', userMessageId: 'user-1', assistantMessageId: 'bond-1', activityMessageId: 'activity-1', text: 'original user',

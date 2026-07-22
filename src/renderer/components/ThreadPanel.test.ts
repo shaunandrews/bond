@@ -190,4 +190,55 @@ describe('ThreadPanel', () => {
     await wrapper.find('.view-shell').trigger('keydown', { key: 'Escape' })
     expect(wrapper.emitted('close')).toBeTruthy()
   })
+
+  // plans/chat-threads.md test plan — "Thread and main drafts survive
+  // switching" / "Empty drafts clean up; non-empty threads persist."
+  describe('composer draft persistence (per-thread, via localStorage)', () => {
+    it('closing the panel saves a non-empty in-progress draft, keyed to this thread', async () => {
+      const DraftStub = defineComponent({
+        props: ['busy', 'model', 'editMode', 'contextUsage', 'placeholder'],
+        emits: ['submit', 'cancel', 'update:model', 'update:editMode'],
+        setup(_props, { expose }) {
+          expose({ focus: () => {}, getText: () => 'a draft in progress', setText: () => {} })
+          return () => null
+        },
+      })
+      const wrapper = shallowMount(ThreadPanel, {
+        props: { threadId: 'thread-1', model: 'balanced' } as any,
+        global: { stubs: { Teleport: true, ViewShell: false, BondButton: false, BondText: false, BondTextarea: false, BondFlyoutMenu: false, BondToolbar: false, ChatInput: DraftStub } },
+      })
+      await flush()
+
+      await wrapper.find('[aria-label="Close thread"]').trigger('click')
+      expect(localStorage.getItem('bond:thread-draft:thread-1')).toBe('a draft in progress')
+    })
+
+    it('mounting restores a previously saved draft into the composer', async () => {
+      localStorage.setItem('bond:thread-draft:thread-1', 'saved earlier')
+      const setTextSpy = vi.fn()
+      const RestoreStub = defineComponent({
+        props: ['busy', 'model', 'editMode', 'contextUsage', 'placeholder'],
+        emits: ['submit', 'cancel', 'update:model', 'update:editMode'],
+        setup(_props, { expose }) {
+          expose({ focus: () => {}, getText: () => '', setText: setTextSpy })
+          return () => null
+        },
+      })
+      shallowMount(ThreadPanel, {
+        props: { threadId: 'thread-1', model: 'balanced' } as any,
+        global: { stubs: { Teleport: true, ViewShell: false, BondButton: false, BondText: false, BondTextarea: false, BondFlyoutMenu: false, BondToolbar: false, ChatInput: RestoreStub } },
+      })
+
+      await vi.waitFor(() => expect(setTextSpy).toHaveBeenCalledWith('saved earlier'))
+    })
+
+    it('sending the draft clears its localStorage entry rather than leaving a stale draft behind', async () => {
+      localStorage.setItem('bond:thread-draft:thread-1', 'about to send')
+      const wrapper = mountPanel()
+      await flush()
+
+      await (wrapper.vm as any).handleSubmit('about to send', [])
+      expect(localStorage.getItem('bond:thread-draft:thread-1')).toBeNull()
+    })
+  })
 })

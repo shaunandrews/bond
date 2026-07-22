@@ -230,6 +230,23 @@ describe('thread CRUD', () => {
     expect(getThread(thread.id)).toBeNull()
   })
 
+  it('deleting the anchor cascades two hops deep — thread metadata AND its own scoped epoch/turn/message rows all disappear', () => {
+    const { assistantMessageId } = makeTurn(1, 'hi', 'hello there')
+    const thread = createThread(assistantMessageId)
+    const { turnId, userMessageId, assistantMessageId: threadReplyId } = makeThreadTurn(thread.id, 1, 'a tangent', 'a reply')
+    getDb().prepare(
+      "INSERT INTO epochs (id, thread_id, pi_session_id, status, started_at, observed_through_seq, reflected_through_seq) VALUES (?, ?, ?, 'active', ?, 0, 0)",
+    ).run('thread-epoch-1', thread.id, 'pi-thread-1', new Date(2026, 0, 2, 0, 0).toISOString())
+
+    getDb().prepare('DELETE FROM messages WHERE id = ?').run(assistantMessageId)
+
+    expect(getThread(thread.id)).toBeNull()
+    expect(getDb().prepare('SELECT 1 FROM turns WHERE id = ?').get(turnId)).toBeUndefined()
+    expect(getDb().prepare('SELECT 1 FROM messages WHERE id = ?').get(userMessageId)).toBeUndefined()
+    expect(getDb().prepare('SELECT 1 FROM messages WHERE id = ?').get(threadReplyId)).toBeUndefined()
+    expect(getDb().prepare("SELECT 1 FROM epochs WHERE id = 'thread-epoch-1'").get()).toBeUndefined()
+  })
+
   it('threadHasPriorTurns is false until a real turn is recorded for that thread', () => {
     const { assistantMessageId } = makeTurn(1, 'hi', 'hello there')
     const thread = createThread(assistantMessageId)
