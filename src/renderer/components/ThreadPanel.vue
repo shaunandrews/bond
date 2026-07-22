@@ -14,7 +14,8 @@ import QuestionPrompt from './QuestionPrompt.vue'
 import BondButton from './BondButton.vue'
 import BondText from './BondText.vue'
 import BondFlyoutMenu from './BondFlyoutMenu.vue'
-import { PhArrowDown, PhArrowSquareOut, PhClockCounterClockwise, PhX } from '@phosphor-icons/vue'
+import BondTextarea from './BondTextarea.vue'
+import { PhArrowDown, PhArrowSquareOut, PhClockCounterClockwise, PhDotsThree, PhPaperPlaneTilt, PhX } from '@phosphor-icons/vue'
 
 const props = withDefaults(defineProps<{
   threadId: string
@@ -28,6 +29,8 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   close: []
   'update:model': [value: ModelId]
+  /** The confirmed summary card landed in main — App.vue reloads main's transcript to show it live. */
+  summarySent: []
 }>()
 
 // Fresh instance per thread — App.vue keys this component by threadId, so a
@@ -114,6 +117,53 @@ function showRootInConversation() {
   window.dispatchEvent(new CustomEvent('bond:scroll-to-message', { detail: rootMessage.value.id }))
 }
 
+// --- Write-back: "Send summary to main" (plans/chat-threads.md Phase 5b) ---
+// Never automatic — the overflow action starts it, an editable confirmation
+// sheet is the only way it actually reaches main.
+const overflowOpen = ref(false)
+const overflowAnchorEl = ref<HTMLElement | null>(null)
+const summarySheet = ref<{ text: string; loading: boolean } | null>(null)
+const sendingSummary = ref(false)
+const summaryError = ref(false)
+
+function toggleOverflow() {
+  overflowOpen.value = !overflowOpen.value
+}
+
+async function startSendSummary() {
+  overflowOpen.value = false
+  summaryError.value = false
+  summarySheet.value = { text: '', loading: true }
+  try {
+    const { summary } = await window.bond.summarizeThread(props.threadId)
+    if (summarySheet.value) summarySheet.value = { text: summary, loading: false }
+  } catch {
+    if (summarySheet.value) { summarySheet.value.loading = false }
+    summaryError.value = true
+  }
+}
+
+function cancelSummarySheet() {
+  summarySheet.value = null
+  summaryError.value = false
+}
+
+async function confirmSendSummary() {
+  const text = summarySheet.value?.text.trim()
+  if (!text || sendingSummary.value) return
+  sendingSummary.value = true
+  summaryError.value = false
+  try {
+    await window.bond.sendThreadSummaryToMain(props.threadId, text)
+    summarySheet.value = null
+    emit('summarySent')
+  } catch {
+    summaryError.value = true
+  } finally {
+    sendingSummary.value = false
+  }
+}
+
 async function handleSubmit(text: string, images: AttachedImage[]) {
   localStorage.removeItem(draftKey.value)
   nextTick(scrollToBottom)
@@ -186,6 +236,18 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
         >
           <BondText size="sm" truncate class="flex-1 min-w-0">{{ t.title || 'Thread' }}</BondText>
           <BondText size="xs" color="muted">{{ t.replyCount }}</BondText>
+        </button>
+      </BondFlyoutMenu>
+
+      <div ref="overflowAnchorEl">
+        <BondButton variant="ghost" size="sm" icon aria-label="Thread options" v-tooltip="'More'" @click="toggleOverflow">
+          <PhDotsThree :size="18" />
+        </BondButton>
+      </div>
+      <BondFlyoutMenu :open="overflowOpen" :anchor="overflowAnchorEl" placement="bottom-end" padding @close="overflowOpen = false">
+        <button type="button" class="overflow-menu-item" @click="startSendSummary">
+          <PhPaperPlaneTilt :size="14" />
+          Send summary to main
         </button>
       </BondFlyoutMenu>
     </template>
@@ -262,6 +324,37 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
       </div>
     </template>
   </ViewShell>
+
+  <Teleport to="body">
+    <div v-if="summarySheet" class="summary-sheet-backdrop" role="dialog" aria-modal="true" aria-label="Send thread summary to main" @click.self="cancelSummarySheet">
+      <div class="summary-sheet">
+        <BondText as="h2" size="sm" weight="semibold">Send summary to main</BondText>
+        <BondText size="xs" color="muted">
+          A short summary of this thread, inserted as a visible card in the main conversation. Nothing else from this thread is shared.
+        </BondText>
+        <BondText v-if="summarySheet.loading" size="sm" color="muted" class="summary-sheet-loading">Summarizing…</BondText>
+        <BondTextarea
+          v-else
+          :modelValue="summarySheet.text"
+          :rows="5"
+          placeholder="Summary…"
+          @update:modelValue="(v) => { if (summarySheet) summarySheet.text = v }"
+        />
+        <BondText v-if="summaryError" size="xs" color="err">Something went wrong. You can try again.</BondText>
+        <div class="summary-sheet-actions">
+          <BondButton variant="secondary" size="sm" @click="cancelSummarySheet">Cancel</BondButton>
+          <BondButton
+            variant="primary"
+            size="sm"
+            :disabled="summarySheet.loading || !summarySheet.text.trim() || sendingSummary"
+            @click="confirmSendSummary"
+          >
+            {{ sendingSummary ? 'Sending…' : 'Send to main' }}
+          </BondButton>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -353,6 +446,60 @@ defineExpose({ focusComposer: () => chatInputRef.value?.focus() })
 
 .recent-thread-row--active {
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.overflow-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background var(--transition-fast);
+}
+
+.overflow-menu-item:hover {
+  background: var(--color-bg);
+}
+
+.summary-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.summary-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  width: min(420px, 92vw);
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.summary-sheet-loading {
+  padding: 1.5rem 0;
+  text-align: center;
+}
+
+.summary-sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
 }
 
 .scroll-to-bottom-wrap {

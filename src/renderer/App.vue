@@ -246,6 +246,16 @@ async function closeThread() {
   if (id) threads.deleteDraftIfEmpty(id)
 }
 
+/**
+ * The write-back card lands via a plain RPC (thread.sendSummaryToMain), not a
+ * turn — main's own useChat instance never sees it as a chunk, so reload its
+ * transcript so the confirmed card actually shows up live.
+ */
+async function handleThreadSummarySent() {
+  await chat.loadTranscript()
+  nextTick(scrollToBottom)
+}
+
 /** Boot restore — adapts to whatever the window currently is; never grows it. */
 async function restoreLastThreadIfAny() {
   const id = threads.lastActiveThreadId()
@@ -559,6 +569,7 @@ onUnmounted(() => {
           :autoFocus="threadAutoFocus"
           @close="closeThread"
           @update:model="handleModelChange"
+          @summarySent="handleThreadSummarySent"
         />
       </BondPanel>
     </template>
@@ -600,6 +611,7 @@ onUnmounted(() => {
       drawer
       @close="closeThread"
       @update:model="handleModelChange"
+      @summarySent="handleThreadSummarySent"
     />
   </div>
 

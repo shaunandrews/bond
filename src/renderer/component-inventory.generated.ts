@@ -997,6 +997,10 @@ export const componentInventory = [
       {
         "name": "close",
         "payload": "void"
+      },
+      {
+        "name": "summarySent",
+        "payload": "void"
       }
     ]
   },
