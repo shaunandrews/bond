@@ -70,6 +70,10 @@ import {
   setAgentRunTransport,
   startAgentRunService,
   stopAgentRunService,
+  getGitHubHandoffConfig,
+  configureGitHubHandoff,
+  setGitHubHandoffCredential,
+  publishAgentRun,
 } from './agents/async/service'
 import * as desk from './desk/service'
 import { createDeskWorker, type DeskWorker } from './desk/worker'
@@ -1053,6 +1057,30 @@ const handlers: RpcHandlers = {
     const runId = getStringParam(raw(params), 'runId')
     if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
     return discardAgentRunWorkspace(runId)
+  },
+
+  'agentruns.githubConfig': () => getGitHubHandoffConfig(),
+
+  'agentruns.configureGithub': async (params) => {
+    const p = raw(params)
+    const enabled = getParam(p, 'enabled')
+    const repository = getStringParam(p, 'repository')
+    const remote = getStringParam(p, 'remote')
+    const credentialRef = getStringParam(p, 'credentialRef')
+    if (typeof enabled !== 'boolean' || !repository || !remote || !credentialRef) throw new RpcError(RPC_INVALID_PARAMS, 'enabled, repository, remote, and credentialRef are required')
+    return configureGitHubHandoff({ enabled, repository, remote, credentialRef })
+  },
+
+  'agentruns.setGithubCredential': async (params) => {
+    const value = getStringParam(raw(params), 'value')
+    if (!value) throw new RpcError(RPC_INVALID_PARAMS, 'value is required')
+    return setGitHubHandoffCredential(value)
+  },
+
+  'agentruns.publish': async (params) => {
+    const runId = getStringParam(raw(params), 'runId')
+    if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
+    return publishAgentRun(runId)
   },
 
   // --- Skills ---

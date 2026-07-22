@@ -38,7 +38,7 @@ import type { WebRenderRequest, WebRenderResult } from './web'
 import type { ModelId } from './models'
 import type { AssetBacklink, AssetKind, AssetReference, LibraryAddDocumentInput, LibraryAsset } from './library'
 import type { AgentRosterResult, AgentSettings, AgentSummary } from './agents'
-import type { AgentRun, AgentRunDetail, AgentRunQuestion, ManagedWorkspaceInspection } from './agent-runs'
+import type { AgentRun, AgentRunDetail, AgentRunPublication, AgentRunQuestion, GitHubHandoffConfig, ManagedWorkspaceInspection } from './agent-runs'
 import type {
   DeskBlockDetail,
   DeskMatcher,
@@ -323,6 +323,11 @@ export interface RpcMethods {
   'agentruns.answerQuestion': { params: { runId: string; questionId: string; approved: boolean; response?: string }; result: { run: AgentRun; question: AgentRunQuestion; changed: boolean } }
   'agentruns.inspectWorkspace': { params: { runId: string }; result: ManagedWorkspaceInspection }
   'agentruns.discardWorkspace': { params: { runId: string }; result: AgentRun }
+  'agentruns.githubConfig': { params: void; result: GitHubHandoffConfig }
+  'agentruns.configureGithub': { params: { enabled: boolean; repository: string; remote: string; credentialRef: string }; result: GitHubHandoffConfig }
+  /** Write-only credential setup; the value is never returned by any RPC. */
+  'agentruns.setGithubCredential': { params: { value: string }; result: GitHubHandoffConfig }
+  'agentruns.publish': { params: { runId: string }; result: AgentRunPublication }
 
   // Skills
   'skills.list': { params: void; result: SkillInfo[] }
@@ -580,6 +585,10 @@ export const RPC_METHOD_NAMES = [
   'agentruns.answerQuestion',
   'agentruns.inspectWorkspace',
   'agentruns.discardWorkspace',
+  'agentruns.githubConfig',
+  'agentruns.configureGithub',
+  'agentruns.setGithubCredential',
+  'agentruns.publish',
   'skills.list',
   'skills.refresh',
   'skills.remove',

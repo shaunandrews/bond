@@ -17,7 +17,7 @@ export interface AgentRunWorkerOptions {
   prepare?: (run: AgentRun, signal: AbortSignal) => Promise<AgentRun>
   intervalMs?: number
   onChanged?: (run: AgentRun) => void
-  onTerminal?: (run: AgentRun) => void
+  onTerminal?: (run: AgentRun) => void | Promise<void>
   onQuestion?: (run: AgentRun, question: AgentRunQuestion) => void
   logger?: Pick<Console, 'error' | 'warn' | 'log'>
 }
@@ -47,9 +47,9 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
   let stopping = false
 
   const emit = (run: AgentRun): void => options.onChanged?.(run)
-  const terminal = (run: AgentRun): void => {
+  const terminal = async (run: AgentRun): Promise<void> => {
     emit(run)
-    options.onTerminal?.(run)
+    await options.onTerminal?.(run)
   }
 
   const enqueue = (task: () => Promise<void>): Promise<void> => {
@@ -105,7 +105,7 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
       if (!started || current.status !== 'running') {
         throw new Error('Background agent executor returned before recording its start checkpoint.')
       }
-      terminal(transitionAgentRun(prepared.id, 'succeeded', { eventType: 'succeeded', result: report }))
+      await terminal(transitionAgentRun(prepared.id, 'succeeded', { eventType: 'succeeded', result: report }))
     } catch (error) {
       const current = getAgentRun(prepared.id)
       if (!current || current.status === 'cancelled') return
@@ -134,7 +134,7 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
         return
       }
       if (current.status === 'preparing-workspace' || current.status === 'running') {
-        terminal(transitionAgentRun(prepared.id, 'failed', {
+        await terminal(transitionAgentRun(prepared.id, 'failed', {
           eventType: 'failed',
           errorClass: 'execution',
           errorMessage: message,
@@ -221,7 +221,7 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
       if (['succeeded', 'failed', 'cancelled'].includes(current.status)) return current
       const cancelled = transitionAgentRun(runId, 'cancelled', { eventType: 'cancelled' })
       if (active?.runId === runId) active.controller.abort()
-      terminal(cancelled)
+      void terminal(cancelled)
       return cancelled
     },
 

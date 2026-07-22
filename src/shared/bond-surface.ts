@@ -162,6 +162,12 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
       invoke('agentruns.answerQuestion', { runId, questionId, approved, response }),
     inspectAgentRunWorkspace: (runId: string) => invoke('agentruns.inspectWorkspace', { runId }),
     discardAgentRunWorkspace: (runId: string) => invoke('agentruns.discardWorkspace', { runId }),
+    getAgentRunGitHubConfig: () => invoke('agentruns.githubConfig'),
+    configureAgentRunGitHub: (enabled: boolean, repository: string, remote: string, credentialRef: string) =>
+      invoke('agentruns.configureGithub', { enabled, repository, remote, credentialRef }),
+    /** Write-only: no Bond surface returns the credential value. */
+    setAgentRunGitHubCredential: (value: string) => invoke('agentruns.setGithubCredential', { value }),
+    publishAgentRun: (runId: string) => invoke('agentruns.publish', { runId }),
 
     // --- Skills ---
     listSkills: () => invoke('skills.list'),

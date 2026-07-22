@@ -175,8 +175,16 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
       const questions = pending.length
         ? `\n\nWaiting for command approval:\n${pending.map(question => `- ${question.id}: ${question.proposedAllowlistAddition}\n  Reason: ${question.reason}`).join('\n')}`
         : ''
+      const publication = detail.publication
+      const handoff = publication?.status === 'published'
+        ? `\n\nDraft PR #${publication.prNumber}: ${publication.prUrl}${publication.qCommentUrl ? `\nQ review: ${publication.qCommentUrl}` : ''}`
+        : publication?.status === 'failed'
+          ? `\n\nGitHub handoff failed (${publication.errorClass}): ${publication.errorMessage}`
+          : publication
+            ? `\n\nGitHub handoff: ${publication.status}`
+            : ''
       return {
-        content: [{ type: 'text' as const, text: `${run.agentLabel} ${run.verb}: ${run.status}.${result}${error}${questions}` }],
+        content: [{ type: 'text' as const, text: `${run.agentLabel} ${run.verb}: ${run.status}.${result}${error}${questions}${handoff}` }],
         details: detail,
       }
     },

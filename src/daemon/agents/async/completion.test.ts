@@ -7,7 +7,7 @@ import { closeDb, getDb } from '../../db'
 import { setDataDir } from '../../paths'
 import { listMessages } from '../../transcript'
 import { createAgentRunCompletionCoordinator } from './completion'
-import { createAgentRunRecord, getAgentRun, parkAgentRunForCommand, transitionAgentRun } from './store'
+import { createAgentRunPublication, createAgentRunRecord, getAgentRun, markAgentRunPublished, markAgentRunQReview, parkAgentRunForCommand, transitionAgentRun } from './store'
 
 let dir: string
 
@@ -103,5 +103,19 @@ describe('agent run completion insertion', () => {
       role: 'meta', kind: 'agent-run', data: { runId: run.id, questionId: parked.question.id, status: 'needs-input' },
     })
     expect(listMessages().messages[0].text).toContain('Allow exact argv')
+  })
+
+  it('renders the durable draft PR and Q advisory links in completion', () => {
+    const run = terminalRun('published-completion')
+    createAgentRunPublication({ runId: run.id, baseRef: 'main', headRef: 'bond-agent/published', idempotencyKey: 'publish-card', qReviewRequired: true })
+    markAgentRunPublished(run.id, { number: 42, nodeId: 'PR42', url: 'https://github.com/shaunandrews/bond/pull/42' })
+    markAgentRunQReview(run.id, { status: 'posted', commentId: 8, commentUrl: 'https://github.com/shaunandrews/bond/pull/42#issuecomment-8' })
+    const coordinator = createAgentRunCompletionCoordinator()
+    coordinator.enqueue(run)
+    expect(listMessages().messages[0]).toMatchObject({
+      data: { prNumber: 42, prUrl: 'https://github.com/shaunandrews/bond/pull/42', qReviewStatus: 'posted' },
+    })
+    expect(listMessages().messages[0].text).toContain('Draft PR #42')
+    expect(listMessages().messages[0].text).toContain('Q review')
   })
 })

@@ -223,7 +223,7 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
     systemPromptOverride: () => `${buildAgentSystemPrompt(definition, verb, run.settings).replace(
       '- You are READ-ONLY. You can read and search files; you cannot edit, write, or run commands. You never ask to. Bond applies every change through its own approval flow.',
       '- You are write-capable only inside the managed worktree supplied for this run. Read before editing and keep every file operation inside it.',
-    )}\n\nUse run_command with argv entries, never shell syntax. Do not access remotes or daemon/app lifecycle commands.`,
+    )}\n\nUse run_command with argv entries, never shell syntax. Do not access remotes or daemon/app lifecycle commands. Before finishing, run every required acceptance command exactly as declared: ${run.acceptanceChecks.join(', ') || '(none)'}.`,
     extensionFactories: [createMathisExtensionFactory({
       run,
       signal: input.signal,

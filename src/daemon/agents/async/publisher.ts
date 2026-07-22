@@ -132,6 +132,7 @@ export function createGitHubDraftTransport(credential: string, fetcher: FetchLik
         'User-Agent': 'Bond-Mathis',
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
     })
     if (!response.ok) throw new Error(`GitHub API ${method} ${path.split('?')[0]} failed with HTTP ${response.status}.`)
     return response.json()

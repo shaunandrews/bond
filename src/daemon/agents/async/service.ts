@@ -28,6 +28,9 @@ import {
   workspaceManager,
 } from './workspace'
 import { MATHIS_COMMAND_POLICY_VERSION } from './command-policy'
+import { createAgentRunHandoff } from './publisher'
+import { qAgentRunReviewer } from './q-review'
+import { githubConfigService } from './github-config'
 
 const execFileAsync = promisify(execFile)
 export const ASYNC_AGENT_COMMAND_POLICY_VERSION = 'phase0-readonly-no-shell-v1'
@@ -51,7 +54,10 @@ function emit(run: AgentRun): void {
 }
 
 const completion = createAgentRunCompletionCoordinator({ onChanged: emit })
-function retainAndComplete(run: AgentRun): void {
+const handoff = createAgentRunHandoff({ reviewer: qAgentRunReviewer })
+const terminalTasks = new Set<Promise<void>>()
+
+function retainWorkspace(run: AgentRun): AgentRun {
   let terminal = run
   if (run.workspace.isolation === 'worktree' && run.workspaceState.status !== 'discarded') {
     const now = new Date().toISOString()
@@ -62,7 +68,22 @@ function retainAndComplete(run: AgentRun): void {
     }, 'workspace_retained', { path: run.workspace.worktreePath }, now)
     emit(terminal)
   }
-  completion.enqueue(terminal)
+  return terminal
+}
+
+function retainAndComplete(run: AgentRun): Promise<void> {
+  const terminal = retainWorkspace(run)
+  const task = (async () => {
+    if (terminal.status === 'succeeded' && terminal.agent === 'mathis' && terminal.workspace.isolation === 'worktree') {
+      await handoff.publish(terminal)
+      const current = getAgentRun(terminal.id)
+      if (current) emit(current)
+    }
+    completion.enqueue(terminal)
+  })()
+  terminalTasks.add(task)
+  void task.finally(() => terminalTasks.delete(task))
+  return task
 }
 
 const worker = createAgentRunWorker({
@@ -135,6 +156,7 @@ export async function stopAgentRunService(): Promise<void> {
   started = false
   setAgentRunApi(null)
   await worker.stop()
+  await Promise.allSettled([...terminalTasks])
 }
 
 export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ run: AgentRun; created: boolean }> {
@@ -258,6 +280,28 @@ export async function answerAgentQuestion(
   if (approved) await worker.resume(runId)
   else retainAndComplete(answered.run)
   return answered
+}
+
+export async function getGitHubHandoffConfig() {
+  return githubConfigService.getConfig()
+}
+
+export async function configureGitHubHandoff(input: { enabled: boolean; repository: string; remote: string; credentialRef: string }) {
+  return githubConfigService.configure(input)
+}
+
+export async function setGitHubHandoffCredential(value: string) {
+  await githubConfigService.setCredential(value)
+  return githubConfigService.getConfig()
+}
+
+export async function publishAgentRun(runId: string) {
+  const run = getAgentRun(runId)
+  if (!run) throw new Error(`Unknown agent run "${runId}".`)
+  const publication = await handoff.publish(run)
+  emit(run)
+  completion.refresh(run)
+  return publication
 }
 
 export function cancelAgentRun(runId: string): AgentRun | null {
