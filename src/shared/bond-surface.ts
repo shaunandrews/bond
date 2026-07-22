@@ -26,6 +26,7 @@ import type { SenseSettings } from './sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
 import type { AssetKind, LibraryAddDocumentInput } from './library'
 import type { AgentSettings } from './agents'
+import type { ConversationScope } from './threads'
 
 /** How a runtime reaches the daemon. Params/results are registry-typed. */
 export type RpcInvoker = <M extends DispatchableMethod>(
@@ -44,14 +45,14 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
       invoke('bond.send', typeof inputOrText === 'string'
         ? { text: inputOrText, sessionId, images }
         : inputOrText),
-    cancel: (sessionId?: string) => invoke('bond.cancel', sessionId ? { sessionId } : undefined),
+    cancel: (sessionId?: string, scope?: ConversationScope) => invoke('bond.cancel', (sessionId || scope) ? { sessionId, scope } : undefined),
     respondToApproval: (requestId: string, approved: boolean) =>
       invoke('bond.approvalResponse', { requestId, approved }),
     answerQuestion: (questionId: string, answer: QuestionAnswer) =>
       invoke('bond.questionResponse', { questionId, answer }),
     pendingQuestion: () => invoke('question.pending'),
-    subscribe: (sessionId?: string) => invoke('bond.subscribe', sessionId ? { sessionId } : undefined),
-    unsubscribe: (sessionId?: string) => invoke('bond.unsubscribe', sessionId ? { sessionId } : undefined),
+    subscribe: (sessionId?: string, scope?: ConversationScope) => invoke('bond.subscribe', (sessionId || scope) ? { sessionId, scope } : undefined),
+    unsubscribe: (sessionId?: string, scope?: ConversationScope) => invoke('bond.unsubscribe', (sessionId || scope) ? { sessionId, scope } : undefined),
 
     // --- Model + Pi setup ---
     getModel: () => invoke('bond.getModel'),

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createApp, defineComponent, nextTick, watch } from 'vue'
-import { useChat, type ChatDeps } from './useChat'
+import { useChat, type ChatDeps, type UseChatOptions } from './useChat'
 import type { TaggedChunk } from '../../shared/stream'
 
 function mockDeps(): ChatDeps {
@@ -21,9 +21,9 @@ function mockDeps(): ChatDeps {
 
 type UseChatReturn = ReturnType<typeof useChat>
 
-function withSetup(deps: ChatDeps): UseChatReturn {
+function withSetup(deps: ChatDeps, options?: UseChatOptions): UseChatReturn {
   let result!: UseChatReturn
-  const app = createApp(defineComponent({ setup() { result = useChat(deps); return () => null } }))
+  const app = createApp(defineComponent({ setup() { result = useChat(deps, options); return () => null } }))
   app.mount(document.createElement('div'))
   return result
 }
@@ -210,7 +210,7 @@ describe('useChat continuous transcript', () => {
     await vi.waitFor(() => expect(deps.send).toHaveBeenCalledTimes(1))
 
     expect(deps.createSession).not.toHaveBeenCalled()
-    expect(deps.subscribe).toHaveBeenCalledWith()
+    expect(deps.subscribe).toHaveBeenCalledWith(undefined, { type: 'main' })
     expect(deps.upsertTranscript).not.toHaveBeenCalled()
     const input = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(input).toMatchObject({ text: 'hello', editMode: { type: 'full' } })
@@ -707,5 +707,56 @@ describe('useChat continuous transcript', () => {
       editMode: { type: 'scoped', allowedPaths: ['/tmp/project'] },
       images: [{ data: 'abc', mediaType: 'image/png' }],
     })
+  })
+})
+
+describe('useChat scoped to a thread', () => {
+  it('tags its own sends with the thread scope', async () => {
+    const deps = mockDeps()
+    const chat = withSetup(deps, { scope: { type: 'thread', threadId: 'thread-1' }, namespace: 'thread:thread-1' })
+    await chat.submit('hello from the thread')
+
+    expect(deps.subscribe).toHaveBeenCalledWith(undefined, { type: 'thread', threadId: 'thread-1' })
+    expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      scope: { type: 'thread', threadId: 'thread-1' },
+    })
+  })
+
+  it('cancels with its own thread scope', async () => {
+    const deps = mockDeps()
+    ;(deps.send as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}))
+    const chat = withSetup(deps, { scope: { type: 'thread', threadId: 'thread-1' } })
+    chat.submit('long running')
+    await vi.waitFor(() => expect(chat.busy.value).toBe(true))
+
+    await chat.cancel()
+    expect(deps.cancel).toHaveBeenCalledWith(undefined, { type: 'thread', threadId: 'thread-1' })
+  })
+
+  it('ignores chunks from main and from a different thread', () => {
+    const deps = mockDeps()
+    const chat = withSetup(deps, { scope: { type: 'thread', threadId: 'thread-1' } })
+    chat.subscribe()
+    const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0] as (c: TaggedChunk) => void
+
+    handler({ kind: 'turn_start', turnId: 'main-turn', userMessageId: 'u-m', assistantMessageId: 'a-m', activityMessageId: 'm-m', text: 'main message', scope: { type: 'main' } })
+    handler({ kind: 'turn_start', turnId: 'other-thread-turn', userMessageId: 'u-o', assistantMessageId: 'a-o', activityMessageId: 'm-o', text: 'other thread message', scope: { type: 'thread', threadId: 'thread-2' } })
+    expect(chat.messages.value).toHaveLength(0)
+
+    handler({ kind: 'turn_start', turnId: 'my-turn', userMessageId: 'u-t', assistantMessageId: 'a-t', activityMessageId: 'm-t', text: 'my thread message', scope: { type: 'thread', threadId: 'thread-1' } })
+    expect(chat.messages.value.some(m => m.id === 'u-t')).toBe(true)
+  })
+
+  it('two thread instances keep independent busy/message state (no shared HMR slot)', async () => {
+    const depsA = mockDeps()
+    const depsB = mockDeps()
+    ;(depsA.send as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}))
+    const chatA = withSetup(depsA, { scope: { type: 'thread', threadId: 'thread-a' }, namespace: 'thread:thread-a' })
+    const chatB = withSetup(depsB, { scope: { type: 'thread', threadId: 'thread-b' }, namespace: 'thread:thread-b' })
+
+    chatA.submit('a is busy')
+    await vi.waitFor(() => expect(chatA.busy.value).toBe(true))
+    expect(chatB.busy.value).toBe(false)
+    expect(chatB.messages.value).toHaveLength(0)
   })
 })
