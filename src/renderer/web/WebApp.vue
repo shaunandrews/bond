@@ -229,6 +229,7 @@ function handleEditModeChange(mode: EditMode) {
             v-for="msg in chat.messages.value"
             :key="msg.id"
             :msg="msg"
+            :threadsEnabled="false"
             @approve="chat.respondToApproval"
           />
         </div>

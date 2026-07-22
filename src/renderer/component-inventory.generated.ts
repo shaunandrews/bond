@@ -749,7 +749,20 @@ export const componentInventory = [
   {
     "name": "MessageBubble",
     "file": "components/MessageBubble.vue",
-    "props": [],
+    "props": [
+      {
+        "name": "msg",
+        "type": "Message"
+      },
+      {
+        "name": "id",
+        "type": "string | undefined"
+      },
+      {
+        "name": "threadsEnabled",
+        "type": "boolean | undefined"
+      }
+    ],
     "events": [
       {
         "name": "approve",

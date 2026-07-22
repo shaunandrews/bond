@@ -224,6 +224,17 @@ describe('MessageBubble thread footer', () => {
     expect(wrapper.find('.thread-footer-action').exists()).toBe(false)
   })
 
+  it('never shows the footer when threadsEnabled is false (the remote web client)', async () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: 'b-web', role: 'bond' as const, text: 'done', streaming: false }, threadsEnabled: false },
+    })
+    await Promise.resolve()
+    await nextTick()
+    expect(wrapper.find('.thread-footer-action').exists()).toBe(false)
+    // Never even looks up whether a thread exists for THIS anchor — nothing to do with the answer.
+    expect(bond.getThreadForAnchor).not.toHaveBeenCalledWith('b-web')
+  })
+
   it('emits openThread with the message id when clicked', async () => {
     const wrapper = shallowMount(MessageBubble, {
       props: { msg: { id: 'b4', role: 'bond' as const, text: 'done', streaming: false } },

@@ -967,3 +967,48 @@ describe('scoped subscription routing (chat threads)', () => {
     })
   })
 })
+
+describe('reconnect with main and thread subscriptions active', () => {
+  it('a fresh connection re-subscribing to both main and a thread receives chunks for both again', async () => {
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'anchor reply' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await client.send('anchor question')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const anchorId = [...rows].reverse().find(m => m.role === 'bond' && m.text === 'anchor reply')!.id
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    // Simulate a disconnect: close the original client (server-side cleanup
+    // removes it from every subscriber set), then reconnect fresh.
+    client.close()
+    const reconnected = new BondClient(socketPath)
+    await reconnected.connect()
+    await reconnected.subscribe() // main
+    await reconnected.subscribe(undefined, { type: 'thread', threadId: thread.id })
+
+    const chunks: unknown[] = []
+    reconnected.onChunk((c) => chunks.push(c))
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'main after reconnect' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await reconnected.send('main after reconnect question')
+    await vi.waitFor(() => {
+      expect(chunks.some(c => (c as { text?: string }).text === 'main after reconnect')).toBe(true)
+    })
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'thread after reconnect' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await reconnected.call('bond.send', { text: 'thread after reconnect question', scope: { type: 'thread', threadId: thread.id } })
+    await vi.waitFor(() => {
+      expect(chunks.some(c => (c as { text?: string }).text === 'thread after reconnect')).toBe(true)
+    })
+
+    reconnected.close()
+  })
+})

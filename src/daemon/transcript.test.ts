@@ -386,6 +386,34 @@ describe('turn reconciliation', () => {
     ])
     expect(activityData('turn-r1').status).toBe('cancelled')
   })
+
+  it('reconciles a turn stranded in a THREAD scope too — startup sweeps every scope, not just main', () => {
+    getDb().prepare("INSERT INTO messages (id, role, text) VALUES ('thread-anchor', 'bond', 'anchor')").run()
+    getDb().prepare(`
+      INSERT INTO threads (id, anchor_message_id, context_snapshot, status, created_at, updated_at)
+      VALUES ('thread-1', 'thread-anchor', '{}', 'open', '2026-01-01', '2026-01-01')
+    `).run()
+    const threadEpoch = createEpoch({ id: 'thread-epoch-1', piSessionId: 'pi-thread-1', threadId: 'thread-1' })
+
+    insertTurnStart({
+      epochId: threadEpoch.id,
+      threadId: 'thread-1',
+      turnId: 'thread-turn-r1',
+      userMessageId: 'thread-user-r1',
+      assistantMessageId: 'thread-bond-r1',
+      activityMessageId: 'thread-activity-r1',
+      text: 'hello from the thread',
+      activityData: { turnId: 'thread-turn-r1', status: 'working', startedAt: 1000, events: [] } as never,
+    })
+
+    const reconciled = reconcileInterruptedTurns()
+
+    expect(reconciled).toBe(1)
+    const turn = getDb().prepare('SELECT status FROM turns WHERE id = ?').get('thread-turn-r1') as { status: string }
+    expect(turn.status).toBe('cancelled')
+    const activity = getDb().prepare('SELECT data FROM messages WHERE id = ?').get('thread-activity-r1') as { data: string }
+    expect(JSON.parse(activity.data).status).toBe('cancelled')
+  })
 })
 
 describe('startup sweep', () => {

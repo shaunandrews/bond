@@ -16,6 +16,17 @@ describe('computeThreadLayoutMode', () => {
     expect(computeThreadLayoutMode(799)).toBe('thread-drawer')
     expect(computeThreadLayoutMode(320)).toBe('thread-drawer')
   })
+
+  // plans/chat-threads.md Phase 6 item 6 — the named widths from the plan's
+  // "Electron window default/minimum" and responsive-mode tables, asserted
+  // explicitly rather than only at the boundary values above.
+  it('resolves the plan-named widths (640, 800, 960, 1180, 1440) to their documented mode', () => {
+    expect(computeThreadLayoutMode(640)).toBe('thread-drawer') // Electron window minimum
+    expect(computeThreadLayoutMode(800)).toBe('two-panel') // responsive-mode floor
+    expect(computeThreadLayoutMode(960)).toBe('two-panel') // Electron window default
+    expect(computeThreadLayoutMode(1180)).toBe('three-panel') // comfortable three-panel floor
+    expect(computeThreadLayoutMode(1440)).toBe('three-panel') // common wide display
+  })
 })
 
 describe('widthBudgetForMode', () => {

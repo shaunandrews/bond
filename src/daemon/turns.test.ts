@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { setDataDir } from './paths'
 import { getDb, closeDb } from './db'
 import { registerApproval } from './approvals'
-import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, getActiveTurn } from './turns'
+import { setTurnTransport, startBondTurn, cancelActiveTurn, settleTurns, getActiveTurn, abortActiveTurnForShutdown } from './turns'
 import type { TaggedChunk } from '../shared/stream'
 import { threadScope } from '../shared/threads'
 
@@ -328,5 +328,88 @@ describe('per-scope concurrent scheduling (chat threads)', () => {
     await startBondTurn({ text: 'main message', turnId: 'main-only-turn', model: 'balanced' })
     await vi.waitFor(() => expect(envelopes).toHaveLength(1))
     expect(envelopes[0] ?? '').not.toContain('<bond-thread-context>')
+  })
+})
+
+describe('shutdown hardening (chat threads)', () => {
+  it('abortActiveTurnForShutdown aborts BOTH a running main turn and a running thread turn', async () => {
+    seedThread('thread-1')
+    let mainAborted = false
+    let threadAborted = false
+    runBondQueryMock.mockImplementation((_prompt, options) => new Promise(resolve => {
+      const onAbort = () => resolve({ succeeded: false, piSessionId: 'pi' })
+      if (options.turnId === 'main-turn') { options.abortSignal.addEventListener('abort', () => { mainAborted = true; onAbort() }) }
+      else { options.abortSignal.addEventListener('abort', () => { threadAborted = true; onAbort() }) }
+    }))
+
+    await startBondTurn({ text: 'main', turnId: 'main-turn', model: 'balanced' })
+    await startBondTurn({ text: 'thread', turnId: 'thread-turn', model: 'balanced', scope: threadScope('thread-1') })
+    expect(getActiveTurn()?.turnId).toBe('main-turn')
+    expect(getActiveTurn(threadScope('thread-1'))?.turnId).toBe('thread-turn')
+
+    abortActiveTurnForShutdown()
+
+    expect(mainAborted).toBe(true)
+    expect(threadAborted).toBe(true)
+    expect(getActiveTurn()).toBeNull()
+    expect(getActiveTurn(threadScope('thread-1'))).toBeNull()
+  })
+
+  it('settleTurns (data-dir swap) drains a running main AND a running thread turn together', async () => {
+    seedThread('thread-1')
+    runBondQueryMock.mockImplementation((_prompt, options) => new Promise(resolve => {
+      options.abortSignal.addEventListener('abort', () => resolve({ succeeded: false, piSessionId: 'pi' }), { once: true })
+    }))
+
+    await startBondTurn({ text: 'main', turnId: 'main-turn', model: 'balanced' })
+    await startBondTurn({ text: 'thread', turnId: 'thread-turn', model: 'balanced', scope: threadScope('thread-1') })
+
+    await settleTurns()
+
+    expect(getActiveTurn()).toBeNull()
+    expect(getActiveTurn(threadScope('thread-1'))).toBeNull()
+    const statuses = turnStatuses()
+    expect(statuses.sort()).toEqual(['cancelled', 'cancelled'])
+  })
+})
+
+describe('approval and question round trips inside a thread', () => {
+  it('parks and clears an approval scoped to a thread turn without touching main', async () => {
+    seedThread('thread-1')
+    runBondQueryMock.mockImplementationOnce((_prompt, options) => new Promise(resolve => {
+      options.abortSignal.addEventListener('abort', () => resolve({ succeeded: false, piSessionId: 'pi-thread' }), { once: true })
+    }))
+
+    const result = await startBondTurn({ text: 'needs approval', turnId: 'thread-approval-turn', model: 'balanced', scope: threadScope('thread-1') })
+    const { registerApproval, pendingApprovalTurnIds, clearTurnApprovals } = await import('./approvals')
+    const parked = registerApproval('req-thread-1', result.turnId)
+    expect(pendingApprovalTurnIds()).toContain(result.turnId)
+
+    clearTurnApprovals(result.turnId)
+    await expect(parked).resolves.toEqual({ approved: false })
+
+    // Cancelling the thread turn must never touch a hypothetical main approval registry entry.
+    expect(pendingApprovalTurnIds()).not.toContain(result.turnId)
+  })
+
+  it('a thread turn image attachment saves and reports imageIds exactly like a main turn does', async () => {
+    seedThread('thread-1')
+    runBondQueryMock.mockResolvedValueOnce({ succeeded: true, piSessionId: 'pi-thread' })
+
+    const result = await startBondTurn({
+      text: 'here is a screenshot',
+      turnId: 'thread-image-turn',
+      model: 'balanced',
+      scope: threadScope('thread-1'),
+      images: [{ data: 'aGVsbG8=', mediaType: 'image/png' }],
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.imageIds?.length).toBe(1)
+    // The turn's own user message row must carry the saved image id, scoped to the thread.
+    const turnRow = getDb().prepare('SELECT user_message_id FROM turns WHERE id = ?').get('thread-image-turn') as { user_message_id: string }
+    const userMessage = getDb().prepare('SELECT image_ids, thread_id FROM messages WHERE id = ?').get(turnRow.user_message_id) as { image_ids: string; thread_id: string | null }
+    expect(JSON.parse(userMessage.image_ids)).toEqual(result.imageIds)
+    expect(userMessage.thread_id).toBe('thread-1')
   })
 })

@@ -33,7 +33,12 @@ function renderUserMarkdown(text: string): string {
 // MessageBubble's template always has more than one root (the active v-if
 // branch plus a trailing copy-toast Teleport), so Vue can never auto-inherit
 // `id` onto a branch root — it must be declared and bound explicitly.
-const props = defineProps<{ msg: Message; id?: string }>()
+const props = withDefaults(defineProps<{
+  msg: Message
+  id?: string
+  /** False on the remote web client — chat threads are desktop-only for now (plans/chat-threads.md). */
+  threadsEnabled?: boolean
+}>(), { threadsEnabled: true })
 const issueHover = ref<{ key: string; title: string; x: number; y: number } | null>(null)
 const userHtml = computed(() => renderUserMarkdown(props.msg.role === 'user' ? props.msg.text : ''))
 
@@ -47,7 +52,7 @@ const emit = defineEmits<{
 // (never mid-stream, never on the first-run intro before onboarding ends —
 // that message keeps the same 'onboarding-intro' id App.vue already checks
 // elsewhere for the reveal-text override).
-const showThreadFooter = computed(() => props.msg.role === 'bond' && !props.msg.streaming && props.msg.id !== 'onboarding-intro')
+const showThreadFooter = computed(() => props.threadsEnabled && props.msg.role === 'bond' && !props.msg.streaming && props.msg.id !== 'onboarding-intro')
 const threadForThis = computed(() => threads.threadForAnchor(props.msg.id))
 const threadFooterLabel = computed(() => {
   const t = threadForThis.value
