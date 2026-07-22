@@ -10,7 +10,7 @@ export type DeskCommand =
   | { kind: 'blocks'; day?: string; limit: number }
   | { kind: 'threads'; includeArchived: boolean }
   | { kind: 'matchers'; confirmedOnly: boolean }
-  | { kind: 'answer'; questionId: string | null; accepted: boolean }
+  | { kind: 'answer'; questionId: string | null; verdict: 'accept' | 'reject' | null }
   | { kind: 'stats'; windowHours: number }
   | { kind: 'on' }
   | { kind: 'off' }
@@ -48,9 +48,14 @@ export function parseDeskArgs(args: string[]): DeskCommand {
       // `bond desk answer <id> yes|no`, or `bond desk answer yes|no` for the
       // pending one — the common case, since only one can be pending at a time.
       const rest = args.slice(1).filter(a => !a.startsWith('--'))
-      const verdict = rest.find(a => ['yes', 'no', 'y', 'n'].includes(a.toLowerCase()))
-      const questionId = rest.find(a => a !== verdict) ?? null
-      return { kind: 'answer', questionId, accepted: !!verdict && verdict.toLowerCase().startsWith('y') }
+      const verdictArg = rest.find(a => ['yes', 'no', 'y', 'n'].includes(a.toLowerCase()))
+      const questionId = rest.find(a => a !== verdictArg) ?? null
+      // A MISSING verdict is a usage error, never a silent rejection — a reject
+      // becomes a durable negative rule, and a typo must not mint one.
+      const verdict = verdictArg
+        ? (verdictArg.toLowerCase().startsWith('y') ? 'accept' : 'reject')
+        : null
+      return { kind: 'answer', questionId, verdict }
     }
     case 'stats': {
       const hours = Number(flagValue(args, '--hours') ?? 24)

@@ -1,4 +1,4 @@
-import { MEMORY_CAPS, type CoreMemory, type MemoryItem, type MemoryItemInput, type MemoryValidationResult, type WorkingState, isMemoryItemKind, isMemorySource } from './types'
+import { MEMORY_CAPS, type CoreMemory, type MemoryItem, type MemoryItemInput, type MemoryValidationResult, type WorkingArtifact, type WorkingState, isMemoryItemKind, isMemorySource, isWorkingArtifactKind } from './types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -110,6 +110,35 @@ export function validateMemoryItem(input: unknown): MemoryValidationResult<Memor
   }
 }
 
+/**
+ * Every field defaults, so `memory.working` JSON persisted before artifacts
+ * existed still loads cleanly. A malformed artifact entry is dropped on its
+ * own — never fatal to the state.
+ */
+export function validateWorkingArtifacts(input: unknown): WorkingArtifact[] {
+  if (!Array.isArray(input)) return []
+  const byRef = new Map<string, WorkingArtifact>()
+  for (const value of input) {
+    if (!isRecord(value)) continue
+    if (!isWorkingArtifactKind(value.kind)) continue
+    if (typeof value.ref !== 'string') continue
+    const ref = clampText(value.ref, MEMORY_CAPS.artifactRefChars)
+    if (!ref) continue
+    const label = typeof value.label === 'string' ? clampText(value.label, MEMORY_CAPS.artifactLabelChars) : ''
+    const lastTouchedAt = typeof value.lastTouchedAt === 'string' && value.lastTouchedAt ? value.lastTouchedAt : new Date().toISOString()
+    byRef.set(ref, { kind: value.kind, ref, ...(label ? { label } : {}), lastTouchedAt })
+  }
+  return [...byRef.values()]
+    .sort((a, b) => (a.lastTouchedAt < b.lastTouchedAt ? 1 : a.lastTouchedAt > b.lastTouchedAt ? -1 : 0))
+    .slice(0, MEMORY_CAPS.workingArtifacts)
+}
+
+function optionalText(value: unknown, maxChars: number): string | null {
+  if (typeof value !== 'string') return null
+  const text = clampText(value, maxChars)
+  return text || null
+}
+
 export function validateWorkingState(input: unknown): MemoryValidationResult<WorkingState> {
   if (!isRecord(input)) return { ok: false, errors: ['Working state must be an object'] }
   return {
@@ -122,6 +151,9 @@ export function validateWorkingState(input: unknown): MemoryValidationResult<Wor
       preferences: uniqueCappedStrings(input.preferences, MEMORY_CAPS.workingPreferences, MEMORY_CAPS.workingListItemChars),
       decisions: uniqueCappedStrings(input.decisions, MEMORY_CAPS.workingDecisions, MEMORY_CAPS.workingListItemChars),
       openThreads: uniqueCappedStrings(input.openThreads, MEMORY_CAPS.workingOpenThreads, MEMORY_CAPS.workingListItemChars),
+      artifacts: validateWorkingArtifacts(input.artifacts),
+      activeSkill: optionalText(input.activeSkill, MEMORY_CAPS.activeSkillChars),
+      checkpoint: optionalText(input.checkpoint, MEMORY_CAPS.checkpointChars),
       updatedAt: typeof input.updatedAt === 'string' ? input.updatedAt : new Date().toISOString(),
     },
   }

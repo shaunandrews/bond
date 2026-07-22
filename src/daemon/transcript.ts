@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3'
 import { getDb } from './db'
-import { buildMatchQuery } from './fts'
+import { buildMatchQuery, countMatchTerms, type MatchMode } from './fts'
 import type { CompleteTurnInput, InsertTurnStartInput, TranscriptMessage, TranscriptPage, TranscriptRole, TurnStatus } from '../shared/transcript'
 
 const TOOL_OUTPUT_INDEX_LIMIT = 4_000
@@ -542,29 +542,111 @@ export function getSourceMessages(ids: string[]): TranscriptMessage[] {
   return rows.map(rowToMessage)
 }
 
-function buildFtsQuery(query: string): string | null {
-  return buildMatchQuery(query, { maxTerms: MAX_SEARCH_TERMS, prefix: false })
+function buildFtsQuery(query: string, mode: MatchMode = 'and'): string | null {
+  return buildMatchQuery(query, { maxTerms: MAX_SEARCH_TERMS, prefix: false, mode })
 }
 
-export function searchMessages(query: string, filters: { role?: TranscriptRole; kind?: string; limit?: number } = {}): TranscriptMessage[] {
+export interface SearchMessagesFilters {
+  role?: TranscriptRole
+  /** Filtered in SQL, before LIMIT. Post-LIMIT filtering silently discarded up to 6 of 8 result slots. */
+  roles?: TranscriptRole[]
+  kind?: string
+  limit?: number
+}
+
+/**
+ * Searching your own history is a RECALL operation, not a precision one. An
+ * empty result teaches Bond the memory does not exist, so the AND pass falls
+ * back to OR before giving up — bm25 keeps rows matching more terms on top,
+ * and LIMIT bounds the noise.
+ */
+export function searchMessages(query: string, filters: SearchMessagesFilters = {}): TranscriptMessage[] {
   const db = getDb()
   ensureTranscriptSchema(db)
-  const ftsQuery = buildFtsQuery(query)
-  if (!ftsQuery) return []
+  const andQuery = buildFtsQuery(query)
+  if (!andQuery) return []
   const limit = clampLimit(filters.limit, 20, MAX_SEARCH_LIMIT)
-  const where: string[] = ['message_fts MATCH ?']
-  const params: unknown[] = [ftsQuery]
-  if (filters.role) { where.push('m.role = ?'); params.push(filters.role) }
-  if (filters.kind) { where.push('m.kind = ?'); params.push(filters.kind) }
-  params.push(limit)
 
-  const rows = db.prepare(`
-    SELECT m.*
+  const run = (ftsQuery: string): TranscriptMessage[] => {
+    const where: string[] = ['message_fts MATCH ?']
+    const params: unknown[] = [ftsQuery]
+    if (filters.role) { where.push('m.role = ?'); params.push(filters.role) }
+    if (filters.roles?.length) {
+      where.push(`m.role IN (${filters.roles.map(() => '?').join(',')})`)
+      params.push(...filters.roles)
+    }
+    if (filters.kind) { where.push('m.kind = ?'); params.push(filters.kind) }
+    params.push(limit)
+
+    const rows = db.prepare(`
+      SELECT m.*
+      FROM message_fts f
+      JOIN messages m ON m.id = f.message_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY bm25(message_fts), m.seq DESC
+      LIMIT ?
+    `).all(...params) as MessageRow[]
+    return rows.map(rowToMessage)
+  }
+
+  const strict = run(andQuery)
+  if (strict.length > 0) return strict
+  if (countMatchTerms(query, { maxTerms: MAX_SEARCH_TERMS }) < 2) return strict
+  const orQuery = buildFtsQuery(query, 'or')
+  return orQuery ? run(orQuery) : strict
+}
+
+/**
+ * Newest user message with real text, skipping the ones the caller owns. Used
+ * to give a deictic message ("next", "on to 9") something to search with.
+ */
+export function getLastUserMessageText(excludeIds: string[] = []): string | null {
+  const db = getDb()
+  ensureTranscriptSchema(db)
+  const placeholders = excludeIds.length ? ` AND id NOT IN (${excludeIds.map(() => '?').join(',')})` : ''
+  const row = db.prepare(`
+    SELECT text FROM messages
+    WHERE role = 'user' AND text IS NOT NULL AND trim(text) != ''${placeholders}
+    ORDER BY seq DESC LIMIT 1
+  `).get(...excludeIds) as { text: string } | undefined
+  return row?.text ?? null
+}
+
+export interface ActivitySnippet {
+  seq: number | null
+  snippet: string
+  createdAt: string
+}
+
+/**
+ * The index knows more than the transcript shows: `searchableText` indexes
+ * activity events (tool inputs and outputs) up to TOOL_OUTPUT_INDEX_LIMIT.
+ * Those rows are useless as conversation but excellent as evidence, so they
+ * are returned as snippets rather than dropped.
+ */
+export function searchActivitySnippets(query: string, limit = 3): ActivitySnippet[] {
+  const db = getDb()
+  ensureTranscriptSchema(db)
+  const andQuery = buildFtsQuery(query)
+  if (!andQuery) return []
+
+  const statement = db.prepare(`
+    SELECT m.seq AS seq, m.created_at AS created_at,
+           snippet(message_fts, 1, '', '', '…', 12) AS snippet
     FROM message_fts f
     JOIN messages m ON m.id = f.message_id
-    WHERE ${where.join(' AND ')}
+    WHERE message_fts MATCH ?
+      AND m.role = 'meta'
     ORDER BY bm25(message_fts), m.seq DESC
     LIMIT ?
-  `).all(...params) as MessageRow[]
-  return rows.map(rowToMessage)
+  `)
+  const run = (ftsQuery: string): ActivitySnippet[] =>
+    (statement.all(ftsQuery, Math.max(1, limit)) as Array<{ seq: number | null; created_at: string; snippet: string }>)
+      .map(row => ({ seq: row.seq, snippet: row.snippet, createdAt: row.created_at }))
+
+  const strict = run(andQuery)
+  if (strict.length > 0) return strict
+  if (countMatchTerms(query, { maxTerms: MAX_SEARCH_TERMS }) < 2) return strict
+  const orQuery = buildFtsQuery(query, 'or')
+  return orQuery ? run(orQuery) : strict
 }

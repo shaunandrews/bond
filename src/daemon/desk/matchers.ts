@@ -69,8 +69,8 @@ export function toMatcher(row: MatcherRow): DeskMatcher {
 
 const now = () => new Date().toISOString()
 
-/** `path > title > bundle > resource`, applied after confirmed and specificity. */
-const FIELD_RANK: Record<string, number> = { path: 4, title: 3, bundle: 2, resource: 1 }
+/** `url > path > title > bundle > resource`, applied after confirmed and specificity. */
+const FIELD_RANK: Record<string, number> = { url: 5, path: 4, title: 3, bundle: 2, resource: 1 }
 
 export function getMatcher(id: string, db: Database.Database = getDb()): DeskMatcher | null {
   const row = db.prepare('SELECT * FROM desk_matchers WHERE id = ?').get(id) as MatcherRow | undefined
@@ -184,6 +184,7 @@ export interface ResolveInput {
   bundleId: string | null
   titles: string[]
   paths: string[]
+  urls?: string[]
 }
 
 function patternMatches(operator: string, normalizedPattern: string, candidate: string): boolean {
@@ -209,6 +210,7 @@ export function resolveMatcher(
     bundle: input.bundleId ? [normalizePattern(input.bundleId)] : [],
     title: input.titles.map(normalizePattern),
     path: input.paths.map(p => p.trim().toLowerCase()),
+    url: (input.urls ?? []).map(u => u.trim().toLowerCase()),
   }
 
   // Archiving a thread must actually stop it claiming new work. Without the
@@ -261,6 +263,15 @@ export type InferenceWriteResult =
   | { action: 'refreshed'; matcher: DeskMatcher }
   | { action: 'blocked_confirmed'; matcher: DeskMatcher }
   | { action: 'blocked_other_thread'; matcher: DeskMatcher }
+  | { action: 'blocked_cap'; matcher: null }
+
+/**
+ * How many *broad* (non-resource) inferred matchers one thread may hold. The
+ * exact-resource matcher is the cache and is never capped; this bounds the
+ * generalizing patterns, which is where `one-off` accumulated 57. Past the cap,
+ * new broad patterns are dropped — the resource is still cached exactly.
+ */
+const MAX_INFERRED_BROAD_MATCHERS_PER_THREAD = 12
 
 /**
  * The ONLY write path model inference is allowed to take. Guarded so it cannot
@@ -268,7 +279,7 @@ export type InferenceWriteResult =
  * thread, and cannot set `confirmed = 1` under any circumstance.
  */
 export function writeInferredMatcher(
-  input: MatcherKey & { threadId: string; confidence: number; example: DeskEvidence },
+  input: MatcherKey & { threadId: string; confidence: number; example: DeskEvidence; batchId?: string | null },
   db: Database.Database = getDb()
 ): InferenceWriteResult {
   const existing = findMatcher(input, db)
@@ -285,17 +296,45 @@ export function writeInferredMatcher(
     return { action: 'refreshed', matcher: getMatcher(existing.id, db)! }
   }
 
+  // Cap broad inferred matchers per thread. The exact-resource matcher is the
+  // cache and is exempt; a runaway thread accumulating generalizing patterns
+  // (the `one-off` failure) is what this stops.
+  if (input.field !== 'resource') {
+    const count = (db.prepare(
+      "SELECT COUNT(*) AS n FROM desk_matchers WHERE thread_id = ? AND confirmed = 0 AND field != 'resource'"
+    ).get(input.threadId) as { n: number }).n
+    if (count >= MAX_INFERRED_BROAD_MATCHERS_PER_THREAD) return { action: 'blocked_cap', matcher: null }
+  }
+
   const id = randomUUID()
   const normalized = normalizePattern(input.pattern)
   db.prepare(`
     INSERT INTO desk_matchers (
       id, thread_id, field, operator, pattern, normalized_pattern, confirmed, source,
-      confidence, specificity, example_json, enabled, hits, last_seen_at, example_updated_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 0, 'inferred', ?, ?, ?, 1, 0, ?, ?, ?, ?)
+      confidence, specificity, example_json, enabled, hits, last_seen_at, example_updated_at, created_at, updated_at, batch_id
+    ) VALUES (?, ?, ?, ?, ?, ?, 0, 'inferred', ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
   `).run(id, input.threadId, input.field, input.operator, input.pattern, normalized,
     input.confidence, computeSpecificity(input.operator, normalized),
-    JSON.stringify(input.example), ts, ts, ts, ts)
+    JSON.stringify(input.example), ts, ts, ts, ts, input.batchId ?? null)
   return { action: 'inserted', matcher: getMatcher(id, db)! }
+}
+
+/**
+ * Prune inferred matchers that have never fired and are stale — `hits = 0` past
+ * a cooling-off window. The store measured 122 of 175 matchers (69.7%) that
+ * never fired once; this makes `hits` an input to a decision instead of a
+ * display column. Confirmed matchers and the exact-resource cache are exempt.
+ */
+export function pruneStaleInferredMatchers(
+  opts: { olderThanDays?: number; now?: string } = {},
+  db: Database.Database = getDb()
+): number {
+  const nowIso = opts.now ?? now()
+  const cutoff = new Date(Date.parse(nowIso) - (opts.olderThanDays ?? 14) * 86_400_000).toISOString()
+  return db.prepare(`
+    DELETE FROM desk_matchers
+    WHERE confirmed = 0 AND field != 'resource' AND hits = 0 AND created_at < ?
+  `).run(cutoff).changes
 }
 
 /**
@@ -420,8 +459,16 @@ export function dropInferredMatchersForThread(
   return db.prepare(`
     DELETE FROM desk_matchers
     WHERE thread_id = ? AND confirmed = 0
-      AND ((field = 'resource' AND normalized_pattern = ?) OR id IN (
-        SELECT matcher_id FROM desk_segments WHERE resource_signature = ? AND matcher_id IS NOT NULL
-      ))
-  `).run(threadId, signature, signature).changes
+      AND (
+        (field = 'resource' AND normalized_pattern = ?)
+        OR id IN (SELECT matcher_id FROM desk_segments WHERE resource_signature = ? AND matcher_id IS NOT NULL)
+        -- The broad matcher a model batch wrote: model-resolved segments store
+        -- matcher_id NULL, so only the batch provenance on the label reaches it.
+        OR batch_id IN (
+          SELECT provenance FROM desk_labels
+          WHERE source = 'model' AND provenance IS NOT NULL
+            AND segment_id IN (SELECT id FROM desk_segments WHERE resource_signature = ?)
+        )
+      )
+  `).run(threadId, signature, signature, signature).changes
 }

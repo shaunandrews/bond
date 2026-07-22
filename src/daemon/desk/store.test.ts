@@ -17,12 +17,16 @@ import {
   createBlock,
   createSegment,
   createThread,
+  currentOpenBlockId,
+  failBlockNote,
   findThreadByName,
+  getBlock,
   getBlockDetail,
   getRuntime,
   getSegment,
   linkCapture,
   listBlocks,
+  listBlocksAwaitingNote,
   listInFlight,
   listThreads,
   listUnresolvedSegments,
@@ -37,6 +41,8 @@ import {
   updateBlock,
   updateSegmentEvidence,
 } from './store'
+import { migrateRepairDeskIntegrity, migrateResetDeskOnSignatureChange } from '../db'
+import { confirmMatcher, listMatchers, writeInferredMatcher } from './matchers'
 
 let testDir: string
 
@@ -354,5 +360,136 @@ describe('runtime singleton', () => {
     setRuntime({ candidatePresenceSeconds: 7 })
     setRuntime({})
     expect(getRuntime().candidatePresenceSeconds).toBe(7)
+  })
+})
+
+describe('Phase 0 integrity guards', () => {
+  it('updateBlock clamps ended_at that precedes started_at', () => {
+    const t = createThread({ name: 'A', source: 'user' })
+    const b = createBlock({ threadId: t.id, startedAt: '2026-07-20T13:23:14.000Z' })
+    // The Ask double-commit once dated a block's end 438s before its own start.
+    updateBlock(b.id, { endedAt: '2026-07-20T13:15:56.000Z', state: 'committed' })
+    const after = getBlock(b.id)!
+    expect(Date.parse(after.endedAt!)).toBeGreaterThanOrEqual(Date.parse(after.startedAt))
+    expect(after.endedAt).toBe(after.startedAt)
+  })
+
+  it('addBlockPresence refuses credit to a closed block', () => {
+    const t = createThread({ name: 'A', source: 'user' })
+    const b = createBlock({ threadId: t.id, startedAt: '2026-07-20T10:00:00.000Z' })
+    addBlockPresence(b.id, 60)
+    updateBlock(b.id, { endedAt: '2026-07-20T10:05:00.000Z', state: 'committed' })
+    addBlockPresence(b.id, 999) // a late, out-of-order capture
+    expect(getBlock(b.id)!.presenceSeconds).toBe(60)
+  })
+
+  it('currentOpenBlockId returns an open block and clears a stale pointer', () => {
+    const t = createThread({ name: 'A', source: 'user' })
+    const b = createBlock({ threadId: t.id, startedAt: '2026-07-20T10:00:00.000Z' })
+    setRuntime({ currentBlockId: b.id })
+    expect(currentOpenBlockId()).toBe(b.id)
+    updateBlock(b.id, { endedAt: '2026-07-20T10:05:00.000Z', state: 'committed' })
+    expect(currentOpenBlockId()).toBeNull()
+    expect(getRuntime().currentBlockId).toBeNull()
+  })
+})
+
+describe('re-entry note failure lifecycle', () => {
+  function departedBlock(): string {
+    const t = createThread({ name: 'A', source: 'user' })
+    const b = createBlock({ threadId: t.id, startedAt: '2026-07-20T10:00:00.000Z' })
+    updateBlock(b.id, { endedAt: '2026-07-20T10:20:00.000Z', presenceSeconds: 600, state: 'committed' })
+    return b.id
+  }
+
+  it('a transient note failure stays retryable; a due retry is re-listed', () => {
+    const id = departedBlock()
+    const now = '2026-07-20T11:00:00.000Z'
+    failBlockNote(id, { transient: true, retryMinutes: [10], now })
+    expect(getBlock(id)!.noteStatus).toBe('failed')
+    // Not yet due — nothing to do.
+    expect(listBlocksAwaitingNote({ now: '2026-07-20T11:05:00.000Z' }).some(b => b.id === id)).toBe(false)
+    // Past the backoff — a transient failure is re-listed, not lost forever.
+    expect(listBlocksAwaitingNote({ now: '2026-07-20T11:20:00.000Z' }).some(b => b.id === id)).toBe(true)
+  })
+
+  it('a permanent note failure is terminal', () => {
+    const id = departedBlock()
+    failBlockNote(id, { transient: false, now: '2026-07-20T11:00:00.000Z' })
+    expect(listBlocksAwaitingNote({ now: '2026-07-21T11:00:00.000Z' }).some(b => b.id === id)).toBe(false)
+  })
+
+  it('a user edit always wins over a concurrent failure stamp', () => {
+    const id = departedBlock()
+    updateBlock(id, { reentryNote: 'my own note', noteStatus: 'edited' })
+    failBlockNote(id, { transient: true, now: '2026-07-20T11:00:00.000Z' })
+    expect(getBlock(id)!.noteStatus).toBe('edited')
+    expect(getBlock(id)!.reentryNote).toBe('my own note')
+  })
+
+  it('retries stop after the attempt cap', () => {
+    const id = departedBlock()
+    for (let i = 0; i < 5; i++) failBlockNote(id, { transient: true, maxAttempts: 3, now: '2026-07-20T11:00:00.000Z' })
+    // Beyond the cap the retry gate is cleared — no longer re-listed.
+    expect(listBlocksAwaitingNote({ now: '2026-07-25T11:00:00.000Z' }).some(b => b.id === id)).toBe(false)
+  })
+})
+
+describe('migrateRepairDeskIntegrity', () => {
+  it('sweeps orphan capture links and clamps negative-duration blocks', () => {
+    const db = getDb()
+    const t = createThread({ name: 'A', source: 'user' })
+    const seg = createSegment({ blockId: null, startedAt: '2026-07-20T10:00:00.000Z', resourceSignature: 's', evidence: {} })
+    const liveCapture = seedCapture()
+    linkCapture(seg.id, liveCapture) // a valid link that must survive
+
+    // Simulate the FK-off era: SQLite never retro-validates, so these orphans
+    // stood on disk. Insert them with the constraint disabled to reproduce it.
+    db.pragma('foreign_keys = OFF')
+    db.prepare('INSERT INTO desk_capture_links (segment_id, capture_id) VALUES (?, ?)').run('ghost-seg', liveCapture)
+    db.prepare('INSERT INTO desk_capture_links (segment_id, capture_id) VALUES (?, ?)').run(seg.id, 'ghost-capture')
+    db.pragma('foreign_keys = ON')
+
+    // A negative-duration block from the double-commit.
+    const b = createBlock({ threadId: t.id, startedAt: '2026-07-20T13:23:14.000Z' })
+    db.prepare('UPDATE desk_blocks SET ended_at = ? WHERE id = ?').run('2026-07-20T13:15:56.000Z', b.id)
+
+    migrateRepairDeskIntegrity(db)
+
+    // Both orphan classes are gone; the valid link survives.
+    expect((db.prepare("SELECT COUNT(*) AS n FROM desk_capture_links WHERE segment_id = 'ghost-seg'").get() as { n: number }).n).toBe(0)
+    expect((db.prepare("SELECT COUNT(*) AS n FROM desk_capture_links WHERE capture_id = 'ghost-capture'").get() as { n: number }).n).toBe(0)
+    expect((db.prepare('SELECT COUNT(*) AS n FROM desk_capture_links WHERE segment_id = ?').get(seg.id) as { n: number }).n).toBe(1)
+    // The negative-duration block is clamped.
+    const after = getBlock(b.id)!
+    expect(Date.parse(after.endedAt!)).toBeGreaterThanOrEqual(Date.parse(after.startedAt))
+  })
+})
+
+describe('migrateResetDeskOnSignatureChange (the one-time signature break)', () => {
+  it('sweeps inferred attribution but preserves the user\'s confirmed rules', () => {
+    const db = getDb()
+    // The boot flow already stamped signature_version = 2 on this fresh db;
+    // wind it back to simulate a database written under the old algorithm.
+    db.prepare('UPDATE desk_runtime SET signature_version = 1 WHERE singleton = 1').run()
+
+    const kept = createThread({ name: 'Studio', source: 'user' })
+    const junk = createThread({ name: 'one-off', source: 'inferred' })
+    confirmMatcher({ field: 'title', operator: 'contains', pattern: 'studio', threadId: kept.id })
+    writeInferredMatcher({ field: 'resource', operator: 'exact', pattern: 'oldsig', threadId: junk.id, confidence: 0.6, example: {} })
+
+    migrateResetDeskOnSignatureChange(db)
+
+    const matchers = listMatchers({ confirmedOnly: false })
+    // The confirmed rule survives; the inferred one is swept.
+    expect(matchers).toHaveLength(1)
+    expect(matchers[0].confirmed).toBe(true)
+    // The orphan inferred thread with no confirmed matcher is gone; the real one stays.
+    const threads = listThreads().map(t => t.id)
+    expect(threads).toContain(kept.id)
+    expect(threads).not.toContain(junk.id)
+    // And the version is stamped so it never runs again.
+    const v = db.prepare('SELECT signature_version AS v FROM desk_runtime WHERE singleton = 1').get() as { v: number }
+    expect(v.v).toBe(2)
   })
 })

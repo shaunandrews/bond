@@ -19,9 +19,11 @@ import {
   getBlock,
   getRuntime,
   getThread,
+  listSegmentsForBlock,
   setRuntime,
   updateBlock,
 } from './store'
+import { recordLabel } from './labels'
 import { dropInferredMatchersForThread, recordRejection } from './matchers'
 import { commitSwitch, type SegmenterContext } from './segmenter'
 import { DESK_TIMING, type DeskPendingQuestion, type DeskQuestion, type DeskQuestionKind } from '../../shared/desk'
@@ -139,7 +141,35 @@ export interface CreateQuestionInput {
 
 export type CreateQuestionResult =
   | { ok: true; question: DeskQuestion }
-  | { ok: false; reason: 'budget' | 'already_pending' | 'invalid'; detail?: string }
+  | { ok: false; reason: 'budget' | 'already_pending' | 'invalid' | 'deduped'; detail?: string }
+
+/** Local start-of-day for the same-day dedupe window. */
+function startOfDay(nowIso: string): string {
+  const d = new Date(nowIso)
+  d.setHours(0, 0, 0, 0)
+  return d.toISOString()
+}
+
+/**
+ * Was this exact (resource, thread) pairing already answered today? Eleven
+ * identical auto-accepts in a day is Desk asking the same question twelve times
+ * and learning nothing. The persisted `desk_questions` rows are the dedupe key,
+ * so a restart cannot forget it.
+ */
+export function pairingResolvedToday(
+  signature: string,
+  threadId: string,
+  nowIso: string,
+  db: Database.Database = getDb()
+): boolean {
+  const row = db.prepare(`
+    SELECT 1 FROM desk_questions
+    WHERE kind = 'thread_switch' AND proposed_thread_id = ? AND resource_signature = ?
+      AND state IN ('auto_accepted', 'rejected', 'accepted') AND resolved_at >= ?
+    LIMIT 1
+  `).get(threadId, signature, startOfDay(nowIso))
+  return !!row
+}
 
 /**
  * Mint one pending Ask, under the budget. Creating it IS the assertion, so the
@@ -150,6 +180,12 @@ export function createQuestion(input: CreateQuestionInput, context: AskContext =
   const invalid = validateQuestion(input)
   if (invalid) return { ok: false, reason: 'invalid', detail: invalid }
   if (getPendingQuestion(context)) return { ok: false, reason: 'already_pending' }
+  // Don't re-ask a pairing already answered today — the block is committed
+  // optimistically regardless, so this only silences the redundant Ask.
+  if (input.kind === 'thread_switch' && input.proposedThreadId && input.resourceSignature &&
+      pairingResolvedToday(input.resourceSignature, input.proposedThreadId, nowIso, db)) {
+    return { ok: false, reason: 'deduped' }
+  }
   if (!assertionAllowed(context)) return { ok: false, reason: 'budget' }
 
   const id = randomUUID()
@@ -185,11 +221,31 @@ export function acceptQuestion(id: string, context: AskContext = {}): AnswerResu
     db.prepare("UPDATE desk_questions SET state = 'accepted', resolved_at = ? WHERE id = ?").run(nowIso, id)
 
     if (question.kind === 'thread_switch' && question.proposedThreadId) {
-      const runtime = getRuntime(db)
-      const sinceIso = runtime.candidateSince ?? question.createdAt
+      // The block was committed optimistically when the Ask was raised.
+      // Accepting *confirms* it — it must never `commitSwitch` a second time
+      // from a live `candidateSince` that may belong to a different candidate
+      // by now. If the user has since reassigned the block, their write wins.
+      if (question.blockId) {
+        const block = getBlock(question.blockId, db)
+        if (block && block.threadId === question.proposedThreadId && block.source !== 'manual') {
+          updateBlock(question.blockId, { source: 'confirmed', confidence: 1, state: 'committed' }, db)
+          // Freeze the accepted attribution as USER labels — but promote NO
+          // broad matcher. An Ask is backed by a container signature as often as
+          // a concrete one, and blindly confirming `title contains "bond"` is
+          // the exact failure this plan exists to fix. A durable *rule* comes
+          // only from an explicit reassignment with a concrete pattern.
+          for (const segment of listSegmentsForBlock(question.blockId, db)) {
+            if (segment.attributedThreadId === question.proposedThreadId) {
+              recordLabel({ segmentId: segment.id, threadId: question.proposedThreadId, source: 'user', confidence: 1 }, db)
+            }
+          }
+        }
+        return { question: getQuestion(id, db)!, committedBlockId: question.blockId }
+      }
+      // Legacy question with no stamped block: commit once, now.
       const blockId = commitSwitch(
         question.proposedThreadId,
-        { sinceIso, source: 'confirmed', confidence: 1 },
+        { sinceIso: question.createdAt, source: 'confirmed', confidence: 1 },
         { ...context, db }
       )
       return { question: getQuestion(id, db)!, committedBlockId: blockId }
@@ -221,7 +277,27 @@ export function rejectQuestion(id: string, context: AskContext = {}): AnswerResu
   const apply = db.transaction((): AnswerResult => {
     db.prepare("UPDATE desk_questions SET state = 'rejected', resolved_at = ? WHERE id = ?").run(nowIso, id)
 
-    if (question.kind !== 'thread_switch' || !question.proposedThreadId || !question.resourceSignature) {
+    if (question.kind !== 'thread_switch' || !question.proposedThreadId) {
+      return { question: getQuestion(id, db)! }
+    }
+
+    // Revert the optimistically-committed block FIRST — before any
+    // signature-dependent teaching. A NULL-signature question (every question
+    // today, until Phase 3 populates the candidate signature) used to
+    // short-circuit here and leave the block attributed to the thread the user
+    // just rejected. The block fall-back must never be gated on the signature.
+    if (question.blockId) {
+      const block = getBlock(question.blockId, db)
+      if (block?.threadId === question.proposedThreadId && block.source === 'inferred') {
+        updateBlock(question.blockId, { threadId: null, confidence: 0 }, db)
+      }
+    }
+    // The candidate that produced this Ask is gone.
+    clearCandidate(db)
+
+    // Without a resource signature there is nothing durable to teach — no
+    // suppression key, no matcher to drop — but the block is already restored.
+    if (!question.resourceSignature) {
       return { question: getQuestion(id, db)! }
     }
 
@@ -230,18 +306,6 @@ export function rejectQuestion(id: string, context: AskContext = {}): AnswerResu
     const clearedSegments = clearSegmentAttribution(
       { signature: question.resourceSignature, threadId: question.proposedThreadId }, db
     )
-
-    // The candidate that produced this Ask is gone; the current block stays put.
-    clearCandidate(db)
-
-    // A block Desk had already optimistically pointed at the rejected thread
-    // falls back to unknown rather than keeping a rejected attribution.
-    if (question.blockId) {
-      const block = getBlock(question.blockId, db)
-      if (block?.threadId === question.proposedThreadId && block.source === 'inferred') {
-        updateBlock(question.blockId, { threadId: null, confidence: 0 }, db)
-      }
-    }
 
     return { question: getQuestion(id, db)!, droppedMatchers, clearedSegments }
   })
@@ -266,12 +330,16 @@ export function expireQuestions(context: AskContext = {}): AnswerResult[] {
         .run(nowIso, question.id)
 
       if (question.kind === 'thread_switch' && question.proposedThreadId) {
-        const runtime = getRuntime(db)
-        const sinceIso = runtime.candidateSince ?? question.createdAt
-        // 'inferred', not 'confirmed' — silence is local consent, nothing more.
+        // Silence auto-accepts THIS block only, and the block is already
+        // committed (optimistically, `inferred`). Leave it exactly as it is —
+        // committing again would re-date it from a stale candidate clock.
+        if (question.blockId) {
+          return { question: getQuestion(question.id, db)!, committedBlockId: question.blockId }
+        }
+        // Legacy question with no stamped block: commit once, now.
         const blockId = commitSwitch(
           question.proposedThreadId,
-          { sinceIso, source: 'inferred', confidence: 0.5 },
+          { sinceIso: question.createdAt, source: 'inferred', confidence: 0.5 },
           { ...context, db }
         )
         return { question: getQuestion(question.id, db)!, committedBlockId: blockId }

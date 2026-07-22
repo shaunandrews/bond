@@ -188,6 +188,7 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     memoryUpsert: (item: MemoryItemInput) => invoke('memory.upsert', { item }),
     memoryDelete: (id: string) => invoke('memory.delete', { id }),
     memorySources: (id: string) => invoke('memory.sources', { id }),
+    memoryHealth: () => invoke('memory.health'),
 
     // --- Sense debriefs ---
     senseMemory: (limit?: number) => invoke('sense.memory', { limit }),

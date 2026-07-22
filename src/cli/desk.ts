@@ -78,6 +78,12 @@ async function main(): Promise<void> {
         break
 
       case 'answer': {
+        if (parsed.verdict === null) {
+          console.log('Usage: bond desk answer [id] yes|no')
+          process.exitCode = 2
+          break
+        }
+        const accepted = parsed.verdict === 'accept'
         let questionId = parsed.questionId
         if (!questionId) {
           const status = await call(ws, 'desk.status') as DeskStatus
@@ -87,9 +93,9 @@ async function main(): Promise<void> {
           console.log('No pending question.')
           break
         }
-        const result = await call(ws, 'desk.answer', { questionId, accepted: parsed.accepted }) as { ok: boolean }
+        const result = await call(ws, 'desk.answer', { questionId, accepted }) as { ok: boolean }
         console.log(result.ok
-          ? (parsed.accepted ? 'Accepted.' : 'Rejected — and Desk will stop suggesting that pairing.')
+          ? (accepted ? 'Accepted.' : 'Rejected — and Desk will stop suggesting that pairing.')
           : 'That question is no longer pending.')
         break
       }

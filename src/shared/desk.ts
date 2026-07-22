@@ -12,7 +12,7 @@ export type DeskBlockState = 'candidate' | 'committed' | 'dismissed'
 export type DeskBlockSource = 'inferred' | 'confirmed' | 'manual'
 export type DeskNoteStatus = 'none' | 'pending' | 'ready' | 'failed' | 'edited'
 export type DeskAttributionState = 'unresolved' | 'queued' | 'resolved' | 'failed'
-export type DeskMatcherField = 'bundle' | 'title' | 'path' | 'resource'
+export type DeskMatcherField = 'url' | 'bundle' | 'title' | 'path' | 'resource'
 export type DeskMatcherOperator = 'exact' | 'prefix' | 'contains'
 export type DeskQuestionKind = 'thread_switch' | 'todo_started'
 export type DeskQuestionState = 'pending' | 'accepted' | 'rejected' | 'auto_accepted' | 'cancelled'
@@ -64,6 +64,15 @@ export interface DeskEvidence {
   bundleId?: string
   titles?: string[]
   paths?: string[]
+  /** Focused-window URLs (origin + path only), from the accessibility path. */
+  urls?: string[]
+  /**
+   * Titles of other windows visible at capture time (arbtt's "any window").
+   * Attribution *context*, never a signature input — while Bond was frontmost,
+   * Figma showed "Studio Workbench" and Chrome "STU-2078". Ordered by layer,
+   * frontmost first.
+   */
+  coTitles?: string[]
 }
 
 export interface DeskSegment {

@@ -51,7 +51,15 @@ export function getDb(): Database.Database {
   migrateCreateSenseMemoryTables(_db)
   migrateCreateRemoteDevicesTable(_db)
   migrateDropRetiredTables(_db)
+  migrateAddSenseCaptureUrl(_db)
   migrateCreateDeskTables(_db)
+  migrateAddDeskNoteRetry(_db)
+  migrateAddDeskMetricsLedger(_db)
+  migrateAddDeskDerivedAttribution(_db)
+  migrateAddDeskMatcherBatch(_db)
+  migrateAddDeskSignatureVersion(_db)
+  migrateRepairDeskIntegrity(_db)
+  migrateResetDeskOnSignatureChange(_db)
   ensureTranscriptSchema(_db)
   ensureMemorySchema(_db)
 
@@ -1024,5 +1032,191 @@ function migrateCreateDeskTables(db: Database.Database): void {
       ok            INTEGER NOT NULL DEFAULT 1
     );
     CREATE INDEX IF NOT EXISTS idx_desk_metrics_time ON desk_metrics(recorded_at DESC);
+
+    -- Phase 2: attribution is a derived projection, not a stored fact. Every
+    -- INTERPRETATION of a segment (from a matcher, the model, or the user) is a
+    -- row here, carrying its source, provenance, confidence, and the rules
+    -- version in force when it was made. desk_segments.attributed_thread_id is
+    -- demoted to a CACHE re-derived from these; a user label is frozen forever,
+    -- matcher/model labels re-derive when the rules change.
+    CREATE TABLE IF NOT EXISTS desk_labels (
+      id            TEXT PRIMARY KEY,
+      segment_id    TEXT NOT NULL REFERENCES desk_segments(id) ON DELETE CASCADE,
+      thread_id     TEXT REFERENCES desk_threads(id) ON DELETE CASCADE,
+      source        TEXT NOT NULL,          -- 'matcher' | 'model' | 'user'
+      provenance    TEXT,                   -- matcher id or inference batch id
+      confidence    REAL NOT NULL DEFAULT 0,
+      rules_version INTEGER NOT NULL DEFAULT 1,
+      created_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_desk_labels_segment ON desk_labels(segment_id, created_at DESC);
   `)
+}
+
+/**
+ * Phase 2 columns: `rules_version` is the monotonically-increasing generation of
+ * the rule set (bumped on any user rule change or thread merge/rename/archive);
+ * `derived_rules_version` stamps the version a segment's cache was derived under,
+ * so a bump makes the cache stale and the background sweep re-derives it.
+ */
+/** `batch_id` links a matcher to the inference batch that wrote it, so a
+ * rejection can drop the broad matcher a batch produced — which model-resolved
+ * segments (matcher_id NULL) otherwise hide from the rejection query. */
+function migrateAddDeskMatcherBatch(db: Database.Database): void {
+  const cols = db.pragma('table_info(desk_matchers)') as { name: string }[]
+  if (!cols.some(c => c.name === 'batch_id')) {
+    db.exec('ALTER TABLE desk_matchers ADD COLUMN batch_id TEXT')
+  }
+}
+
+function migrateAddDeskDerivedAttribution(db: Database.Database): void {
+  const runtimeCols = db.pragma('table_info(desk_runtime)') as { name: string }[]
+  if (!runtimeCols.some(c => c.name === 'rules_version')) {
+    db.exec('ALTER TABLE desk_runtime ADD COLUMN rules_version INTEGER NOT NULL DEFAULT 1')
+  }
+  const segCols = db.pragma('table_info(desk_segments)') as { name: string }[]
+  if (!segCols.some(c => c.name === 'derived_rules_version')) {
+    db.exec('ALTER TABLE desk_segments ADD COLUMN derived_rules_version INTEGER NOT NULL DEFAULT 0')
+    // Backfill: every already-attributed segment becomes a matcher/model label
+    // so it can re-derive going forward, then is stamped current so the first
+    // sweep does not touch it. Without this, the sweep would wipe every
+    // pre-Phase-2 attribution (no label to derive from).
+    db.exec(`
+      INSERT INTO desk_labels (id, segment_id, thread_id, source, provenance, confidence, rules_version, created_at)
+      SELECT lower(hex(randomblob(16))), id, attributed_thread_id,
+             CASE WHEN matcher_id IS NOT NULL THEN 'matcher' ELSE 'model' END,
+             matcher_id, attribution_confidence, 1, COALESCE(attributed_at, created_at)
+      FROM desk_segments WHERE attributed_thread_id IS NOT NULL;
+      UPDATE desk_segments SET derived_rules_version = 1;
+    `)
+  }
+}
+
+/**
+ * A transient note failure (a Pi outage during `generateReentryNote`) must not
+ * be terminal — `listBlocksAwaitingNote` only ever looked at `note_status =
+ * 'none'`, so one blip permanently lost a block's re-entry note. `note_retry_at`
+ * gates a bounded retry; `note_attempts` caps it. Permanent failures (no
+ * evidence, redacted) leave `note_retry_at` NULL and stay terminal, correctly.
+ */
+function migrateAddDeskNoteRetry(db: Database.Database): void {
+  const columns = db.pragma('table_info(desk_blocks)') as { name: string }[]
+  if (!columns.some(c => c.name === 'note_retry_at')) {
+    db.exec('ALTER TABLE desk_blocks ADD COLUMN note_retry_at TEXT')
+  }
+  if (!columns.some(c => c.name === 'note_attempts')) {
+    db.exec('ALTER TABLE desk_blocks ADD COLUMN note_attempts INTEGER NOT NULL DEFAULT 0')
+  }
+}
+
+/**
+ * `desk_metrics` is Desk's inference ledger (the `memory_runs` pattern). It was
+ * missing the fields that make a giving-up visible: how many segments a batch
+ * actually resolved vs. failed, and the model error when a call threw. Silence
+ * was the meta-failure of the 2026-07-21 memory incident; a batch that fails
+ * must leave a legible row.
+ */
+function migrateAddDeskMetricsLedger(db: Database.Database): void {
+  const columns = db.pragma('table_info(desk_metrics)') as { name: string }[]
+  if (!columns.some(c => c.name === 'resolved')) {
+    db.exec('ALTER TABLE desk_metrics ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0')
+  }
+  if (!columns.some(c => c.name === 'failed')) {
+    db.exec('ALTER TABLE desk_metrics ADD COLUMN failed INTEGER NOT NULL DEFAULT 0')
+  }
+  if (!columns.some(c => c.name === 'error')) {
+    db.exec('ALTER TABLE desk_metrics ADD COLUMN error TEXT')
+  }
+}
+
+/** The accessibility path can expose a focused URL (Safari natively; Chromium
+ * behind AXManualAccessibility). It is the strongest project token on the
+ * machine (`linear.app/a8c/issue/STU-2079`), stored origin+path only. */
+function migrateAddSenseCaptureUrl(db: Database.Database): void {
+  const columns = db.pragma('table_info(sense_captures)') as { name: string }[]
+  if (!columns.some(c => c.name === 'url')) {
+    db.exec('ALTER TABLE sense_captures ADD COLUMN url TEXT')
+  }
+}
+
+/** `signature_version` lets the *next* signature change invalidate instead of
+ * corrupt. Absent on databases created before it existed. */
+function migrateAddDeskSignatureVersion(db: Database.Database): void {
+  const columns = db.pragma('table_info(desk_runtime)') as { name: string }[]
+  if (!columns.some(c => c.name === 'signature_version')) {
+    db.exec('ALTER TABLE desk_runtime ADD COLUMN signature_version INTEGER NOT NULL DEFAULT 1')
+  }
+}
+
+/**
+ * When the signature algorithm changes, everything keyed on a signature is
+ * stale — every `resource`-field matcher hashes to a value that can never
+ * recur. This is free to do exactly once: 0 confirmed matchers, 0 suppressions.
+ * Sweep the inferred attribution (never a user's confirmed rule), the empty
+ * suppressions, and the model's junk threads, then stamp the new version.
+ *
+ * `import`ed lazily to avoid a cycle: db.ts is imported by the desk modules.
+ */
+export function migrateResetDeskOnSignatureChange(db: Database.Database): void {
+  const SIGNATURE_VERSION = 2 // mirror of signature.ts; a bare literal avoids the import cycle
+  const row = db.prepare('SELECT signature_version FROM desk_runtime WHERE singleton = 1').get() as
+    { signature_version: number } | undefined
+  const current = row?.signature_version ?? 1
+  if (current >= SIGNATURE_VERSION) return
+
+  const sweep = db.transaction(() => {
+    // Inferred matchers only — confirmed rules are the user's and are preserved.
+    db.prepare('DELETE FROM desk_matchers WHERE confirmed = 0').run()
+    db.prepare('DELETE FROM desk_suppressions').run()
+    // Orphan inferred threads: model-invented, no user note, no rename, and now
+    // holding no confirmed matcher. (`source = 'inferred'` never touches a
+    // thread the user named or renamed — those become `source = 'user'`.)
+    db.prepare(`
+      DELETE FROM desk_threads
+      WHERE source = 'inferred' AND user_note IS NULL
+        AND id NOT IN (SELECT DISTINCT thread_id FROM desk_matchers)
+    `).run()
+    // A deleted junk thread leaves its segments with `attributed_thread_id`
+    // NULLed by the FK cascade but `attribution_state` still 'resolved' — an
+    // inconsistent state. Return those to unresolved so they re-derive.
+    db.prepare(`
+      UPDATE desk_segments SET attribution_state = 'unresolved',
+        matcher_id = NULL, attribution_confidence = 0, attributed_at = NULL
+      WHERE attributed_thread_id IS NULL AND attribution_state = 'resolved'
+    `).run()
+    // Ensure the singleton exists, then stamp the version.
+    db.prepare('INSERT OR IGNORE INTO desk_runtime (singleton, updated_at) VALUES (1, ?)')
+      .run(new Date(0).toISOString())
+    db.prepare('UPDATE desk_runtime SET signature_version = ? WHERE singleton = 1').run(SIGNATURE_VERSION)
+  })
+  sweep()
+  console.log('[bond] desk: signature algorithm changed — swept inferred attribution, stamped v' + SIGNATURE_VERSION)
+}
+
+/**
+ * One-time integrity repair for damage that accrued while `foreign_keys` was
+ * OFF (the serving daemon predated the bundle that turned it on). SQLite never
+ * retro-validates, so the orphan rows stand until swept. Idempotent: after the
+ * first pass every query below matches nothing and costs almost nothing.
+ */
+export function migrateRepairDeskIntegrity(db: Database.Database): void {
+  // Orphan capture links — a live segment plus links to segments that no longer
+  // exist. No arbitration: the surviving segment keeps its link, the rest go.
+  db.prepare('DELETE FROM desk_capture_links WHERE segment_id NOT IN (SELECT id FROM desk_segments)').run()
+  db.prepare('DELETE FROM desk_capture_links WHERE capture_id NOT IN (SELECT id FROM sense_captures)').run()
+
+  // Negative-duration blocks: the Ask double-commit dated a block's end before
+  // its own start. Clamp `ended_at` up to `started_at` (a zero-length committed
+  // block, which the noise floor already filters out of the In-flight list).
+  db.prepare('UPDATE desk_blocks SET ended_at = started_at WHERE ended_at IS NOT NULL AND ended_at < started_at').run()
+
+  // Visibility, not enforcement: log any residual FK violation so an orphan
+  // class can never silently re-accumulate. `foreign_key_check` returns one row
+  // per violation; we only need to know it is non-empty.
+  try {
+    const violations = db.pragma('foreign_key_check') as unknown[]
+    if (violations.length > 0) {
+      console.warn(`[bond] desk integrity: ${violations.length} foreign-key violation(s) remain after repair`)
+    }
+  } catch { /* best effort */ }
 }

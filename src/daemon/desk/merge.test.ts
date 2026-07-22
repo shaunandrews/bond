@@ -175,7 +175,7 @@ describe('merge — matchers cannot collide', () => {
   })
 
   it('the matcher a segment and the runtime candidate point at survives the merge', () => {
-    const m = writeInferredMatcher({ ...KEY, threadId: source.id, confidence: 0.5, example: {} }).matcher
+    const m = writeInferredMatcher({ ...KEY, threadId: source.id, confidence: 0.5, example: {} }).matcher!
     const seg = createSegment({ blockId: null, startedAt: 'a', resourceSignature: 'sig', evidence: {} })
     attributeSegment(seg.id, { threadId: source.id, matcherId: m.id, confidence: 0.5 })
     setRuntime({ candidateMatcherId: m.id })

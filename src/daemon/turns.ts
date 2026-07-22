@@ -8,7 +8,7 @@ import { clearTurnApprovals } from './approvals'
 import { clearTurnQuestions } from './questions'
 import { ensureActiveEpoch } from './epochs'
 import { saveImages } from './images'
-import { enqueueMemoryTask, finalObserverHook, memoryFlushHook, scheduleEpochObservation } from './memory/service'
+import { enqueueMemoryTask, finalObserverHook, memoryFlushHook, scheduleEpochObservation, scheduleEpochReflection } from './memory/service'
 import { GLOBAL_TRANSCRIPT_SESSION_ID, ensureGlobalTranscriptSession } from './sessions'
 import { getSetting } from './settings'
 import { completeTurn, getMaxMessageSeq, insertTurnStart, startTurn, upsertMessages } from './transcript'
@@ -215,13 +215,16 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
             contextWindow: result.contextWindow,
           })
           if (succeeded && !ac.signal.aborted) {
+            const toSeq = getMaxMessageSeq()
             scheduleEpochObservation({
               epochId: epoch.id,
-              toSeq: getMaxMessageSeq(),
+              toSeq,
               sessionId: sessionId ?? epoch.piSessionId,
               userText: cleanText,
               logger: console,
             })
+            // Rollover is a backstop now, so reflection can no longer ride it.
+            scheduleEpochReflection({ epochId: epoch.id, toSeq, logger: console })
           }
           return succeeded
         } catch (error) {

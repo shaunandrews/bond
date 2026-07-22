@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { setDataDir, ensureSkillsDir } from './paths'
 import { claimSocket, daemonHealth, socketIdentity, startSocketWatchdog } from './lifecycle'
 import { installWireToolLogging, installWireWebSocketLogging } from './wire-debug'
-import { startServer, attachConnection, registerBroadcastServer, startDeskIfRunning, stopDesk } from './server'
+import { startServer, attachConnection, registerBroadcastServer, initDesk, startDeskIfRunning, stopDesk } from './server'
 import { startRemoteServer, type RemoteServer } from './remote'
 import { exchangePairingCode, isValidDeviceToken } from './pairing'
 import { getRemotePort, getOrCreateRemoteToken } from './settings'
@@ -113,6 +113,10 @@ async function main(): Promise<void> {
   } catch (err) {
     console.error(`[bond-daemon] remote server failed to start: ${err instanceof Error ? err.message : String(err)}`)
   }
+
+  // Register Desk's change broadcast unconditionally — a read-only Desk (off
+  // this boot) still mutates and must keep every open panel in sync.
+  initDesk()
 
   // A Desk that was running before the restart starts observing again.
   // Observed activity alone still never turns Desk on.

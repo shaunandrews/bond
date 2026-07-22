@@ -15,6 +15,7 @@ import {
   isSuppressed,
   listMatchers,
   pruneOverbroadMatchers,
+  pruneStaleInferredMatchers,
   recordMatcherHit,
   recordRejection,
   repointMatcherByUser,
@@ -53,8 +54,8 @@ describe('authority matrix — inference writes', () => {
   it('inserts an unconfirmed exact-resource matcher when none exists', () => {
     const result = writeInferredMatcher({ ...RESOURCE, threadId: studio.id, confidence: 0.8, example: {} })
     expect(result.action).toBe('inserted')
-    expect(result.matcher.confirmed).toBe(false)
-    expect(result.matcher.source).toBe('inferred')
+    expect(result.matcher!.confirmed).toBe(false)
+    expect(result.matcher!.source).toBe('inferred')
   })
 
   it('refreshes an unconfirmed matcher for the same thread without changing authority', () => {
@@ -63,9 +64,9 @@ describe('authority matrix — inference writes', () => {
       ...RESOURCE, threadId: studio.id, confidence: 0.95, example: { titles: ['Sync Dialog'] },
     })
     expect(result.action).toBe('refreshed')
-    expect(result.matcher.confidence).toBe(0.95)
-    expect(result.matcher.confirmed).toBe(false)
-    expect(result.matcher.example.titles).toEqual(['Sync Dialog'])
+    expect(result.matcher!.confidence).toBe(0.95)
+    expect(result.matcher!.confirmed).toBe(false)
+    expect(result.matcher!.example.titles).toEqual(['Sync Dialog'])
   })
 
   it('will not steal a pattern already pointing at another thread', () => {
@@ -88,7 +89,7 @@ describe('authority matrix — inference writes', () => {
 
   it('never sets confirmed = 1, no matter the confidence', () => {
     const result = writeInferredMatcher({ ...RESOURCE, threadId: studio.id, confidence: 1, example: {} })
-    expect(result.matcher.confirmed).toBe(false)
+    expect(result.matcher!.confirmed).toBe(false)
   })
 })
 
@@ -169,7 +170,7 @@ describe('resolution order', () => {
   })
 
   it('skips a disabled matcher', () => {
-    const m = writeInferredMatcher({ ...RESOURCE, threadId: studio.id, confidence: 1, example: {} }).matcher
+    const m = writeInferredMatcher({ ...RESOURCE, threadId: studio.id, confidence: 1, example: {} }).matcher!
     setMatcherEnabled(m.id, false)
     expect(resolveFor()).toBeNull()
   })
@@ -238,7 +239,7 @@ describe('rejection rollback', () => {
   it('drops a title matcher reached through the segments that used it', () => {
     const m = writeInferredMatcher({
       field: 'title', operator: 'exact', pattern: 'sync dialog', threadId: studio.id, confidence: 0.9, example: {},
-    }).matcher
+    }).matcher!
     const seg = createSegment({ blockId: null, startedAt: 'a', resourceSignature: 'sig-abc', evidence: {} })
     attributeSegment(seg.id, { threadId: studio.id, matcherId: m.id, confidence: 0.9 })
 
@@ -369,5 +370,80 @@ describe('the rules editor surface', () => {
     expect(deleteMatcher(m.id)).toBe(true)
     expect(deleteMatcher(m.id)).toBe(false)
     expect(listMatchers()).toHaveLength(0)
+  })
+})
+
+describe('url matchers (Phase 1) outrank titles', () => {
+  it('a url matcher resolves and wins over a title matcher', () => {
+    const url = confirmMatcher({ field: 'url', operator: 'contains', pattern: 'linear.app/a8c/issue/stu', threadId: studio.id })
+    confirmMatcher({ field: 'title', operator: 'contains', pattern: 'linear', threadId: isp.id })
+
+    const hit = resolveMatcher({
+      signature: 'sig-x', bundleId: 'com.google.chrome',
+      titles: ['STU-2079 · Linear'], paths: [], urls: ['linear.app/a8c/issue/STU-2079'],
+    })
+    expect(hit?.id).toBe(url.id)
+    expect(hit?.threadId).toBe(studio.id)
+  })
+
+  it('resolves without urls supplied (back-compat)', () => {
+    const m = confirmMatcher({ field: 'title', operator: 'contains', pattern: 'studio', threadId: studio.id })
+    const hit = resolveMatcher({ signature: 's', bundleId: null, titles: ['studio sync'], paths: [] })
+    expect(hit?.id).toBe(m.id)
+  })
+})
+
+describe('inferred-matcher cap and stale prune (Phase 1.5)', () => {
+  it('caps broad inferred matchers per thread; the exact-resource cache is exempt', () => {
+    for (let i = 0; i < 15; i++) {
+      writeInferredMatcher({ field: 'title', operator: 'contains', pattern: `token${i}`, threadId: studio.id, confidence: 0.6, example: {} })
+    }
+    const broad = listMatchers({ threadId: studio.id }).filter(m => m.field !== 'resource')
+    expect(broad.length).toBeLessThanOrEqual(12)
+
+    // Past the cap, a broad write is blocked...
+    const blocked = writeInferredMatcher({ field: 'title', operator: 'contains', pattern: 'overflow', threadId: studio.id, confidence: 0.6, example: {} })
+    expect(blocked.action).toBe('blocked_cap')
+    // ...but the exact-resource cache always writes.
+    const cached = writeInferredMatcher({ field: 'resource', operator: 'exact', pattern: 'sig-x', threadId: studio.id, confidence: 0.6, example: {} })
+    expect(cached.action).toBe('inserted')
+  })
+
+  it('prunes never-fired stale inferred matchers, so hits is a real decision input', () => {
+    const stale = writeInferredMatcher({ field: 'title', operator: 'contains', pattern: 'ghost', threadId: studio.id, confidence: 0.5, example: {} })
+    getDb().prepare('UPDATE desk_matchers SET created_at = ? WHERE id = ?').run('2020-01-01T00:00:00.000Z', stale.matcher!.id)
+    // A fired matcher of the same age is kept.
+    const fired = writeInferredMatcher({ field: 'title', operator: 'contains', pattern: 'active', threadId: isp.id, confidence: 0.5, example: {} })
+    getDb().prepare("UPDATE desk_matchers SET created_at = ?, hits = 5 WHERE id = ?").run('2020-01-01T00:00:00.000Z', fired.matcher!.id)
+
+    const pruned = pruneStaleInferredMatchers({ olderThanDays: 14, now: '2026-07-20T12:00:00.000Z' })
+    expect(pruned).toBe(1)
+    expect(findMatcher({ field: 'title', operator: 'contains', pattern: 'ghost' })).toBeNull()
+    expect(findMatcher({ field: 'title', operator: 'contains', pattern: 'active' })).not.toBeNull()
+  })
+
+  it('never prunes a confirmed matcher, however stale', () => {
+    const m = confirmMatcher({ field: 'title', operator: 'contains', pattern: 'studio', threadId: studio.id })
+    getDb().prepare('UPDATE desk_matchers SET created_at = ? WHERE id = ?').run('2020-01-01T00:00:00.000Z', m.id)
+    expect(pruneStaleInferredMatchers({ olderThanDays: 1, now: '2026-07-20T12:00:00.000Z' })).toBe(0)
+  })
+})
+
+describe('rejection reaches the broad matcher a model batch wrote (Phase 3)', () => {
+  it('drops the batch\'s broad matcher via label provenance, not just the exact-resource one', () => {
+    const db = getDb()
+    const batchId = 'batch-xyz'
+    // A model batch wrote both the exact-resource cache AND a broad title matcher.
+    writeInferredMatcher({ field: 'resource', operator: 'exact', pattern: 'sig-r', threadId: studio.id, confidence: 0.6, example: {} })
+    writeInferredMatcher({ field: 'title', operator: 'contains', pattern: 'studio', threadId: studio.id, confidence: 0.6, example: {}, batchId })
+    // A model-resolved segment stores matcher_id NULL; the batch link lives on the label.
+    const s = createSegment({ blockId: null, startedAt: 'x', resourceSignature: 'sig-r', evidence: {} })
+    attributeSegment(s.id, { threadId: studio.id, matcherId: null, confidence: 0.6 })
+    db.prepare(`INSERT INTO desk_labels (id, segment_id, thread_id, source, provenance, confidence, rules_version, created_at)
+                VALUES (?, ?, ?, 'model', ?, 0.6, 1, ?)`).run(randomUUID(), s.id, studio.id, batchId, 'x')
+
+    const dropped = dropInferredMatchersForThread('sig-r', studio.id, db)
+    expect(dropped).toBe(2) // the exact-resource AND the broad title matcher
+    expect(listMatchers({ threadId: studio.id })).toHaveLength(0)
   })
 })

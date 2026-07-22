@@ -24,7 +24,7 @@
  */
 import type Database from 'better-sqlite3'
 import { getDb } from '../db'
-import { getBlock, getThread, listSegmentsForBlock, recentBlockText, updateBlock } from './store'
+import { failBlockNote, getBlock, getThread, listSegmentsForBlock, recentBlockText, updateBlock } from './store'
 import { redactAll, redactField } from './signature'
 import type { TextPrompt } from './inference'
 
@@ -150,7 +150,8 @@ export async function generateReentryNote(
 
   const evidence = gatherEvidence(blockId, db)
   if (!hasEnoughEvidence(evidence)) {
-    updateBlock(blockId, { noteStatus: 'failed' }, db)
+    // Permanent: at departure the evidence is fixed; no note is ever coming.
+    failBlockNote(blockId, { transient: false }, db)
     return { status: 'failed', reason: 'no_evidence' }
   }
 
@@ -158,7 +159,7 @@ export async function generateReentryNote(
   // Redact the assembled prompt one final time before it leaves the machine.
   const safePrompt = redactField(prompt)
   if (safePrompt === null) {
-    updateBlock(blockId, { noteStatus: 'failed' }, db)
+    failBlockNote(blockId, { transient: false }, db)
     return { status: 'failed', reason: 'redacted' }
   }
 
@@ -168,20 +169,22 @@ export async function generateReentryNote(
   try {
     raw = await withTimeout(options.prompt(safePrompt, 'fast'), PROMPT_TIMEOUT_MS)
   } catch (error) {
-    updateBlock(blockId, { noteStatus: 'failed' }, db)
+    // Transient: a provider outage must not permanently lose this block's note.
+    failBlockNote(blockId, { transient: true }, db)
     return { status: 'failed', reason: 'model_error', detail: error instanceof Error ? error.message : String(error) }
   }
 
   const cleaned = cleanNote(raw)
   if (!cleaned) {
-    updateBlock(blockId, { noteStatus: 'failed' }, db)
+    // The model saw the evidence and had nothing to say — permanent.
+    failBlockNote(blockId, { transient: false }, db)
     return { status: 'failed', reason: 'empty' }
   }
 
   // ...and redact what came back, before it touches the database.
   const safeNote = redactField(cleaned)
   if (safeNote === null) {
-    updateBlock(blockId, { noteStatus: 'failed' }, db)
+    failBlockNote(blockId, { transient: false }, db)
     return { status: 'failed', reason: 'redacted' }
   }
 

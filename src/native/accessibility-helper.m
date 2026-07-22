@@ -95,6 +95,65 @@ static NSString *getElementValue(AXUIElementRef element) {
     return nil;
 }
 
+// Read kAXURLAttribute off an element, returning an absolute URL string or nil.
+static NSString *copyURLFromElement(AXUIElementRef element) {
+    if (!element) return nil;
+    CFTypeRef urlRef = NULL;
+    if (AXUIElementCopyAttributeValue(element, kAXURLAttribute, &urlRef) != kAXErrorSuccess || !urlRef) return nil;
+    NSString *out = nil;
+    if (CFGetTypeID(urlRef) == CFURLGetTypeID()) {
+        out = [(__bridge NSURL *)urlRef absoluteString];
+    } else if (CFGetTypeID(urlRef) == CFStringGetTypeID()) {
+        out = (__bridge NSString *)urlRef;
+    }
+    NSString *result = out.length ? [out copy] : nil;
+    CFRelease(urlRef);
+    return result;
+}
+
+// The focused document/tab URL. Safari exposes AXURL natively; Chromium exposes
+// it only once it believes an assistive technology is present, which is what the
+// caller-set AXManualAccessibility flag signals. Try the focused element, then
+// the focused window, then a shallow walk for an AXWebArea carrying a URL.
+static void findWebAreaURL(AXUIElementRef element, int depth, NSString **found) {
+    if (*found || depth > 4 || !element) return;
+    CFTypeRef roleRef = NULL;
+    AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &roleRef);
+    if (roleRef) {
+        NSString *role = (__bridge_transfer NSString *)roleRef;
+        if ([role isEqualToString:@"AXWebArea"]) {
+            NSString *u = copyURLFromElement(element);
+            if (u) { *found = u; return; }
+        }
+    }
+    CFTypeRef childrenRef = NULL;
+    if (AXUIElementCopyAttributeValue(element, kAXChildrenAttribute, &childrenRef) != kAXErrorSuccess || !childrenRef) return;
+    NSArray *children = (__bridge_transfer NSArray *)childrenRef;
+    for (id child in children) {
+        findWebAreaURL((__bridge AXUIElementRef)child, depth + 1, found);
+        if (*found) return;
+    }
+}
+
+static NSString *copyFocusedURL(AXUIElementRef appElement) {
+    // Focused UI element first (the active document/web area).
+    CFTypeRef focusedRef = NULL;
+    if (AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute, &focusedRef) == kAXErrorSuccess && focusedRef) {
+        NSString *u = copyURLFromElement((AXUIElementRef)focusedRef);
+        CFRelease(focusedRef);
+        if (u) return u;
+    }
+    // Then the focused window itself, then a shallow walk of it.
+    CFTypeRef windowRef = NULL;
+    if (AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute, &windowRef) == kAXErrorSuccess && windowRef) {
+        NSString *u = copyURLFromElement((AXUIElementRef)windowRef);
+        if (!u) findWebAreaURL((AXUIElementRef)windowRef, 0, &u);
+        CFRelease(windowRef);
+        if (u) return u;
+    }
+    return nil;
+}
+
 static void walkElement(AXUIElementRef element, int depth, int maxDepth, NSMutableArray *results) {
     if (depth > maxDepth) return;
 
@@ -134,6 +193,7 @@ int main(int argc, const char *argv[]) {
         pid_t targetPid = 0;
         int maxDepth = 10;
         NSString *typesArg = nil;
+        BOOL wantURL = NO;
 
         for (int i = 1; i < argc; i++) {
             if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
@@ -145,6 +205,11 @@ int main(int argc, const char *argv[]) {
             } else if (strcmp(argv[i], "--types") == 0 && i + 1 < argc) {
                 typesArg = [NSString stringWithUTF8String:argv[i + 1]];
                 i++;
+            } else if (strcmp(argv[i], "--url") == 0) {
+                // Opt-in: reading a Chromium URL requires signalling assistive
+                // technology (AXManualAccessibility), which has observable side
+                // effects on some apps, so the caller decides per app.
+                wantURL = YES;
             }
         }
 
@@ -182,17 +247,27 @@ int main(int argc, const char *argv[]) {
             return 1;
         }
 
+        // The focused URL, when requested and available.
+        NSString *focusedURL = nil;
+        if (wantURL) {
+            // Signal assistive technology so Chromium-family apps expose their
+            // full tree (and thus AXURL). Safari exposes it without this.
+            AXUIElementSetAttributeValue(appElement, CFSTR("AXManualAccessibility"), kCFBooleanTrue);
+            focusedURL = copyFocusedURL(appElement);
+        }
+
         // Walk the tree
         NSMutableArray *elements = [NSMutableArray array];
         walkElement(appElement, 0, maxDepth, elements);
         CFRelease(appElement);
 
         // Build output
-        NSDictionary *output = @{
+        NSMutableDictionary *output = [@{
             @"app": appName,
             @"pid": @(targetPid),
             @"elements": elements
-        };
+        } mutableCopy];
+        if (focusedURL.length) output[@"url"] = focusedURL;
 
         NSError *jsonError = nil;
         NSData *jsonData = [NSJSONSerialization dataWithJSONObject:output

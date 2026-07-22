@@ -2,10 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   buildEvidence,
   computeSpecificity,
+  coVisibleTitles,
   extractPaths,
+  isBadThreadName,
   isGenericBundle,
   mergeEvidence,
   normalizeTitle,
+  normalizeUrl,
   redactAll,
   redactField,
   resourceSignature,
@@ -306,5 +309,78 @@ describe('computeSpecificity', () => {
 
   it('ranks a longer pattern above a shorter one of the same operator', () => {
     expect(computeSpecificity('prefix', 'studio — sync')).toBeGreaterThan(computeSpecificity('prefix', 'studio'))
+  })
+})
+
+describe('signature route-independence (v2)', () => {
+  it('paths never change the signature — the same window is one resource under AX or OCR', () => {
+    const base = resourceSignature({ bundleId: 'com.automattic.studio', appName: 'Studio', title: 'Sync' })
+    const withPaths = resourceSignature({
+      bundleId: 'com.automattic.studio', appName: 'Studio', title: 'Sync', paths: ['~/a.ts', '~/b.ts'],
+    })
+    expect(withPaths).toBe(base)
+  })
+
+  it('strips dev-server ports, bare percentages, and ISO dates from the title', () => {
+    expect(normalizeTitle('localhost:3000 — app')).toBe(normalizeTitle('localhost — app'))
+    expect(normalizeTitle('Compiling 34%')).toBe(normalizeTitle('Compiling'))
+    expect(normalizeTitle('Report 2026-07-21')).toBe(normalizeTitle('Report'))
+  })
+})
+
+describe('normalizeUrl — origin + path only (a URL is secret-bearing)', () => {
+  it('drops the query and fragment', () => {
+    expect(normalizeUrl('https://linear.app/a8c/issue/STU-2079?token=secret#comment'))
+      .toBe('linear.app/a8c/issue/STU-2079')
+  })
+  it('lowercases the host and trims a trailing slash', () => {
+    expect(normalizeUrl('https://GitHub.com/foo/bar/')).toBe('github.com/foo/bar')
+    expect(normalizeUrl('https://example.com/')).toBe('example.com')
+  })
+  it('rejects non-http(s) and garbage', () => {
+    expect(normalizeUrl('file:///etc/passwd')).toBeNull()
+    expect(normalizeUrl('not a url')).toBeNull()
+    expect(normalizeUrl(null)).toBeNull()
+  })
+})
+
+describe('coVisibleTitles', () => {
+  it('extracts titles from the rich snapshot, frontmost first', () => {
+    const json = JSON.stringify([
+      { name: 'Chrome', title: 'STU-2078 · Linear', layer: 0, frontmost: false },
+      { name: 'Electron', title: 'Bond', layer: 0, frontmost: true },
+      { name: 'Figma', title: 'Studio Workbench', layer: 0, frontmost: false },
+    ])
+    expect(coVisibleTitles(json)).toEqual(['Bond', 'STU-2078 · Linear', 'Studio Workbench'])
+  })
+  it('tolerates the old bare-name format (no titles to give)', () => {
+    expect(coVisibleTitles(JSON.stringify(['Chrome', 'Electron']))).toEqual([])
+    expect(coVisibleTitles('not json')).toEqual([])
+    expect(coVisibleTitles(null)).toEqual([])
+  })
+})
+
+describe('buildEvidence folds url and co-visible titles', () => {
+  it('captures a normalized url and co-visible titles', () => {
+    const evidence = buildEvidence(capture({
+      window_title: 'Bond',
+      url: 'https://linear.app/a8c/issue/STU-2079?tok=x',
+      visible_windows: JSON.stringify([{ name: 'Figma', title: 'Studio Workbench', frontmost: false }]),
+    }))
+    expect(evidence.urls).toEqual(['linear.app/a8c/issue/STU-2079'])
+    expect(evidence.coTitles).toEqual(['Studio Workbench'])
+  })
+})
+
+describe('isBadThreadName (Phase 1.5)', () => {
+  it('bars junk-drawer names and container/tool names', () => {
+    for (const bad of ['one-off', 'misc', 'other', 'various', 'Chrome', 'Electron', 'Terminal']) {
+      expect(isBadThreadName(bad)).toBeTruthy()
+    }
+  })
+  it('accepts a real piece of work', () => {
+    expect(isBadThreadName('ISP problem')).toBeNull()
+    expect(isBadThreadName('Bond mobile composer')).toBeNull()
+    expect(isBadThreadName('STU-2079')).toBeNull()
   })
 })

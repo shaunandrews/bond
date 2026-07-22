@@ -48,20 +48,23 @@ describe('parseDeskArgs', () => {
   })
 
   it('answers the pending question with no id', () => {
-    expect(parseDeskArgs(['answer', 'yes'])).toEqual({ kind: 'answer', questionId: null, accepted: true })
-    expect(parseDeskArgs(['answer', 'no'])).toEqual({ kind: 'answer', questionId: null, accepted: false })
-    expect(parseDeskArgs(['answer', 'y'])).toMatchObject({ accepted: true })
-    expect(parseDeskArgs(['answer', 'n'])).toMatchObject({ accepted: false })
+    expect(parseDeskArgs(['answer', 'yes'])).toEqual({ kind: 'answer', questionId: null, verdict: 'accept' })
+    expect(parseDeskArgs(['answer', 'no'])).toEqual({ kind: 'answer', questionId: null, verdict: 'reject' })
+    expect(parseDeskArgs(['answer', 'y'])).toMatchObject({ verdict: 'accept' })
+    expect(parseDeskArgs(['answer', 'n'])).toMatchObject({ verdict: 'reject' })
   })
 
   it('answers a specific question id', () => {
     expect(parseDeskArgs(['answer', 'q-123', 'yes'])).toEqual({
-      kind: 'answer', questionId: 'q-123', accepted: true,
+      kind: 'answer', questionId: 'q-123', verdict: 'accept',
     })
   })
 
-  it('treats a missing verdict as a rejection rather than guessing yes', () => {
-    expect(parseDeskArgs(['answer', 'q-123'])).toEqual({ kind: 'answer', questionId: 'q-123', accepted: false })
+  it('treats a missing verdict as a usage error, never a silent rejection', () => {
+    // A reject becomes a durable negative rule in Phase 3; a forgotten verdict
+    // must not mint one. `verdict: null` makes the CLI print usage instead.
+    expect(parseDeskArgs(['answer', 'q-123'])).toEqual({ kind: 'answer', questionId: 'q-123', verdict: null })
+    expect(parseDeskArgs(['answer'])).toEqual({ kind: 'answer', questionId: null, verdict: null })
   })
 
   it('parses stats hours', () => {

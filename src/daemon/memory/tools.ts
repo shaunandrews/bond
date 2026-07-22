@@ -6,7 +6,8 @@ import { getDb } from '../db'
 import { firstRunToolReminder } from '../onboarding'
 import { getSetting } from '../settings'
 import { redact } from '../sense/redaction'
-import { getSourceMessages, searchMessages } from '../transcript'
+import { getSourceMessages, searchActivitySnippets, searchMessages } from '../transcript'
+import { getMemoryHealth } from './ledger'
 import { readCoreMemory, withCoreMemoryLock, writeCoreMemoryAtomic } from './core-memory'
 import {
   countActiveMemoryItems,
@@ -167,13 +168,16 @@ export function registerMemoryTools(pi: ExtensionAPI, options: { sourceMessageId
   pi.registerTool({
     name: 'memory_status',
     label: 'Memory Status',
-    description: 'Inspect Bond’s persistent memory system status and counts without exposing all memory content.',
+    description: 'Inspect Bond’s persistent memory system status, counts, and WRITE HEALTH. Reports when memory writes are failing or stale, so you can say so plainly instead of guessing why you cannot recall recent work.',
     parameters: Type.Object({}),
     async execute() {
       const db = getDb()
       const core = readCoreMemory()
       const working = readWorkingMemory()
       const transcript = db.prepare("SELECT COUNT(*) AS count FROM messages WHERE role IN ('user', 'bond')").get() as { count: number }
+      // Counts alone lie by omission: mid-incident this tool would have
+      // reported active: true with 24 stale facts and called it healthy.
+      const health = getMemoryHealth(db)
       return toolResult({
         available: true,
         core: { facts: core.facts.length, preferences: core.preferences.length, decisions: core.decisions.length },
@@ -183,6 +187,17 @@ export function registerMemoryTools(pi: ExtensionAPI, options: { sourceMessageId
           preferences: working.preferences.length,
           decisions: working.decisions.length,
           openThreads: working.openThreads.length,
+          artifacts: working.artifacts.map(a => `${a.kind}:${a.ref}`),
+          activeSkill: working.activeSkill,
+          checkpoint: working.checkpoint,
+        },
+        health: {
+          workingUpdatedAt: health.workingUpdatedAt,
+          coreUpdatedAt: health.coreUpdatedAt,
+          observerLagSeqs: health.observerLagSeqs,
+          consecutiveObserverFailures: health.consecutiveObserverFailures,
+          lastError: health.lastError,
+          degraded: health.consecutiveObserverFailures >= 2 || health.observerLagSeqs > 48,
         },
         searchableItems: countActiveMemoryItems(db),
         transcriptMessages: transcript.count,
@@ -225,16 +240,22 @@ export function registerMemoryTools(pi: ExtensionAPI, options: { sourceMessageId
   pi.registerTool({
     name: 'history_search',
     label: 'Search History',
-    description: 'Search Bond’s exact conversation transcript for previous wording, dates, paths, numbers, or discussions.',
+    description: 'Search Bond’s exact conversation transcript for previous wording, dates, paths, numbers, or discussions. Matching is per-word AND; "quoted spans" match as phrases; if nothing matches, the search automatically broadens to OR. Prefer 2–3 distinctive terms over a long descriptive sentence. Tool activity (files read/written, commands run) is searched too and returned separately as activityMatches.',
     parameters: Type.Object({
-      query: Type.String({ description: 'Specific transcript query' }),
+      query: Type.String({ description: 'Specific transcript query — 2-3 distinctive terms' }),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
     }),
     async execute(_toolCallId, params) {
-      const messages = searchMessages(params.query, { limit: params.limit ?? 8 })
-        .filter(message => message.role === 'user' || message.role === 'bond')
+      const limit = params.limit ?? 8
+      // roles filters in SQL: post-LIMIT filtering discarded up to 6 of 8 slots
+      // to activity rows and returned empty while matches existed.
+      const messages = searchMessages(params.query, { limit, roles: ['user', 'bond'] })
         .map(message => ({ id: message.id, seq: message.seq, role: message.role, text: message.text, createdAt: message.createdAt }))
-      return toolResult({ messages })
+      // The audit document's content lived in tool outputs all morning (FTS
+      // indexes activity events up to 4k chars). Those were the best matches
+      // in the index and the old post-filter threw every one of them away.
+      const activityMatches = searchActivitySnippets(params.query, 3)
+      return toolResult({ messages, activityMatches })
     },
   })
 

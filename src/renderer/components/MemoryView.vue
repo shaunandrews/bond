@@ -7,7 +7,7 @@ import BondTab from './BondTab.vue'
 import BondButton from './BondButton.vue'
 import BondInput from './BondInput.vue'
 import BondTextarea from './BondTextarea.vue'
-import type { CoreMemory, MemoryItem, MemoryItemKind, WorkingState } from '../../shared/memory'
+import type { CoreMemory, MemoryHealth, MemoryItem, MemoryItemKind, WorkingState } from '../../shared/memory'
 
 const memory = useMemory()
 
@@ -116,8 +116,49 @@ function roleLabel(role: string): string {
   return 'System'
 }
 
+/**
+ * Health line. The 2026-07-21 freeze was invisible in this panel: it showed
+ * state with no last-written time and no failure indication, so stale memory
+ * looked exactly like fresh memory.
+ */
+const health = ref<MemoryHealth | null>(null)
+
+const healthDegraded = computed(() => {
+  const value = health.value
+  if (!value) return false
+  return value.consecutiveObserverFailures >= 2 || value.observerLagSeqs > 48
+})
+
+const healthSummary = computed(() => {
+  const value = health.value
+  if (!value) return ''
+  const written = value.workingUpdatedAt ? `Working memory written ${relativeAge(value.workingUpdatedAt)}` : 'Working memory never written'
+  const observer = value.observerLagSeqs === 0 ? 'observer up to date' : `observer ${value.observerLagSeqs} behind`
+  return `${written} · ${observer}`
+})
+
+function relativeAge(iso: string): string {
+  const ts = Date.parse(iso)
+  if (Number.isNaN(ts)) return 'at an unknown time'
+  const minutes = Math.max(0, Math.round((Date.now() - ts) / 60000))
+  if (minutes < 2) return 'just now'
+  if (minutes < 90) return `${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 36) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+async function loadHealth() {
+  try {
+    health.value = await window.bond.memoryHealth()
+  } catch {
+    health.value = null
+  }
+}
+
 onMounted(() => {
   if (memory.isEmpty.value && !memory.loading.value) memory.loadMemory()
+  void loadHealth()
 })
 </script>
 
@@ -128,6 +169,11 @@ onMounted(() => {
         <BondText size="sm" weight="medium">Memory</BondText>
       </template>
     </BondToolbar>
+
+    <div v-if="healthSummary" class="memory-health">
+      <BondText size="xs" :color="healthDegraded ? 'err' : 'muted'">{{ healthSummary }}</BondText>
+      <BondText v-if="healthDegraded && health?.lastError" size="xs" color="err" truncate>{{ health.lastError }}</BondText>
+    </div>
 
     <div class="memory-tabs">
       <BondTab :tabs="tabs" :modelValue="activeTab" @update:modelValue="activeTab = $event as TabType" />
@@ -150,6 +196,14 @@ onMounted(() => {
       <section v-else-if="activeTab === 'working'" class="stack">
         <BondText size="xs" color="muted">Current scratchpad: goal, useful facts, choices, and open threads.</BondText>
         <label class="field"><BondText size="xs" weight="semibold">Goal</BondText><BondInput v-model="workingDraft.goal" /></label>
+        <div v-if="memory.working.value.artifacts.length || memory.working.value.activeSkill || memory.working.value.checkpoint" class="field">
+          <BondText size="xs" weight="semibold">Working on</BondText>
+          <BondText v-for="artifact in memory.working.value.artifacts" :key="artifact.ref" as="div" size="xs" color="muted" truncate>
+            [{{ artifact.kind }}] {{ artifact.label ?? artifact.ref }}
+          </BondText>
+          <BondText v-if="memory.working.value.activeSkill" as="div" size="xs" color="muted">Skill: {{ memory.working.value.activeSkill }}</BondText>
+          <BondText v-if="memory.working.value.checkpoint" as="div" size="xs" color="muted">Checkpoint: {{ memory.working.value.checkpoint }}</BondText>
+        </div>
         <label class="field"><BondText size="xs" weight="semibold">Facts</BondText><BondTextarea v-model="workingDraft.facts" :rows="5" /></label>
         <label class="field"><BondText size="xs" weight="semibold">Preferences</BondText><BondTextarea v-model="workingDraft.preferences" :rows="4" /></label>
         <label class="field"><BondText size="xs" weight="semibold">Decisions</BondText><BondTextarea v-model="workingDraft.decisions" :rows="4" /></label>
@@ -188,6 +242,13 @@ onMounted(() => {
 
 <style scoped>
 .memory-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--color-border); background: var(--color-bg); }
+.memory-health {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.375rem 0.75rem 0;
+}
+
 .memory-tabs { padding: 0.375rem 0.75rem; border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .memory-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0.75rem; }
 .stack { display: flex; flex-direction: column; gap: 0.75rem; }

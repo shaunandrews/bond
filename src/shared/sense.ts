@@ -113,6 +113,12 @@ export interface AccessibilityResult {
   app: string
   pid: number
   elements: AccessibilityElement[]
+  /**
+   * The focused element's URL, if the app exposes `kAXURLAttribute` (Safari
+   * natively; Chromium behind AXManualAccessibility). The strongest project
+   * token on the machine. Absent on apps that don't expose it.
+   */
+  url?: string | null
 }
 
 // App text quality cache — tracks which apps produce good accessibility data

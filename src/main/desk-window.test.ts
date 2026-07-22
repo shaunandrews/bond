@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { clampHotRects } from './desk-window'
+import { clampHotRects, FLAT_SAFE_WIDTH } from './desk-window'
 
 /** The 16" measurements: 640×240 window, 185pt notch, 33pt menu bar. */
 const BOUNDS = { width: 640, height: 240 }
-const NOTCH = { menuBarHeight: 33, restWidth: 185 }
-const notchLeft = BOUNDS.width / 2 - NOTCH.restWidth / 2   // 227.5
-const notchRight = BOUNDS.width / 2 + NOTCH.restWidth / 2  // 412.5
+const NOTCH = { menuBarHeight: 33, safeWidth: 185 }
+const notchLeft = BOUNDS.width / 2 - NOTCH.safeWidth / 2   // 227.5
+const notchRight = BOUNDS.width / 2 + NOTCH.safeWidth / 2  // 412.5
 
 /** The one invariant that matters: nothing interactive over the menu bar. */
 function violatesMenuBar(rects: ReturnType<typeof clampHotRects>): boolean {
@@ -81,8 +81,34 @@ describe('clampHotRects — the menu bar invariant', () => {
   it('on a display with no menu bar of its own, nothing is restricted', () => {
     // A secondary display with "Displays have separate Spaces" off reports 0.
     const out = clampHotRects([{ x: 0, y: 0, width: 640, height: 100 }], BOUNDS, {
-      menuBarHeight: 0, restWidth: 300,
+      menuBarHeight: 0, safeWidth: 300,
     })
     expect(out).toEqual([{ x: 0, y: 0, width: 640, height: 100 }])
+  })
+})
+
+describe('clampHotRects — a display with no notch', () => {
+  /** An external monitor: a real menu bar, and no notch to hide behind. */
+  const FLAT = { menuBarHeight: 30, safeWidth: FLAT_SAFE_WIDTH }
+
+  it('passes the open panel through intact, close button and all', () => {
+    // 400pt panel hanging from the screen edge. Clipping it to the 300pt
+    // fallback lozenge would leave 50pt dead on each side — which is exactly
+    // where the close button sits.
+    const panel = { x: 120, y: 0, width: 400, height: 200 }
+    expect(clampHotRects([panel], BOUNDS, FLAT)).toEqual([
+      { x: 120, y: 0, width: 400, height: 30 },
+      { x: 120, y: 30, width: 400, height: 170 },
+    ])
+  })
+
+  it('still refuses to swallow the whole menu bar', () => {
+    const out = clampHotRects([{ x: 0, y: 0, width: 640, height: 20 }], BOUNDS, FLAT)
+    expect(out).toEqual([{ x: 110, y: 0, width: FLAT_SAFE_WIDTH, height: 20 }])
+  })
+
+  it('leaves the narrow rest band untouched', () => {
+    const band = { x: 230, y: 0, width: 180, height: 18 }
+    expect(clampHotRects([band], BOUNDS, FLAT)).toEqual([band])
   })
 })

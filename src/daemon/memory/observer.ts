@@ -12,12 +12,25 @@ export interface SourcedMemoryInput extends MemoryItemInput {
   sourceIds: string[]
 }
 
+/** A record the run dropped. Informational — never a reason to fail the run. */
+export interface SkippedMemory {
+  index?: number
+  text?: string
+  reason: string
+}
+
 export interface ObservedMemory {
   workingState: WorkingState
   memories: SourcedMemoryInput[]
+  /** Per-item validation failures. The rest of the batch still persists. */
+  skipped: SkippedMemory[]
+  /** Fatal only: the response was not parseable JSON. */
   errors: string[]
   prompt: string
 }
+
+/** Maps whatever the model wrote back to a canonical message uuid, or null. */
+export type SourceIdResolver = (token: string) => string | null
 
 export async function observeTranscript(input: {
   messages: TranscriptMessage[]
@@ -30,67 +43,107 @@ export async function observeTranscript(input: {
   const response = await input.model.generate(prompt)
   const parsed = parseJsonObject(response)
   if (!parsed.ok) {
-    return { workingState: input.currentState ?? createWorkingState({ sessionId: input.sessionId ?? null, projectId: input.projectId ?? null }), memories: [], errors: parsed.errors, prompt }
+    return { workingState: input.currentState ?? createWorkingState({ sessionId: input.sessionId ?? null, projectId: input.projectId ?? null }), memories: [], skipped: [], errors: parsed.errors, prompt }
   }
 
-  const allowedIds = new Set(input.messages.map(m => m.id))
-  const errors: string[] = []
+  const resolve = buildSourceIdResolver(input.messages)
+  const skipped: SkippedMemory[] = []
+  // artifacts and activeSkill are DETERMINISTIC-ONLY: they come from the tool
+  // event stream, which is ground truth. A model guess would silently outrank
+  // a fact Bond performed itself. checkpoint is the one field it may write.
+  const { artifacts: _ignoredArtifacts, activeSkill: _ignoredSkill, ...modelPatch } = isRecord(parsed.value.workingState) ? parsed.value.workingState : {}
   const workingPatch = validateWorkingState({
-    ...(isRecord(parsed.value.workingState) ? parsed.value.workingState : {}),
+    ...modelPatch,
+    artifacts: input.currentState?.artifacts ?? [],
+    activeSkill: input.currentState?.activeSkill ?? null,
     sessionId: input.sessionId ?? input.currentState?.sessionId ?? null,
     projectId: input.projectId ?? input.currentState?.projectId ?? null,
   })
-  if (!workingPatch.ok) errors.push(...workingPatch.errors)
+  // A malformed patch keeps the current state; that is a degraded record, not
+  // a failed run.
+  if (!workingPatch.ok) skipped.push({ reason: `workingState: ${workingPatch.errors.join('; ')}` })
 
   const base = input.currentState ?? createWorkingState({ sessionId: input.sessionId ?? null, projectId: input.projectId ?? null })
   const workingState = workingPatch.ok ? mergeWorkingState(base, workingPatch.value) : base
-  const memories = validateSourcedMemories(parsed.value.memories, allowedIds, errors, input.projectId)
-  return { workingState, memories, errors, prompt }
+  const memories = validateSourcedMemories(parsed.value.memories, resolve, skipped, input.projectId)
+  return { workingState, memories, skipped, errors: [], prompt }
 }
 
-export function validateSourcedMemories(raw: unknown, allowedSourceIds: Set<string>, errors: string[] = [], defaultProjectId?: string | null): SourcedMemoryInput[] {
+/**
+ * The model is asked for one identifier and still improvises: bare seqs, `#696`,
+ * uppercase uuids, JSON numbers, and outright hallucinated uuids all appear in
+ * the log. Everything that CAN be resolved resolves; what cannot is dropped as
+ * one record, never as the batch.
+ */
+export function buildSourceIdResolver(messages: TranscriptMessage[]): SourceIdResolver {
+  const map = new Map<string, string>()
+  for (const message of messages) {
+    map.set(message.id, message.id)
+    map.set(message.id.toLocaleLowerCase(), message.id)
+    if (message.seq != null) {
+      map.set(String(message.seq), message.id)
+      map.set(`#${message.seq}`, message.id)
+      map.set(`seq=${message.seq}`, message.id)
+    }
+  }
+  return token => {
+    const trimmed = token.trim()
+    return map.get(trimmed) ?? map.get(trimmed.toLocaleLowerCase()) ?? null
+  }
+}
+
+/**
+ * Provenance never gates the payload: a memory with one resolvable source is
+ * kept (the unresolvable tokens are simply dropped), and a memory with none is
+ * the only thing lost. Callers get `skipped` for the ledger, not an exception.
+ */
+export function validateSourcedMemories(raw: unknown, resolve: SourceIdResolver, skipped: SkippedMemory[] = [], defaultProjectId?: string | null): SourcedMemoryInput[] {
   if (!Array.isArray(raw)) return []
   const out: SourcedMemoryInput[] = []
   for (const [index, value] of raw.entries()) {
     if (!isRecord(value)) {
-      errors.push(`memories[${index}] must be an object`)
+      skipped.push({ index, reason: 'not an object' })
       continue
     }
-    const sourceIdResult = normalizeSourceIds(value.sourceIds, allowedSourceIds)
-    if (sourceIdResult.invalid.length > 0) errors.push(`memories[${index}] has unknown sourceIds: ${sourceIdResult.invalid.join(', ')}`)
-    const sourceIds = sourceIdResult.ids
-    if (sourceIds.length === 0) {
-      errors.push(`memories[${index}] has no valid sourceIds`)
+    const text = typeof value.text === 'string' ? value.text : undefined
+    const { ids, invalid } = normalizeSourceIds(value.sourceIds, resolve)
+    if (ids.length === 0) {
+      skipped.push({ index, text, reason: `unresolvable sourceIds: ${invalid.join(', ') || '(none supplied)'}` })
       continue
     }
     const item = validateMemoryItemInput({ ...value, projectId: value.projectId ?? defaultProjectId ?? null })
     if (!item.ok) {
-      errors.push(...item.errors.map(error => `memories[${index}]: ${error}`))
+      skipped.push({ index, text, reason: item.errors.join('; ') })
       continue
     }
-    out.push({ ...item.value, sourceIds })
+    if (invalid.length > 0) skipped.push({ index, text, reason: `kept; dropped unresolvable sourceIds: ${invalid.join(', ')}` })
+    out.push({ ...item.value, sourceIds: ids })
   }
   return out
 }
 
-export function normalizeSourceIds(raw: unknown, allowedSourceIds: Set<string>): { ids: string[]; invalid: string[] } {
+export function normalizeSourceIds(raw: unknown, resolve: SourceIdResolver): { ids: string[]; invalid: string[] } {
   if (!Array.isArray(raw)) return { ids: [], invalid: [] }
   const seen = new Set<string>()
   const invalidSeen = new Set<string>()
   const ids: string[] = []
   const invalid: string[] = []
   for (const value of raw) {
-    if (typeof value !== 'string' || !value.trim()) continue
-    if (!allowedSourceIds.has(value)) {
-      if (!invalidSeen.has(value)) {
-        invalidSeen.add(value)
-        invalid.push(value)
+    // JSON numbers happen: the prompt now shows bare seqs, and models quote
+    // them inconsistently.
+    const token = typeof value === 'number' && Number.isFinite(value) ? String(value) : typeof value === 'string' ? value : ''
+    if (!token.trim()) continue
+    const resolved = resolve(token)
+    if (!resolved) {
+      if (!invalidSeen.has(token)) {
+        invalidSeen.add(token)
+        invalid.push(token)
       }
       continue
     }
-    if (seen.has(value)) continue
-    seen.add(value)
-    ids.push(value)
+    if (seen.has(resolved)) continue
+    seen.add(resolved)
+    ids.push(resolved)
   }
   return { ids, invalid }
 }

@@ -28,10 +28,15 @@ describe('memory retrieval', () => {
       upsertMemoryItem({ id: 'p1', text: 'Project Vitest memory', projectId: 'bond' }, db)
       upsertMemoryItem({ id: 'g1', text: 'Global Vitest memory', projectId: null }, db)
 
-      const result = retrieveMemory({ query: 'Vitest', projectId: 'bond', db, corePath, workingState: { sessionId: 's1', projectId: 'bond', goal: 'test', facts: [], preferences: [], decisions: [], openThreads: [], updatedAt: 'now' } })
+      const result = retrieveMemory({ query: 'Vitest', projectId: 'bond', db, corePath, workingState: { sessionId: 's1', projectId: 'bond', goal: 'test', facts: [], preferences: [], decisions: [], openThreads: [], artifacts: [], activeSkill: null, checkpoint: null, updatedAt: 'now' } })
       expect(result.retrieved.map(r => r.item.id)).toEqual(['p1', 'g1'])
-      expect(result.context).toContain('Core fact')
-      expect(result.context).toContain('Goal: test')
+      // The stable half rides the system prompt now; the envelope carries only
+      // the query-specific retrieval.
+      expect(result.context).toContain('Retrieved memory')
+      expect(result.context).not.toContain('Core fact')
+      expect(result.context).not.toContain('Goal: test')
+      expect(result.stableContext).toContain('Core fact')
+      expect(result.stableContext).toContain('Goal: test')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

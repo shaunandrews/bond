@@ -94,9 +94,22 @@ function pointIn(point: Point, rect: DeskHotRect): boolean {
 }
 
 /**
+ * How wide a region Desk may make non-click-through above the menu bar on a
+ * display with **no notch**.
+ *
+ * On a notched display the safe range is exact and free: the notch's own
+ * x-range owns no menu bar content, so nothing is lost. A flat menu bar runs
+ * edge to edge and has no such range, so this is a *ceiling* on what a renderer
+ * bug could swallow, not a licence to use it. The renderer asks for a narrow
+ * band at rest and widens to this only while the panel is painting opaque black
+ * over that strip, where swallowing the click is the correct behaviour.
+ */
+export const FLAT_SAFE_WIDTH = 420
+
+/**
  * **Hard rule: never leave a non-click-through region overlapping
- * `y < menuBarHeight` outside the notch's own x-range.** That is how you break
- * the menu bar for the entire machine.
+ * `y < menuBarHeight` outside the safe x-range.** That is how you break the
+ * menu bar for the entire machine.
  *
  * The renderer proposes rects; this clamps them. Exported because it is the
  * single safety invariant of the whole surface and deserves its own tests.
@@ -104,10 +117,10 @@ function pointIn(point: Point, rect: DeskHotRect): boolean {
 export function clampHotRects(
   rects: DeskHotRect[],
   bounds: { width: number; height: number },
-  notch: { menuBarHeight: number; restWidth: number }
+  notch: { menuBarHeight: number; safeWidth: number }
 ): DeskHotRect[] {
-  const notchLeft = bounds.width / 2 - notch.restWidth / 2
-  const notchRight = bounds.width / 2 + notch.restWidth / 2
+  const notchLeft = bounds.width / 2 - notch.safeWidth / 2
+  const notchRight = bounds.width / 2 + notch.safeWidth / 2
 
   const out: DeskHotRect[] = []
   for (const rect of rects) {
@@ -445,7 +458,12 @@ export function createDeskWindowHost(options: DeskWindowOptions): DeskWindowHost
       hotRects = clampHotRects(
         rects,
         { width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
-        { menuBarHeight: geometry.menuBarHeight, restWidth: restShape(geometry).width }
+        {
+          menuBarHeight: geometry.menuBarHeight,
+          // The notch's own width is the exact safe range; a flat display has
+          // none, so it gets the documented ceiling instead.
+          safeWidth: geometry.notched ? restShape(geometry).width : FLAT_SAFE_WIDTH,
+        }
       )
       deskLog('setHotRects clamped', hotRects)
       // An Ask is an active interaction; do not move the panel underneath it.

@@ -121,7 +121,7 @@ describe('buildDaemonSurface', () => {
 
     const working: WorkingState = {
       sessionId: null, projectId: null, goal: 'g',
-      facts: [], preferences: [], decisions: [], openThreads: [], updatedAt: 'now',
+      facts: [], preferences: [], decisions: [], openThreads: [], artifacts: [], activeSkill: null, checkpoint: null, updatedAt: 'now',
     }
     await bond.memoryUpdateWorking(working)
     expect(calls.at(-1)).toEqual({ method: 'memory.updateWorking', params: { working } })

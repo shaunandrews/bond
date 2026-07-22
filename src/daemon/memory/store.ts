@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { getDb } from '../db'
+import { buildMatchQuery } from '../fts'
 import { MEMORY_CAPS, type MemoryItem, type MemoryItemInput, type RetrievedMemory } from './types'
 import { validateMemoryItem, validateMemoryItemInput } from './parser'
 
@@ -105,25 +106,14 @@ function parseTags(raw: string): string[] {
   }
 }
 
+/**
+ * Memory retrieval has always been OR-joined — a memory matching one strong
+ * term is worth surfacing, and bm25 ranks multi-term hits above it. Delegates
+ * to the shared builder so there is ONE escaping path and phrases survive
+ * ("on to 9" stays a phrase instead of becoming three loose terms).
+ */
 export function buildFtsQuery(input: string, maxTerms = MEMORY_CAPS.queryTerms): string | null {
-  const terms = input
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .match(/[\p{L}\p{N}_-]+/gu)
-    ?.map(term => term.replace(/^-+|-+$/g, '').slice(0, 64))
-    .filter(Boolean) ?? []
-
-  const unique: string[] = []
-  const seen = new Set<string>()
-  for (const term of terms) {
-    if (seen.has(term)) continue
-    seen.add(term)
-    unique.push(term)
-    if (unique.length >= maxTerms) break
-  }
-
-  if (unique.length === 0) return null
-  return unique.map(term => `"${term.replace(/"/g, '""')}"`).join(' OR ')
+  return buildMatchQuery(input.toLocaleLowerCase(), { maxTerms, mode: 'or' })
 }
 
 export function upsertMemoryItem(input: MemoryItemInput, db: Database.Database = getDb()): MemoryItem {

@@ -6,12 +6,14 @@ import { randomUUID } from 'node:crypto'
 import { setDataDir } from '../paths'
 import { getDb, closeDb } from '../db'
 import {
+  SWEEP_CALLS_PER_HOUR,
   buildBriefs,
   buildPrompt,
   immediateBudgetRemaining,
   parseResponse,
   recordMetrics,
   runInferenceBatch,
+  sweepBudgetRemaining,
   type InferenceResult,
 } from './inference'
 import { attributeSegment, createSegment, createThread, getSegment, listThreads } from './store'
@@ -60,13 +62,15 @@ const run = (prompt: (p: string) => Promise<string>, over: Partial<Parameters<ty
   runInferenceBatch({ prompt: async p => prompt(p), now: () => NOW, ...over })
 
 describe('buildPrompt', () => {
-  it('sends metadata and text excerpts — never a screenshot or image path', () => {
+  it('sends structured metadata — never a screenshot, image path, or OCR dump', () => {
     const s = segment({ appName: 'Studio', titles: ['Sync Dialog'], paths: ['~/dev/bond/src/sync.ts'] })
     seedCaptureText(s.id, 'conflict state copy is unwritten')
     const prompt = buildPrompt(buildBriefs([getSegment(s.id)!], getDb()), listThreads())
 
     expect(prompt).toContain('Sync Dialog')
-    expect(prompt).toContain('conflict state copy')
+    expect(prompt).toContain('~/dev/bond/src/sync.ts')
+    // The whole-screen OCR excerpt is no longer transmitted at all.
+    expect(prompt).not.toContain('conflict state copy')
     expect(prompt).not.toMatch(/\.jpg|\.png|image_path|base64/i)
   })
 
@@ -77,18 +81,25 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('[REDACTED')
   })
 
-  it('redacts the text excerpt again before transmission', () => {
+  it('never sends whole-screen OCR text at all (Phase 1: excerpt removed)', () => {
+    // The OCR excerpt was removed: no lift, and where the privacy risk lived.
     const s = segment({ appName: 'Terminal' })
-    seedCaptureText(s.id, 'run with Bearer abc123def456ghi789jkl')
+    seedCaptureText(s.id, 'run with Bearer abc123def456ghi789jkl and other screen noise')
     const prompt = buildPrompt(buildBriefs([getSegment(s.id)!], getDb()), [])
     expect(prompt).not.toContain('abc123def456ghi789jkl')
+    expect(prompt).not.toContain('screen noise')
   })
 
-  it('classifies on metadata alone when a capture has no text', () => {
-    const s = segment({ appName: 'Studio', titles: ['Sync Dialog'] })
-    const briefs = buildBriefs([getSegment(s.id)!], getDb())
-    expect(briefs[0].excerpt).toBeNull()
-    expect(buildPrompt(briefs, [])).toContain('Sync Dialog')
+  it('classifies on structured evidence — title, url, co-visible windows', () => {
+    const s = segment({
+      appName: 'Electron', titles: ['Bond'],
+      urls: ['linear.app/a8c/issue/STU-2079'],
+      coTitles: ['Studio Workbench (Agentic UI)', 'STU-2078 · Linear'],
+    })
+    const prompt = buildPrompt(buildBriefs([getSegment(s.id)!], getDb()), [])
+    expect(prompt).toContain('linear.app/a8c/issue/STU-2079')
+    expect(prompt).toContain('Studio Workbench')
+    expect(prompt).toContain('also open')
   })
 
   it('offers existing threads as short refs, not uuids', () => {
@@ -129,14 +140,18 @@ describe('buildPrompt', () => {
       return getSegment(s.id)!
     })
     const prompt = buildPrompt(buildBriefs(segments, getDb()), listThreads())
-    expect(prompt.length).toBeLessThan(2500) // ~625 tokens
+    expect(prompt.length).toBeLessThan(2800) // ~700 tokens; the fixed instructions grew with the NONE + junk-name rules
   })
 
-  it('clips a long excerpt rather than paying for the whole capture', () => {
-    const s = segment({ appName: 'Studio' })
-    seedCaptureText(s.id, 'y'.repeat(5000))
+  it('bounds co-visible titles and urls per brief', () => {
+    const s = segment({
+      appName: 'Electron', titles: ['Bond'],
+      urls: ['a.example/1', 'b.example/2', 'c.example/3'],
+      coTitles: ['one', 'two', 'three', 'four', 'five'],
+    })
     const brief = buildBriefs([getSegment(s.id)!], getDb())[0]
-    expect(brief.excerpt!.length).toBeLessThanOrEqual(160)
+    expect(brief.urls.length).toBeLessThanOrEqual(2)
+    expect(brief.coTitles.length).toBeLessThanOrEqual(3)
   })
 })
 
@@ -195,18 +210,27 @@ describe('parseResponse', () => {
 })
 
 describe('runInferenceBatch', () => {
-  it('never spends a model call on activity older than the horizon', async () => {
+  it('labels across the full retention window, not just the last 24 hours', async () => {
+    // The old 24h horizon made any segment older than a day invisible to the
+    // sweep forever — which silently abandoned a whole day of unresolved work.
+    // The reach-back is now the retention window (default 90 days).
     const t = createThread({ name: 'Studio sync', source: 'user' })
     const fresh = segment({ appName: 'Studio' }, 'sig-fresh')
-    const stale = segment({ appName: 'Studio' }, 'sig-stale')
+    const sixDaysOld = segment({ appName: 'Studio' }, 'sig-6d')
     getDb().prepare('UPDATE desk_segments SET started_at = ? WHERE id = ?')
-      .run('2026-07-14T11:00:00.000Z', stale.id) // six days before NOW
+      .run('2026-07-14T11:00:00.000Z', sixDaysOld.id) // 6 days before NOW — inside retention
+    const ancient = segment({ appName: 'Studio' }, 'sig-old')
+    getDb().prepare('UPDATE desk_segments SET started_at = ? WHERE id = ?')
+      .run('2026-01-01T11:00:00.000Z', ancient.id) // ~200 days before NOW — beyond retention
 
-    const result = await run(async () => `S1|${t.id}|0.9|none|-`)
+    const result = await run(async () => `S1|${t.id}|0.9|none|-\nS2|${t.id}|0.9|none|-`)
 
-    expect(result.segments).toBe(1)
+    // Both the fresh and six-day-old segments are labelled; only what is beyond
+    // the retention window is left untouched.
+    expect(result.segments).toBe(2)
     expect(getSegment(fresh.id)!.attributedThreadId).toBe(t.id)
-    expect(getSegment(stale.id)!.attributionState).toBe('unresolved')
+    expect(getSegment(sixDaysOld.id)!.attributedThreadId).toBe(t.id)
+    expect(getSegment(ancient.id)!.attributionState).toBe('unresolved')
   })
 
   it('labels the newest work first when there is a queue', async () => {
@@ -441,5 +465,80 @@ describe('immediate-inference ceiling', () => {
     recordMetrics('immediate', failed, '2026-07-20T10:00:00.000Z')
     recordMetrics('immediate', failed, '2026-07-20T11:59:00.000Z')
     expect(immediateBudgetRemaining(NOW.toISOString())).toBe(5)
+  })
+})
+
+describe('the user always wins a race with inference', () => {
+  it('does not overwrite a segment reassigned during the model call', async () => {
+    const t = createThread({ name: 'Studio', source: 'user' })
+    const other = createThread({ name: 'Other', source: 'user' })
+    const s = segment({ appName: 'Studio' }, 'sig-race')
+
+    // The segment is marked `queued` before the await; the model "returns" a
+    // label for it, but mid-call the user reassigns it (state leaves `queued`).
+    const result = await run(async () => {
+      attributeSegment(s.id, { threadId: other.id, confidence: 1, state: 'resolved' })
+      return `S1|${t.id}|0.9|none|-`
+    })
+
+    expect(getSegment(s.id)!.attributedThreadId).toBe(other.id) // the user's write survives
+    expect(result.problems.some(p => /changed under inference/.test(p))).toBe(true)
+  })
+})
+
+describe('the sweep budget is real', () => {
+  it('has an hourly ceiling that actually gates the sweep', () => {
+    const db = getDb()
+    const now = '2026-07-20T12:00:00.000Z'
+    const metric: InferenceResult = {
+      segments: 1, resolved: 1, failed: 0, threadsProposed: 0,
+      promptChars: 10, latencyMs: 5, ok: true, problems: [],
+    }
+    expect(sweepBudgetRemaining(now, db)).toBe(SWEEP_CALLS_PER_HOUR)
+    for (let i = 0; i < SWEEP_CALLS_PER_HOUR; i++) recordMetrics('sweep', metric, now, db)
+    expect(sweepBudgetRemaining(now, db)).toBe(0)
+    // An hour later the window has rolled and the budget is back.
+    expect(sweepBudgetRemaining('2026-07-20T13:30:00.000Z', db)).toBe(SWEEP_CALLS_PER_HOUR)
+  })
+
+  it('a failed batch leaves a legible ledger row (error + counts)', async () => {
+    const t = createThread({ name: 'Studio', source: 'user' })
+    segment({ appName: 'Studio' }, 'sig-x')
+    const result = await run(async () => { throw new Error('provider exploded') })
+    recordMetrics('sweep', result, '2026-07-20T12:00:00.000Z', getDb())
+    const row = getDb().prepare("SELECT ok, failed, error FROM desk_metrics WHERE kind = 'sweep'").get() as
+      { ok: number; failed: number; error: string }
+    expect(row.ok).toBe(0)
+    expect(row.failed).toBeGreaterThan(0)
+    expect(row.error).toMatch(/provider exploded/)
+    void t
+  })
+})
+
+describe('inference hygiene (Phase 1.5)', () => {
+  it('a NONE verdict resolves the segment to nothing and mints no leisure thread', async () => {
+    const s = segment({ appName: 'YouTube' }, 'sig-leisure')
+    const result = await run(async () => `S1|NONE|0.9|none|-`)
+    expect(result.resolved).toBe(1)
+    const seg = getSegment(s.id)!
+    expect(seg.attributedThreadId).toBeNull()
+    expect(seg.attributionState).toBe('resolved') // stops re-querying
+    expect(listThreads()).toHaveLength(0)
+  })
+
+  it('refuses a junk-drawer new-thread name and files the segment as nothing', async () => {
+    const s = segment({ appName: 'Chrome' }, 'sig-junk')
+    const result = await run(async () => `S1|NEW: one-off|0.8|none|-`)
+    expect(getSegment(s.id)!.attributedThreadId).toBeNull()
+    expect(getSegment(s.id)!.attributionState).toBe('resolved')
+    expect(listThreads().some(t => t.name.toLowerCase().includes('one-off'))).toBe(false)
+    expect(result.problems.some(p => /junk-drawer/.test(p))).toBe(true)
+  })
+
+  it('refuses a container new-thread name (a tool, not work)', async () => {
+    const s = segment({ appName: 'Electron' }, 'sig-container')
+    await run(async () => `S1|NEW: Electron|0.8|none|-`)
+    expect(listThreads()).toHaveLength(0)
+    expect(getSegment(s.id)!.attributionState).toBe('resolved')
   })
 })

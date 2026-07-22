@@ -98,6 +98,22 @@ const restWidth = computed(() => geometry.value?.restWidth ?? 185)
 const restHeight = computed(() => geometry.value?.restHeight ?? 41)
 const menuBarHeight = computed(() => geometry.value?.menuBarHeight ?? 33)
 const windowWidth = computed(() => geometry.value?.windowWidth ?? 640)
+const notched = computed(() => geometry.value?.notched ?? false)
+
+/**
+ * The strip Desk keeps clear at the top of the screen.
+ *
+ * On a notched display that is the menu bar, because the camera housing
+ * physically occludes those pixels — the framebuffer keeps them and a
+ * screenshot shows them perfectly, but the display cannot emit light through
+ * the housing, so anything drawn there is invisible.
+ *
+ * **No other display occludes anything.** Reserving the strip on an external
+ * monitor buys nothing and reads as an unexplained gap between the screen edge
+ * and the panel, so there the panel hangs from the edge itself and the hairline
+ * sits where the notch would have been.
+ */
+const topInset = computed(() => (notched.value ? menuBarHeight.value : 0))
 
 /**
  * The Rest hit target. Above the menu bar it is pinned to the notch's own
@@ -108,6 +124,19 @@ const windowWidth = computed(() => geometry.value?.windowWidth ?? 640)
  */
 const REST_HOVER_WIDTH = 240
 const REST_HOVER_HEIGHT = 14
+
+/**
+ * The Rest target on a flat display, where the whole band sits *inside* the
+ * menu bar rather than below it.
+ *
+ * A notch hands Desk a wide x-range that owns no menu bar content, for free.
+ * A flat menu bar runs edge to edge and owns all of it, so this band is
+ * deliberately much narrower than `REST_HOVER_WIDTH` — enough to aim the
+ * cursor at a 44pt hairline, small enough that the menu titles and status
+ * extras either side of centre stay clickable.
+ */
+const FLAT_REST_HOVER_WIDTH = 180
+const FLAT_REST_HOVER_HEIGHT = 18
 
 const ASK_WIDTH = 380
 const ASK_HEIGHT = 48
@@ -132,31 +161,31 @@ const droppedBody = computed(() => (mode.value === 'ask' ? ASK_HEIGHT : OPEN_MAX
  */
 const shapeStyle = computed(() => {
   if (!showingPanel.value) {
+    const width = notched.value ? REST_HOVER_WIDTH : FLAT_REST_HOVER_WIDTH
+    const strip = notched.value ? REST_HOVER_HEIGHT : FLAT_REST_HOVER_HEIGHT
     return {
-      width: `${REST_HOVER_WIDTH}px`,
-      height: `${menuBarHeight.value + REST_HOVER_HEIGHT}px`,
+      width: `${width}px`,
+      height: `${topInset.value + strip}px`,
       top: '0px',
       borderRadius: '0',
     }
   }
   return {
     width: `${droppedWidth.value}px`,
-    height: `${menuBarHeight.value + droppedBody.value}px`,
+    height: `${topInset.value + droppedBody.value}px`,
     top: '0px',
     // Square at the screen edge, rounded where it leaves the notch.
     borderRadius: '0 0 16px 16px',
-    paddingTop: `${menuBarHeight.value}px`,
+    paddingTop: `${topInset.value}px`,
   }
 })
 
 /**
- * The hairline sits just BELOW the menu bar. Anything inside the notch's own
- * footprint is physically invisible — the framebuffer keeps those pixels (a
- * screenshot shows them fine) but the display cannot emit light through the
- * camera housing.
+ * The hairline sits just below the strip the notch swallows — or, on a flat
+ * display, right at the screen edge, since nothing is swallowed there.
  */
 const markStyle = computed(() => ({
-  top: `${menuBarHeight.value + 2}px`,
+  top: `${topInset.value + 2}px`,
   ...(threadColor.value ? { background: threadColor.value } : {}),
 }))
 
@@ -171,6 +200,15 @@ function hotRects(): DeskHotRect[] {
   const centreX = windowWidth.value / 2
 
   if (mode.value === 'rest') {
+    // Flat display: one narrow band at the very top, where the hairline is.
+    if (!notched.value) {
+      return [{
+        x: centreX - FLAT_REST_HOVER_WIDTH / 2,
+        y: 0,
+        width: FLAT_REST_HOVER_WIDTH,
+        height: FLAT_REST_HOVER_HEIGHT,
+      }]
+    }
     return [
       // Above the bar: the notch's own x-range, which owns no menu bar content.
       { x: centreX - restWidth.value / 2, y: 0, width: restWidth.value, height: menuBarHeight.value },
@@ -184,15 +222,19 @@ function hotRects(): DeskHotRect[] {
     ]
   }
 
+  const body: DeskHotRect = {
+    x: centreX - droppedWidth.value / 2,
+    y: topInset.value,
+    width: droppedWidth.value,
+    height: droppedBody.value,
+  }
+  // The panel's own body already reaches the screen edge on a flat display, so
+  // the extra notch strip would only duplicate it.
+  if (!notched.value) return [body]
+  // Keep the notch strip hot so moving up into it does not drop the panel.
   return [
-    // Keep the notch strip hot so moving up into it does not drop the panel.
     { x: centreX - restWidth.value / 2, y: 0, width: restWidth.value, height: restHeight.value },
-    {
-      x: centreX - droppedWidth.value / 2,
-      y: menuBarHeight.value,
-      width: droppedWidth.value,
-      height: droppedBody.value,
-    },
+    body,
   ]
 }
 

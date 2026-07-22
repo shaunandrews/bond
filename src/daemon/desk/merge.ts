@@ -97,6 +97,10 @@ export function mergeThreads(
       .run(targetId, now, sourceId).changes
     const movedSegments = db.prepare('UPDATE desk_segments SET attributed_thread_id = ? WHERE attributed_thread_id = ?')
       .run(targetId, sourceId).changes
+    // Labels are the merge's eighth re-pointed table (Phase 2). A user label's
+    // thread reference must follow the merge or it would freeze the segment onto
+    // a thread that no longer exists.
+    db.prepare('UPDATE desk_labels SET thread_id = ? WHERE thread_id = ?').run(targetId, sourceId)
     const movedTodoLinks = db.prepare('UPDATE desk_todo_links SET thread_id = ? WHERE thread_id = ?')
       .run(targetId, sourceId).changes
     db.prepare('UPDATE desk_questions SET proposed_thread_id = ? WHERE proposed_thread_id = ?').run(targetId, sourceId)

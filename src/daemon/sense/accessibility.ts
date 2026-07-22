@@ -8,15 +8,15 @@ import { resolveHelperPath } from './helpers'
  */
 export function extractAccessibilityText(
   pid: number,
-  maxDepth = 10
+  maxDepth = 10,
+  opts: { wantUrl?: boolean } = {}
 ): Promise<AccessibilityResult | null> {
   const helperPath = resolveHelperPath('bond-accessibility-helper')
+  const args = ['--pid', String(pid), '--max-depth', String(maxDepth)]
+  if (opts.wantUrl) args.push('--url')
 
   return new Promise((resolve) => {
-    execFile(helperPath, [
-      '--pid', String(pid),
-      '--max-depth', String(maxDepth),
-    ], { timeout: 10_000 }, (err, stdout) => {
+    execFile(helperPath, args, { timeout: 10_000 }, (err, stdout) => {
       if (err) {
         resolve(null)
         return

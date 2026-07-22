@@ -379,6 +379,11 @@ cmd_desk() {
   node "$PROJECT_DIR/out/cli/desk.js" "$@"
 }
 
+cmd_memory() {
+  _ensure_cli
+  node "$PROJECT_DIR/out/cli/memory.js" "$@"
+}
+
 _ensure_cli() {
   # Rebuild bundled CLI subcommands only when a source is newer than its output.
   # scripts/build.mjs owns the entry list so it can't drift from build:cli.
@@ -408,6 +413,7 @@ cmd_help() {
   echo -e "  ${G}mcp${N}                Manage MCP servers (list, status, add, enable, tools)"
   echo -e "  ${G}ask${N}                Show/answer Bond's pending question (option #, --text, --cancel, --json)"
   echo -e "  ${G}desk${N}               What's on your desk (status, on/off, blocks, threads, matchers, stats)"
+  echo -e "  ${G}memory${N}             Memory write health (staleness, observer lag, recent runs)"
   echo -e "  ${G}screenshot${N}         Capture Bond window to /tmp/bond-screenshot.png"
   echo -e "  ${G}test${N}               Run tests"
   echo -e "  ${G}help${N}               This message"
@@ -431,6 +437,7 @@ case "${1:-help}" in
   mcp)     shift; cmd_mcp "$@" ;;
   ask)     shift; cmd_ask "$@" ;;
   desk)    shift; cmd_desk "$@" ;;
+  memory)  shift; cmd_memory "$@" ;;
   screenshot|ss) cmd_screenshot "${2:-/tmp/bond-screenshot.png}" ;;
   test)    cmd_test ;;
   help|-h|--help) cmd_help ;;

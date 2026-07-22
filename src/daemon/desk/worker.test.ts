@@ -66,10 +66,19 @@ function seedCapture(offset: number, title = 'Studio — Sync Dialog'): string {
   return id
 }
 
-/** A leading thread with enough attributed presence to clear the majority test. */
+/**
+ * A leading thread with enough attributed presence to clear the majority test.
+ *
+ * The rolling window now credits only the presence a segment accrued *inside*
+ * the window, so a fixture must anchor that presence to the worker's real
+ * evaluation clock: start the segment `presence` seconds before now, open-ended,
+ * so it sits wholly within the current working sphere. (`startOffset` shifts it
+ * further back for tests that want a partially-out-of-window segment.)
+ */
 function seedLeader(threadId: string, startOffset: number, presence: number) {
+  const startMs = Date.now() - presence * 1000 + startOffset * 1000
   const s = createSegment({
-    blockId: null, startedAt: at(startOffset), resourceSignature: randomUUID(), evidence: {},
+    blockId: null, startedAt: new Date(startMs).toISOString(), resourceSignature: randomUUID(), evidence: {},
   })
   attributeSegment(s.id, { threadId, confidence: 0.9 })
   getDb().prepare('UPDATE desk_segments SET presence_seconds = ? WHERE id = ?').run(presence, s.id)
@@ -123,17 +132,23 @@ describe('the worker never calls a model on the fast path', () => {
 })
 
 describe('the switch decision', () => {
-  it('asks rather than committing silently when the budget allows', async () => {
+  it('commits optimistically and asks when the budget allows', async () => {
     setRuntime({ running: true })
     seedLeader(studio.id, 0, 300)
     setRuntime({ candidateThreadId: studio.id, candidateSince: at(-600) })
 
     await createDeskWorker({ prompt: async () => '' }).tickNow()
 
+    // The block is committed optimistically AND an Ask is raised. Accepting or
+    // rejecting only *adjusts* that block — it never commits a second time,
+    // which is what produced the negative-duration blocks.
     const pending = getPendingQuestion()
     expect(pending?.proposedThreadName).toBe('Studio sync dialog')
-    // The block is NOT committed yet — the Ask is the assertion
-    expect(getRuntime().currentBlockId).toBeNull()
+    const blockId = getRuntime().currentBlockId
+    expect(blockId).not.toBeNull()
+    expect(getBlockDetail(blockId!)!.threadId).toBe(studio.id)
+    // The question is stamped with the very block it would adjust.
+    expect(pending?.blockId).toBe(blockId)
   })
 
   it('commits directly when the budget is already spent', async () => {

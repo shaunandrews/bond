@@ -439,8 +439,10 @@ describe('evaluateSwitch', () => {
   it('calls the switch once the dwell clears three minutes', () => {
     const t = createThread({ name: 'Studio', source: 'user' })
     leaderSegment(t.id, 0, 150)
-    evaluateSwitch(ctx(0))
-    const decision = evaluateSwitch(ctx(181))
+    // First detection a beat after the segment opens (presence only exists once
+    // time has elapsed inside the segment); dwell is measured from there.
+    evaluateSwitch(ctx(10))
+    const decision = evaluateSwitch(ctx(191))
     expect(decision).toMatchObject({ kind: 'switch', threadId: t.id })
   })
 
@@ -542,5 +544,22 @@ describe('commitSwitch', () => {
     const t = createThread({ name: 'Studio', source: 'user' })
     const blockId = commitSwitch(t.id, { sinceIso: at(0) }, ctx(200))
     expect(getBlockDetail(blockId)!.threadId).toBe(t.id)
+  })
+})
+
+describe('candidate resource population (Phase 3 — un-deads rejection)', () => {
+  it('stamps the driving segment\'s signature and matcher onto the candidate', () => {
+    const t = createThread({ name: 'Studio', source: 'user' })
+    const m = writeInferredMatcher({ field: 'resource', operator: 'exact', pattern: 'sig-driving', threadId: t.id, confidence: 0.9, example: {} })
+    const s = createSegment({ blockId: null, startedAt: at(0), resourceSignature: 'sig-driving', evidence: {} })
+    attributeSegment(s.id, { threadId: t.id, matcherId: m.matcher!.id, confidence: 0.9 })
+    getDb().prepare('UPDATE desk_segments SET presence_seconds = ? WHERE id = ?').run(150, s.id)
+
+    evaluateSwitch(ctx(60))
+    const rt = getRuntime()
+    expect(rt.candidateThreadId).toBe(t.id)
+    // These columns existed since the schema was born but nothing ever wrote them.
+    expect(rt.candidateResourceSignature).toBe('sig-driving')
+    expect(rt.candidateMatcherId).toBe(m.matcher!.id)
   })
 })

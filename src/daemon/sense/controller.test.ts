@@ -180,3 +180,38 @@ describe('sense controller — pid capture', () => {
     controller.destroy()
   })
 })
+
+describe('sense controller — app-switch debounce', () => {
+  it('suppresses a rapid burst of app switches within one capture interval', async () => {
+    const detector = fakeWindowDetector()
+    const { controller, requests } = await startRecording(fakeDeps({ windowDetector: detector }))
+    // Free the pending slot so only the debounce (not the wedge) can block.
+    controller.onCaptureReady(requests[0], join(testDir, 'a.jpg'))
+    const before = requests.length
+
+    // The old code fired one capture per app switch — 26x more captures than
+    // actual transitions. Ten switches over ~2s, all inside the 15s interval.
+    for (let i = 0; i < 10; i++) {
+      detector.emit('appSwitch', ACTIVE_WINDOW, null)
+      await vi.advanceTimersByTimeAsync(200)
+    }
+
+    expect(requests.length).toBe(before)
+    controller.destroy()
+  })
+
+  it('still captures on an app switch once the interval has elapsed', async () => {
+    const detector = fakeWindowDetector()
+    const { controller, requests } = await startRecording(fakeDeps({ windowDetector: detector }))
+    // Leave the initial capture pending so interval ticks are swallowed and the
+    // debounce clock (the last actual capture) does not advance.
+    await vi.advanceTimersByTimeAsync(18_000) // > the 15s interval, < the 30s wedge timeout
+    controller.onCaptureReady(requests[0], join(testDir, 'a.jpg'))
+
+    detector.emit('appSwitch', ACTIVE_WINDOW, null)
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(requests.length).toBeGreaterThan(1)
+    controller.destroy()
+  })
+})

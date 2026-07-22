@@ -14,7 +14,9 @@ import {
   insertTurnStart,
   listMessages,
   reconcileInterruptedTurns,
+  searchActivitySnippets,
   searchMessages,
+  getLastUserMessageText,
   upsertMessages,
 } from './transcript'
 
@@ -185,6 +187,78 @@ describe('transcript store', () => {
     expect(searchMessages('project file').map(m => m.id)).toEqual(['a1'])
     expect(searchMessages('do-not-index-me')).toEqual([])
     expect(searchMessages('secret-after-cap')).toEqual([])
+  })
+})
+
+describe('transcript search is a recall tool', () => {
+  function seedMorningAudit(): void {
+    insertTurnStart({
+      epochId: 'epoch-1', turnId: 't1', userMessageId: 'u1', assistantMessageId: 'b1', activityMessageId: 'a1',
+      text: "let's start the studio trunk audit",
+    })
+    upsertMessages([{ id: 'b1', role: 'bond', epochId: 'epoch-1', turnId: 't1', text: 'Wrote the Studio trunk audit document with 18 findings.' }])
+  }
+
+  it('filters roles in SQL so activity rows cannot crowd out the results', () => {
+    // Six activity rows all matching "audit" used to consume the LIMIT before
+    // the post-filter ran, so the tool returned empty while matches existed.
+    seedMorningAudit()
+    for (let i = 0; i < 6; i += 1) {
+      insertTurnStart({
+        epochId: 'epoch-1', turnId: `t-noise-${i}`, userMessageId: `un${i}`, assistantMessageId: `bn${i}`, activityMessageId: `an${i}`,
+        text: 'unrelated',
+        activityData: {
+          turnId: `t-noise-${i}`, status: 'done', startedAt: 1,
+          events: [{ id: `e${i}`, type: 'tool', label: 'Read audit document', ts: 1, toolName: 'read', output: 'audit audit audit' }],
+        },
+      })
+    }
+
+    const results = searchMessages('audit', { limit: 4, roles: ['user', 'bond'] })
+    expect(results.length).toBeGreaterThan(0)
+    expect(results.every(m => m.role === 'user' || m.role === 'bond')).toBe(true)
+  })
+
+  it('THE INCIDENT: the literal recovered query finds the morning discussion', () => {
+    // Recovered from the 17:05Z session JSONL at 18:26:34Z. It returned nothing:
+    // AND-of-all-tokens required one message containing on/to/9/studio/audit.
+    seedMorningAudit()
+    const results = searchMessages('"on to 9" Studio audit', { limit: 8, roles: ['user', 'bond'] })
+    expect(results.length).toBeGreaterThan(0)
+    expect(results.some(m => m.text?.includes('studio trunk audit') || m.text?.includes('Studio trunk audit'))).toBe(true)
+  })
+
+  it('prefers the strict AND result when it matches at all', () => {
+    seedMorningAudit()
+    upsertMessages([{ id: 'x1', role: 'user', epochId: 'epoch-1', turnId: 't1', text: 'studio only' }])
+    const results = searchMessages('studio trunk', { roles: ['user', 'bond'] })
+    expect(results.map(m => m.id)).not.toContain('x1')
+  })
+
+  it('does not run a second pass for a single-term query', () => {
+    seedMorningAudit()
+    expect(searchMessages('nonexistentterm', { roles: ['user', 'bond'] })).toEqual([])
+  })
+
+  it('returns activity snippets from indexed tool output', () => {
+    insertTurnStart({
+      epochId: 'epoch-1', turnId: 't2', userMessageId: 'u2', assistantMessageId: 'b2', activityMessageId: 'a2',
+      text: 'do it',
+      activityData: {
+        turnId: 't2', status: 'done', startedAt: 1,
+        events: [{ id: 'e1', type: 'tool', label: 'Write library document', ts: 1, toolName: 'write', output: 'Studio trunk audit — July 21, 2026' }],
+      },
+    })
+
+    const snippets = searchActivitySnippets('studio trunk audit', 3)
+    expect(snippets.length).toBeGreaterThan(0)
+    expect(snippets[0].snippet.toLowerCase()).toContain('audit')
+  })
+
+  it('finds the last user message, honoring exclusions', () => {
+    seedMorningAudit()
+    expect(getLastUserMessageText()).toBe("let's start the studio trunk audit")
+    expect(getLastUserMessageText(['u1'])).toBeNull()
   })
 })
 

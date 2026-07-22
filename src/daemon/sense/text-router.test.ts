@@ -46,7 +46,7 @@ describe('extractText — accessibility routing', () => {
       pid: 4242,
     })
 
-    expect(extractAccessibilityText).toHaveBeenCalledWith(4242)
+    expect(extractAccessibilityText).toHaveBeenCalledWith(4242, 10, { wantUrl: false })
     expect(result.source).toBe('accessibility')
     expect(result.text).toContain('structured accessibility tree')
     // Accessibility won outright, so OCR never ran
@@ -65,7 +65,7 @@ describe('extractText — accessibility routing', () => {
 
     const result = await extractText({ imagePath: '/tmp/shot.jpg', appBundleId: 'com.apple.Safari', pid: 99 })
 
-    expect(extractAccessibilityText).toHaveBeenCalledWith(99)
+    expect(extractAccessibilityText).toHaveBeenCalledWith(99, 10, { wantUrl: true })
     expect(result.source).toBe('ocr')
 
     // and it remembers to skip accessibility for that app next time
@@ -94,11 +94,37 @@ describe('extractText — accessibility routing', () => {
     expect(extractAccessibilityText).not.toHaveBeenCalled()
   })
 
+  it('re-probes accessibility after the ocr downgrade expires (no longer a one-way pin)', async () => {
+    // An OCR preference set 30 days ago must NOT still suppress accessibility.
+    const stale = new Date(Date.now() - 30 * 86_400_000).toISOString()
+    getDb()
+      .prepare(
+        `INSERT INTO sense_app_text_quality (bundle_id, preferred_source, avg_accessibility_chars, sample_count, updated_at)
+         VALUES (?, 'ocr', 0, 1, ?)`
+      )
+      .run('com.apple.Safari', stale)
+    extractAccessibilityText.mockResolvedValue(axResult('a fresh structured accessibility tree'))
+
+    const result = await extractText({ imagePath: '/tmp/shot.jpg', appBundleId: 'com.apple.Safari', pid: 99 })
+
+    expect(extractAccessibilityText).toHaveBeenCalled()
+    expect(result.source).toBe('accessibility')
+  })
+
+  it('surfaces the focused url from the accessibility result', async () => {
+    extractAccessibilityText.mockResolvedValue({
+      app: 'Safari', pid: 99, elements: [{ type: 'text', value: 'a structured tree dump here', depth: 1 }],
+      url: 'https://linear.app/a8c/issue/STU-2079',
+    })
+    const result = await extractText({ imagePath: '/tmp/shot.jpg', appBundleId: 'com.apple.Safari', pid: 99 })
+    expect(result.url).toBe('https://linear.app/a8c/issue/STU-2079')
+  })
+
   it('reports failure when neither source produces text', async () => {
     extractAccessibilityText.mockResolvedValue(null)
     extractOcrText.mockResolvedValue({ lines: [] })
 
     const result = await extractText({ imagePath: '/tmp/shot.jpg', pid: 4242 })
-    expect(result).toEqual({ text: null, source: 'failed' })
+    expect(result).toEqual({ text: null, source: 'failed', url: null })
   })
 })

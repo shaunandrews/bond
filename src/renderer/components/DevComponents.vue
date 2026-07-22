@@ -336,7 +336,7 @@ const components = [
     name: 'MemoryView',
     file: 'components/MemoryView.vue',
     category: 'Composed',
-    description: 'Right-panel memory view with Core, Working, Search, and Source tabs for inspecting and editing memory.',
+    description: 'Right-panel memory view with Core, Working, Search, and Source tabs for inspecting and editing memory. A health line above the tabs reports last-written time and observer lag, turning red when memory writes are degraded.',
     props: [],
     events: [
     ],

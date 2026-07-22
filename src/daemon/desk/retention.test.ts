@@ -115,7 +115,7 @@ describe('matchers', () => {
     const t = createThread({ name: 'Studio', source: 'user' })
     const m = writeInferredMatcher({
       field: 'resource', operator: 'exact', pattern: 'sig', threadId: t.id, confidence: 0.7, example: {},
-    }).matcher
+    }).matcher!
     getDb().prepare('UPDATE desk_matchers SET last_seen_at = ?, created_at = ? WHERE id = ?').run(OLD, OLD, m.id)
 
     expect(sweep().deletedMatchers).toBe(1)
@@ -126,7 +126,7 @@ describe('matchers', () => {
     const t = createThread({ name: 'Studio', source: 'user' })
     const m = writeInferredMatcher({
       field: 'resource', operator: 'exact', pattern: 'sig', threadId: t.id, confidence: 0.7, example: {},
-    }).matcher
+    }).matcher!
     getDb().prepare('UPDATE desk_matchers SET last_seen_at = ?, created_at = ? WHERE id = ?').run(RECENT, OLD, m.id)
     sweep()
     expect(listMatchers()).toHaveLength(1)

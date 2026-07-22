@@ -16,7 +16,9 @@ afterEach(() => {
 
 describe('memory store', () => {
   it('builds FTS queries from sanitized terms only', () => {
-    expect(buildFtsQuery('sqlite OR "drop" -stuff email@example.com')).toBe('"sqlite" OR "or" OR "drop" OR "stuff" OR "email" OR "example" OR "com"')
+    // Quoted spans are kept as phrases (and therefore lead); everything else
+    // is tokenized. Every term is quoted, so operators can only be literals.
+    expect(buildFtsQuery('sqlite OR "drop" -stuff email@example.com')).toBe('"drop" OR "sqlite" OR "or" OR "-stuff" OR "email" OR "example" OR "com"')
     expect(buildFtsQuery('"*()')).toBeNull()
   })
 

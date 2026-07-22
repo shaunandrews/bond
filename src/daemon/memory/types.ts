@@ -30,6 +30,18 @@ export interface MemoryItemInput {
   updatedAt?: string
 }
 
+export const WORKING_ARTIFACT_KINDS = ['file', 'library', 'issue', 'url'] as const
+export type WorkingArtifactKind = typeof WORKING_ARTIFACT_KINDS[number]
+
+/** Mirrors `WorkingArtifact` in shared/memory.ts — keep the two identical. */
+export interface WorkingArtifact {
+  kind: WorkingArtifactKind
+  /** Absolute path, issue key (STU-2085), or url. */
+  ref: string
+  label?: string
+  lastTouchedAt: string
+}
+
 export interface WorkingState {
   sessionId: string | null
   projectId: string | null
@@ -38,7 +50,17 @@ export interface WorkingState {
   preferences: string[]
   decisions: string[]
   openThreads: string[]
+  /** Deterministic-only (tool events). The model may not write this. */
+  artifacts: WorkingArtifact[]
+  /** Deterministic-only: set by a SKILL.md read. */
+  activeSkill: string | null
+  /** LLM-writable: the user's position in the active work. */
+  checkpoint: string | null
   updatedAt: string
+}
+
+export function isWorkingArtifactKind(value: unknown): value is WorkingArtifactKind {
+  return typeof value === 'string' && (WORKING_ARTIFACT_KINDS as readonly string[]).includes(value)
 }
 
 export interface CoreMemory {
@@ -68,6 +90,11 @@ export const MEMORY_CAPS = {
   workingPreferences: 16,
   workingDecisions: 16,
   workingOpenThreads: 16,
+  workingArtifacts: 8,
+  artifactRefChars: 500,
+  artifactLabelChars: 200,
+  checkpointChars: 200,
+  activeSkillChars: 100,
   coreFacts: 80,
   corePreferences: 80,
   coreDecisions: 80,

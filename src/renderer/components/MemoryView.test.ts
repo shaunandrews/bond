@@ -20,6 +20,9 @@ const working: WorkingState = {
   preferences: [],
   decisions: [],
   openThreads: ['Remove dead tests'],
+  artifacts: [],
+  activeSkill: null,
+  checkpoint: null,
   updatedAt: '2026-01-01T00:00:00.000Z',
 }
 
@@ -66,7 +69,7 @@ describe('MemoryView', () => {
     setupBond()
     const mem = useMemory()
     mem.core.value = { version: 1, facts: [], preferences: [], decisions: [], updatedAt: '2026-01-01T00:00:00.000Z' }
-    mem.working.value = { sessionId: null, projectId: null, goal: '', facts: [], preferences: [], decisions: [], openThreads: [], updatedAt: '2026-01-01T00:00:00.000Z' }
+    mem.working.value = { sessionId: null, projectId: null, goal: '', facts: [], preferences: [], decisions: [], openThreads: [], artifacts: [], activeSkill: null, checkpoint: null, updatedAt: '2026-01-01T00:00:00.000Z' }
     mem.results.value = []
     mem.sources.value = { sourceIds: [], messages: [] }
     mem.loading.value = false

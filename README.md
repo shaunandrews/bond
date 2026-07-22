@@ -88,6 +88,7 @@ bond rebuild [target]    # Stop, build, start
 bond log                 # Tail daemon log
 bond media               # Manage media (list, info, open, rm, purge)
 bond sense               # Ambient screen awareness (status, on, off, search, apps, timeline)
+bond memory              # Memory write health (staleness, observer lag, failures, recent runs)
 bond screenshot          # Capture Bond window to /tmp/bond-screenshot.png
 bond test                # Run tests
 bond help                # Show all commands

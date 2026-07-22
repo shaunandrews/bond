@@ -5,7 +5,14 @@ import { ensureTranscriptSchema, getMessagesForRange } from './transcript'
 import type { TranscriptMessage } from '../shared/transcript'
 
 export const DEFAULT_CONTEXT_WINDOW = 200_000
-export const DEFAULT_SOFT_LIMIT_RATIO = 0.8
+/**
+ * Pi compacts its own session IN PLACE and the session survives — measured
+ * firing at 75.3% of the window with a better summary than Bond's handoff.
+ * Bond's rollover at 0.8 was pre-empting it to solve the same problem worse:
+ * it kills the session outright and hands the successor a prose tail. At 0.92
+ * rollover only fires if Pi's compaction fails to keep up — a genuine backstop.
+ */
+export const DEFAULT_SOFT_LIMIT_RATIO = 0.92
 
 export type EpochStatus = 'active' | 'closed'
 
@@ -74,7 +81,6 @@ export interface EnsureActiveEpochResult {
   rolledOver: boolean
   previousEpoch: Epoch | null
   softLimit: number
-  warnings: string[]
 }
 
 type EpochRow = {
@@ -144,15 +150,27 @@ export function findActiveEpoch(db?: Database.Database): Epoch | null {
   return row ? toEpoch(row) : null
 }
 
+/**
+ * Markers are SEEDED at the transcript high-water mark, never left at 0.
+ * Everything before an epoch's birth is the previous epoch's duty — its
+ * rollover hooks observe and reflect through the swap-time toSeq, which
+ * `ensureActiveEpoch` captures immediately before closeEpoch/createEpoch with
+ * no message writes in between. So the closing epoch's hook range ends exactly
+ * where the new epoch's markers start: no gap, no overlap. Without this, every
+ * new epoch re-observed the entire transcript from seq 1 (measured: 521
+ * messages / ~38k tokens in one background run) and every rollover reflected
+ * over all of history, growing forever.
+ */
 export function createEpoch(input: CreateEpochInput = {}, db?: Database.Database): Epoch {
   const actual = dbOrDefault(db)
   const id = input.id ?? randomUUID()
   const piSessionId = input.piSessionId ?? randomUUID()
   const startedAt = input.now ?? nowIso()
+  const seedSeq = maxMessageSeq(actual)
   actual.prepare(`
-    INSERT INTO epochs (id, pi_session_id, pi_session_file, status, started_at)
-    VALUES (?, ?, ?, 'active', ?)
-  `).run(id, piSessionId, input.piSessionFile ?? null, startedAt)
+    INSERT INTO epochs (id, pi_session_id, pi_session_file, status, started_at, observed_through_seq, reflected_through_seq)
+    VALUES (?, ?, ?, 'active', ?, ?, ?)
+  `).run(id, piSessionId, input.piSessionFile ?? null, startedAt, seedSeq, seedSeq)
   const created = findEpoch(id, actual)
   if (!created) throw new Error(`Failed to create epoch ${id}`)
   return created
@@ -195,7 +213,6 @@ async function runHook(
   fromSeq: number,
   toSeq: number,
   db: Database.Database,
-  warnings: string[],
   logger?: Pick<Console, 'warn'>,
 ): Promise<boolean> {
   if (toSeq < fromSeq) return true
@@ -206,9 +223,10 @@ async function runHook(
     return true
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    const warning = `${name} failed for epoch ${epoch.id}: ${message}`
-    warnings.push(warning)
-    logger?.warn?.(`[bond] ${warning}`)
+    // The ledger (memory/ledger.ts) is the durable record; this is the live
+    // log line. The old `warnings` array was returned to a caller that never
+    // read it and was always empty on the deferred path production uses.
+    logger?.warn?.(`[bond] ${name} failed for epoch ${epoch.id}: ${message}`)
     return false
   }
 }
@@ -224,7 +242,6 @@ async function runRolloverHookWork(
   epochId: string,
   toSeq: number,
   options: EnsureActiveEpochOptions,
-  warnings: string[],
   db?: Database.Database,
 ): Promise<void> {
   const actual = dbOrDefault(db)
@@ -232,14 +249,14 @@ async function runRolloverHookWork(
   if (!epoch) return
 
   const observedFrom = epoch.observedThroughSeq + 1
-  const observedOk = await runHook('finalObserver', options.finalObserver, epoch, observedFrom, toSeq, actual, warnings, options.logger)
+  const observedOk = await runHook('finalObserver', options.finalObserver, epoch, observedFrom, toSeq, actual, options.logger)
   if (observedOk && toSeq >= observedFrom) {
     actual.prepare('UPDATE epochs SET observed_through_seq = ? WHERE id = ?').run(toSeq, epoch.id)
   }
 
   const reflectedFrom = epoch.reflectedThroughSeq + 1
   const flush = options.memoryFlush ?? options.flushMemory
-  const reflectedOk = await runHook('memoryFlush', flush, epoch, reflectedFrom, toSeq, actual, warnings, options.logger)
+  const reflectedOk = await runHook('memoryFlush', flush, epoch, reflectedFrom, toSeq, actual, options.logger)
   if (reflectedOk && toSeq >= reflectedFrom) {
     actual.prepare('UPDATE epochs SET reflected_through_seq = ? WHERE id = ?').run(toSeq, epoch.id)
   }
@@ -254,16 +271,15 @@ export async function ensureActiveEpoch(options: EnsureActiveEpochOptions = {}, 
       piSessionFile: options.piSessionFile,
       now: options.now,
     }, actual)
-    return { epoch, rolledOver: false, previousEpoch: null, softLimit: calculateSoftLimit(epoch.contextWindow, options), warnings: [] }
+    return { epoch, rolledOver: false, previousEpoch: null, softLimit: calculateSoftLimit(epoch.contextWindow, options) }
   }
 
   active = updateContextUsage(active, options.contextTokens, options.contextWindow, actual)
   const softLimit = calculateSoftLimit(active.contextWindow, options)
   if (active.contextTokens < softLimit) {
-    return { epoch: active, rolledOver: false, previousEpoch: null, softLimit, warnings: [] }
+    return { epoch: active, rolledOver: false, previousEpoch: null, softLimit }
   }
 
-  const warnings: string[] = []
   const toSeq = maxMessageSeq(actual)
 
   if (options.deferHookWork) {
@@ -279,11 +295,11 @@ export async function ensureActiveEpoch(options: EnsureActiveEpochOptions = {}, 
     }, actual)
     // The task resolves the db handle at run time — the captured one could
     // be closed by a sandbox data swap before the queue drains.
-    options.deferHookWork(() => runRolloverHookWork(closedId, toSeq, options, []))
-    return { epoch, rolledOver: true, previousEpoch: closed, softLimit, warnings }
+    options.deferHookWork(() => runRolloverHookWork(closedId, toSeq, options))
+    return { epoch, rolledOver: true, previousEpoch: closed, softLimit }
   }
 
-  await runRolloverHookWork(active.id, toSeq, options, warnings, actual)
+  await runRolloverHookWork(active.id, toSeq, options, actual)
 
   const closed = closeEpoch({ id: active.id, reason: options.rolloverReason ?? 'context_soft_limit', now: options.now }, actual) ?? active
   const epoch = createEpoch({
@@ -292,5 +308,5 @@ export async function ensureActiveEpoch(options: EnsureActiveEpochOptions = {}, 
     now: options.now,
   }, actual)
 
-  return { epoch, rolledOver: true, previousEpoch: closed, softLimit, warnings }
+  return { epoch, rolledOver: true, previousEpoch: closed, softLimit }
 }

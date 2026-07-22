@@ -15,6 +15,7 @@ import type { EditMode } from '../../shared/session'
 import { selectModel } from './model'
 import { getImagePaths } from '../images'
 import { codexImageGenExtension, extractRevisedPrompt, IMAGEGEN_TOOL_NAMES, imageGenAvailable, saveGeneratedImages, stripResultImageData } from '../imagegen'
+import { recordToolEventArtifacts } from '../memory/service'
 import { createMemoryExtensionFactory, MEMORY_TOOL_NAMES } from '../memory/tools'
 import { createWebExtensionFactory, WEB_TOOL_NAMES } from '../web/tools'
 import { createAgentExtensionFactory, AGENT_TOOL_NAMES } from '../agents/tools'
@@ -483,12 +484,31 @@ export async function runPiBondQuery(prompt: string, options: PiBondQueryOptions
     throw new Error(`Bond tools failed to register: ${missingBondTools.join(', ')}`)
   }
 
+  // Only tool_execution_START carries args; the end event carries the result.
+  // Artifact capture needs both, so the args are parked by call id until the
+  // matching end arrives (and dropped there, so an aborted turn cannot leak).
+  const pendingToolArgs = new Map<string, Record<string, unknown>>()
+
   const unsubscribe = session.subscribe((event) => {
     const separator = textBlockSeparator(event, narratedThisTurn)
     if (separator) options.onChunk(separator)
     for (const chunk of piEventToChunks(event)) {
       if (chunk.kind === 'assistant_text' && chunk.text.trim()) narratedThisTurn = true
       options.onChunk(chunk)
+    }
+    if (event.type === 'tool_execution_start') {
+      pendingToolArgs.set(event.toolCallId, (event.args ?? {}) as Record<string, unknown>)
+    }
+    if (event.type === 'tool_execution_end') {
+      const args = pendingToolArgs.get(event.toolCallId) ?? {}
+      pendingToolArgs.delete(event.toolCallId)
+      if (!event.isError) {
+        // Deterministic artifact capture: the file Bond just wrote, the issue
+        // it just filed, the skill it just read. The memory observer never sees
+        // tool activity, so this is the ONLY path by which an artifact reaches
+        // working memory without someone typing its path into chat.
+        recordToolEventArtifacts({ toolName: event.toolName, args, result: event.result })
+      }
     }
     if (event.type === 'tool_execution_end' && !event.isError && IMAGEGEN_TOOL_NAMES.includes(event.toolName)) {
       // Persist generated images into Bond's image store and surface them as

@@ -137,6 +137,7 @@ import {
   listBacklinksForAsset,
 } from './library'
 import { readCoreMemory, withCoreMemoryLock, writeCoreMemoryAtomic } from './memory/core-memory'
+import { getMemoryHealth } from './memory/ledger'
 import { getMemoryItem, getMemoryItemSourceIds, listRecentMemory, searchMemory, upsertMemoryItem } from './memory/store'
 import { createWorkingState } from './memory/working-state'
 import { readWorkingMemoryState, waitForMemoryQueue, writeWorkingMemoryState } from './memory/service'
@@ -297,6 +298,27 @@ function getSenseController(): SenseController {
 // --- Desk ---
 
 let deskWorker: DeskWorker | null = null
+let deskInitialized = false
+
+/**
+ * Register Desk's Sense-state reader and the `desk.changed` → broadcast bridge.
+ *
+ * This MUST run at server init, independently of whether the worker ever
+ * starts. A Desk that is off this boot (Sense disabled, `running = false`) is
+ * still fully usable read-only — reassign, rename, merge, answer, todos all
+ * mutate and call `emitDeskChanged`. If the bridge were registered lazily
+ * inside `getDeskWorker()`, those broadcasts would land in an empty listener
+ * list and every open panel would silently go stale. Idempotent.
+ */
+export function initDesk(): void {
+  if (deskInitialized) return
+  deskInitialized = true
+  desk.setSenseStateProvider(() => {
+    const controller = getSenseController()
+    return { state: controller.getState(), enabled: controller.getSettings().enabled }
+  })
+  desk.onDeskChanged(() => broadcastSenseEvent('desk.changed', {}))
+}
 
 /**
  * Desk reads Sense but never the other way round, so the controller is handed
@@ -304,11 +326,7 @@ let deskWorker: DeskWorker | null = null
  */
 function getDeskWorker(): DeskWorker {
   if (!deskWorker) {
-    desk.setSenseStateProvider(() => {
-      const controller = getSenseController()
-      return { state: controller.getState(), enabled: controller.getSettings().enabled }
-    })
-    desk.onDeskChanged(() => broadcastSenseEvent('desk.changed', {}))
+    initDesk()
     deskWorker = createDeskWorker()
   }
   return deskWorker
@@ -1436,6 +1454,8 @@ const handlers: RpcHandlers = {
     const sourceIds = relatedSourceIds.length > 0 ? relatedSourceIds : (item ? sourceIdsForMemoryTags(item.tags) : [])
     return { sourceIds, messages: getSourceMessages(sourceIds) }
   },
+
+  'memory.health': () => getMemoryHealth(),
 
   // --- Sense Debriefs ---
   'sense.memory': (params) => {

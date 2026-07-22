@@ -12,17 +12,19 @@
  * sweep in `sense/storage.ts`.
  */
 import { runPiTextPrompt } from '../pi/runtime'
-import { getRuntime, listBlocksAwaitingNote, requeueStaleSegments } from './store'
+import { getRuntime, hasUnknownWorkPastFloor, listBlocksAwaitingNote, requeueStaleSegments } from './store'
 import { commitSwitch, evaluateSwitch, ingestCaptures } from './segmenter'
 import {
   IMMEDIATE_CALLS_PER_HOUR,
   immediateBudgetRemaining,
   recordMetrics,
   runInferenceBatch,
+  sweepBudgetRemaining,
   type TextPrompt,
 } from './inference'
 import { assertionAllowed, createQuestion, expireQuestions } from './questions'
-import { pruneOverbroadMatchers } from './matchers'
+import { pruneOverbroadMatchers, pruneStaleInferredMatchers } from './matchers'
+import { rederiveStale } from './labels'
 import { generateReentryNote } from './notes'
 import { emitDeskChanged } from './service'
 import { unfinishedTodosForThread } from './today'
@@ -80,6 +82,21 @@ export function createDeskWorker(options: DeskWorkerOptions = {}): DeskWorker {
     const expired = expireQuestions()
     let changed = ingested.capturesProcessed > 0 || expired.length > 0
 
+    // Phase 2: re-derive a bounded batch of stale-cache segments against the
+    // current rules (no model calls). The notch reads the cache, so this
+    // staleness is invisible; a correction becomes retroactive as the sweep
+    // catches up, newest-first.
+    const rederived = rederiveStale({ limit: 50 })
+    if (rederived.changed > 0) changed = true
+
+    // Timely classification: real unknown work past the noise floor gets an
+    // immediate batch now (behind the 6/hour ceiling), rather than waiting for
+    // the 15-minute sweep — otherwise the three-minute Ask is unmeetable, since
+    // an unknown resource contributes to no thread until it is classified.
+    if (immediateBudgetRemaining(new Date().toISOString()) > 0 && hasUnknownWorkPastFloor()) {
+      if (await runBatch('immediate')) changed = true
+    }
+
     const decision = evaluateSwitch()
     if (decision.kind === 'switch') {
       changed = true
@@ -91,26 +108,33 @@ export function createDeskWorker(options: DeskWorkerOptions = {}): DeskWorker {
   }
 
   /**
-   * A stable candidate either asks or commits. It asks when the budget allows
-   * — silence then commits it a few minutes later. It commits directly when the
-   * budget is spent, because a switch Desk is confident about should not be
-   * lost just because it could not speak.
+   * A stable candidate commits **optimistically, once** — then, if the budget
+   * allows, asks about the block it just committed.
+   *
+   * The old shape asked first and returned without committing; on the next 2s
+   * tick the same candidate still evaluated as `switch`, the budget was now
+   * spent, and control fell through to a `commitSwitch` while the question was
+   * still pending — then accept/expire committed a *second* time from a live,
+   * possibly-different candidate clock. That triple bug is what produced the
+   * blocks whose `ended_at` preceded their own `started_at`. Committing here and
+   * stamping the block onto the question means accept/reject/expire only ever
+   * *adjust* that block — they never commit again.
    */
   async function handleSwitch(threadId: string, sinceIso: string): Promise<void> {
     const runtime = getRuntime()
     const signature = runtime.candidateResourceSignature
 
+    const blockId = commitSwitch(threadId, { sinceIso, source: 'inferred', confidence: 0.6 })
+
     if (assertionAllowed()) {
-      const asked = createQuestion({
+      createQuestion({
         kind: 'thread_switch',
         proposedThreadId: threadId,
-        blockId: runtime.currentBlockId,
+        blockId,
         resourceSignature: signature,
       })
-      if (asked.ok) return
     }
 
-    commitSwitch(threadId, { sinceIso, source: 'inferred', confidence: 0.6 })
     await maybeAskAboutTodo(threadId)
   }
 
@@ -146,6 +170,7 @@ export function createDeskWorker(options: DeskWorkerOptions = {}): DeskWorker {
   async function runBatch(kind: 'immediate' | 'sweep'): Promise<boolean> {
     const nowIso = new Date().toISOString()
     if (kind === 'immediate' && immediateBudgetRemaining(nowIso) <= 0) return false
+    if (kind === 'sweep' && sweepBudgetRemaining(nowIso) <= 0) return false
 
     const result = await runInferenceBatch({ prompt, kind })
     if (result.segments === 0) return false
@@ -189,11 +214,17 @@ export function createDeskWorker(options: DeskWorkerOptions = {}): DeskWorker {
       // as sense/worker.ts's requeueStale.
       const requeued = requeueStaleSegments()
       if (requeued > 0) console.log(`[desk/worker] requeued ${requeued} stranded segment(s)`)
-      // Self-heal: drop inferred matchers too broad to have been written.
+      // A pending Ask that outlived a stop must not auto-accept a stale switch
+      // now that we are starting again.
+      expireQuestions()
+      // Self-heal: drop inferred matchers too broad to have been written, and
+      // never-fired stale ones (making `hits` an input, not just a display).
       const pruned = pruneOverbroadMatchers()
       if (pruned.deleted > 0) {
         console.log(`[desk/worker] pruned ${pruned.deleted} over-broad matcher(s):`, pruned.reasons.slice(0, 5))
       }
+      const stale = pruneStaleInferredMatchers()
+      if (stale > 0) console.log(`[desk/worker] pruned ${stale} never-fired stale matcher(s)`)
       segmentTimer = setInterval(() => { enqueue(segmentTick) }, options.segmentIntervalMs ?? SEGMENT_INTERVAL_MS)
       segmentTimer.unref?.()
       sweepTimer = setInterval(() => { enqueue(catchUp) }, options.sweepIntervalMs ?? SWEEP_INTERVAL_MS)

@@ -26,6 +26,7 @@ import {
   getRuntime,
   getSegment,
   setRuntime,
+  updateBlock,
 } from './store'
 import { getSuppression, isSuppressed, listMatchers, writeInferredMatcher } from './matchers'
 import type { DeskThread } from '../../shared/desk'
@@ -89,8 +90,18 @@ describe('the interruption budget', () => {
     expect(switchQuestion(0).ok).toBe(true)
     // resolve the first so 'already_pending' is not what blocks it
     acceptQuestion(getPendingQuestion(ctx(60))!.id, ctx(60))
-    const second = switchQuestion(120)
+    // A DIFFERENT pairing, so the same-day dedupe doesn't fire — the budget does.
+    const second = switchQuestion(120, 'sig-other')
     expect(second).toEqual({ ok: false, reason: 'budget' })
+  })
+
+  it('deduplicates a pairing already answered today, so the alternation cycle stops', () => {
+    expect(switchQuestion(0).ok).toBe(true)
+    acceptQuestion(getPendingQuestion(ctx(60))!.id, ctx(60))
+    // The same (signature, thread) pairing, well past the cooldown — still not
+    // re-asked, because it was already answered today.
+    const again = switchQuestion(700) // > 600s cooldown
+    expect(again).toEqual({ ok: false, reason: 'deduped' })
   })
 
   it('refuses a second Ask while one is still pending', () => {
@@ -151,7 +162,7 @@ describe('rejecting — a real state change, not a dismissal', () => {
     const matcher = writeInferredMatcher({
       field: 'resource', operator: 'exact', pattern: signature,
       threadId: studio.id, confidence: 0.8, example: {},
-    }).matcher
+    }).matcher!
     const segment = createSegment({ blockId: null, startedAt: at(0), resourceSignature: signature, evidence: {} })
     attributeSegment(segment.id, { threadId: studio.id, matcherId: matcher.id, confidence: 0.8 })
     return { matcher, segment }
@@ -324,5 +335,55 @@ describe('cancelPendingQuestions', () => {
     expect(cancelPendingQuestions(ctx(60))).toBe(1)
     expect(getPendingQuestion(ctx(60))).toBeNull()
     expect(getRuntime().currentBlockId).toBeNull()
+  })
+})
+
+describe('optimistic commit: answering only adjusts the already-committed block', () => {
+  function optimisticBlockAndQuestion(signature: string | null = 'sig-abc') {
+    const b = createBlock({ threadId: studio.id, startedAt: at(0), source: 'inferred', confidence: 0.6 })
+    const q = createQuestion(
+      { kind: 'thread_switch', proposedThreadId: studio.id, blockId: b.id, resourceSignature: signature },
+      ctx(60)
+    )
+    if (!q.ok) throw new Error('question not created')
+    return { blockId: b.id, questionId: q.question.id }
+  }
+
+  it('accepting confirms the block without minting a second one', () => {
+    const { blockId, questionId } = optimisticBlockAndQuestion()
+    const before = (getDb().prepare('SELECT COUNT(*) AS n FROM desk_blocks').get() as { n: number }).n
+    const result = acceptQuestion(questionId, ctx(120))
+    expect(result?.committedBlockId).toBe(blockId)
+    // No double-commit: no new block, and the end never precedes the start.
+    expect((getDb().prepare('SELECT COUNT(*) AS n FROM desk_blocks').get() as { n: number }).n).toBe(before)
+    const block = getBlockDetail(blockId)!
+    expect(block.source).toBe('confirmed')
+    expect(block.confidence).toBe(1)
+  })
+
+  it('accepting never overrides a block the user reassigned mid-flight', () => {
+    const other = createThread({ name: 'Other', source: 'user' })
+    const { blockId, questionId } = optimisticBlockAndQuestion()
+    updateBlock(blockId, { threadId: other.id, source: 'manual', confidence: 1 })
+    acceptQuestion(questionId, ctx(120))
+    expect(getBlockDetail(blockId)!.threadId).toBe(other.id) // user wins
+  })
+
+  it('rejecting reverts the optimistic block even with a NULL signature', () => {
+    // The norm today: candidate_resource_signature is unpopulated until Phase 3,
+    // so the question carries no signature. The block must still be restored.
+    const { blockId, questionId } = optimisticBlockAndQuestion(null)
+    const result = rejectQuestion(questionId, ctx(120))
+    expect(result?.question.state).toBe('rejected')
+    expect(getBlockDetail(blockId)!.threadId).toBeNull()
+  })
+
+  it('silence (expiry) leaves the optimistic block exactly as committed', () => {
+    const { blockId } = optimisticBlockAndQuestion()
+    const results = expireQuestions(ctx(60 + 6000)) // well past the TTL
+    expect(results.some(r => r.committedBlockId === blockId)).toBe(true)
+    const block = getBlockDetail(blockId)!
+    expect(block.threadId).toBe(studio.id)
+    expect(block.source).toBe('inferred') // silence never confirms
   })
 })

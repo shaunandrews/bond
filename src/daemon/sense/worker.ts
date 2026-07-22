@@ -98,6 +98,13 @@ export function createTextWorker(settings: SenseSettings) {
             settings.textExtractionPreference
           )
 
+          // The focused URL, when the accessibility path exposed one, is the
+          // strongest project token Desk gets. Persist it independently of the
+          // text status so it survives even a redaction drop.
+          if (result.url) {
+            db.prepare('UPDATE sense_captures SET url = ? WHERE id = ?').run(result.url, row.id)
+          }
+
           if (result.text === null && result.source !== 'failed') {
             // Frame dropped by redaction — delete image and mark failed
             safeUpdateText(db, row.id, '[DROPPED: sensitive content]', 'failed', result.source)

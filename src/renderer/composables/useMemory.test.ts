@@ -7,7 +7,7 @@ function core(): CoreMemory {
 }
 
 function working(): WorkingState {
-  return { sessionId: null, projectId: null, goal: 'Ship memory', facts: [], preferences: [], decisions: [], openThreads: [], updatedAt: '2026-01-01T00:00:00.000Z' }
+  return { sessionId: null, projectId: null, goal: 'Ship memory', facts: [], preferences: [], decisions: [], openThreads: [], artifacts: [], activeSkill: null, checkpoint: null, updatedAt: '2026-01-01T00:00:00.000Z' }
 }
 
 function item(overrides: Partial<MemoryItem> = {}): MemoryItem {

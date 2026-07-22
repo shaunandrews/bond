@@ -11,8 +11,11 @@ import type Database from 'better-sqlite3'
 import { getDb } from '../db'
 import {
   archiveThread as archiveThreadRow,
+  bumpRulesVersion,
   clearCandidate,
   createBlock,
+  getRulesVersion,
+  stampDerivedVersion,
   createThread,
   getBlock,
   getBlockDetail,
@@ -35,7 +38,8 @@ import {
   setMatcherEnabled,
 } from './matchers'
 import { mergeThreads as mergeThreadsTxn, type MergeResult } from './merge'
-import { acceptQuestion, getPendingQuestion, rejectQuestion } from './questions'
+import { acceptQuestion, expireQuestions, getPendingQuestion, rejectQuestion } from './questions'
+import { recordLabel } from './labels'
 import { computeStats } from './stats'
 import { carryTodo, ensureToday, linkTodo, listToday, unlinkTodo } from './today'
 import { isGenericBundle, normalizePattern } from './signature'
@@ -138,6 +142,10 @@ function isBackfilling(db: Database.Database): boolean {
  */
 export function setRunning(running: boolean, db: Database.Database = getDb()): DeskStatus {
   setRuntime({ running }, db)
+  // A pending Ask must not survive Desk being switched off and auto-accept a
+  // stale switch on the next start — `expireQuestions` otherwise only runs
+  // inside the segment tick, which returns early while stopped.
+  if (!running) expireQuestions({ db })
   emitDeskChanged()
   return getStatus(db)
 }
@@ -172,19 +180,23 @@ export function createUserThread(name: string, db: Database.Database = getDb()):
 
 export function renameThread(id: string, name: string, db: Database.Database = getDb()): DeskThread | null {
   const thread = renameThreadRow(id, name, db)
+  bumpRulesVersion(db)
   emitDeskChanged()
   return thread
 }
 
 export function archiveThread(id: string, archived: boolean, db: Database.Database = getDb()): DeskThread | null {
   const thread = archiveThreadRow(id, archived, db)
+  // Archiving must actually stop a thread claiming work — re-derive so its
+  // cached segments fall away rather than lingering on the In-flight list.
+  bumpRulesVersion(db)
   emitDeskChanged()
   return thread
 }
 
 export function mergeThreads(targetId: string, sourceId: string, db: Database.Database = getDb()): MergeResult | null {
   const result = mergeThreadsTxn(targetId, sourceId, db)
-  if (result) emitDeskChanged()
+  if (result) { bumpRulesVersion(db); emitDeskChanged() }
   return result
 }
 
@@ -225,14 +237,25 @@ export function reassignBlock(
   const evidence = segments[0]?.evidence ?? {}
 
   const apply = db.transaction((): ReassignResult => {
+    // A user rule change bumps the rule generation, so every *other* cached
+    // segment re-derives against it — this is what makes correction retroactive.
+    bumpRulesVersion(db)
+    const rulesVersion = getRulesVersion(db)
+    const at = new Date().toISOString()
+
     updateBlock(block.id, { threadId: input.threadId, source: 'manual', confidence: 1, state: 'committed' }, db)
 
+    // Every segment in the block is being reassigned by the user — write a
+    // FROZEN user label for each (not just segments[0]), so a multi-resource
+    // block teaches all of its resources at zero extra model cost.
     for (const segment of segments) {
       db.prepare(`
         UPDATE desk_segments
         SET attributed_thread_id = ?, attribution_confidence = 1, attribution_state = 'resolved', attributed_at = ?
         WHERE id = ?
-      `).run(input.threadId, new Date().toISOString(), segment.id)
+      `).run(input.threadId, at, segment.id)
+      recordLabel({ segmentId: segment.id, threadId: input.threadId, source: 'user', confidence: 1 }, db)
+      stampDerivedVersion(segment.id, rulesVersion, db)
     }
 
     let matcher: DeskMatcher | null = null
@@ -246,13 +269,21 @@ export function reassignBlock(
         matcher = confirmMatcher({ ...input.confirmedMatcher, threadId: input.threadId, example: evidence }, db)
         learned = `Got it — ${describeMatcher(input.confirmedMatcher)} will go to ${thread.name}.`
       }
-    } else if (signature) {
-      // No named pattern: store a one-resource attribution and ask nothing further.
-      matcher = repointMatcherByUser(
-        { field: 'resource', operator: 'exact', pattern: signature, threadId: input.threadId, example: evidence },
+    }
+    // Re-point the exact-resource matcher for EACH distinct signature in the
+    // block, so a multi-resource block does not have to be re-bought per resource.
+    const seen = new Set<string>()
+    for (const segment of segments) {
+      const sig = segment.resourceSignature
+      if (seen.has(sig)) continue
+      seen.add(sig)
+      const m = repointMatcherByUser(
+        { field: 'resource', operator: 'exact', pattern: sig, threadId: input.threadId, example: segment.evidence },
         db
       )
+      if (!matcher) matcher = m
     }
+    void signature
 
     return { block: getBlockDetail(block.id, db)!, matcher, learned }
   })
@@ -323,13 +354,14 @@ export function getMatchers(confirmedOnly = true, db: Database.Database = getDb(
 
 export function disableMatcher(id: string, db: Database.Database = getDb()): DeskMatcher | null {
   const matcher = setMatcherEnabled(id, false, db)
+  bumpRulesVersion(db)
   emitDeskChanged()
   return matcher
 }
 
 export function deleteMatcher(id: string, db: Database.Database = getDb()): boolean {
   const deleted = deleteMatcherRow(id, db)
-  if (deleted) emitDeskChanged()
+  if (deleted) { bumpRulesVersion(db); emitDeskChanged() }
   return deleted
 }
 

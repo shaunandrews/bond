@@ -20,9 +20,12 @@
  * item is dropped with a reason, never thrown, so one malformed entry cannot
  * lose a whole batch.
  */
+import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { getDb } from '../db'
-import { oneOffReason, redactAll, redactField, tooBroadReason } from './signature'
+import { isBadThreadName, oneOffReason, redactAll, redactField, tooBroadReason } from './signature'
+import { recordLabel } from './labels'
+import { getRulesVersion, stampDerivedVersion } from './store'
 import {
   attributeSegment,
   createThread,
@@ -36,7 +39,7 @@ import {
   touchThread,
 } from './store'
 import { isSuppressed, writeInferredMatcher } from './matchers'
-import { BACKFILL_HORIZON_HOURS } from './segmenter'
+import { getSenseSettings } from '../settings'
 import type { DeskEvidence, DeskSegment, DeskThread } from '../../shared/desk'
 
 /** How the batch reaches a model. Injected so tests never touch a provider. */
@@ -78,12 +81,6 @@ const MAX_ATTEMPTS = 4
  * headroom on that without letting a wedged provider hold a batch all day.
  */
 const PROMPT_TIMEOUT_MS = 120_000
-/**
- * Prompt budget, tuned against a real back-fill batch rather than guessed: at
- * 400 excerpt chars over 24 segments the first live sweep produced an
- * 11,851-character prompt (~3k tokens) against the plan's 200-500 target.
- */
-const EXCERPT_CHARS = 160
 const MAX_BATCH_SEGMENTS = 14
 /** The closed label set the model picks from. */
 const MAX_THREAD_LABELS = 24
@@ -111,34 +108,22 @@ interface SegmentBrief {
   appName: string
   titles: string[]
   paths: string[]
-  excerpt: string | null
+  urls: string[]
+  coTitles: string[]
   minutes: number
 }
 
 /**
- * A capture with failed or empty text is still eligible for metadata-only
- * classification — it must not sit unresolved forever waiting for text that is
- * never coming.
+ * The brief is now built from *structured* evidence only — app, title, path,
+ * URL, and the titles of co-visible windows. The whole-screen OCR excerpt was
+ * removed deliberately (Phase 1): measured lift analysis found no token above
+ * 1.30x over the ambient screen-noise base rate on the signatures covering 40%
+ * of the day, so it never carried a classification; and it was where the
+ * privacy exposure concentrated — unbounded free screen text with no file
+ * extension or syntax for redaction to anchor on. Co-visible titles do not
+ * bleed the way whole-screen OCR does: each is bound to a named window.
  */
-function excerptFor(segmentId: string, db: Database.Database): string | null {
-  const rows = db.prepare(`
-    SELECT c.text_content FROM desk_capture_links l
-    JOIN sense_captures c ON c.id = l.capture_id
-    WHERE l.segment_id = ? AND c.text_content IS NOT NULL AND c.text_status = 'done'
-    ORDER BY c.captured_at DESC LIMIT 2
-  `).all(segmentId) as { text_content: string }[]
-  if (rows.length === 0) return null
-  const joined = rows.map(r => r.text_content).join(' ').replace(/\s+/g, ' ').trim()
-  if (!joined) return null
-  // 400 chars/segment put a real 24-segment batch at ~3k tokens against a
-  // 200-500 target. Classification is a labelling task — the app, the title,
-  // and a sentence of context carry it; the rest is paid-for noise.
-  const clipped = joined.slice(0, EXCERPT_CHARS)
-  // Sense redacted this once on extraction; redact again because Desk transmits it.
-  return redactField(clipped)
-}
-
-export function buildBriefs(segments: DeskSegment[], db: Database.Database): SegmentBrief[] {
+export function buildBriefs(segments: DeskSegment[], _db?: Database.Database): SegmentBrief[] {
   return segments.map((segment, index) => {
     const evidence: DeskEvidence = segment.evidence ?? {}
     return {
@@ -149,7 +134,8 @@ export function buildBriefs(segments: DeskSegment[], db: Database.Database): Seg
       // redact at assembly rather than trusting the store.
       titles: redactAll(evidence.titles ?? []).slice(0, 2),
       paths: redactAll(evidence.paths ?? []).slice(0, 2),
-      excerpt: excerptFor(segment.id, db),
+      urls: redactAll(evidence.urls ?? []).slice(0, 2),
+      coTitles: redactAll(evidence.coTitles ?? []).slice(0, 3),
       minutes: Math.max(1, Math.round(segment.presenceSeconds / 60)),
     }
   })
@@ -173,8 +159,9 @@ export function buildPrompt(briefs: SegmentBrief[], threads: DeskThread[]): stri
   const observations = briefs.map(b => {
     const lines = [`${b.ref}. app: ${b.appName} (~${b.minutes}m)`]
     if (b.titles.length) lines.push(`   titles: ${b.titles.join(' | ')}`)
+    if (b.urls.length) lines.push(`   urls: ${b.urls.join(' | ')}`)
     if (b.paths.length) lines.push(`   paths: ${b.paths.join(' | ')}`)
-    if (b.excerpt) lines.push(`   text: ${b.excerpt}`)
+    if (b.coTitles.length) lines.push(`   also open: ${b.coTitles.join(' | ')}`)
     return lines.join('\n')
   }).join('\n')
 
@@ -190,12 +177,16 @@ ${labels}
 Observations:
 ${observations}
 
+"also open" lists the titles of other windows visible at the same time — strong context for what a container app (a bare "Electron" or "Chrome") was actually being used FOR. Weigh it, but the focused window's own title/url/path is the primary signal.
+
 For each observation, reply with one line:
-<ref>|<T-ref or NEW:thread name>|<confidence 0-1>|<matcher field: title|path|bundle|none>|<matcher pattern or ->
+<ref>|<T-ref, NEW:thread name, or NONE>|<confidence 0-1>|<matcher field: url|title|path|bundle|none>|<matcher pattern or ->
 
 Rules:
 - Prefer an existing T-ref. Propose at most ONE new thread across the whole batch, and only if nothing existing fits.
-- The matcher is the PROJECT TOKEN, not the whole title. For "~/Developer/Projects/studio — nvim" the matcher is "studio", which also matches the Figma file and the GitHub page. Matching is substring-based.
+- Use NONE as the thread when the activity is NOT WORK — a video, a music player, a chat, an article, a game. Do not invent a thread to hold leisure. NONE files it under nothing.
+- A new thread names a PIECE OF WORK ("ISP problem", "Bond mobile composer"), never a tool ("Chrome", "Electron") and never a junk drawer ("one-off", "misc", "other").
+- The matcher is the PROJECT TOKEN, not the whole title. For "~/Developer/Projects/studio — nvim" the matcher is "studio", which also matches the Figma file and the GitHub page. A url matcher like "linear.app/a8c/issue/STU" is even stronger. Matching is substring-based.
 - Use "none" when nothing generalizes: a one-off article, a product page, a document you will never see again. The resource is cached either way, so "none" costs nothing.
 - Never a bare app name (Chrome, Terminal, Slack, Code, Electron), never a filename containing a uuid or hash.
 - Confidence below 0.5 means you are guessing; say so honestly.
@@ -208,12 +199,14 @@ export interface ParsedLine {
   ref: string
   threadId: string | null
   newThreadName: string | null
+  /** The model declared this segment "not work" — file it under nothing. */
+  none: boolean
   confidence: number
-  matcherField: 'bundle' | 'title' | 'path' | null
+  matcherField: 'url' | 'bundle' | 'title' | 'path' | null
   matcherPattern: string | null
 }
 
-const VALID_FIELDS = new Set(['bundle', 'title', 'path'])
+const VALID_FIELDS = new Set(['url', 'bundle', 'title', 'path'])
 
 /**
  * Strict parse that accumulates problems instead of throwing. One malformed
@@ -245,10 +238,15 @@ export function parseResponse(
 
     let threadId: string | null = null
     let newThreadName: string | null = null
+    let none = false
     if (/^new\s*:/i.test(thread)) {
       newThreadName = thread.replace(/^new\s*:/i, '').trim().slice(0, 80)
       if (!newThreadName) { problems.push(`empty new thread name for ${ref}`); continue }
-    } else if (thread && thread !== '-' && thread.toLowerCase() !== 'none') {
+    } else if (thread.toUpperCase() === 'NONE') {
+      // The "not work" verdict: leisure, a video, a chat. The segment resolves
+      // to nothing so it stops re-querying and never mints a leisure thread.
+      none = true
+    } else if (thread && thread !== '-') {
       threadId = thread
     } else {
       problems.push(`no thread for ${ref}`)
@@ -263,6 +261,7 @@ export function parseResponse(
       ref,
       threadId,
       newThreadName,
+      none,
       confidence,
       matcherField: field as ParsedLine['matcherField'],
       matcherPattern: field && pattern ? pattern : null,
@@ -295,9 +294,14 @@ export async function runInferenceBatch(options: InferenceOptions): Promise<Infe
     promptChars: 0, latencyMs: 0, ok: true, problems: [],
   }
 
-  // Never spend a model call labelling activity older than Desk reaches back.
+  // Reach back across the whole retention window, not a fixed 24 hours. The
+  // old 24h horizon made any segment older than a day invisible to the sweep
+  // forever — zero attempts, zero errors — which is how a whole day (2026-07-19)
+  // was silently abandoned with unresolved segments its capture data still
+  // backed. The per-hour sweep budget, not an age cliff, is what bounds cost.
+  const retentionDays = Math.max(1, getSenseSettings().textRetentionDays)
   const since = options.since
-    ?? new Date(nowMs - BACKFILL_HORIZON_HOURS * 3_600_000).toISOString()
+    ?? new Date(nowMs - retentionDays * 86_400_000).toISOString()
   const segments = listUnresolvedSegments(
     { limit: options.limit ?? MAX_BATCH_SEGMENTS, nowIso, since },
     db
@@ -338,17 +342,58 @@ export async function runInferenceBatch(options: InferenceOptions): Promise<Infe
   const threadIds = new Set(threads.map(t => t.id))
   let proposedThreadId: string | null = null
 
+  // One batch id, so a rejection can later find every label this batch wrote.
+  const batchId = randomUUID()
+  const rulesVersion = getRulesVersion(db)
+  const recordModelLabel = (segmentId: string, threadId: string | null, confidence: number) => {
+    recordLabel({ segmentId, threadId, source: 'model', provenance: batchId, confidence }, db)
+    stampDerivedVersion(segmentId, rulesVersion, db)
+  }
+
   const apply = db.transaction(() => {
     for (const line of lines) {
       const brief = byRef.get(line.ref)!
       const segment = getSegment(brief.segmentId, db)
       if (!segment) continue
 
+      // The user's write always wins. This segment was marked `queued` before
+      // the model call; if it is no longer queued, a reassignment (or another
+      // resolver) touched it during the up-to-120s await. The model's answer
+      // must not silently revert that. The "didn't answer" loop below already
+      // guards the same way — the main apply path did not, and that was the
+      // hole through which inference reverted a live correction.
+      if (segment.attributionState !== 'queued') {
+        result.problems.push(`segment ${line.ref} changed under inference; skipped`)
+        continue
+      }
+
+      // The "not work" verdict: resolve to nothing. It stops re-querying and
+      // never mints a leisure thread or surfaces a block. Declining to file
+      // leisure AS work is a description, not a grade.
+      if (line.none) {
+        attributeSegment(segment.id, { threadId: null, matcherId: null, confidence: line.confidence, state: 'resolved' }, db)
+        recordModelLabel(segment.id, null, line.confidence)
+        result.resolved++
+        continue
+      }
+
       // Accept the short ref we offered, or a raw id if the model echoed one.
       let threadId = line.threadId && refs.has(line.threadId)
         ? refs.get(line.threadId)!.id
         : line.threadId
       if (line.newThreadName) {
+        // Bar junk-drawer and container names — the guard `tooBroadReason`
+        // applies to matcher patterns was never applied to thread names, which
+        // is how "one-off" was born. A barred name resolves to nothing rather
+        // than minting a dumping ground.
+        const bad = isBadThreadName(line.newThreadName)
+        if (bad) {
+          result.problems.push(`rejected new thread for ${line.ref}: ${bad}`)
+          attributeSegment(segment.id, { threadId: null, matcherId: null, confidence: line.confidence, state: 'resolved' }, db)
+          recordModelLabel(segment.id, null, line.confidence)
+          result.resolved++
+          continue
+        }
         // At most one new thread per batch; later proposals reuse it only if
         // they named the same thing.
         const existingByName = findThreadByName(line.newThreadName, db)
@@ -406,11 +451,16 @@ export async function runInferenceBatch(options: InferenceOptions): Promise<Infe
             // already whole identifiers.
             operator: line.matcherField === 'title' ? 'contains'
               : line.matcherField === 'path' ? 'contains'
+              : line.matcherField === 'url' ? 'contains'
               : 'exact',
             pattern: line.matcherPattern,
             threadId,
             confidence: line.confidence,
             example: segment.evidence,
+            // Stamp the batch so a later rejection can find and drop this broad
+            // matcher — model-resolved segments store matcher_id NULL, so the
+            // batch provenance is the only path back to it.
+            batchId,
           }, db)
         }
       }
@@ -421,6 +471,7 @@ export async function runInferenceBatch(options: InferenceOptions): Promise<Infe
       // hit, and `cacheHitRate` is the number the go/no-go turns on.
       void write
       attributeSegment(segment.id, { threadId, matcherId: null, confidence: line.confidence }, db)
+      recordModelLabel(segment.id, threadId, line.confidence)
       touchThread(threadId, nowIso, db)
       maybeEstablishThread(threadId, db)
       result.resolved++
@@ -457,6 +508,25 @@ export function immediateBudgetRemaining(
   return Math.max(0, IMMEDIATE_CALLS_PER_HOUR - row.n)
 }
 
+/**
+ * The sweep's own hourly ceiling — the live path had none. `catchUp` looped up
+ * to 200 rounds unbudgeted, which is how one hour of back-fill burned 81 calls.
+ * A burst large enough to clear a day's backlog in a few hours, bounded so it
+ * cannot run away. (Steady state is ~32 calls/*day*; this is the back-fill cap.)
+ */
+export const SWEEP_CALLS_PER_HOUR = 30
+
+export function sweepBudgetRemaining(
+  nowIso: string = new Date().toISOString(),
+  db: Database.Database = getDb()
+): number {
+  const since = new Date(Date.parse(nowIso) - 3_600_000).toISOString()
+  const row = db.prepare(
+    "SELECT COUNT(*) AS n FROM desk_metrics WHERE kind = 'sweep' AND recorded_at >= ?"
+  ).get(since) as { n: number }
+  return Math.max(0, SWEEP_CALLS_PER_HOUR - row.n)
+}
+
 /** Instrumentation the Phase 2 go/no-go reads. Without it the trial is an impression. */
 export function recordMetrics(
   kind: 'immediate' | 'sweep',
@@ -465,7 +535,10 @@ export function recordMetrics(
   db: Database.Database = getDb()
 ): void {
   db.prepare(`
-    INSERT INTO desk_metrics (recorded_at, kind, calls, segments, prompt_chars, latency_ms, ok)
-    VALUES (?, ?, 1, ?, ?, ?, ?)
-  `).run(nowIso, kind, result.segments, result.promptChars, result.latencyMs, result.ok ? 1 : 0)
+    INSERT INTO desk_metrics (recorded_at, kind, calls, segments, resolved, failed, prompt_chars, latency_ms, ok, error)
+    VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    nowIso, kind, result.segments, result.resolved, result.failed,
+    result.promptChars, result.latencyMs, result.ok ? 1 : 0, result.error ?? null
+  )
 }

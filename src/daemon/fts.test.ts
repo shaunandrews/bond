@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
-import { buildMatchQuery } from './fts'
+import { buildMatchQuery, countMatchTerms } from './fts'
 
 describe('buildMatchQuery', () => {
   it('quotes plain terms', () => {
@@ -21,6 +21,38 @@ describe('buildMatchQuery', () => {
     expect(buildMatchQuery('col:')).toBe('"col"')
     expect(buildMatchQuery('"quoted"')).toBe('"quoted"')
     expect(buildMatchQuery('"unbalanced')).toBe('"unbalanced"')
+  })
+
+  it('keeps a quoted span as one phrase term', () => {
+    // The model quoted "on to 9" expecting phrase matching; the old builder
+    // flattened it into three independent AND terms and matched nothing.
+    expect(buildMatchQuery('"on to 9" Studio audit')).toBe('"on to 9" "Studio" "audit"')
+    expect(buildMatchQuery('"multi word phrase"')).toBe('"multi word phrase"')
+  })
+
+  it('sanitizes phrase interiors instead of trusting them', () => {
+    expect(buildMatchQuery('"NEAR( col: x"')).toBe('"NEAR col x"')
+    expect(buildMatchQuery('"***"')).toBeNull()
+    expect(buildMatchQuery('"a-b c_d"')).toBe('"a-b c_d"')
+  })
+
+  it('never prefix-stars a phrase', () => {
+    expect(buildMatchQuery('"two words" solo', { prefix: true })).toBe('"two words" "solo"*')
+  })
+
+  it('joins with OR in or mode', () => {
+    expect(buildMatchQuery('studio trunk audit', { mode: 'or' })).toBe('"studio" OR "trunk" OR "audit"')
+    expect(buildMatchQuery('"on to 9" audit', { mode: 'or' })).toBe('"on to 9" OR "audit"')
+  })
+
+  it('dedupes repeated terms', () => {
+    expect(buildMatchQuery('audit audit AUDIT')).toBe('"audit"')
+  })
+
+  it('counts terms for callers deciding whether to broaden', () => {
+    expect(countMatchTerms('"on to 9" Studio audit')).toBe(3)
+    expect(countMatchTerms('audit')).toBe(1)
+    expect(countMatchTerms('!!!')).toBe(0)
   })
 
   it('caps the number of terms', () => {
@@ -57,16 +89,23 @@ describe('buildMatchQuery', () => {
       '-leading dash-',
       'ünïcode nörmâl',
       '日本語 テスト',
+      '"on to 9" studio',
+      '"NEAR(" col:',
+      '"unclosed phrase',
+      '""',
+      '"a" OR "b"',
     ]
 
     for (const q of hostile) {
       for (const prefix of [false, true]) {
-        const match = buildMatchQuery(q, { prefix })
+        for (const mode of ['and', 'or'] as const) {
+        const match = buildMatchQuery(q, { prefix, mode })
         if (match === null) continue
         expect(
           () => db.prepare('SELECT rowid FROM t WHERE t MATCH ?').all(match),
-          `query ${JSON.stringify(q)} prefix=${prefix} built ${JSON.stringify(match)}`
+          `query ${JSON.stringify(q)} prefix=${prefix} mode=${mode} built ${JSON.stringify(match)}`
         ).not.toThrow()
+        }
       }
     }
   })

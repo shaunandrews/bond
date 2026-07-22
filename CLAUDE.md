@@ -83,16 +83,19 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `questions.ts` | The single pending-question registry for `ask_user_question` — same shape as `approvals.ts` (`questionId` resolves, `turnId` scopes bulk clears), plus the `PendingQuestion` snapshot `question.pending` serves to the CLI |
 | `agent.ts` / `pi/runtime.ts` | Builds Bond context, runs Pi sessions, streams chunks, parks tool approvals via `approvals.ts` |
 | `pi/runtime.ts` | Pi session lifecycle, event streaming, edit-mode → tool/permission mapping, Bond memory tool registration, tier resolution, Pi OAuth |
-| `memory/service.ts` | Serialized automatic observer persistence + epoch observer/reflector hooks; `enqueueMemoryTask` runs deferred work (incl. epoch-rollover hooks) on the same queue so it never blocks a send |
+| `memory/service.ts` | Serialized automatic observer persistence + epoch observer/reflector hooks; `enqueueMemoryTask` runs deferred work (incl. epoch-rollover hooks) on the same queue so it never blocks a send. **Validation failures never fail a run** — they degrade the record and the marker still advances; only a `model.generate` throw (transport) propagates. Also owns `recordToolEventArtifacts` (deterministic artifact capture) and `scheduleEpochReflection` (reflection's own cadence, since rollover is now a backstop) |
+| `memory/ledger.ts` | The `memory_runs` table + `getMemoryHealth()` — every observer/reflector run, including transport failures, leaves a row. The single read behind `memory.health`, `bond memory status`, and the `memory_status` tool |
+| `memory/artifacts.ts` | `workingPatchFromToolEvent` — pure detection rules mapping a `tool_execution_end` to a working-memory patch (library/file writes, `SKILL.md` reads, second-reads, Linear issue keys). No model in the path |
 | `memory/tools.ts` | Bond-owned Pi tools for memory status/search/recall/history and explicit remember/update/forget |
-| `memory/store.ts` | Searchable memory CRUD, FTS, and relational source-message provenance |
+| `memory/store.ts` | Searchable memory CRUD, FTS (OR-joined via the shared `fts.ts` builder), and relational source-message provenance |
 | `memory/core-memory.ts` | Bounded persistent Core memory in `memory/core.json` |
 | `web/tools.ts` | Bond-owned Pi tools `web_search` + `fetch_content` — keyless, zero-config web access with a 15-min cache and polite batch spacing |
 | `web/broker.ts` | Render broker — parks tool promises, sends `web.requestRender` to the app, resolves on `web.renderReady`; errors clearly when no app is connected |
 | `web/extract.ts` | DuckDuckGo SERP parsing (linkedom) and page → markdown extraction (Readability + Turndown) over app-rendered HTML |
 | `questions/tools.ts` | The `ask_user_question` Pi tool — mints daemon-owned option ids, emits the `user_question` chunk, parks the turn on `questions.ts`'s registry until answered, resumed, or the turn is cleared |
 | `desk/signature.ts` | Resource signatures + **the redaction boundary**. Sense only redacts *extracted* text; `window_title` is raw at trigger time. Desk transmits and persists titles/paths, so nothing leaves this module without passing `redact()`. Volatile badges/counters/clocks are stripped so `Inbox (3)` and `Inbox (7)` are one resource; the signature is an opaque hash so a suppression never carries a captured title |
-| `desk/store.ts` | Threads, blocks, segments, and the `desk_runtime` singleton — the only place snake_case rows become `shared/desk.ts` types. Attribution is a **snapshot**, not a join, so correcting a matcher never rewrites history |
+| `desk/store.ts` | Threads, blocks, segments, and the `desk_runtime` singleton — the only place snake_case rows become `shared/desk.ts` types. `attributed_thread_id` is a **derived cache** (Phase 2): `desk_labels` holds every interpretation (matcher/model/user) and `desk/labels.ts` re-derives the cache when the rule generation (`rules_version`) bumps. A **user** label is frozen and never re-derived; matcher and model labels do — so correcting a rule is retroactive, but never rewrites what the user set |
+| `desk/labels.ts` | Derived attribution (Phase 2) — `desk_labels` (one interpretation row per matcher/model/user), `recordLabel`, `deriveAttribution` (the authority order: user frozen > confirmed matcher > model > unconfirmed matcher never overturns a model label), and `rederiveStale` (the bounded background re-derivation sweep on the worker). A label-less segment is preserved, never wiped |
 | `desk/matchers.ts` | The deterministic fast path and **the authority matrix**. `confirmed = 0` is an inferred one-resource attribution; `confirmed = 1` is a user-approved pattern. `writeInferredMatcher` cannot mutate a confirmed row, steal a pattern owned by another thread, or ever set `confirmed = 1`; there is deliberately no generic `upsertMatcher`. Also owns three-strike suppressions, checked **before** an unconfirmed matcher resolves so "No" changes behaviour rather than hiding the next question |
 | `desk/merge.ts` | Thread merge in one transaction. Only `desk_suppressions` can collide (its PK includes `thread_id`): fold to `max(count)`, later expiry, `permanent = a OR b` — a merge must never *weaken* negative evidence. `desk_matchers` cannot collide; its UNIQUE excludes `thread_id`, so one pattern has exactly one owner |
 | `desk/segmenter.ts` | Sense captures → segments → blocks, **no model call**. Owns the two-condition eligibility gate (survived-the-blacklist-recheck + a 10s age floor so an out-of-order capture is never leapfrogged), `presence_seconds` derived as `min(gap, 2 x captureInterval)` from the **user's configured** interval, and temporal smoothing over a rolling window of *time* rather than a count of observations |
@@ -134,8 +137,8 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 | `generate-debrief.ts` | Auto-generates session debriefs (summary + topics) |
 | `images.ts` | Image storage — save/get/delete files + `images` table CRUD. Every save/delete also upserts/deletes a mirror row in `assets` (kind `'media'`, same id) so Library stays in sync — `images` remains the sole byte/id authority; nothing else writes to it |
 | `library.ts` | Library data layer — the `assets` table (documents + a media mirror of `images`) and the `asset_references` join table linking assets to collection items. Documents own their bytes under `getLibraryDir()` (`library/<id><ext>`, mirrors `images/` exactly); `deleteAsset` deletes the file itself for documents or delegates to `images.ts`'s `deleteImage` for media, whose cascade (`ON DELETE CASCADE` on `asset_references`) is what keeps reference integrity a SQL-level guarantee rather than app-level cleanup |
-| `db.ts` | Database init, migrations, WAL mode; an UNREADABLE db is quarantined (renamed `.corrupt-<ts>`, Pi sessions/images untouched) — only a readable stale-version db takes the clean-cutover wipe. `transcript.ts` owns the `messages` table shape; `APP_SCHEMA_VERSION` stays pinned (bumping it IS the wipe) — schema evolves via in-version migrations |
-| `fts.ts` | `buildMatchQuery` — safe FTS5 MATCH construction (token extraction, quote-doubling, optional prefix) shared by transcript search and `sense.search` |
+| `db.ts` | Database init, migrations, WAL mode; `memory/ledger.ts` and `transcript.ts` own their own lazily-ensured tables (`memory_runs`, `messages`/`epochs`/`turns`). An UNREADABLE db is quarantined (renamed `.corrupt-<ts>`, Pi sessions/images untouched) — only a readable stale-version db takes the clean-cutover wipe. `transcript.ts` owns the `messages` table shape; `APP_SCHEMA_VERSION` stays pinned (bumping it IS the wipe) — schema evolves via in-version migrations |
+| `fts.ts` | `buildMatchQuery` — safe FTS5 MATCH construction (phrase extraction with sanitized interiors, token extraction, quote-doubling, optional prefix, `and`/`or` mode) shared by transcript search, memory search, and `sense.search` |
 | `settings.ts` | Key-value settings storage (soul, model, accent color) + typed accessors (`getSenseSettings`/`setSenseSettings`) |
 | `paths.ts` | Data directory resolution |
 | `index.ts` | Daemon library exports |
@@ -159,7 +162,7 @@ Electron main process. Spawns daemon if not running, creates window, proxies all
 
 ### Preload (`src/preload/index.ts`)
 
-Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from `buildDaemonSurface` in `src/shared/bond-surface.ts` riding ONE generic `bond:rpc` IPC channel (allowlisted against `RPC_METHOD_NAMES` in main); the 27 Electron-local members (native menus, fs reads, window management, event registrars, and the three settings proxies with main-side broadcasts) are hand-written and typed by `ElectronBondSurface`, which also forces the web shim to acknowledge every one. Protocol skew between app and daemon hard-fails with a "daemon out of date" dialog (desktop) or a `mismatch` banner (web) — the version rides `/health`, `bond.auth`, and `bond.ping`.
+Exposes `window.bond` via `contextBridge`. The 130 pure daemon proxies come from `buildDaemonSurface` in `src/shared/bond-surface.ts` riding ONE generic `bond:rpc` IPC channel (allowlisted against `RPC_METHOD_NAMES` in main); the 29 Electron-local members (native menus, fs reads, window management, event registrars, and the three settings proxies with main-side broadcasts) are hand-written and typed by `ElectronBondSurface`, which also forces the web shim to acknowledge every one. Protocol skew between app and daemon hard-fails with a "daemon out of date" dialog (desktop) or a `mismatch` banner (web) — the version rides `/health`, `bond.auth`, and `bond.ping`.
 
 ### Shared (`src/shared/`)
 
@@ -167,12 +170,13 @@ Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from
 |------|---------|
 | `protocol.ts` | JSON-RPC 2.0 types and helpers + `PROTOCOL_VERSION` (bump on any breaking rpc-schema change; equality = compatibility) |
 | `rpc-schema.ts` | **Single source of truth for the RPC contract** — `RpcMethods` (per-method params/result), `RpcNotifications`, `RPC_METHOD_NAMES`; server handlers, both clients, preload, and the shim all derive from it, so contract drift is a compile error |
-| `bond-surface.ts` | The `window.bond` surface builder — `buildDaemonSurface(invoke)` generates the ~99 daemon proxies from the registry; `ElectronBondSurface` declares the 30 main-process-local members the shim must explicitly stub |
+| `bond-surface.ts` | The `window.bond` surface builder — `buildDaemonSurface(invoke)` generates the 130 daemon proxies from the registry; `ElectronBondSurface` declares the 29 main-process-local members the shim must explicitly stub |
 | `stream.ts` | `BondStreamChunk` union type (text, thinking, tool, approval, error, system) |
 | `client.ts` | `BondClient` WebSocket client class — registry-typed `call`, token provider, reconnect-in-place, `daemonProtocolVersion` |
 | `session.ts` | Session, SessionMessage, EditMode, AttachedImage, Collection, FieldDef/FieldOption/FieldDefInput, and media/collection types |
 | `fields.ts` | **Field-type registry** — per-type `coerce`/`validate`/`format`/`compare`/`defaultValue` for every `FieldType`, plus `normalizeSchema` (legacy `string[]` options → canonical `FieldOption[]`), `validateSchema`, `coerceItemData` (the single item write gate), `isDoneValue`, and the issue-key regexes (`ISSUE_PREFIX_RE`, `ISSUE_KEY_RE`). Shared by daemon (enforcement), renderer (render/edit/sort), and CLI (parse/format) — add a `FieldType` without a registry entry and the compiler objects |
 | `agents.ts` | Agent roster types — `AgentSettings` (model/thinking/report/policy/leash/instructions/tools), `AgentSummary`, `GRANTABLE_AGENT_TOOLS` (read-only tools only), `normalizeAgentSettings`. Every agent is read-only and artifact-producing; Bond applies changes through its own approvals |
+| `memory.ts` | Memory wire types — CoreMemory, `WorkingState` (incl. `artifacts`/`activeSkill`/`checkpoint`), MemoryItem, RetrievedMemory, and `MemoryHealth`/`MemoryRunSummary` (the health report behind `memory.health`, `bond memory status`, and the MemoryView badge). Mirrors `daemon/memory/types.ts` — extend both together |
 | `sense.ts` | SenseSession, SenseCapture, SenseSettings, SenseState, DetectedWindow, OcrResult, AccessibilityResult types |
 | `library.ts` | `AssetKind`, `AssetFormat`, `LibraryAsset`, `AssetReference`, `AssetBacklink` — the Library asset model shared by daemon, renderer, and CLI |
 | `models.ts` | `ModelId` — provider-neutral capability tiers (`'high' | 'balanced' | 'fast'`); Pi maps them to concrete models |
@@ -181,7 +185,7 @@ Exposes `window.bond` via `contextBridge`. The ~74 pure daemon proxies come from
 
 ### CLI (`bin/bond`)
 
-`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`, `mcp`, `library`, `ask`, `desk`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow; `library-helpers.ts` holds `library.ts`'s pure logic — id/number resolution, format detection — split out so it's unit-testable without triggering the CLI's `main()` on import; `ask-helpers.ts` is the same split for `ask.ts`). `bond desk` is Desk's only surface until the notch panel lands — `status`, `on`/`off`, `blocks`, `threads`, `matchers`, `answer`, and above all `stats`, which is where a day of dogfooding becomes a go/no-go decision instead of an impression. `bond ask` shows and answers Bond's pending `ask_user_question` — a bare number picks an option, `--text`/`--cancel` answer directly, `--json` (or a non-TTY caller with no explicit answer) prints the pending question as JSON and never blocks. See the "Commands" section above for the common daemon workflows.
+`bin/bond` is a bash wrapper for daemon lifecycle (`status`/`start`/`stop`/`restart`/`dev`/`rebuild`/`log`/`build`) plus thin Node entrypoints that connect to the daemon over the socket. The Node subcommands are bundled by `npm run build:cli` into `out/cli/` and rebuilt on demand: `media`, `sense`, `soul`, `collection`, `screenshot`, `mcp`, `library`, `ask`, `desk`, `memory`. Their sources live in `src/cli/` (`connect.ts` handles the Pi auth connect flow; `library-helpers.ts` holds `library.ts`'s pure logic — id/number resolution, format detection — split out so it's unit-testable without triggering the CLI's `main()` on import; `ask-helpers.ts` is the same split for `ask.ts`). `bond desk` is Desk's only surface until the notch panel lands — `status`, `on`/`off`, `blocks`, `threads`, `matchers`, `answer`, and above all `stats`, which is where a day of dogfooding becomes a go/no-go decision instead of an impression. `bond memory` (`status`, `--json`) answers the one question the 2026-07-21 memory incident could not: is memory actually writing — last-written times, observer lag, consecutive failures, last error, recent runs; it exits non-zero when degraded. `bond ask` shows and answers Bond's pending `ask_user_question` — a bare number picks an option, `--text`/`--cancel` answer directly, `--json` (or a non-TTY caller with no explicit answer) prints the pending question as JSON and never blocks. See the "Commands" section above for the common daemon workflows.
 
 ## Project Structure
 
@@ -198,6 +202,8 @@ src/
     mcp.ts                           # bond mcp — servers, trust policy, tool classification, Keychain secrets
     sense.ts                         # bond sense — CLI for Sense ambient awareness
     ask.ts                           # bond ask — show/answer Bond's pending ask_user_question
+    memory.ts                        # bond memory — memory write health
+    memory-helpers.ts                # Pure memory.ts formatting (age, status report, degraded check)
     desk.ts                          # bond desk — status, on/off, blocks, threads, matchers, answer, stats
     desk-helpers.ts                  # Pure desk.ts logic (arg parsing, formatting)
     ask-helpers.ts                   # Pure ask.ts logic (arg parsing, answer-line parsing, formatting)
@@ -236,6 +242,9 @@ src/
       tools.ts                       # web_search + fetch_content Pi tools (keyless, cached)
       broker.ts                      # Render broker for the app's hidden browser window
       extract.ts                     # DDG SERP parsing + Readability/Turndown markdown
+    memory/
+      ledger.ts                      # memory_runs table + getMemoryHealth()
+      artifacts.ts                   # Deterministic tool-event → working-memory patch rules
     questions/
       tools.ts                       # ask_user_question Pi tool — parks the turn on questions.ts until answered
     desk/
@@ -548,10 +557,10 @@ Inline search input in the header bar. Debounced 300ms text search with results 
 - **Expose:** `focus()`
 
 ### MemoryView
-Right-panel memory view for inspecting and editing Bond memory.
+Right-panel memory view for inspecting and editing Bond memory. A health line sits above the tabs (`memory.health`): last-written time plus observer lag, muted normally and `color="err"` with the last error when the observer has ≥2 consecutive failures or is >48 seqs behind — stale memory used to look exactly like fresh memory here.
 - **Tabs:** Core, Working, Search, Source
 - **Core:** stable facts, preferences, and decisions persisted to `memory/core.json`
-- **Working:** current scratchpad goal, facts, preferences, decisions, and open threads
+- **Working:** current scratchpad goal, facts, preferences, decisions, and open threads, plus a read-only **Working on** block listing the deterministically captured artifacts, active skill, and checkpoint (the model cannot write those, so neither can this editor)
 - **Search:** memory item search with inline edit/delete controls
 - **Source:** source messages attached to a selected memory item
 
@@ -588,6 +597,11 @@ Singleton PREFIX-n issue reference index. One `collection.listReferences` RPC fe
 - **State:** `references` (CollectionReference[]), `byKey` (Map by "BOND-12"), `knownPrefixes` (Set)
 - **Methods:** `load()` (coalesces concurrent calls)
 - **Test helper:** `resetIssueReferencesForTest()`
+
+### useMemory()
+Singleton memory panel state backing `MemoryView`. Loads core, working, search results, and source messages via the `memory.*` RPCs.
+- **State:** `core`, `working` (incl. `artifacts`/`activeSkill`/`checkpoint`), `results`, `sources`, `loading`, `saving`, `error`, `isEmpty`
+- **Methods:** `loadMemory()`, `saveCore()`, `saveWorking()`, `clearWorking()`, `search()`, `upsert()`, `remove()`, `loadSources()`
 
 ### useLibrary()
 Per-instance Library asset list state backing `LibraryView`. Loads via `library.list` with an optional kind filter (`'document' | 'media' | 'all'`) and search query.
@@ -718,6 +732,35 @@ Sense's 60-**second** idle threshold is a *presence* signal and a fourth, separa
 ### Retention
 
 Desk-derived screen data expires with Sense's `textRetentionDays`, swept from `runRetentionCleanup` in `sense/storage.ts`. **No raw title, path, example, summary, generated note, inferred attribution, or orphan inferred thread may outlive it.** What survives is what the user authored: named/renamed threads, todos, confirmed patterns, suppressions (an explicit rejection carrying only an opaque hash), and `user_note` values — including notes that **graduate** from an edited block note onto the thread just before the block expires.
+
+## Memory
+
+Four systems, none authoritative, all previously failing open in silence. On 2026-07-21 all four failed at once and Bond could not resolve "Lets move on to 9." — the plan and the full forensics are in `plans/memory-reliability.md`.
+
+| Layer | Where | Holds |
+|---|---|---|
+| Pi session context | `pi/runtime.ts` | The live conversation this epoch |
+| Working memory | `memory.working` settings row | Goal, **artifacts**, activeSkill, checkpoint, facts, decisions, open threads |
+| Core memory | `memory/core.json` | Stable identity facts and preferences |
+| Searchable memory | `memory/store.ts` (SQLite + FTS) | Sourced durable memories |
+| Transcript FTS | `transcript.ts`, `fts.ts` | Full history, searchable |
+
+### Invariants — these are load-bearing, not preferences
+
+1. **Provenance never gates the payload.** A memory whose sourceId cannot be resolved is a memory with unknown provenance, not a reason to discard the batch. One bad id drops one record; the working state still writes.
+2. **Never emit two identifiers and ask for "the id."** `renderTranscriptForMemory` emits exactly one `id` per message (the `seq`); `buildSourceIdResolver` maps whatever comes back — bare seqs, `#696`, uppercase uuids, JSON numbers — onto the canonical uuid. 93% of the incident's 160 rejected tokens were bare seqs.
+3. **A failed range still advances.** Only a `model.generate` throw (transport) leaves a marker unmoved. A validation failure that froze the marker meant every subsequent turn re-sent a larger range and failed harder — a permanent, per-turn-billed loop.
+4. **Deterministic capture beats inference.** The observer filters the transcript to user/bond TEXT before it sees anything, so it is structurally blind to tool activity. `memory/artifacts.ts` is therefore the ONLY path by which a written file, a filed issue, or a loaded skill can reach working memory. The model may write `checkpoint`; `artifacts` and `activeSkill` are stripped from its patch.
+5. **Core memory is additive.** The reflector may add and rephrase; only the user removes (`memory_manage`, `memory.updateCore`, MemoryView). A `fast`-tier model rewriting the whole file every reflection is how a week of daily use produced nine core items.
+6. **Epoch markers are seeded at birth** (`createEpoch`), never left at 0. Everything before an epoch exists is the previous epoch's duty, and its rollover hooks cover exactly that range — no gap, no overlap. Unseeded markers made every new epoch re-observe the entire transcript (measured: 521 messages / ~38k tokens in one run).
+7. **Short messages need MORE context, not less.** `shouldRecallMemory` is inverted on its own — 14% of user messages fall below it, including "on to 9". `resolveRecallQuery` sends those to search the working state (goal + checkpoint + artifact labels + previous message) instead of searching nothing.
+8. **Internal search is a recall tool, not a precision tool.** AND first, then OR, then give up — an empty result teaches Bond the memory does not exist. Quoted spans survive as FTS phrases (sanitized interiors). Roles filter in **SQL**, before LIMIT: post-LIMIT filtering discarded up to 6 of 8 slots to activity rows and returned empty while matches existed.
+9. **Pay for stable state once.** Core + working memory ride `systemPromptOverride` (rebuilt per request, never persisted into Pi session history); only query-specific content enters the accumulating envelope. Measured before the split: ~9,100 chars/turn of ~90%-identical text, ~32k tokens in 14 turns — burning the very budget whose exhaustion triggers rollover.
+10. **Anything that can degrade must report it.** Every run writes a `memory_runs` row. `bond memory status`, `memory.health`, the MemoryView badge, and the `memory_status` tool all read it. Silence was the meta-failure: the user noticed before the system did.
+
+### Rollover is a backstop, not a strategy
+
+Pi compacts its own session **in place** and the session survives — observed firing at 75.3% of the window with a better summary than Bond ever wrote. Bond's rollover at 0.8 was pre-empting it to solve the same problem worse (it kills the session). `DEFAULT_SOFT_LIMIT_RATIO` is **0.92**, so rollover fires only if Pi's compaction fails to keep up. Consequences: reflection can no longer ride rollover (`scheduleEpochReflection`, every 200 seqs), and the handoff carries a **state snapshot** — goal, artifacts, skill, checkpoint, open threads, plus the closing session's last `{"type":"compaction"}` summary if one exists (only 3 of 16 sessions had one) — instead of a prose tail that once delivered "ok, on to 7!" without the thing being numbered.
 
 ## Image Storage
 

@@ -20,7 +20,10 @@ import {
   closeSegment,
   createBlock,
   createSegment,
+  currentOpenBlockId,
+  getRulesVersion,
   getRuntime,
+  stampDerivedVersion,
   linkCapture,
   mergeEvidenceOnSegment,
   setRuntime,
@@ -29,6 +32,7 @@ import {
   type DeskRuntime,
 } from './store'
 import { recordMatcherHit, resolveMatcher } from './matchers'
+import { recordLabel } from './labels'
 import { buildEvidence, redactAll, redactField, signatureForCapture, type CaptureRow } from './signature'
 import { DESK_TIMING } from '../../shared/desk'
 import type { DeskEvidence, DeskSegment } from '../../shared/desk'
@@ -131,7 +135,7 @@ export function selectEligibleCaptures(runtime: DeskRuntime, ctx: Ctx, limit: nu
   }
   return ctx.db.prepare(`
     SELECT id, captured_at, app_name, app_bundle_id, window_title, text_content, text_status, text_source,
-           image_path, image_purged_at
+           image_path, image_purged_at, url, visible_windows
     FROM sense_captures
     WHERE ${where.join(' AND ')}
     ORDER BY captured_at ASC, id ASC
@@ -233,10 +237,15 @@ export function ingestCaptures(context: SegmenterContext = {}): IngestResult {
       runtime = getRuntime(ctx.db)
     }
 
+    // Only ever attach to / credit an OPEN block. A stale `currentBlockId`
+    // pointing at a block that has already ended (or a late, out-of-order
+    // capture) must open fresh work, never extend closed history.
+    const openBlockId = currentOpenBlockId(ctx.db)
+
     if (!current || current.resourceSignature !== signature) {
       if (current) closeSegment(current.id, row.captured_at, ctx.db)
       current = createSegment({
-        blockId: runtime.currentBlockId,
+        blockId: openBlockId,
         startedAt: row.captured_at,
         resourceSignature: signature,
         evidence,
@@ -255,14 +264,14 @@ export function ingestCaptures(context: SegmenterContext = {}): IngestResult {
     if (credited > 0) {
       addSegmentPresence(current.id, credited, ctx.db)
       result.presenceSeconds += credited
-      if (runtime.currentBlockId) addBlockPresence(runtime.currentBlockId, credited, ctx.db)
+      if (openBlockId) addBlockPresence(openBlockId, credited, ctx.db)
     }
 
     // Deterministic resolution — no model call on this path.
     if (current.attributionState === 'unresolved' && !current.attributedThreadId) {
       const titles = redactAll(evidence.titles ?? [])
       const matcher = resolveMatcher(
-        { signature, bundleId: row.app_bundle_id, titles, paths: evidence.paths ?? [] },
+        { signature, bundleId: row.app_bundle_id, titles, paths: evidence.paths ?? [], urls: evidence.urls ?? [] },
         { at: row.captured_at },
         ctx.db
       )
@@ -272,6 +281,11 @@ export function ingestCaptures(context: SegmenterContext = {}): IngestResult {
           matcherId: matcher.id,
           confidence: matcher.confirmed ? 1 : matcher.confidence,
         }, ctx.db)
+        // Record the durable interpretation and stamp the derived version so the
+        // re-derivation sweep sees this cache as current, not stale.
+        recordLabel({ segmentId: current.id, threadId: matcher.threadId, source: 'matcher',
+          provenance: matcher.id, confidence: matcher.confirmed ? 1 : matcher.confidence }, ctx.db)
+        stampDerivedVersion(current.id, getRulesVersion(ctx.db), ctx.db)
         recordMatcherHit(matcher.id, row.captured_at, ctx.db)
         touchThread(matcher.threadId, row.captured_at, ctx.db)
         current = { ...current, attributedThreadId: matcher.threadId, attributionState: 'resolved' }
@@ -310,19 +324,37 @@ export function rollingWindow(
   windowSeconds: number = DESK_TIMING.workingSphereSeconds
 ): { total: number; leader: WindowShare | null; shares: WindowShare[] } {
   const ctx = resolveCtx(context)
-  const start = new Date(Date.parse(atIso) - windowSeconds * 1000).toISOString()
+  const windowEnd = Date.parse(atIso)
+  const windowStart = windowEnd - windowSeconds * 1000
+
+  // **Clip to in-window presence.** Summing each overlapping segment's ENTIRE
+  // lifetime `presence_seconds` let a segment that started 25 minutes ago and
+  // overlaps the window by one second contribute all 25 minutes — the stale
+  // leader the smoothing exists to prevent, running backwards. Instead credit
+  // each segment only the presence it accrued *inside* the window, apportioned
+  // linearly across its span (presence is not timestamped finer than this).
   const rows = ctx.db.prepare(`
-    SELECT attributed_thread_id AS thread_id, SUM(presence_seconds) AS seconds
+    SELECT attributed_thread_id AS thread_id, started_at, ended_at, presence_seconds
     FROM desk_segments
     WHERE attributed_thread_id IS NOT NULL
       AND started_at <= ?
       AND (ended_at IS NULL OR ended_at >= ?)
-    GROUP BY attributed_thread_id
-  `).all(atIso, start) as { thread_id: string; seconds: number }[]
+  `).all(atIso, new Date(windowStart).toISOString()) as
+    { thread_id: string; started_at: string; ended_at: string | null; presence_seconds: number }[]
 
-  const total = rows.reduce((sum, r) => sum + Number(r.seconds ?? 0), 0)
-  const shares = rows
-    .map(r => ({ threadId: r.thread_id, seconds: Number(r.seconds ?? 0), share: total > 0 ? Number(r.seconds) / total : 0 }))
+  const byThread = new Map<string, number>()
+  for (const row of rows) {
+    const segStart = Date.parse(row.started_at)
+    const segEnd = row.ended_at ? Date.parse(row.ended_at) : windowEnd
+    const span = Math.max(1, segEnd - segStart)
+    const overlap = Math.max(0, Math.min(segEnd, windowEnd) - Math.max(segStart, windowStart))
+    const credited = Number(row.presence_seconds ?? 0) * (overlap / span)
+    if (credited > 0) byThread.set(row.thread_id, (byThread.get(row.thread_id) ?? 0) + credited)
+  }
+
+  const total = [...byThread.values()].reduce((sum, s) => sum + s, 0)
+  const shares = [...byThread.entries()]
+    .map(([threadId, seconds]) => ({ threadId, seconds, share: total > 0 ? seconds / total : 0 }))
     .sort((a, b) => b.seconds - a.seconds)
 
   return { total, leader: pickLeader(shares), shares }
@@ -384,10 +416,22 @@ export function evaluateSwitch(context: SegmenterContext = {}): SwitchDecision {
   const sinceIso = continuing ? runtime.candidateSince! : ctx.nowIso
   const heldSeconds = (ctx.nowMs - Date.parse(sinceIso)) / 1000
 
+  // Populate the candidate's RESOURCE — the segment driving the switch — so a
+  // rejection has something to suppress. These columns existed since the schema
+  // was born but nothing ever wrote them, which is why the entire rejection
+  // path (suppressions, matcher drops, the three-strike rule) was inert.
+  const driving = ctx.db.prepare(`
+    SELECT resource_signature, matcher_id FROM desk_segments
+    WHERE attributed_thread_id = ? AND started_at <= ?
+    ORDER BY started_at DESC LIMIT 1
+  `).get(leader.threadId, ctx.nowIso) as { resource_signature: string; matcher_id: string | null } | undefined
+
   setRuntime({
     candidateThreadId: leader.threadId,
     candidateSince: sinceIso,
     candidatePresenceSeconds: Math.round(leader.seconds),
+    candidateResourceSignature: driving?.resource_signature ?? null,
+    candidateMatcherId: driving?.matcher_id ?? null,
   }, ctx.db)
 
   if (heldSeconds < DESK_TIMING.noiseFloorSeconds) {

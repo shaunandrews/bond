@@ -28,6 +28,7 @@ import type {
   CoreMemory,
   MemoryItem,
   MemoryItemInput,
+  MemoryHealth,
   MemorySourcesResult,
   RetrievedMemory,
   WorkingState,
@@ -383,6 +384,7 @@ export interface RpcMethods {
   'memory.upsert': { params: { item: MemoryItemInput }; result: MemoryItem }
   'memory.delete': { params: { id: string }; result: { ok: boolean } }
   'memory.sources': { params: { id: string }; result: MemorySourcesResult }
+  'memory.health': { params: void; result: MemoryHealth }
 
   // Sense debriefs
   'sense.memory': { params: { limit?: number } | void; result: { debriefs: SessionDebrief[] } }
@@ -602,6 +604,7 @@ export const RPC_METHOD_NAMES = [
   'memory.upsert',
   'memory.delete',
   'memory.sources',
+  'memory.health',
   'sense.memory',
   'sense.debrief',
   'sense.deleteDebrief',

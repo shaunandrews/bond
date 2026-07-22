@@ -446,6 +446,9 @@ describe('working memory RPC', () => {
       preferences: [],
       decisions: [],
       openThreads: [],
+      artifacts: [],
+      activeSkill: null,
+      checkpoint: null,
       updatedAt: new Date().toISOString(),
     })
 

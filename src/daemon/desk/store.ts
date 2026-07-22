@@ -280,12 +280,23 @@ export function updateBlock(
     confidence: 'confidence',
     source: 'source',
   }
+  const p = { ...patch }
+  // A block's `ended_at` can never precede its own `started_at`. The Ask
+  // double-commit dated blocks from an earlier candidate clock and produced
+  // four negative-duration blocks in a single day; `updateBlock` used to write
+  // whatever it was handed. Clamp here so no caller can reintroduce it.
+  if ('endedAt' in p && p.endedAt != null) {
+    const row = db.prepare('SELECT started_at FROM desk_blocks WHERE id = ?').get(id) as
+      { started_at: string } | undefined
+    if (row && Date.parse(p.endedAt) < Date.parse(row.started_at)) p.endedAt = row.started_at
+  }
+
   const sets: string[] = []
   const values: unknown[] = []
   for (const [key, column] of Object.entries(columns)) {
-    if (!(key in patch)) continue
+    if (!(key in p)) continue
     sets.push(`${column} = ?`)
-    values.push((patch as Record<string, unknown>)[key])
+    values.push((p as Record<string, unknown>)[key])
   }
   if (sets.length === 0) return getBlock(id, db)
   sets.push('updated_at = ?')
@@ -294,10 +305,29 @@ export function updateBlock(
   return getBlock(id, db)
 }
 
+/**
+ * Credit presence to an OPEN block only. A closed block is history; a late,
+ * out-of-order capture (or a stale `currentBlockId` after a switch) must never
+ * inflate a span that has already ended — 11 of 34 blocks once carried
+ * presence exceeding their own wall-clock span, one by 4.18x.
+ */
 export function addBlockPresence(id: string, seconds: number, db: Database.Database = getDb()): void {
   if (seconds <= 0) return
-  db.prepare('UPDATE desk_blocks SET presence_seconds = presence_seconds + ?, updated_at = ? WHERE id = ?')
+  db.prepare('UPDATE desk_blocks SET presence_seconds = presence_seconds + ?, updated_at = ? WHERE id = ? AND ended_at IS NULL')
     .run(Math.round(seconds), now(), id)
+}
+
+/** The current block id, but only if it is still open. Clears a stale pointer. */
+export function currentOpenBlockId(db: Database.Database = getDb()): string | null {
+  const runtime = getRuntime(db)
+  if (!runtime.currentBlockId) return null
+  const row = db.prepare('SELECT ended_at FROM desk_blocks WHERE id = ?').get(runtime.currentBlockId) as
+    { ended_at: string | null } | undefined
+  if (!row || row.ended_at != null) {
+    setRuntime({ currentBlockId: null }, db)
+    return null
+  }
+  return runtime.currentBlockId
 }
 
 export function listBlocks(
@@ -404,8 +434,11 @@ export function mergeEvidenceOnSegment(
 }
 
 /**
- * Snapshot an attribution onto a segment. A snapshot, not a join: correcting a
- * matcher later must not silently rewrite history.
+ * Write a segment's attribution CACHE (Phase 2). This is the fast-path cache the
+ * notch reads; the durable interpretation lives in `desk_labels`, and
+ * `labels.ts` re-derives this cache when the rules change. A **user** label is
+ * frozen and never re-derived; matcher and model labels do. (Before Phase 2 this
+ * was a permanent snapshot — a wrong guess at 04:41 was load-bearing at 20:41.)
  */
 export function attributeSegment(
   id: string,
@@ -494,25 +527,81 @@ export function markSegmentFailed(id: string, retryAt: string | null, db: Databa
  * something up, not working. `edited` and `ready` are already spoken for.
  */
 export function listBlocksAwaitingNote(
-  opts: { noiseFloorSeconds?: number; limit?: number } = {},
+  opts: { noiseFloorSeconds?: number; limit?: number; now?: string } = {},
   db: Database.Database = getDb()
 ): DeskBlock[] {
+  const nowIso = opts.now ?? now()
   return (db.prepare(`
     SELECT * FROM desk_blocks
     WHERE ended_at IS NOT NULL
       AND thread_id IS NOT NULL
       AND state != 'dismissed'
-      AND note_status = 'none'
       AND presence_seconds >= ?
+      AND (
+        note_status = 'none'
+        OR (note_status = 'failed' AND note_retry_at IS NOT NULL AND note_retry_at <= ?)
+      )
     ORDER BY ended_at DESC
     LIMIT ?
-  `).all(opts.noiseFloorSeconds ?? 180, opts.limit ?? 3) as BlockRow[]).map(toBlock)
+  `).all(opts.noiseFloorSeconds ?? 180, nowIso, opts.limit ?? 3) as BlockRow[]).map(toBlock)
+}
+
+/**
+ * Mark a block's re-entry note failed — unless the user edited it while the
+ * model was thinking, in which case their write wins and nothing changes. A
+ * transient failure (`transient: true`, e.g. a provider outage) is scheduled to
+ * retry with backoff until `maxAttempts`; a permanent one (no evidence,
+ * redaction) leaves `note_retry_at` NULL and is terminal.
+ */
+export function failBlockNote(
+  id: string,
+  opts: { transient: boolean; retryMinutes?: number[]; maxAttempts?: number; now?: string },
+  db: Database.Database = getDb()
+): void {
+  const row = db.prepare('SELECT note_status, note_attempts FROM desk_blocks WHERE id = ?').get(id) as
+    { note_status: string; note_attempts: number } | undefined
+  if (!row || row.note_status === 'edited') return
+  const attempts = Number(row.note_attempts ?? 0) + 1
+  const retryMinutes = opts.retryMinutes ?? [10, 30, 60]
+  const maxAttempts = opts.maxAttempts ?? 4
+  const ts = opts.now ?? now()
+  let retryAt: string | null = null
+  if (opts.transient && attempts < maxAttempts) {
+    const mins = retryMinutes[Math.min(attempts - 1, retryMinutes.length - 1)]
+    retryAt = new Date(Date.parse(ts) + mins * 60_000).toISOString()
+  }
+  db.prepare(`
+    UPDATE desk_blocks
+    SET note_status = 'failed', note_attempts = ?, note_retry_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(attempts, retryAt, ts, id)
 }
 
 export function requeueStaleSegments(db: Database.Database = getDb()): number {
   return db.prepare(
     "UPDATE desk_segments SET attribution_state = 'unresolved' WHERE attribution_state = 'queued'"
   ).run().changes
+}
+
+/**
+ * Is there real unknown work waiting — an unresolved segment that has already
+ * accumulated past the noise floor? Below the floor you were looking something
+ * up; at or above it, this is work the immediate inference path should classify
+ * now rather than making the three-minute Ask wait for the 15-minute sweep.
+ */
+export function hasUnknownWorkPastFloor(
+  opts: { noiseFloorSeconds?: number; now?: string } = {},
+  db: Database.Database = getDb()
+): boolean {
+  const nowIso = opts.now ?? now()
+  const row = db.prepare(`
+    SELECT 1 FROM desk_segments
+    WHERE attribution_state IN ('unresolved', 'failed')
+      AND presence_seconds >= ?
+      AND (retry_at IS NULL OR retry_at <= ?)
+    LIMIT 1
+  `).get(opts.noiseFloorSeconds ?? 180, nowIso)
+  return !!row
 }
 
 export function countUnresolvedSegments(db: Database.Database = getDb()): number {
@@ -630,6 +719,45 @@ export function setRuntime(patch: Partial<DeskRuntime>, db: Database.Database = 
   values.push(now())
   db.prepare(`UPDATE desk_runtime SET ${sets.join(', ')} WHERE singleton = 1`).run(...values)
   return getRuntime(db)
+}
+
+/**
+ * The rule-set generation (Phase 2). Bumped on any user rule change or thread
+ * merge/rename/archive; a segment whose cache was derived under an older version
+ * is stale and the background sweep re-derives it. This is what makes correction
+ * retroactive without a migration.
+ */
+export function getRulesVersion(db: Database.Database = getDb()): number {
+  getRuntime(db) // ensure the row exists
+  const row = db.prepare('SELECT rules_version FROM desk_runtime WHERE singleton = 1').get() as
+    { rules_version: number } | undefined
+  return row?.rules_version ?? 1
+}
+
+export function bumpRulesVersion(db: Database.Database = getDb()): number {
+  getRuntime(db)
+  db.prepare('UPDATE desk_runtime SET rules_version = rules_version + 1, updated_at = ? WHERE singleton = 1')
+    .run(now())
+  return getRulesVersion(db)
+}
+
+/** Segments whose cached attribution predates the current rules version. */
+export function listStaleAttributions(
+  opts: { limit?: number; rulesVersion: number },
+  db: Database.Database = getDb()
+): DeskSegment[] {
+  return (db.prepare(`
+    SELECT * FROM desk_segments
+    WHERE derived_rules_version < ?
+      AND attribution_state IN ('resolved', 'unresolved', 'failed')
+    ORDER BY started_at DESC
+    LIMIT ?
+  `).all(opts.rulesVersion, opts.limit ?? 50) as SegmentRow[]).map(toSegment)
+}
+
+/** Stamp the cache's derived-version after a (re-)derivation. */
+export function stampDerivedVersion(segmentId: string, rulesVersion: number, db: Database.Database = getDb()): void {
+  db.prepare('UPDATE desk_segments SET derived_rules_version = ? WHERE id = ?').run(rulesVersion, segmentId)
 }
 
 /** Forget the in-flight candidate without touching the committed block. */

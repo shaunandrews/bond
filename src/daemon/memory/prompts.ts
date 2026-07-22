@@ -2,12 +2,19 @@ import type { TranscriptMessage } from '../../shared/transcript'
 import type { CoreMemory, WorkingState } from './types'
 import { renderWorkingStateForPrompt } from './working-state'
 
+/**
+ * ONE identifier per message, never two. Emitting both `id` (uuid) and `seq`
+ * and then asking for "the message ids" is how 93% of rejected sourceIds came
+ * to be bare sequence numbers — the model picked the shorter one. `seq` wins:
+ * fewer tokens across a 24-message batch, monotonic, and legible in logs. The
+ * resolver in observer.ts maps whatever comes back to the canonical uuid.
+ */
 export function renderTranscriptForMemory(messages: TranscriptMessage[]): string {
   return messages.map(message => {
-    const seq = message.seq != null ? ` seq=${message.seq}` : ''
     const kind = message.kind ? ` kind=${message.kind}` : ''
+    const idAttr = message.seq != null ? String(message.seq) : message.id
     const text = message.text?.trim() || renderMessageData(message.data)
-    return `<message id="${escapeAttr(message.id)}" role="${message.role}"${kind}${seq}>\n${text}\n</message>`
+    return `<message id="${escapeAttr(idAttr)}" role="${message.role}"${kind}>\n${text}\n</message>`
   }).join('\n\n')
 }
 
@@ -43,7 +50,8 @@ Return one JSON object only, no markdown:
     "facts": ["short facts needed for the current work"],
     "preferences": ["stable user preferences mentioned or reinforced"],
     "decisions": ["decisions made in this work"],
-    "openThreads": ["unresolved follow-ups"]
+    "openThreads": ["unresolved follow-ups"],
+    "checkpoint": "current position in the active work, or empty string"
   },
   "memories": [
     { "kind": "fact|preference|decision|thread", "text": "one standalone memory", "source": "user|assistant|debrief|system", "projectId": ${JSON.stringify(input.projectId ?? null)}, "tags": ["short-tag"], "confidence": 0.0, "sourceIds": ["message-id"] }
@@ -51,7 +59,7 @@ Return one JSON object only, no markdown:
 }
 
 Rules:
-- Use sourceIds from the transcript message ids only.
+- sourceIds must be the id attribute values of the supporting <message> tags, copied exactly.
 - Do not invent facts, preferences, decisions, or source ids.
 - Prefer fewer, high-signal memories over summaries.
 - Keep text standalone and concise.
@@ -60,6 +68,8 @@ Rules:
 - Do not infer personal facts from jokes, speculation, hypotheticals, or screen activity.
 - Never store credentials, secrets, authentication material, private keys, financial data, or giant code/tool outputs.
 - Temporary task details belong in workingState, not durable memories.
+- Update checkpoint whenever the user's position in a numbered or staged task changes ("item 8 of 18 filed; next 9").
+- Do not write artifacts or activeSkill; Bond captures those from its own tool activity.
 - Return no memory rather than manufacturing significance.
 
 Current working state:
@@ -81,10 +91,9 @@ Return one JSON object only, no markdown:
 }
 
 Rules:
-- core arrays should be the complete desired core memory after reflection, not a patch.
-- Preserve still-relevant existing core items.
+- Return new or updated core items only. Existing core items are preserved automatically; do not repeat them unless rephrasing improves them.
 - Core contains only stable identity facts, preferences, corrections, and durable operating rules explicitly supported by user-authored messages.
-- Use sourceIds from the transcript message ids only.
+- sourceIds must be the id attribute values of the supporting <message> tags, copied exactly.
 - Do not invent or overgeneralize. If unsure, omit.
 - Do not promote temporary work details, Sense observations, jokes, speculation, credentials, secrets, or tool output into core memory.
 - Assistant statements are not evidence of personal facts.
@@ -96,21 +105,32 @@ Transcript:
 ${renderTranscriptForMemory(input.messages)}`
 }
 
-export function renderMemoryContext(input: { core: CoreMemory; working?: WorkingState | null; retrieved: Array<{ text: string; score?: number; id?: string }> }): string {
+/**
+ * Core + working memory — the STABLE half. It changes at most once per
+ * observation interval, so it rides the per-request system prompt (rebuilt
+ * every turn, never persisted into Pi session history) instead of the context
+ * envelope, which is embedded in the user message and accumulates forever.
+ * Measured before the split: 14 of 14 user messages in one session carried an
+ * envelope, avg 9,146 chars, ~32k tokens of ~90%-identical text in 14 turns.
+ */
+export function renderStableMemoryState(core: CoreMemory, working?: WorkingState | null): string {
   const sections: string[] = []
-  if (input.core.facts.length || input.core.preferences.length || input.core.decisions.length) {
+  if (core.facts.length || core.preferences.length || core.decisions.length) {
     sections.push(`Core memory:\n${[
-      ...input.core.facts.map(v => `- Fact: ${v}`),
-      ...input.core.preferences.map(v => `- Preference: ${v}`),
-      ...input.core.decisions.map(v => `- Decision: ${v}`),
+      ...core.facts.map(v => `- Fact: ${v}`),
+      ...core.preferences.map(v => `- Preference: ${v}`),
+      ...core.decisions.map(v => `- Decision: ${v}`),
     ].join('\n')}`)
   }
-  if (input.working) {
-    const rendered = renderWorkingStateForPrompt(input.working)
+  if (working) {
+    const rendered = renderWorkingStateForPrompt(working)
     if (rendered) sections.push(`Working memory:\n${rendered}`)
   }
-  if (input.retrieved.length) {
-    sections.push(`Retrieved memory:\n${input.retrieved.map(m => `- ${m.id ? `[${m.id}] ` : ''}${m.text}`).join('\n')}`)
-  }
   return sections.join('\n\n')
+}
+
+/** The VOLATILE half: query-specific retrieval only. Stays in the envelope. */
+export function renderMemoryContext(input: { retrieved: Array<{ text: string; score?: number; id?: string }> }): string {
+  if (!input.retrieved.length) return ''
+  return `Retrieved memory:\n${input.retrieved.map(m => `- ${m.id ? `[${m.id}] ` : ''}${m.text}`).join('\n')}`
 }

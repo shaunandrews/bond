@@ -83,6 +83,8 @@ export function createSenseController(
   // Pending capture (waiting for main process response)
   let pendingCapture: { id: string; preSnapshot: Awaited<ReturnType<typeof windowDetector.getSnapshot>> } | null = null
   let pendingCaptureTimer: ReturnType<typeof setTimeout> | null = null
+  /** When the last capture (any trigger) actually proceeded — for app-switch debounce. */
+  let lastCaptureAtMs = 0
 
   /**
    * Release the pending-capture slot. `orphanId` deletes the capture row that
@@ -138,6 +140,9 @@ export function createSenseController(
       // Blacklist check
       if (isBlacklisted(preSnapshot.windows, settings.blacklistedApps)) return
 
+      // This capture is proceeding — the app-switch debounce keys off it.
+      lastCaptureAtMs = Date.now()
+
       // Prepare capture directory
       const dateStr = new Date().toISOString().split('T')[0]
       const captureDir = getDateDir(dateStr)
@@ -159,7 +164,16 @@ export function createSenseController(
         activeWindow?.name ?? null,
         activeWindow?.bundleId ?? null,
         activeWindow?.title ?? null,
-        JSON.stringify(preSnapshot.windows.map(w => w.name)),
+        // Store per-window title + layer + frontmost, not just app names — this
+        // is Desk's co-visible-window signal (arbtt's "any window"). Titles are
+        // raw here like every Sense title; Desk redacts them at its boundary.
+        // Bounded to the top windows by layer so the JSON stays small.
+        JSON.stringify(
+          [...preSnapshot.windows]
+            .sort((a, b) => (a.layer ?? 999) - (b.layer ?? 999))
+            .slice(0, 8)
+            .map(w => ({ name: w.name, title: w.title, layer: w.layer ?? 999, frontmost: w.active }))
+        ),
         trigger ?? null,
         activeWindow?.pid ?? null,
         now
@@ -265,9 +279,15 @@ export function createSenseController(
 
   // --- Window switch events (event-driven capture) ---
   windowDetector.on('appSwitch', () => {
-    if (state === 'recording' && settings.eventDrivenCapture) {
-      triggerCapture('app_switch')
-    }
+    if (state !== 'recording' || !settings.eventDrivenCapture) return
+    // Debounce against the configured capture interval. A raw app-switch stream
+    // produced 26x more captures than actual app transitions (20,457 vs 775 in
+    // one day) — 93% of gaps under 2s — burning the OCR queue and storage for
+    // near-duplicate frames. An interval tick already covers steady work; an
+    // app switch only needs to capture if nothing has captured recently.
+    const intervalMs = settings.captureIntervalSeconds * 1000
+    if (Date.now() - lastCaptureAtMs < intervalMs) return
+    triggerCapture('app_switch')
   })
 
   // --- Clipboard events ---

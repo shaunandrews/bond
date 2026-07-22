@@ -2,7 +2,7 @@ import { ref, computed } from 'vue'
 import type { CoreMemory, MemoryItem, MemoryItemInput, MemorySourcesResult, RetrievedMemory, WorkingState } from '../../shared/memory'
 
 const emptyCore = (): CoreMemory => ({ version: 1, facts: [], preferences: [], decisions: [], updatedAt: new Date().toISOString() })
-const emptyWorking = (): WorkingState => ({ sessionId: null, projectId: null, goal: '', facts: [], preferences: [], decisions: [], openThreads: [], updatedAt: new Date().toISOString() })
+const emptyWorking = (): WorkingState => ({ sessionId: null, projectId: null, goal: '', facts: [], preferences: [], decisions: [], openThreads: [], artifacts: [], activeSkill: null, checkpoint: null, updatedAt: new Date().toISOString() })
 
 const core = ref<CoreMemory>(emptyCore())
 const working = ref<WorkingState>(emptyWorking())
