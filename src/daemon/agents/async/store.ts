@@ -8,11 +8,12 @@ import {
   type AgentRunQuestion,
   type AgentRunPublication,
   type AgentRunResourceCaps,
+  type AgentRunSummary,
   type AgentRunState,
   type AgentRunWorkspace,
   type AgentRunWorkspaceState,
 } from '../../../shared/agent-runs'
-import type { AgentSettings } from '../../../shared/agents'
+import { normalizeAgentSettings, type AgentSettings } from '../../../shared/agents'
 import { getDb } from '../../db'
 import { ensureAgentRunSchema } from './schema'
 import { redactAgentText, redactAgentValue } from './redaction'
@@ -35,6 +36,7 @@ type RunRow = {
   acceptance_checks_json: string
   resource_caps_json: string
   checkpoint_json: string | null
+  summary_json: string | null
   status: AgentRunState
   result: string | null
   error_class: string | null
@@ -60,6 +62,7 @@ type EventRow = {
   from_state: AgentRunState | null
   to_state: AgentRunState | null
   data: string
+  raw_data?: string | null
   created_at: string
 }
 
@@ -160,12 +163,13 @@ function rowToRun(row: RunRow): AgentRun {
     workspaceState: parseJson<AgentRunWorkspaceState>(row.workspace_state_json),
     baseSha: row.base_sha,
     allowedPaths: parseJson<string[]>(row.allowed_paths_json),
-    settings: parseJson<AgentSettings>(row.settings_json),
+    settings: normalizeAgentSettings(parseJson<Partial<AgentSettings>>(row.settings_json)),
     agentDefinitionVersion: row.agent_definition_version,
     commandPolicyVersion: row.command_policy_version,
     acceptanceChecks: parseJson<string[]>(row.acceptance_checks_json),
     resourceCaps: parseJson<AgentRunResourceCaps>(row.resource_caps_json),
     checkpoint: row.checkpoint_json ? parseJson<Record<string, unknown>>(row.checkpoint_json) : null,
+    summary: row.summary_json ? parseJson<AgentRunSummary>(row.summary_json) : null,
     status: row.status,
     result: row.result,
     errorClass: row.error_class,
@@ -192,7 +196,8 @@ function rowToEvent(row: EventRow): AgentRunEvent {
     type: row.type,
     fromState: row.from_state,
     toState: row.to_state,
-    data: parseJson<Record<string, unknown>>(row.data),
+    data: parseJson<Record<string, unknown>>(row.raw_data ?? row.data),
+    rawPayloadAvailable: row.raw_data !== null && row.raw_data !== undefined,
     createdAt: row.created_at,
   }
 }
@@ -236,6 +241,19 @@ function rowToPublication(row: PublicationRow): AgentRunPublication {
   }
 }
 
+function terminalSummary(run: AgentRun, completedAt: string): AgentRunSummary {
+  return {
+    status: run.status as AgentRunSummary['status'],
+    agentLabel: run.agentLabel,
+    verb: run.verb,
+    brief: redactAgentText(run.brief).slice(0, 280),
+    finalReport: run.result ? redactAgentText(run.result).slice(0, 2_000) : null,
+    errorClass: run.errorClass,
+    errorMessage: run.errorMessage ? redactAgentText(run.errorMessage).slice(0, 1_000) : null,
+    completedAt,
+  }
+}
+
 function dbFor(db?: Database.Database): Database.Database {
   const resolved = db ?? getDb()
   ensureAgentRunSchema(resolved)
@@ -256,10 +274,13 @@ function insertEvent(
   data: Record<string, unknown>,
   now: string,
 ): void {
-  db.prepare(`
+  const payload = JSON.stringify(redactAgentValue(data))
+  const inserted = db.prepare(`
     INSERT INTO agent_run_events (run_id, sequence, type, from_state, to_state, data, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(runId, nextSequence(db, runId), type, fromState, toState, JSON.stringify(redactAgentValue(data)), now)
+  `).run(runId, nextSequence(db, runId), type, fromState, toState, '{}', now)
+  db.prepare(`INSERT INTO agent_run_event_logs (event_id, run_id, data, byte_count, created_at) VALUES (?, ?, ?, ?, ?)`)
+    .run(Number(inserted.lastInsertRowid), runId, payload, Buffer.byteLength(payload), now)
 }
 
 function assertMatchingDispatch(existing: AgentRun, input: CreateAgentRunRecord): void {
@@ -368,7 +389,9 @@ export function listAgentRuns(options: { statuses?: AgentRunState[]; limit?: num
 
 export function listAgentRunEvents(runId: string, dbArg?: Database.Database): AgentRunEvent[] {
   const db = dbFor(dbArg)
-  return (db.prepare('SELECT * FROM agent_run_events WHERE run_id = ? ORDER BY sequence ASC').all(runId) as EventRow[]).map(rowToEvent)
+  return (db.prepare(`SELECT e.*, l.data AS raw_data
+    FROM agent_run_events e LEFT JOIN agent_run_event_logs l ON l.event_id = e.id
+    WHERE e.run_id = ? ORDER BY e.sequence ASC`).all(runId) as EventRow[]).map(rowToEvent)
 }
 
 export function listAgentRunQuestions(runId: string, dbArg?: Database.Database): AgentRunQuestion[] {
@@ -653,6 +676,11 @@ export function transitionAgentRun(id: string, to: AgentRunState, options: Trans
       now,
       id,
     )
+    if (terminal) {
+      const completed = rowToRun(db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(id) as RunRow)
+      db.prepare('UPDATE agent_runs SET summary_json = ? WHERE id = ?')
+        .run(JSON.stringify(terminalSummary(completed, now)), id)
+    }
   })()
   return getAgentRun(id, db)!
 }
@@ -717,11 +745,43 @@ export function runsAwaitingCompletion(dbArg?: Database.Database): AgentRun[] {
   `).all() as RunRow[]).map(rowToRun)
 }
 
-export function deleteTerminalAgentRun(id: string, dbArg?: Database.Database): boolean {
+export function agentRunRawLogBytes(dbArg?: Database.Database): number {
   const db = dbFor(dbArg)
-  const run = getAgentRun(id, db)
-  if (!run) return false
-  if (!TERMINAL_AGENT_RUN_STATES.includes(run.status)) throw new Error('Only terminal agent runs can be removed by retention.')
-  if (listAgentRunQuestions(id, db).some(question => question.status === 'pending')) throw new Error('A run with an unresolved question cannot be removed.')
-  return db.prepare('DELETE FROM agent_runs WHERE id = ?').run(id).changes === 1
+  return (db.prepare('SELECT COALESCE(SUM(byte_count), 0) AS bytes FROM agent_run_event_logs').get() as { bytes: number }).bytes
+}
+
+export function deleteExpiredTerminalAgentRunLogs(cutoff: string, dbArg?: Database.Database): { deleted: number; bytes: number } {
+  const db = dbFor(dbArg)
+  const aggregate = db.prepare(`SELECT COUNT(*) AS deleted, COALESCE(SUM(l.byte_count), 0) AS bytes
+    FROM agent_run_event_logs l JOIN agent_runs r ON r.id = l.run_id
+    WHERE r.status IN ('succeeded','failed','cancelled') AND r.completed_at < ?`).get(cutoff) as { deleted: number; bytes: number }
+  db.prepare(`DELETE FROM agent_run_event_logs WHERE event_id IN (
+    SELECT l.event_id FROM agent_run_event_logs l JOIN agent_runs r ON r.id = l.run_id
+    WHERE r.status IN ('succeeded','failed','cancelled') AND r.completed_at < ?
+  )`).run(cutoff)
+  return aggregate
+}
+
+export function evictOldestTerminalAgentRunLogs(maxBytes: number, dbArg?: Database.Database): { deleted: number; bytes: number } {
+  const db = dbFor(dbArg)
+  let total = agentRunRawLogBytes(db)
+  let deleted = 0
+  let bytes = 0
+  if (total <= maxBytes) return { deleted, bytes }
+  const candidates = db.prepare(`SELECT l.event_id, l.byte_count
+    FROM agent_run_event_logs l JOIN agent_runs r ON r.id = l.run_id
+    WHERE r.status IN ('succeeded','failed','cancelled')
+    ORDER BY l.created_at ASC, l.event_id ASC`).all() as Array<{ event_id: number; byte_count: number }>
+  const remove = db.prepare('DELETE FROM agent_run_event_logs WHERE event_id = ?')
+  db.transaction(() => {
+    for (const candidate of candidates) {
+      if (total <= maxBytes) break
+      if (remove.run(candidate.event_id).changes) {
+        total -= candidate.byte_count
+        bytes += candidate.byte_count
+        deleted += 1
+      }
+    }
+  })()
+  return { deleted, bytes }
 }

@@ -1,8 +1,8 @@
 import type { AgentRun } from '../../../shared/agent-runs'
 import { getSetting } from '../../settings'
 import {
-  deleteTerminalAgentRun,
-  getAgentRun,
+  deleteExpiredTerminalAgentRunLogs,
+  evictOldestTerminalAgentRunLogs,
   getAgentRunPublication,
   listAgentRunQuestions,
   listAgentRuns,
@@ -11,11 +11,25 @@ import {
 import { workspaceManager } from './workspace'
 
 export const DEFAULT_AGENT_WORKTREE_RETENTION_DAYS = 30
-export const DEFAULT_AGENT_LOG_RETENTION_DAYS = 180
+export const DEFAULT_AGENT_LOG_RETENTION_DAYS = 30
+export const DEFAULT_AGENT_RAW_LOG_MAX_BYTES = 256 * 1024 * 1024
+export type AgentRawLogRetention = 7 | 30 | 90 | 'forever'
 
 function daysSetting(key: string, fallback: number): number {
   const parsed = Number(getSetting(key))
   return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : fallback
+}
+
+function rawLogRetentionSetting(): AgentRawLogRetention {
+  const value = getSetting('agents.retention.rawLogDays')
+  if (value === 'forever') return value
+  const days = Number(value)
+  return days === 7 || days === 30 || days === 90 ? days : DEFAULT_AGENT_LOG_RETENTION_DAYS
+}
+
+function bytesSetting(): number {
+  const bytes = Number(getSetting('agents.retention.rawLogMaxBytes'))
+  return Number.isFinite(bytes) && bytes >= 1_048_576 ? Math.floor(bytes) : DEFAULT_AGENT_RAW_LOG_MAX_BYTES
 }
 
 function olderThan(run: AgentRun, cutoffMs: number): boolean {
@@ -26,19 +40,19 @@ function olderThan(run: AgentRun, cutoffMs: number): boolean {
 export interface AgentRetentionOptions {
   now?: number
   worktreeDays?: number
-  logDays?: number
+  logRetention?: AgentRawLogRetention
+  maxRawLogBytes?: number
   discard?: (run: AgentRun) => Promise<void>
 }
 
-export async function runAgentRetentionSweep(options: AgentRetentionOptions = {}): Promise<{ discarded: number; deleted: number; retained: number }> {
+export async function runAgentRetentionSweep(options: AgentRetentionOptions = {}): Promise<{ discarded: number; rawLogsDeleted: number; rawBytesDeleted: number; retained: number }> {
   const currentTime = options.now ?? Date.now()
   const worktreeDays = options.worktreeDays ?? daysSetting('agents.retention.worktreeDays', DEFAULT_AGENT_WORKTREE_RETENTION_DAYS)
-  const logDays = options.logDays ?? daysSetting('agents.retention.logDays', DEFAULT_AGENT_LOG_RETENTION_DAYS)
+  const logRetention = options.logRetention ?? rawLogRetentionSetting()
+  const maxRawLogBytes = options.maxRawLogBytes ?? bytesSetting()
   const discard = options.discard ?? (run => workspaceManager.discard(run))
   const worktreeCutoff = currentTime - worktreeDays * 86_400_000
-  const logCutoff = currentTime - logDays * 86_400_000
   let discarded = 0
-  let deleted = 0
   let retained = 0
 
   for (const snapshot of listAgentRuns({ statuses: ['succeeded', 'failed', 'cancelled'], limit: 500 })) {
@@ -55,13 +69,16 @@ export async function runAgentRetentionSweep(options: AgentRetentionOptions = {}
       discarded += 1
     }
 
-    const workspaceSafe = run.workspace.isolation === 'in-place' || run.workspaceState.status === 'discarded'
-    const publicationSafe = !publication ? run.workspace.isolation === 'in-place' : safelyPublished
-    if (!unresolved && workspaceSafe && publicationSafe && olderThan(run, logCutoff)) {
-      if (deleteTerminalAgentRun(run.id)) deleted += 1
-    } else if (getAgentRun(run.id)) {
-      retained += 1
-    }
+    retained += 1
   }
-  return { discarded, deleted, retained }
+  const expired = logRetention === 'forever'
+    ? { deleted: 0, bytes: 0 }
+    : deleteExpiredTerminalAgentRunLogs(new Date(currentTime - logRetention * 86_400_000).toISOString())
+  const evicted = evictOldestTerminalAgentRunLogs(maxRawLogBytes)
+  return {
+    discarded,
+    rawLogsDeleted: expired.deleted + evicted.deleted,
+    rawBytesDeleted: expired.bytes + evicted.bytes,
+    retained,
+  }
 }

@@ -17,12 +17,14 @@ export type AgentReportDepth = 'full' | 'quick'
 /** How eagerly Bond consults this agent without being asked. */
 export type AgentPolicy = 'on-demand' | 'suggest' | 'auto'
 export type AgentWorkspaceSetting = 'read-only' | 'write'
+export type AgentBudgetPreset = 'conservative' | 'standard' | 'extended'
 
 export const AGENT_MODEL_SETTINGS: AgentModelSetting[] = ['inherit', 'high', 'balanced', 'fast']
 export const AGENT_THINKING_LEVELS: AgentThinking[] = ['default', 'low', 'medium', 'high', 'max']
 export const AGENT_REPORT_DEPTHS: AgentReportDepth[] = ['full', 'quick']
 export const AGENT_POLICIES: AgentPolicy[] = ['on-demand', 'suggest', 'auto']
 export const AGENT_WORKSPACE_SETTINGS: AgentWorkspaceSetting[] = ['read-only', 'write']
+export const AGENT_BUDGET_PRESETS: AgentBudgetPreset[] = ['conservative', 'standard', 'extended']
 
 /**
  * Bond tools an agent may be granted beyond the read-only base
@@ -42,6 +44,8 @@ export interface AgentSettings {
   policy: AgentPolicy
   /** Write is opt-in and only honored by the durable worktree runner. */
   workspace: AgentWorkspaceSetting
+  /** Persisted budget profile; resolved caps are snapshotted onto each run. */
+  budgetPreset: AgentBudgetPreset
   /** Max consult wall-clock seconds before the session is aborted. */
   leash: number
   /** Per-agent "soul" appended to the agent's system prompt. */
@@ -55,6 +59,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   report: 'full',
   policy: 'suggest',
   workspace: 'read-only',
+  budgetPreset: 'standard',
   leash: 300,
   instructions: '',
   tools: [],
@@ -122,6 +127,7 @@ export function normalizeAgentSettings(raw: unknown, defaults: AgentSettings = D
     report: pick(value.report, AGENT_REPORT_DEPTHS, defaults.report),
     policy: pick(value.policy, AGENT_POLICIES, defaults.policy),
     workspace: pick(value.workspace, AGENT_WORKSPACE_SETTINGS, defaults.workspace),
+    budgetPreset: pick(value.budgetPreset, AGENT_BUDGET_PRESETS, defaults.budgetPreset),
     leash: clampLeash(typeof value.leash === 'number' ? value.leash : defaults.leash),
     instructions: typeof value.instructions === 'string' ? value.instructions : defaults.instructions,
     tools: Array.isArray(value.tools)

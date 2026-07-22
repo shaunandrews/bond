@@ -82,6 +82,7 @@ describe('agent run store', () => {
 
     expect(done.status).toBe('succeeded')
     expect(done.result).toBe('report')
+    expect(done.summary).toMatchObject({ status: 'succeeded', finalReport: 'report', brief: 'Read the surface and report.' })
     expect(done.checkpoint).toEqual({ phase: 'started' })
     expect(listAgentRunEvents('run-1', db).map(event => [event.fromState, event.toState]))
       .toEqual([[null, 'queued'], ['queued', 'preparing-workspace'], ['preparing-workspace', 'running'], ['running', 'succeeded']])

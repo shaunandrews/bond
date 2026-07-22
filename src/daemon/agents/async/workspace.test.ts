@@ -56,7 +56,7 @@ function seedRun(root: string, repo: string, baseSha: string, id = 'run-worktree
     commandPolicyVersion: 'local-only-v1',
     acceptanceChecks: [],
     resourceCaps: { wallClockSeconds: 900, maxOutputChars: 100_000 },
-    checkpoint: null,
+    checkpoint: null, summary: null,
     status: 'queued',
     result: null,
     errorClass: null,

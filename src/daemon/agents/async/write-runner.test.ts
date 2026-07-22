@@ -17,7 +17,7 @@ function runFixture(): AgentRun {
     workspace: { repoRoot: root, isolation: 'worktree', branch: 'bond-agent/test', baseRef: 'main', worktreePath: root, readOnly: false },
     workspaceState: { status: 'ready', createdAt: now, retainedAt: null, discardedAt: null }, baseSha: 'a'.repeat(40), allowedPaths: [root],
     settings: { ...DEFAULT_AGENT_SETTINGS, workspace: 'write' }, agentDefinitionVersion: 'v1', commandPolicyVersion: 'v1', acceptanceChecks: [],
-    resourceCaps: { wallClockSeconds: 10, maxOutputChars: 1000 }, checkpoint: null, status: 'running', result: null, errorClass: null,
+    resourceCaps: { wallClockSeconds: 10, maxOutputChars: 1000 }, checkpoint: null, summary: null, status: 'running', result: null, errorClass: null,
     errorMessage: null, recoveryCount: 0, attemptCount: 1, retryCount: 0, nextRetryAt: null, completionMessageId: null, completionInsertedAt: null, createdAt: now, updatedAt: now,
     startedAt: now, completedAt: null, cancelledAt: null,
   }

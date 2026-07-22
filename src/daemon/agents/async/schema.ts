@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 const STATE_CHECK = "'queued','preparing-workspace','running','needs-input','succeeded','failed','cancelled','interrupted'"
 
 export function ensureAgentRunSchema(db: Database.Database): void {
+  const hadRawLogTable = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_run_event_logs'").get())
   db.exec(`
     CREATE TABLE IF NOT EXISTS agent_runs (
       id TEXT PRIMARY KEY,
@@ -22,6 +23,7 @@ export function ensureAgentRunSchema(db: Database.Database): void {
       acceptance_checks_json TEXT NOT NULL CHECK(json_valid(acceptance_checks_json)),
       resource_caps_json TEXT NOT NULL CHECK(json_valid(resource_caps_json)),
       checkpoint_json TEXT CHECK(checkpoint_json IS NULL OR json_valid(checkpoint_json)),
+      summary_json TEXT CHECK(summary_json IS NULL OR json_valid(summary_json)),
       status TEXT NOT NULL CHECK(status IN (${STATE_CHECK})),
       result TEXT,
       error_class TEXT,
@@ -56,6 +58,23 @@ export function ensureAgentRunSchema(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_sequence
       ON agent_run_events(run_id, sequence);
+
+    CREATE TABLE IF NOT EXISTS agent_run_event_logs (
+      event_id INTEGER PRIMARY KEY REFERENCES agent_run_events(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      data TEXT NOT NULL CHECK(json_valid(data)),
+      byte_count INTEGER NOT NULL CHECK(byte_count >= 0),
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_run_event_logs_created
+      ON agent_run_event_logs(created_at, event_id);
+
+    CREATE TRIGGER IF NOT EXISTS agent_run_event_logs_no_update
+    BEFORE UPDATE ON agent_run_event_logs
+    BEGIN
+      SELECT RAISE(ABORT, 'agent run raw logs are append-only');
+    END;
 
     CREATE TABLE IF NOT EXISTS agent_run_questions (
       id TEXT PRIMARY KEY,
@@ -128,6 +147,33 @@ export function ensureAgentRunSchema(db: Database.Database): void {
   if (!columns.some(column => column.name === 'attempt_count')) db.exec('ALTER TABLE agent_runs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0')
   if (!columns.some(column => column.name === 'retry_count')) db.exec('ALTER TABLE agent_runs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0')
   if (!columns.some(column => column.name === 'next_retry_at')) db.exec('ALTER TABLE agent_runs ADD COLUMN next_retry_at TEXT')
+  if (!columns.some(column => column.name === 'summary_json')) db.exec('ALTER TABLE agent_runs ADD COLUMN summary_json TEXT CHECK(summary_json IS NULL OR json_valid(summary_json))')
+
+  if (!hadRawLogTable) db.exec(`
+    INSERT OR IGNORE INTO agent_run_event_logs (event_id, run_id, data, byte_count, created_at)
+    SELECT id, run_id, data, length(CAST(data AS BLOB)), created_at FROM agent_run_events;
+
+    DROP TRIGGER agent_run_events_no_update;
+    UPDATE agent_run_events SET data = '{}';
+    CREATE TRIGGER agent_run_events_no_update
+    BEFORE UPDATE ON agent_run_events
+    BEGIN
+      SELECT RAISE(ABORT, 'agent_run_events is append-only');
+    END;
+  `)
+  db.exec(`
+    UPDATE agent_runs SET summary_json = json_object(
+      'status', status,
+      'agentLabel', agent_label,
+      'verb', verb,
+      'brief', substr(task_brief, 1, 280),
+      'finalReport', CASE WHEN result IS NULL THEN NULL ELSE substr(result, 1, 2000) END,
+      'errorClass', error_class,
+      'errorMessage', CASE WHEN error_message IS NULL THEN NULL ELSE substr(error_message, 1, 1000) END,
+      'completedAt', completed_at
+    )
+    WHERE summary_json IS NULL AND status IN ('succeeded','failed','cancelled') AND completed_at IS NOT NULL;
+  `)
 
   const deleteTrigger = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_run_events_no_delete'").get() as { sql?: string } | undefined
   if (deleteTrigger?.sql && !deleteTrigger.sql.includes('WHEN EXISTS')) {

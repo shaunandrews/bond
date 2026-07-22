@@ -35,7 +35,10 @@ describe('async agent dispatch service', () => {
     const retry = await dispatchAgentRun(input)
 
     expect(first.created).toBe(true)
-    expect(first.run).toMatchObject({ status: 'queued', workspace: { readOnly: true, isolation: 'in-place' } })
+    expect(first.run).toMatchObject({
+      status: 'queued', workspace: { readOnly: true, isolation: 'in-place' },
+      settings: { budgetPreset: 'standard' }, resourceCaps: { budgetPreset: 'standard', maxSteps: 80 },
+    })
     expect(retry).toMatchObject({ created: false, run: { id: first.run.id } })
   })
 

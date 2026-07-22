@@ -32,6 +32,7 @@ import { createAgentRunHandoff } from './publisher'
 import { qAgentRunReviewer } from './q-review'
 import { githubConfigService } from './github-config'
 import { runAgentRetentionSweep } from './retention'
+import { AGENT_BUDGET_PRESET_CAPS, resolveAgentRunBudget } from '../../../shared/agent-budgets'
 
 const execFileAsync = promisify(execFile)
 export const ASYNC_AGENT_COMMAND_POLICY_VERSION = 'phase0-readonly-no-shell-v1'
@@ -243,15 +244,9 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
     agentDefinitionVersion: definitionVersion({ definition, settings }),
     commandPolicyVersion: workspace.isolation === 'worktree' ? MATHIS_COMMAND_POLICY_VERSION : ASYNC_AGENT_COMMAND_POLICY_VERSION,
     acceptanceChecks: workspace.isolation === 'worktree' ? MATHIS_ACCEPTANCE_CHECKS : [],
-    resourceCaps: {
-      wallClockSeconds: settings.leash,
-      maxOutputChars: 100_000,
-      maxSteps: 80,
-      maxSubprocesses: 24,
-      maxDiskBytes: 2 * 1024 * 1024 * 1024,
-      maxTokens: 250_000,
-      maxCostUsd: 25,
-    },
+    resourceCaps: resolveAgentRunBudget(settings.budgetPreset, {
+      wallClockSeconds: Math.min(settings.leash, AGENT_BUDGET_PRESET_CAPS[settings.budgetPreset].wallClockSeconds),
+    }),
   })
   if (created.created) {
     emit(created.run)

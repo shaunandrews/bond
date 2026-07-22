@@ -15,16 +15,20 @@ or daemon restart behavior.
   recovered run always starts a new session and never revives an old PID.
 - Centralize secret redaction before any durable event, checkpoint, error,
   completion-card, or CLI representation is written.
+- Resolve persisted conservative, standard, or extended budget presets into an
+  immutable per-run cap contract. Keep an internal override seam for later
+  dispatch support and clamp every value to Bond-owned hard ceilings.
 
 ## Operations and retention
 
 - Add agent-run RPCs and `bond agent` CLI commands for status/list/logs/cancel,
   answer, and discard.
-- Add a conservative retention sweep for old terminal runs/worktrees. Never
-  delete unresolved questions, retained unpublished changes, active/parked
-  runs, or a published run whose workspace has not already been discarded.
-- Keep run history durable by pruning only eligible discarded terminal rows;
-  foreign-key cascades remove their event/question/publication children.
+- Preserve terminal run rows, compact redacted summaries, final reports, and
+  publication/workspace provenance indefinitely.
+- Split raw event payloads from the append-only event envelope. Retain payloads
+  for 30 days by default (7/30/90/forever are valid), then enforce a total
+  payload budget by evicting oldest terminal-run logs first. Worktree cleanup
+  remains independent and conservative around unpublished changes.
 
 ## Tests and commits
 

@@ -1,4 +1,4 @@
-import type { AgentSettings } from './agents'
+import type { AgentBudgetPreset, AgentSettings } from './agents'
 
 export const AGENT_RUN_STATES = [
   'queued',
@@ -57,6 +57,7 @@ export interface ManagedWorkspaceInspection {
 }
 
 export interface AgentRunResourceCaps {
+  budgetPreset?: AgentBudgetPreset
   wallClockSeconds: number
   maxOutputChars: number
   maxSteps?: number
@@ -64,6 +65,17 @@ export interface AgentRunResourceCaps {
   maxDiskBytes?: number
   maxTokens?: number
   maxCostUsd?: number
+}
+
+export interface AgentRunSummary {
+  status: Extract<AgentRunState, 'succeeded' | 'failed' | 'cancelled'>
+  agentLabel: string
+  verb: string
+  brief: string
+  finalReport: string | null
+  errorClass: string | null
+  errorMessage: string | null
+  completedAt: string
 }
 
 export type AgentRunQuestionStatus = 'pending' | 'approved' | 'denied'
@@ -132,6 +144,7 @@ export interface AgentRun {
   acceptanceChecks: string[]
   resourceCaps: AgentRunResourceCaps
   checkpoint: Record<string, unknown> | null
+  summary: AgentRunSummary | null
   status: AgentRunState
   result: string | null
   errorClass: string | null
@@ -157,6 +170,7 @@ export interface AgentRunEvent {
   fromState: AgentRunState | null
   toState: AgentRunState | null
   data: Record<string, unknown>
+  rawPayloadAvailable?: boolean
   createdAt: string
 }
 

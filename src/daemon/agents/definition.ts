@@ -16,6 +16,7 @@ import {
   AGENT_REPORT_DEPTHS,
   AGENT_THINKING_LEVELS,
   AGENT_WORKSPACE_SETTINGS,
+  AGENT_BUDGET_PRESETS,
   type AgentSettings,
 } from '../../shared/agents'
 
@@ -178,6 +179,7 @@ function settingsFromFrontmatter(frontmatter: Record<string, FrontmatterValue>, 
     report: pick('report', AGENT_REPORT_DEPTHS, DEFAULT_AGENT_SETTINGS.report),
     policy: pick('policy', AGENT_POLICIES, DEFAULT_AGENT_SETTINGS.policy),
     workspace: pick('workspace', AGENT_WORKSPACE_SETTINGS, DEFAULT_AGENT_SETTINGS.workspace),
+    budgetPreset: pick('budgetPreset', AGENT_BUDGET_PRESETS, DEFAULT_AGENT_SETTINGS.budgetPreset),
     leash: clampLeash(leash),
     instructions: '',
     tools: tools.filter(tool => (GRANTABLE_AGENT_TOOLS as readonly string[]).includes(tool)),

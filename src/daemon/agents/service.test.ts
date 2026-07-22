@@ -99,11 +99,12 @@ describe('updateAgentSettings', () => {
   })
 
   it('normalizes hostile input rather than persisting it', () => {
-    updateAgentSettings('q', { tools: ['bash'], model: 'wishful', leash: 99_999 } as never)
+    updateAgentSettings('q', { tools: ['bash'], model: 'wishful', leash: 99_999, budgetPreset: 'unlimited' } as never)
     expect(setAgentSettingsOverride).toHaveBeenCalledWith('q', expect.objectContaining({
       tools: [],
       model: 'high',
       leash: 900,
+      budgetPreset: 'standard',
     }))
   })
 
