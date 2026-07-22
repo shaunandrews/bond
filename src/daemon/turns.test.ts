@@ -332,6 +332,27 @@ describe('per-scope concurrent scheduling (chat threads)', () => {
     expect(epochIds).toHaveLength(1)
   })
 
+  it('notifies the transport that the thread changed when a thread turn starts — never for main', async () => {
+    // Regression: the turn row IS the reply count and touchThread flips
+    // draft→open, but both are daemon-internal writes no RPC broadcasts —
+    // main's "Discuss" footer stayed frozen at zero replies forever.
+    seedThread('thread-1')
+    let threadChangedCalls = 0
+    setTurnTransport({
+      broadcastChunk: () => {},
+      imagesChanged: () => {},
+      threadChanged: () => { threadChangedCalls++ },
+    })
+
+    await startBondTurn({ text: 'main text', turnId: 'main-turn', model: 'balanced' })
+    await settleTurns()
+    expect(threadChangedCalls).toBe(0)
+
+    await startBondTurn({ text: 'thread text', turnId: 'thread-turn', model: 'balanced', scope: threadScope('thread-1') })
+    await settleTurns()
+    expect(threadChangedCalls).toBe(1)
+  })
+
   // plans/chat-threads.md Failure behavior: "If the Pi thread session file
   // is missing, start a new Pi session from the stored snapshot and existing
   // thread transcript summary rather than losing the visible thread."

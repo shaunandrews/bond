@@ -32,6 +32,8 @@ export interface TurnTransport {
     tags?: { epochId?: string; turnId?: string; assistantMessageId?: string; scope?: ConversationScope },
   ): void
   imagesChanged(): void
+  /** A thread's turn count or status changed server-side (touchThread/insertTurnStart) — clients refresh reply counts. */
+  threadChanged?: () => void
   enableSense?: () => { enabled: boolean; state?: string }
 }
 
@@ -196,6 +198,11 @@ export function startBondTurn(input: StartTurnInput): Promise<StartTurnResult> {
         activityData: { turnId, userMessageId, assistantMessageId, status: 'working', startedAt: Date.now(), events: [] },
       })
       startTurn(turnId, epoch.id)
+      // The turn row above IS the reply count (replyCountFor counts turns),
+      // and touchThread just flipped draft→open — but both happened through
+      // daemon-internal calls no RPC handler broadcasts for. Without this,
+      // main's cached "Discuss" footer never becomes "Thread · N".
+      if (threadId) transport?.threadChanged?.()
 
       // Tell every other live viewer about this turn's user message and
       // message ids. Without this, a second client (desktop vs. phone)

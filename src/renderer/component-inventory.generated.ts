@@ -1000,10 +1000,6 @@ export const componentInventory = [
       {
         "name": "autoFocus",
         "type": "boolean | undefined"
-      },
-      {
-        "name": "drawer",
-        "type": "boolean | undefined"
       }
     ],
     "events": [
@@ -1014,6 +1010,17 @@ export const componentInventory = [
       {
         "name": "summarySent",
         "payload": "void"
+      }
+    ]
+  },
+  {
+    "name": "ThreadsView",
+    "file": "components/ThreadsView.vue",
+    "props": [],
+    "events": [
+      {
+        "name": "open",
+        "payload": "threadId: string"
       }
     ]
   },

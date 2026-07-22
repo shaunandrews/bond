@@ -1880,6 +1880,7 @@ export function startServer(socketPath: string, authToken?: string, health?: Dae
   setTurnTransport({
     broadcastChunk,
     imagesChanged: broadcastImageChanged,
+    threadChanged: broadcastThreadChanged,
     enableSense: () => {
       const ctrl = getSenseController()
       ctrl.enable()
