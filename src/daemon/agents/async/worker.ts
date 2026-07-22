@@ -13,7 +13,7 @@ import {
 } from './store'
 import { executeAgentRun, type AsyncAgentExecutor } from './executor'
 import { CommandApprovalRequired } from './write-runner'
-import { classifyAgentRunFailure } from './failures'
+import { AgentResourceLimitError, classifyAgentRunFailure } from './failures'
 
 export interface AgentRunWorkerOptions {
   execute?: AsyncAgentExecutor
@@ -103,6 +103,12 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
     const controller = new AbortController()
     active = { runId: prepared.id, controller }
     let started = false
+    let wallClockExpired = false
+    const wallClockTimer = setTimeout(() => {
+      wallClockExpired = true
+      controller.abort()
+    }, Math.max(1, prepared.resourceCaps.wallClockSeconds) * 1_000)
+    wallClockTimer.unref?.()
     try {
       prepared = await prepare(prepared, controller.signal)
       const report = await execute(prepared, {
@@ -132,9 +138,12 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
         throw new Error('Background agent executor returned before recording its start checkpoint.')
       }
       await terminal(transitionAgentRun(prepared.id, 'succeeded', { eventType: 'succeeded', result: report }))
-    } catch (error) {
+    } catch (caught) {
       const current = getAgentRun(prepared.id)
       if (!current || current.status === 'cancelled') return
+      const error = wallClockExpired
+        ? new AgentResourceLimitError(`Agent run exceeded the ${prepared.resourceCaps.wallClockSeconds}s wall-clock cap.`)
+        : caught
       if (error instanceof CommandApprovalRequired && current.status === 'running') {
         const parked = parkAgentRunForCommand(prepared.id, error.question, {
           phase: 'awaiting-command-approval',
@@ -175,6 +184,7 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
         }))
       }
     } finally {
+      clearTimeout(wallClockTimer)
       if (active?.runId === prepared.id) active = null
     }
   }

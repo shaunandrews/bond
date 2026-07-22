@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRun } from '../../../shared/agent-runs'
 import { DEFAULT_AGENT_SETTINGS } from '../../../shared/agents'
-import { createMathisExtensionFactory, MathisResourceGuard, packageScriptsMatch } from './write-runner'
+import { createMathisExtensionFactory, MathisResourceGuard, packageScriptsMatch, pendingMathisAcceptanceChecks } from './write-runner'
 
 const roots: string[] = []
 function runFixture(): AgentRun {
@@ -57,5 +57,31 @@ describe('Mathis worktree tools', () => {
   it('requires npm scripts to match the immutable base manifest', () => {
     expect(packageScriptsMatch('{"scripts":{"test":"vitest"}}', '{"scripts":{"test":"vitest"}}')).toBe(true)
     expect(packageScriptsMatch('{"scripts":{"test":"curl evil"}}', '{"scripts":{"test":"vitest"}}')).toBe(false)
+  })
+
+  it('reports a durable command-start boundary as soon as the child is spawned', async () => {
+    const run = runFixture()
+    let commandTool: any
+    const onCommandStarted = vi.fn()
+    createMathisExtensionFactory({ run, signal: new AbortController().signal, onQuestion: vi.fn(), onCommandStarted })({
+      on: vi.fn(),
+      registerTool: (_definition: unknown) => { commandTool = _definition },
+    } as any)
+
+    await commandTool.execute('tool-1', { argv: ['git', 'status', '--short'], reason: 'inspect current changes' })
+
+    expect(onCommandStarted).toHaveBeenCalledOnce()
+    expect(onCommandStarted).toHaveBeenCalledWith(expect.objectContaining({ argv: ['git', 'status', '--short'], rule: 'git status' }))
+    expect(onCommandStarted.mock.calls[0][0].pid).toBeTypeOf('number')
+  })
+
+  it('reconstructs pending checks from durable successful command events', () => {
+    const run = runFixture()
+    run.acceptanceChecks = [JSON.stringify(['npm', 'run', 'typecheck']), JSON.stringify(['npm', 'run', 'test:run'])]
+    const events = [{
+      id: 1, runId: run.id, sequence: 1, type: 'command_completed', fromState: 'running' as const, toState: 'running' as const,
+      data: { argv: ['npm', 'run', 'typecheck'], exitCode: 0 }, createdAt: new Date().toISOString(),
+    }]
+    expect(pendingMathisAcceptanceChecks(run, events)).toEqual([JSON.stringify(['npm', 'run', 'test:run'])])
   })
 })

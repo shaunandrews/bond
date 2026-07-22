@@ -716,3 +716,12 @@ export function runsAwaitingCompletion(dbArg?: Database.Database): AgentRun[] {
     ORDER BY completed_at ASC, created_at ASC
   `).all() as RunRow[]).map(rowToRun)
 }
+
+export function deleteTerminalAgentRun(id: string, dbArg?: Database.Database): boolean {
+  const db = dbFor(dbArg)
+  const run = getAgentRun(id, db)
+  if (!run) return false
+  if (!TERMINAL_AGENT_RUN_STATES.includes(run.status)) throw new Error('Only terminal agent runs can be removed by retention.')
+  if (listAgentRunQuestions(id, db).some(question => question.status === 'pending')) throw new Error('A run with an unresolved question cannot be removed.')
+  return db.prepare('DELETE FROM agent_runs WHERE id = ?').run(id).changes === 1
+}

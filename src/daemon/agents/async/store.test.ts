@@ -13,6 +13,8 @@ import {
   markAgentRunPublishing,
   markAgentRunPublishFailed,
   markAgentRunQReview,
+  parkAgentRunForCommand,
+  answerAgentRunQuestion,
 } from './store'
 
 function input(overrides: Record<string, unknown> = {}) {
@@ -92,6 +94,22 @@ describe('agent run store', () => {
     createAgentRunRecord(input(), db)
     expect(() => db.prepare("UPDATE agent_run_events SET type = 'rewritten'").run()).toThrow('append-only')
     expect(() => db.prepare('DELETE FROM agent_run_events').run()).toThrow('append-only')
+    db.close()
+  })
+
+  it('makes same-answer races idempotent and rejects conflicting answers', () => {
+    const db = memoryDb()
+    createAgentRunRecord(input(), db)
+    transitionAgentRun('run-1', 'preparing-workspace', { eventType: 'preparing' }, db)
+    transitionAgentRun('run-1', 'running', { eventType: 'started' }, db)
+    const parked = parkAgentRunForCommand('run-1', {
+      argv: ['node', 'scripts/check.mjs'], reason: 'needed', proposedAllowlistAddition: 'exact grant',
+    }, { phase: 'awaiting-command-approval' }, undefined, db)
+
+    expect(answerAgentRunQuestion('run-1', parked.question.id, true, 'yes', undefined, db).changed).toBe(true)
+    expect(answerAgentRunQuestion('run-1', parked.question.id, true, 'duplicate yes', undefined, db).changed).toBe(false)
+    expect(() => answerAgentRunQuestion('run-1', parked.question.id, false, 'late no', undefined, db)).toThrow('already approved')
+    expect(listAgentRunEvents('run-1', db).filter(event => event.type === 'command_approved')).toHaveLength(1)
     db.close()
   })
 

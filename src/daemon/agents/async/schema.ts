@@ -104,6 +104,7 @@ export function ensureAgentRunSchema(db: Database.Database): void {
 
     CREATE TRIGGER IF NOT EXISTS agent_run_events_no_delete
     BEFORE DELETE ON agent_run_events
+    WHEN EXISTS (SELECT 1 FROM agent_runs WHERE id = OLD.run_id)
     BEGIN
       SELECT RAISE(ABORT, 'agent_run_events is append-only');
     END;
@@ -127,4 +128,17 @@ export function ensureAgentRunSchema(db: Database.Database): void {
   if (!columns.some(column => column.name === 'attempt_count')) db.exec('ALTER TABLE agent_runs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0')
   if (!columns.some(column => column.name === 'retry_count')) db.exec('ALTER TABLE agent_runs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0')
   if (!columns.some(column => column.name === 'next_retry_at')) db.exec('ALTER TABLE agent_runs ADD COLUMN next_retry_at TEXT')
+
+  const deleteTrigger = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_run_events_no_delete'").get() as { sql?: string } | undefined
+  if (deleteTrigger?.sql && !deleteTrigger.sql.includes('WHEN EXISTS')) {
+    db.exec(`
+      DROP TRIGGER agent_run_events_no_delete;
+      CREATE TRIGGER agent_run_events_no_delete
+      BEFORE DELETE ON agent_run_events
+      WHEN EXISTS (SELECT 1 FROM agent_runs WHERE id = OLD.run_id)
+      BEGIN
+        SELECT RAISE(ABORT, 'agent_run_events is append-only');
+      END;
+    `)
+  }
 }

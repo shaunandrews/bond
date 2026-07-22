@@ -10,7 +10,7 @@ import {
   type ExtensionAPI,
 } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
-import type { AgentRun } from '../../../shared/agent-runs'
+import type { AgentRun, AgentRunEvent } from '../../../shared/agent-runs'
 import { selectModel } from '../../pi/model'
 import { buildAgentSystemPrompt, buildAgentUserPrompt } from '../prompt'
 import { findAgent } from '../registry'
@@ -125,6 +125,7 @@ export interface MathisExtensionOptions {
   exactGrants?: ReadonlySet<string>
   guard?: MathisResourceGuard
   onQuestion(question: ProposedCommandQuestion): void
+  onCommandStarted?: (input: { argv: string[]; rule: string; pid: number }) => void
   onCommandCompleted?: (input: { argv: string[]; rule: string; exitCode: number | null; signal: NodeJS.Signals | null }) => void
 }
 
@@ -185,7 +186,12 @@ export function createMathisExtensionFactory(options: MathisExtensionOptions) {
         assertNpmScriptsUnchanged(options.run, argv)
         const diskCap = options.run.resourceCaps.maxDiskBytes ?? 2 * 1024 * 1024 * 1024
         if (directoryBytes(worktree, diskCap) > diskCap) throw new AgentResourceLimitError(`Mathis exceeded the ${diskCap}-byte worktree resource cap.`)
-        const result = await runArgvCommand(argv, { cwd: worktree, signal: options.signal, caps: options.run.resourceCaps })
+        const result = await runArgvCommand(argv, {
+          cwd: worktree,
+          signal: options.signal,
+          caps: options.run.resourceCaps,
+          onProcess: pid => { if (pid !== null) options.onCommandStarted?.({ argv, rule: decision.rule, pid }) },
+        })
         options.onCommandCompleted?.({ argv, rule: decision.rule, exitCode: result.exitCode, signal: result.signal })
         const text = [result.stdout, result.stderr].filter(Boolean).join('\n')
         return {
@@ -201,8 +207,16 @@ export interface RunMathisInput {
   run: AgentRun
   signal: AbortSignal
   exactGrants?: ReadonlySet<string>
+  events?: AgentRunEvent[]
   onStarted(checkpoint: Record<string, unknown>): void
   onProgress(type: string, data: Record<string, unknown>, checkpoint?: Record<string, unknown>): void
+}
+
+export function pendingMathisAcceptanceChecks(run: AgentRun, events: AgentRunEvent[]): string[] {
+  const completed = new Set(events
+    .filter(event => event.type === 'command_completed' && event.data.exitCode === 0 && Array.isArray(event.data.argv))
+    .map(event => JSON.stringify(event.data.argv)))
+  return run.acceptanceChecks.filter(check => !completed.has(check))
 }
 
 export async function runMathis(input: RunMathisInput): Promise<string> {
@@ -233,11 +247,19 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
         pendingQuestion = question
         queueMicrotask(abortSession)
       },
+      onCommandStarted: result => input.onProgress('command_started', result, {
+        phase: 'command-started',
+        argv: result.argv,
+        pid: result.pid,
+        worktree: run.workspace.isolation === 'worktree' ? run.workspace.worktreePath : null,
+        lastCompletedAction: 'command-spawned-result-unknown',
+      }),
       onCommandCompleted: result => input.onProgress('command_completed', result, {
         phase: 'command-completed',
         argv: result.argv,
         exitCode: result.exitCode,
         worktree: run.workspace.isolation === 'worktree' ? run.workspace.worktreePath : null,
+        lastCompletedAction: 'command-completed',
       }),
     })],
   })
@@ -264,8 +286,9 @@ export async function runMathis(input: RunMathisInput): Promise<string> {
       lastCompletedAction: 'workspace-ready',
       previousCheckpoint: run.checkpoint,
     })
+    const pendingChecks = pendingMathisAcceptanceChecks(run, input.events ?? [])
     const resume = run.checkpoint
-      ? `\n\nRESUME CHECKPOINT:\nContinue this same durable run in the existing worktree after an approval or daemon interruption. Previous checkpoint: ${JSON.stringify(run.checkpoint)}. Exact run-scoped command grants: ${JSON.stringify([...input.exactGrants ?? []])}. Re-inspect git status and current files; preserve completed edits and do not repeat work blindly.`
+      ? `\n\nRESUME CHECKPOINT:\nStart a fresh session for this same durable run in worktree ${run.workspace.worktreePath} at immutable base ${run.baseSha ?? '(unavailable)'}. Previous checkpoint: ${JSON.stringify(run.checkpoint)}. Last completed action: ${String(run.checkpoint.lastCompletedAction ?? '(unknown)')}. Pending acceptance checks: ${pendingChecks.join(', ') || '(none)'}. Exact run-scoped command grants: ${JSON.stringify([...input.exactGrants ?? []])}. Never revive a previous child PID; its outcome is unknown unless a command_completed event exists. Re-inspect git status and current files; preserve completed edits and do not repeat work blindly.`
       : ''
     await session.prompt(buildAgentUserPrompt({ brief: `${run.brief}${resume}`, paths: run.paths }))
     if (pendingQuestion) throw new CommandApprovalRequired(pendingQuestion)

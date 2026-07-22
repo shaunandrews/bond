@@ -31,6 +31,7 @@ import { MATHIS_COMMAND_POLICY_VERSION } from './command-policy'
 import { createAgentRunHandoff } from './publisher'
 import { qAgentRunReviewer } from './q-review'
 import { githubConfigService } from './github-config'
+import { runAgentRetentionSweep } from './retention'
 
 const execFileAsync = promisify(execFile)
 export const ASYNC_AGENT_COMMAND_POLICY_VERSION = 'phase0-readonly-no-shell-v1'
@@ -149,6 +150,7 @@ export function startAgentRunService(): void {
   setAgentRunApi({ dispatch: dispatchAgentRun, check: checkAgentRun, answer: answerAgentQuestion })
   completion.reconcile()
   worker.start()
+  void runAgentRetentionSweep().catch(error => console.warn('[agents/retention] sweep failed:', error))
 }
 
 export async function stopAgentRunService(): Promise<void> {

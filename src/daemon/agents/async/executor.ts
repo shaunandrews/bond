@@ -20,6 +20,7 @@ export const executeAgentRun: AsyncAgentExecutor = (run, context) => run.workspa
       run,
       signal: context.signal,
       exactGrants: context.exactCommandGrants,
+      events: context.events,
       onStarted: context.onStarted,
       onProgress: context.onProgress,
     })
@@ -32,9 +33,11 @@ function recoveryEnvelope(run: AgentRun, events: AgentRunEvent[]): string {
   return [
     '<async-recovery>',
     'This read-only task is resuming after its previous process was interrupted.',
+    `Workspace: ${run.workspace.repoRoot}`,
+    `Immutable base SHA: ${run.baseSha ?? '(unavailable)'}`,
     `Durable checkpoint: ${JSON.stringify(run.checkpoint ?? {})}`,
     `Recent events:\n${summary || '(none)'}`,
-    'Re-read the requested sources and produce the final report; do not assume an interrupted action completed.',
+    'Start a fresh session. Never revive a prior child process. Re-read the requested sources and do not assume an interrupted action completed.',
     '</async-recovery>',
   ].join('\n')
 }

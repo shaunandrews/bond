@@ -11,7 +11,7 @@ import { CommandApprovalRequired } from './write-runner'
 
 let dir: string
 
-function seed(id: string, key = id) {
+function seed(id: string, key = id, resourceCaps = { wallClockSeconds: 300, maxOutputChars: 100_000 }) {
   return createAgentRunRecord({
     id,
     idempotencyKey: key,
@@ -27,7 +27,7 @@ function seed(id: string, key = id) {
     agentDefinitionVersion: 'v1',
     commandPolicyVersion: 'phase0-readonly-no-shell-v1',
     acceptanceChecks: [],
-    resourceCaps: { wallClockSeconds: 300, maxOutputChars: 100_000 },
+    resourceCaps,
   }).run
 }
 
@@ -38,6 +38,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   closeDb()
   rmSync(dir, { recursive: true, force: true })
   setDataDir(null as never)
@@ -86,6 +87,29 @@ describe('agent run worker', () => {
     ]))
   })
 
+  it('starts a fresh session after a crash during a subprocess and treats the old pid as diagnostic only', async () => {
+    seed('recover-command')
+    transitionAgentRun('recover-command', 'preparing-workspace', { eventType: 'workspace_preparing' })
+    transitionAgentRun('recover-command', 'running', {
+      eventType: 'started',
+      checkpoint: { phase: 'command-started', argv: ['npm', 'run', 'typecheck'], pid: 987654, lastCompletedAction: 'command-spawned-result-unknown' },
+    })
+    const execute = vi.fn(async (run, context) => {
+      expect(run.checkpoint).toMatchObject({ phase: 'command-started', pid: 987654 })
+      expect(context.events.map((event: { type: string }) => event.type)).toContain('daemon_interrupted')
+      context.onStarted({ phase: 'fresh-session', previousCheckpoint: run.checkpoint })
+      return 're-inspected and completed'
+    })
+    const worker = createAgentRunWorker({ execute, intervalMs: 60_000 })
+
+    worker.start()
+    await worker.tickNow()
+    await worker.stop()
+
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(getAgentRun('recover-command')).toMatchObject({ status: 'succeeded', recoveryCount: 1 })
+  })
+
   it('cancels an active session and never overwrites cancelled with success or failure', async () => {
     seed('cancel-me')
     let started!: () => void
@@ -112,6 +136,31 @@ describe('agent run worker', () => {
     expect(worker.activeRunId()).toBeNull()
     expect(getAgentRun('cancel-me')?.status).toBe('cancelled')
     expect(listAgentRunEvents('cancel-me').at(-1)?.type).toBe('cancelled')
+  })
+
+  it('keeps cancellation terminal when completion races the abort signal', async () => {
+    seed('cancel-race')
+    let started!: () => void
+    let finish!: () => void
+    const didStart = new Promise<void>(resolve => { started = resolve })
+    const mayFinish = new Promise<void>(resolve => { finish = resolve })
+    const worker = createAgentRunWorker({
+      execute: async (_run, context) => {
+        context.onStarted({ phase: 'started' })
+        started()
+        await mayFinish
+        return 'late success'
+      },
+    })
+
+    const ticking = worker.tickNow()
+    await didStart
+    worker.cancel('cancel-race')
+    finish()
+    await ticking
+
+    expect(getAgentRun('cancel-race')).toMatchObject({ status: 'cancelled', result: null })
+    expect(listAgentRunEvents('cancel-race').filter(event => event.type === 'cancelled')).toHaveLength(1)
   })
 
   it('durably parks an unknown command and resumes the same run after restart approval', async () => {
@@ -154,6 +203,33 @@ describe('agent run worker', () => {
     expect(listAgentRunEvents('park-resume').map(event => event.type)).toEqual(expect.arrayContaining([
       'command_question_asked', 'command_approved', 'command_resume_started', 'succeeded',
     ]))
+  })
+
+  it('deduplicates concurrent resume requests for the same approved run', async () => {
+    seed('resume-once')
+    transitionAgentRun('resume-once', 'preparing-workspace', { eventType: 'preparing' })
+    transitionAgentRun('resume-once', 'running', { eventType: 'started' })
+    const { parkAgentRunForCommand } = await import('./store')
+    const parked = parkAgentRunForCommand('resume-once', {
+      argv: ['node', 'scripts/check.mjs'], reason: 'needed', proposedAllowlistAddition: 'exact grant',
+    }, { phase: 'awaiting-command-approval' })
+    answerAgentRunQuestion('resume-once', parked.question.id, true, 'yes')
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const execute = vi.fn(async (_run, context) => {
+      context.onStarted({ phase: 'resumed' })
+      await gate
+      return 'done once'
+    })
+    const worker = createAgentRunWorker({ execute })
+
+    const first = worker.resume('resume-once')
+    const second = worker.resume('resume-once')
+    release()
+    await Promise.all([first, second])
+
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(getAgentRun('resume-once')?.status).toBe('succeeded')
   })
 
   it('fails a parked run when the command is denied', async () => {
@@ -207,5 +283,25 @@ describe('agent run worker', () => {
     await worker.tickNow()
     expect(execute).toHaveBeenCalledTimes(1)
     expect(getAgentRun('no-retry-policy')).toMatchObject({ status: 'failed', errorClass: 'policy', retryCount: 0 })
+  })
+
+  it('aborts and terminally classifies wall-clock cap exhaustion', async () => {
+    vi.useFakeTimers()
+    seed('wall-clock', 'wall-clock', { wallClockSeconds: 1, maxOutputChars: 100_000 })
+    const worker = createAgentRunWorker({
+      execute: async (_run, context) => {
+        context.onStarted({ phase: 'started' })
+        await new Promise<never>((_resolve, reject) => {
+          context.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        })
+        return 'unreachable'
+      },
+    })
+
+    const ticking = worker.tickNow()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await ticking
+
+    expect(getAgentRun('wall-clock')).toMatchObject({ status: 'failed', errorClass: 'resource', retryCount: 0 })
   })
 })
