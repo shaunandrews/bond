@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { homedir } from 'node:os'
-import { resolve } from 'node:path'
-import type { AgentRun, AgentRunDetail, DispatchAgentRunInput } from '../../../shared/agent-runs'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
+import type { AgentRun, AgentRunDetail, AgentRunWorkspace, DispatchAgentRunInput, ManagedWorkspaceInspection } from '../../../shared/agent-runs'
 import { MODEL_IDS } from '../../../shared/models'
 import { resolveContextDocs } from '../context-docs'
 import { effectiveAgentSettings, findAgent } from '../registry'
@@ -14,9 +14,16 @@ import {
   getAgentRunByIdempotencyKey,
   listAgentRunEvents,
   listAgentRuns,
+  updateAgentRunWorkspaceState,
 } from './store'
 import { createAgentRunWorker } from './worker'
 import { setAgentRunApi } from './api'
+import {
+  configuredBondBaseRef,
+  configuredBondRepoRoot,
+  plannedWorktree,
+  workspaceManager,
+} from './workspace'
 
 const execFileAsync = promisify(execFile)
 export const ASYNC_AGENT_COMMAND_POLICY_VERSION = 'phase0-readonly-no-shell-v1'
@@ -36,8 +43,35 @@ function emit(run: AgentRun): void {
 
 const completion = createAgentRunCompletionCoordinator({ onChanged: emit })
 const worker = createAgentRunWorker({
+  prepare: async (run, signal) => {
+    if (run.workspace.isolation !== 'worktree') return run
+    if (run.workspaceState.status === 'discarded') throw new Error('This run\'s managed worktree was discarded.')
+    await workspaceManager.ensure(run, signal)
+    if (run.workspaceState.status === 'ready') return run
+    const now = new Date().toISOString()
+    const updated = updateAgentRunWorkspaceState(run.id, {
+      status: 'ready',
+      createdAt: run.workspaceState.createdAt ?? now,
+      retainedAt: null,
+      discardedAt: null,
+    }, 'workspace_ready', { path: run.workspace.worktreePath, branch: run.workspace.branch }, now)
+    emit(updated)
+    return updated
+  },
   onChanged: emit,
-  onTerminal: run => completion.enqueue(run),
+  onTerminal: run => {
+    let terminal = run
+    if (run.workspace.isolation === 'worktree' && run.workspaceState.status !== 'discarded') {
+      const now = new Date().toISOString()
+      terminal = updateAgentRunWorkspaceState(run.id, {
+        ...run.workspaceState,
+        status: 'retained',
+        retainedAt: now,
+      }, 'workspace_retained', { path: run.workspace.worktreePath }, now)
+      emit(terminal)
+    }
+    completion.enqueue(terminal)
+  },
 })
 
 function expandPath(path: string): string {
@@ -95,13 +129,22 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
   validateDispatch(input)
   const agentName = input.agent.trim().toLowerCase()
   const verbName = input.verb.trim().toLowerCase()
-  const paths = (input.paths ?? []).map(expandPath)
+  let paths = (input.paths ?? []).map(expandPath)
   const prior = getAgentRunByIdempotencyKey(input.idempotencyKey.trim())
   if (prior) {
+    const priorWorkspace = prior.workspace
+    const retryPaths = priorWorkspace.isolation === 'worktree'
+      ? ((input.paths ?? []).length
+          ? (input.paths ?? []).map(path => {
+              const source = isAbsolute(path) ? resolve(path) : resolve(priorWorkspace.repoRoot, path)
+              return resolve(priorWorkspace.worktreePath, relative(priorWorkspace.repoRoot, source))
+            })
+          : [priorWorkspace.worktreePath])
+      : paths
     const sameRequest = prior.agent === agentName
       && prior.verb === verbName
       && prior.brief === input.brief.trim()
-      && JSON.stringify(prior.paths) === JSON.stringify(paths)
+      && JSON.stringify(prior.paths) === JSON.stringify(retryPaths)
     if (!sameRequest) throw new Error(`Idempotency key "${input.idempotencyKey}" already belongs to a different agent run.`)
     return { run: prior, created: false }
   }
@@ -110,8 +153,6 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
   const verb = definition.verbs.find(entry => entry.name === verbName)
   if (!verb) throw new Error(`"${input.verb}" is not a verb of ${definition.label}.`)
 
-  const docs = paths.length ? resolveContextDocs(paths, definition.contextDocs) : { root: homedir(), docs: {} }
-  const repoRoot = docs.root ?? homedir()
   const effective = effectiveAgentSettings(definition)
   const parentModel = input.parentModel && (MODEL_IDS as readonly string[]).includes(input.parentModel)
     ? input.parentModel
@@ -120,16 +161,42 @@ export async function dispatchAgentRun(input: DispatchAgentRunInput): Promise<{ 
     ? { ...effective, model: parentModel as typeof effective.model }
     : effective
 
+  const id = randomUUID()
+  let workspace: AgentRunWorkspace
+  let baseSha: string | null
+  let allowedPaths: string[]
+  if (settings.workspace === 'write') {
+    const repoRoot = configuredBondRepoRoot()
+    const baseRef = configuredBondBaseRef()
+    baseSha = await workspaceManager.resolveBase(repoRoot, baseRef)
+    const writeWorkspace = plannedWorktree(id, repoRoot, baseRef)
+    workspace = writeWorkspace
+    const sourcePaths = (input.paths ?? []).map(path => isAbsolute(path) ? resolve(path) : resolve(repoRoot, path))
+    paths = sourcePaths.length ? sourcePaths.map(path => {
+      const rel = relative(repoRoot, path)
+      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error(`Mathis path is outside the configured Bond repository: ${path}`)
+      return resolve(writeWorkspace.worktreePath, rel)
+    }) : [writeWorkspace.worktreePath]
+    allowedPaths = [writeWorkspace.worktreePath]
+  } else {
+    const docs = paths.length ? resolveContextDocs(paths, definition.contextDocs) : { root: homedir(), docs: {} }
+    const repoRoot = docs.root ?? homedir()
+    workspace = { repoRoot, isolation: 'in-place' as const, branch: null, readOnly: true as const }
+    baseSha = await gitBaseSha(repoRoot)
+    allowedPaths = paths
+  }
+
   const created = createAgentRunRecord({
+    id,
     idempotencyKey: input.idempotencyKey.trim(),
     agent: definition.name,
     agentLabel: definition.label,
     verb: verb.name,
     brief: input.brief.trim(),
     paths,
-    workspace: { repoRoot, isolation: 'in-place', branch: null, readOnly: true },
-    baseSha: await gitBaseSha(repoRoot),
-    allowedPaths: paths,
+    workspace,
+    baseSha,
+    allowedPaths,
     settings,
     agentDefinitionVersion: definitionVersion({ definition, settings }),
     commandPolicyVersion: ASYNC_AGENT_COMMAND_POLICY_VERSION,
@@ -154,4 +221,27 @@ export function cancelAgentRun(runId: string): AgentRun | null {
 
 export function reconnectAgentRuns(): AgentRun[] {
   return listAgentRuns({ limit: 100 })
+}
+
+export async function inspectAgentRunWorkspace(runId: string): Promise<ManagedWorkspaceInspection> {
+  const run = getAgentRun(runId)
+  if (!run) throw new Error(`Unknown agent run "${runId}".`)
+  return workspaceManager.inspect(run)
+}
+
+export async function discardAgentRunWorkspace(runId: string): Promise<AgentRun> {
+  const run = getAgentRun(runId)
+  if (!run) throw new Error(`Unknown agent run "${runId}".`)
+  if (!['succeeded', 'failed', 'cancelled'].includes(run.status)) throw new Error('A managed worktree can only be discarded after the run finishes.')
+  if (run.workspace.isolation !== 'worktree') throw new Error('This run has no managed worktree.')
+  if (run.workspaceState.status === 'discarded') return run
+  await workspaceManager.discard(run)
+  const now = new Date().toISOString()
+  const updated = updateAgentRunWorkspaceState(run.id, {
+    ...run.workspaceState,
+    status: 'discarded',
+    discardedAt: now,
+  }, 'workspace_discarded', { path: run.workspace.worktreePath, branch: run.workspace.branch }, now)
+  emit(updated)
+  return updated
 }

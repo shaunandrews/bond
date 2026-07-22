@@ -64,6 +64,8 @@ import {
   cancelAgentRun,
   checkAgentRun,
   reconnectAgentRuns,
+  inspectAgentRunWorkspace,
+  discardAgentRunWorkspace,
   setAgentRunTransport,
   startAgentRunService,
   stopAgentRunService,
@@ -1028,6 +1030,18 @@ const handlers: RpcHandlers = {
     const runId = getStringParam(raw(params), 'runId')
     if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
     return cancelAgentRun(runId)
+  },
+
+  'agentruns.inspectWorkspace': async (params) => {
+    const runId = getStringParam(raw(params), 'runId')
+    if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
+    return inspectAgentRunWorkspace(runId)
+  },
+
+  'agentruns.discardWorkspace': async (params) => {
+    const runId = getStringParam(raw(params), 'runId')
+    if (!runId) throw new RpcError(RPC_INVALID_PARAMS, 'runId is required')
+    return discardAgentRunWorkspace(runId)
   },
 
   // --- Skills ---

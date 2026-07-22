@@ -103,8 +103,8 @@ async function revokeRunner(command: string) {
     <section>
       <p class="section-intro">
         Agents are specialists Bond consults for focused work. Each runs in its own isolated session,
-        reads what it needs, and hands Bond a report — you keep one conversation. Agents are read-only:
-        Bond applies every change itself, through the usual approvals.
+        reads what it needs, and hands Bond a result — you keep one conversation. Felix and Q remain
+        read-only; Mathis can write only inside a retained per-run git worktree after brief confirmation.
       </p>
       <p class="section-intro mt-2">
         Add your own at <code>~/.bond/agents/&lt;name&gt;/AGENT.md</code>.

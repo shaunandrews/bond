@@ -75,6 +75,9 @@ export function registerAgentTools(pi: ExtensionAPI, options: AgentToolOptions =
       }
 
       const settings = effectiveAgentSettings(definition)
+      if (settings.workspace === 'write') {
+        throw new Error(`${definition.label} is write-capable and must run durably through dispatch_agent after the user confirms the brief.`)
+      }
       const paths = (params.paths ?? []).map(expandPath)
       const docs = paths.length ? resolveDocs(paths, definition.contextDocs) : { docs: {} }
 
@@ -198,7 +201,10 @@ export function buildAgentRosterPrompt(loadRoster: typeof loadAgentRoster = load
       : settings.policy === 'suggest'
         ? 'Offer to consult them when their specialty is in play; consult when the user asks.'
         : 'Consult only when the user explicitly asks.'
-    prompt += `- ${agent.label} (${agent.name})${agent.role ? ` — ${agent.role}` : ''}. Verbs: ${verbs}. ${policy}\n`
+    const mode = settings.workspace === 'write'
+      ? 'Write-capable: dispatch only after explicit brief confirmation; it works in a managed retained worktree.'
+      : 'Read-only; use consult_agent for synchronous work or dispatch_agent for durable background work.'
+    prompt += `- ${agent.label} (${agent.name})${agent.role ? ` — ${agent.role}` : ''}. Verbs: ${verbs}. ${mode} ${policy}\n`
   }
   return prompt
 }

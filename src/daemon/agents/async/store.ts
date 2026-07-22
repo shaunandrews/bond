@@ -7,7 +7,8 @@ import {
   type AgentRunEvent,
   type AgentRunResourceCaps,
   type AgentRunState,
-  type ReadOnlyAgentWorkspace,
+  type AgentRunWorkspace,
+  type AgentRunWorkspaceState,
 } from '../../../shared/agent-runs'
 import type { AgentSettings } from '../../../shared/agents'
 import { getDb } from '../../db'
@@ -22,6 +23,7 @@ type RunRow = {
   task_brief: string
   paths_json: string
   workspace_json: string
+  workspace_state_json: string
   base_sha: string | null
   allowed_paths_json: string
   settings_json: string
@@ -63,7 +65,8 @@ export interface CreateAgentRunRecord {
   verb: string
   brief: string
   paths: string[]
-  workspace: ReadOnlyAgentWorkspace
+  workspace: AgentRunWorkspace
+  workspaceState?: AgentRunWorkspaceState
   baseSha: string | null
   allowedPaths: string[]
   settings: AgentSettings
@@ -112,7 +115,8 @@ function rowToRun(row: RunRow): AgentRun {
     verb: row.verb,
     brief: row.task_brief,
     paths: parseJson<string[]>(row.paths_json),
-    workspace: parseJson<ReadOnlyAgentWorkspace>(row.workspace_json),
+    workspace: parseJson<AgentRunWorkspace>(row.workspace_json),
+    workspaceState: parseJson<AgentRunWorkspaceState>(row.workspace_state_json),
     baseSha: row.base_sha,
     allowedPaths: parseJson<string[]>(row.allowed_paths_json),
     settings: parseJson<AgentSettings>(row.settings_json),
@@ -226,13 +230,18 @@ export function createAgentRunRecord(input: CreateAgentRunRecord, dbArg?: Databa
       db.prepare(`
         INSERT INTO agent_runs (
           id, idempotency_key, agent_name, agent_label, verb, task_brief,
-          paths_json, workspace_json, base_sha, allowed_paths_json,
+          paths_json, workspace_json, workspace_state_json, base_sha, allowed_paths_json,
           settings_json, agent_definition_version, command_policy_version,
           acceptance_checks_json, resource_caps_json, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
       `).run(
         id, input.idempotencyKey, input.agent, input.agentLabel, input.verb, input.brief,
-        JSON.stringify(input.paths), JSON.stringify(input.workspace), input.baseSha,
+        JSON.stringify(input.paths), JSON.stringify(input.workspace), JSON.stringify(input.workspaceState ?? {
+          status: input.workspace.isolation === 'worktree' ? 'pending' : 'ready',
+          createdAt: null,
+          retainedAt: null,
+          discardedAt: null,
+        }), input.baseSha,
         JSON.stringify(input.allowedPaths), JSON.stringify(input.settings),
         input.agentDefinitionVersion, input.commandPolicyVersion,
         JSON.stringify(input.acceptanceChecks), JSON.stringify(input.resourceCaps), now, now,
@@ -341,6 +350,25 @@ export function appendAgentRunEvent(
     insertEvent(db, id, type, current.status, current.status, data, now)
     db.prepare('UPDATE agent_runs SET checkpoint_json = COALESCE(?, checkpoint_json), updated_at = ? WHERE id = ?')
       .run(options.checkpoint === undefined ? null : JSON.stringify(options.checkpoint), now, id)
+  })()
+  return getAgentRun(id, db)!
+}
+
+export function updateAgentRunWorkspaceState(
+  id: string,
+  workspaceState: AgentRunWorkspaceState,
+  eventType: string,
+  data: Record<string, unknown> = {},
+  now = nowIso(),
+  dbArg?: Database.Database,
+): AgentRun {
+  const db = dbFor(dbArg)
+  db.transaction(() => {
+    const current = getAgentRun(id, db)
+    if (!current) throw new Error(`Unknown agent run "${id}".`)
+    insertEvent(db, id, eventType, current.status, current.status, data, now)
+    db.prepare('UPDATE agent_runs SET workspace_state_json = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(workspaceState), now, id)
   })()
   return getAgentRun(id, db)!
 }

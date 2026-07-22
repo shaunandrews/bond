@@ -27,6 +27,35 @@ export interface ReadOnlyAgentWorkspace {
   readOnly: true
 }
 
+export interface ManagedWorktreeWorkspace {
+  repoRoot: string
+  isolation: 'worktree'
+  branch: string
+  baseRef: string
+  worktreePath: string
+  readOnly: false
+}
+
+export type AgentRunWorkspace = ReadOnlyAgentWorkspace | ManagedWorktreeWorkspace
+
+export interface AgentRunWorkspaceState {
+  status: 'pending' | 'ready' | 'retained' | 'discarded'
+  createdAt: string | null
+  retainedAt: string | null
+  discardedAt: string | null
+}
+
+export interface ManagedWorkspaceInspection {
+  runId: string
+  path: string
+  branch: string
+  baseSha: string | null
+  headSha: string | null
+  status: AgentRunWorkspaceState['status']
+  porcelain: string
+  diffStat: string
+}
+
 export interface AgentRunResourceCaps {
   wallClockSeconds: number
   maxOutputChars: number
@@ -40,7 +69,8 @@ export interface AgentRun {
   verb: string
   brief: string
   paths: string[]
-  workspace: ReadOnlyAgentWorkspace
+  workspace: AgentRunWorkspace
+  workspaceState: AgentRunWorkspaceState
   baseSha: string | null
   allowedPaths: string[]
   settings: AgentSettings

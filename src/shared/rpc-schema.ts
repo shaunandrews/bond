@@ -38,7 +38,7 @@ import type { WebRenderRequest, WebRenderResult } from './web'
 import type { ModelId } from './models'
 import type { AssetBacklink, AssetKind, AssetReference, LibraryAddDocumentInput, LibraryAsset } from './library'
 import type { AgentRosterResult, AgentSettings, AgentSummary } from './agents'
-import type { AgentRun, AgentRunDetail } from './agent-runs'
+import type { AgentRun, AgentRunDetail, ManagedWorkspaceInspection } from './agent-runs'
 import type {
   DeskBlockDetail,
   DeskMatcher,
@@ -320,6 +320,8 @@ export interface RpcMethods {
   'agentruns.list': { params: void; result: { runs: AgentRun[] } }
   'agentruns.get': { params: { runId: string }; result: AgentRunDetail | null }
   'agentruns.cancel': { params: { runId: string }; result: AgentRun | null }
+  'agentruns.inspectWorkspace': { params: { runId: string }; result: ManagedWorkspaceInspection }
+  'agentruns.discardWorkspace': { params: { runId: string }; result: AgentRun }
 
   // Skills
   'skills.list': { params: void; result: SkillInfo[] }
@@ -574,6 +576,8 @@ export const RPC_METHOD_NAMES = [
   'agentruns.list',
   'agentruns.get',
   'agentruns.cancel',
+  'agentruns.inspectWorkspace',
+  'agentruns.discardWorkspace',
   'skills.list',
   'skills.refresh',
   'skills.remove',

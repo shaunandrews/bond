@@ -13,6 +13,7 @@ export function ensureAgentRunSchema(db: Database.Database): void {
       task_brief TEXT NOT NULL,
       paths_json TEXT NOT NULL CHECK(json_valid(paths_json)),
       workspace_json TEXT NOT NULL CHECK(json_valid(workspace_json)),
+      workspace_state_json TEXT NOT NULL DEFAULT '{"status":"pending","createdAt":null,"retainedAt":null,"discardedAt":null}' CHECK(json_valid(workspace_state_json)),
       base_sha TEXT,
       allowed_paths_json TEXT NOT NULL CHECK(json_valid(allowed_paths_json)),
       settings_json TEXT NOT NULL CHECK(json_valid(settings_json)),
@@ -76,4 +77,9 @@ export function ensureAgentRunSchema(db: Database.Database): void {
       SELECT RAISE(ABORT, 'agent run dispatch contract is immutable');
     END;
   `)
+
+  const columns = db.pragma('table_info(agent_runs)') as Array<{ name: string }>
+  if (!columns.some(column => column.name === 'workspace_state_json')) {
+    db.exec(`ALTER TABLE agent_runs ADD COLUMN workspace_state_json TEXT NOT NULL DEFAULT '{"status":"pending","createdAt":null,"retainedAt":null,"discardedAt":null}' CHECK(json_valid(workspace_state_json))`)
+  }
 }

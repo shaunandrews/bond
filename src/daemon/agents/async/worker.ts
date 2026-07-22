@@ -9,6 +9,7 @@ import { executeReadOnlyAgentRun, type AsyncAgentExecutor } from './executor'
 
 export interface AgentRunWorkerOptions {
   execute?: AsyncAgentExecutor
+  prepare?: (run: AgentRun, signal: AbortSignal) => Promise<AgentRun>
   intervalMs?: number
   onChanged?: (run: AgentRun) => void
   onTerminal?: (run: AgentRun) => void
@@ -29,6 +30,7 @@ const DEFAULT_INTERVAL_MS = 1_000
 
 export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): AgentRunWorker {
   const execute = options.execute ?? executeReadOnlyAgentRun
+  const prepare = options.prepare ?? (async run => run)
   const logger = options.logger ?? console
   let timer: ReturnType<typeof setInterval> | null = null
   let queue: Promise<void> = Promise.resolve()
@@ -68,6 +70,7 @@ export function createAgentRunWorker(options: AgentRunWorkerOptions = {}): Agent
     active = { runId: prepared.id, controller }
     let started = false
     try {
+      prepared = await prepare(prepared, controller.signal)
       const report = await execute(prepared, {
         signal: controller.signal,
         events: listAgentRunEvents(prepared.id),

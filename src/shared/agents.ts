@@ -1,11 +1,10 @@
 /**
  * Agent roster types shared by daemon, renderer, and the RPC contract.
  *
- * An agent is a specialist Bond consults for focused work. Every agent is
- * read-only and artifact-producing: it returns a report, a draft, or a patch,
- * and Bond is the only pair of hands that applies anything — through the
- * normal edit/approval flow. That invariant is what keeps agents available in
- * every edit mode and keeps approval plumbing out of nested sessions.
+ * An agent is a specialist Bond consults for focused work. Read-only is the
+ * default and remains the invariant for synchronous consultation. A bundled
+ * agent may opt into durable worktree writes; that axis is enforced by the
+ * async runner and never widens consult_agent.
  */
 
 import type { ModelId } from './models'
@@ -17,11 +16,13 @@ export type AgentThinking = 'default' | 'low' | 'medium' | 'high' | 'max'
 export type AgentReportDepth = 'full' | 'quick'
 /** How eagerly Bond consults this agent without being asked. */
 export type AgentPolicy = 'on-demand' | 'suggest' | 'auto'
+export type AgentWorkspaceSetting = 'read-only' | 'write'
 
 export const AGENT_MODEL_SETTINGS: AgentModelSetting[] = ['inherit', 'high', 'balanced', 'fast']
 export const AGENT_THINKING_LEVELS: AgentThinking[] = ['default', 'low', 'medium', 'high', 'max']
 export const AGENT_REPORT_DEPTHS: AgentReportDepth[] = ['full', 'quick']
 export const AGENT_POLICIES: AgentPolicy[] = ['on-demand', 'suggest', 'auto']
+export const AGENT_WORKSPACE_SETTINGS: AgentWorkspaceSetting[] = ['read-only', 'write']
 
 /**
  * Bond tools an agent may be granted beyond the read-only base
@@ -39,6 +40,8 @@ export interface AgentSettings {
   thinking: AgentThinking
   report: AgentReportDepth
   policy: AgentPolicy
+  /** Write is opt-in and only honored by the durable worktree runner. */
+  workspace: AgentWorkspaceSetting
   /** Max consult wall-clock seconds before the session is aborted. */
   leash: number
   /** Per-agent "soul" appended to the agent's system prompt. */
@@ -51,6 +54,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   thinking: 'default',
   report: 'full',
   policy: 'suggest',
+  workspace: 'read-only',
   leash: 300,
   instructions: '',
   tools: [],
@@ -117,6 +121,7 @@ export function normalizeAgentSettings(raw: unknown, defaults: AgentSettings = D
     thinking: pick(value.thinking, AGENT_THINKING_LEVELS, defaults.thinking),
     report: pick(value.report, AGENT_REPORT_DEPTHS, defaults.report),
     policy: pick(value.policy, AGENT_POLICIES, defaults.policy),
+    workspace: pick(value.workspace, AGENT_WORKSPACE_SETTINGS, defaults.workspace),
     leash: clampLeash(typeof value.leash === 'number' ? value.leash : defaults.leash),
     instructions: typeof value.instructions === 'string' ? value.instructions : defaults.instructions,
     tools: Array.isArray(value.tools)

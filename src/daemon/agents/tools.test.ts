@@ -106,6 +106,14 @@ describe('consult_agent', () => {
     expect((deps.gatherEvidence as any).mock.calls[0][0]).toMatchObject({ turnId: 'turn-1', onChunk, signal: controller.signal })
     expect((deps.runConsult as any).mock.calls[0][0]).toMatchObject({ parentModel: 'high', signal: controller.signal })
   })
+
+  it('keeps synchronous consultation read-only when an agent opts into writes', async () => {
+    const { effectiveAgentSettings } = await import('./registry')
+    vi.mocked(effectiveAgentSettings).mockReturnValueOnce({ ...DEFAULT_AGENT_SETTINGS, workspace: 'write' })
+    const tool = collectTools(fakes()).get('consult_agent')!
+    await expect(tool.execute('c1', { agent: 'felix', verb: 'critique', brief: 'x' }))
+      .rejects.toThrow('dispatch_agent')
+  })
 })
 
 describe('async agent tools', () => {
