@@ -758,6 +758,10 @@ export const componentInventory = [
       {
         "name": "openActivity",
         "payload": "void"
+      },
+      {
+        "name": "openThread",
+        "payload": "messageId: string"
       }
     ]
   },

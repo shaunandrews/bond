@@ -4,6 +4,7 @@ import { shallowMount } from '@vue/test-utils'
 import MessageBubble from './MessageBubble.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 import { resetIssueReferencesForTest } from '../composables/useIssueReferences'
+import { resetThreadsForTest } from '../composables/useThreads'
 
 describe('MessageBubble issue references', () => {
   beforeEach(() => {
@@ -156,5 +157,81 @@ describe('MessageBubble', () => {
 
     expect(wrapper.text()).toContain('connected')
     expect(wrapper.find('.self-center').exists()).toBe(true)
+  })
+})
+
+describe('MessageBubble thread footer', () => {
+  let bond: { getThreadForAnchor: ReturnType<typeof vi.fn>; onThreadChanged: (fn: () => void) => () => void; listRecentThreads: ReturnType<typeof vi.fn> }
+
+  beforeEach(() => {
+    resetThreadsForTest()
+    bond = {
+      getThreadForAnchor: vi.fn().mockResolvedValue(null),
+      listRecentThreads: vi.fn().mockResolvedValue({ threads: [] }),
+      onThreadChanged: () => () => {},
+    }
+    ;(window as unknown as { bond: unknown }).bond = bond
+  })
+
+  afterEach(() => {
+    resetThreadsForTest()
+    delete (window as unknown as { bond?: unknown }).bond
+  })
+
+  it('hides the footer while the response is still streaming', () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: 'b1', role: 'bond' as const, text: 'typing…', streaming: true } },
+    })
+    expect(wrapper.find('.thread-footer-action').exists()).toBe(false)
+  })
+
+  it('shows Discuss once the response completes, with no thread yet', async () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: 'b2', role: 'bond' as const, text: 'done', streaming: false } },
+    })
+    await Promise.resolve()
+    await nextTick()
+
+    const action = wrapper.find('.thread-footer-action')
+    expect(action.exists()).toBe(true)
+    expect(action.text()).toBe('Discuss')
+    expect(action.attributes('aria-label')).toBe('Start a thread about this response')
+  })
+
+  it('shows the reply count once a thread with replies exists for this anchor', async () => {
+    bond.getThreadForAnchor.mockResolvedValue({
+      id: 't1', anchorMessageId: 'b3', status: 'open', replyCount: 3,
+      contextSnapshot: { version: 1, createdAt: '', anchorMessageId: 'b3', anchorSeq: 1, messages: [] },
+      createdAt: '', updatedAt: '',
+    })
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: 'b3', role: 'bond' as const, text: 'done', streaming: false } },
+    })
+    await Promise.resolve()
+    await nextTick()
+
+    const action = wrapper.find('.thread-footer-action')
+    expect(action.text()).toBe('Thread · 3')
+    expect(action.attributes('aria-label')).toBe('Open thread with 3 replies')
+  })
+
+  it('never shows the footer on the onboarding intro message', async () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: 'onboarding-intro', role: 'bond' as const, text: 'welcome', streaming: false } },
+    })
+    await Promise.resolve()
+    await nextTick()
+    expect(wrapper.find('.thread-footer-action').exists()).toBe(false)
+  })
+
+  it('emits openThread with the message id when clicked', async () => {
+    const wrapper = shallowMount(MessageBubble, {
+      props: { msg: { id: 'b4', role: 'bond' as const, text: 'done', streaming: false } },
+    })
+    await Promise.resolve()
+    await nextTick()
+
+    await wrapper.find('.thread-footer-action').trigger('click')
+    expect(wrapper.emitted('openThread')).toEqual([['b4']])
   })
 })
