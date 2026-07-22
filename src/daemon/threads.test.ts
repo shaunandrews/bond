@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -16,6 +16,8 @@ import {
   getThreadForAnchor,
   listRecentThreads,
   markThreadRead,
+  sendThreadSummaryToMain,
+  summarizeThread,
   threadHasPriorTurns,
   touchThread,
 } from './threads'
@@ -37,6 +39,25 @@ function makeTurn(n: number, userText: string, bondText: string) {
     now: new Date(2026, 0, 1, 0, n).toISOString(),
   })
   upsertMessages([{ id: assistantMessageId, role: 'bond', turnId, text: bondText }])
+  return { turnId, userMessageId, assistantMessageId, activityMessageId }
+}
+
+/** One turn scoped to a thread — no epochId, so insertTurnStart's scope check never triggers. */
+function makeThreadTurn(threadId: string, n: number, userText: string, bondText: string) {
+  const turnId = `t-turn-${n}`
+  const userMessageId = `tu${n}`
+  const assistantMessageId = `tb${n}`
+  const activityMessageId = `ta${n}`
+  insertTurnStart({
+    threadId,
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    activityMessageId,
+    text: userText,
+    now: new Date(2026, 0, 2, 0, n).toISOString(),
+  })
+  upsertMessages([{ id: assistantMessageId, role: 'bond', turnId, threadId, text: bondText }])
   return { turnId, userMessageId, assistantMessageId, activityMessageId }
 }
 
@@ -246,5 +267,64 @@ describe('buildThreadContextEnvelope', () => {
 
   it('tolerates a malformed/empty snapshot rather than throwing', () => {
     expect(() => buildThreadContextEnvelope({ version: 1, createdAt: '', anchorMessageId: '', anchorSeq: 0, messages: undefined as any })).not.toThrow()
+  })
+})
+
+describe('summarizeThread', () => {
+  it("summarizes only the thread's own messages, via the injected prompt runner", async () => {
+    const { assistantMessageId } = makeTurn(1, 'what is bond?', 'bond is a chat app')
+    const thread = createThread(assistantMessageId)
+    makeThreadTurn(thread.id, 1, 'why does it need threads?', 'to keep tangents out of the main conversation')
+
+    const promptRunner = vi.fn().mockResolvedValue('  Bond needs threads to isolate tangents.  ')
+    const summary = await summarizeThread(thread.id, getDb(), promptRunner)
+
+    expect(summary).toBe('Bond needs threads to isolate tangents.')
+    expect(promptRunner).toHaveBeenCalledTimes(1)
+    const [prompt, model] = promptRunner.mock.calls[0]
+    expect(model).toBe('fast')
+    expect(prompt).toContain('why does it need threads?')
+    expect(prompt).toContain('to keep tangents out of the main conversation')
+    // Never the main conversation's own content — only the thread's scoped messages.
+    expect(prompt).not.toContain('what is bond?')
+  })
+
+  it('returns an empty string without calling the model when the thread has no real messages yet', async () => {
+    const { assistantMessageId } = makeTurn(1, 'q', 'a')
+    const thread = createThread(assistantMessageId)
+    const promptRunner = vi.fn()
+
+    expect(await summarizeThread(thread.id, getDb(), promptRunner)).toBe('')
+    expect(promptRunner).not.toHaveBeenCalled()
+  })
+
+  it('returns an empty string when the model call fails, rather than throwing', async () => {
+    const { assistantMessageId } = makeTurn(1, 'q', 'a')
+    const thread = createThread(assistantMessageId)
+    makeThreadTurn(thread.id, 1, 'hi', 'hello')
+    const promptRunner = vi.fn().mockRejectedValue(new Error('model down'))
+
+    await expect(summarizeThread(thread.id, getDb(), promptRunner)).resolves.toBe('')
+  })
+})
+
+describe('sendThreadSummaryToMain', () => {
+  it('inserts a labeled bond message into MAIN scope (thread_id null)', () => {
+    const message = sendThreadSummaryToMain('Bond needs threads to isolate tangents.')
+    expect(message.role).toBe('bond')
+    expect(message.threadId).toBeNull()
+    expect(message.text).toContain('From thread')
+    expect(message.text).toContain('Bond needs threads to isolate tangents.')
+
+    const row = getDb().prepare('SELECT thread_id, role, text FROM messages WHERE id = ?').get(message.id) as { thread_id: string | null; role: string; text: string }
+    expect(row.thread_id).toBeNull()
+    expect(row.role).toBe('bond')
+    expect(row.text).toContain('Bond needs threads to isolate tangents.')
+  })
+
+  it('is observable via the normal main role/scope filter — rides the same path as any Bond reply', () => {
+    const message = sendThreadSummaryToMain('conclusion here')
+    const rows = getDb().prepare("SELECT id FROM messages WHERE role = 'bond' AND thread_id IS NULL").all() as Array<{ id: string }>
+    expect(rows.map(r => r.id)).toContain(message.id)
   })
 })

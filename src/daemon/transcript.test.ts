@@ -70,6 +70,24 @@ describe('transcript store', () => {
       ['bond-1', 3, 'bond', null],
     ])
     expect(page.messages[0].imageIds).toEqual(['img-1'])
+    // Main scope round-trips as threadId: null, not merely absent.
+    expect(page.messages.every(m => m.threadId === null)).toBe(true)
+  })
+
+  it('round-trips threadId on read for a thread-scoped message', () => {
+    getDb().prepare("INSERT INTO messages (id, role, text) VALUES ('thread-anchor', 'bond', 'anchor')").run()
+    getDb().prepare(`
+      INSERT INTO threads (id, anchor_message_id, context_snapshot, status, created_at, updated_at)
+      VALUES ('thread-1', 'thread-anchor', '{}', 'open', '2026-01-01', '2026-01-01')
+    `).run()
+
+    insertTurnStart({
+      threadId: 'thread-1', turnId: 'thread-turn-1', userMessageId: 'thread-user-1',
+      assistantMessageId: 'thread-bond-1', activityMessageId: 'thread-activity-1', text: 'thread question',
+    })
+
+    const page = listMessages({ threadId: 'thread-1' })
+    expect(page.messages.every(m => m.threadId === 'thread-1')).toBe(true)
   })
 
   it('upserts supplied messages without deleting absent rows', () => {

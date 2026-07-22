@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { getDb } from './db'
-import { ensureTranscriptSchema } from './transcript'
-import { escapeHistoricalText } from './pi/runtime'
+import { ensureTranscriptSchema, upsertMessages } from './transcript'
+import { escapeHistoricalText, runPiTextPrompt } from './pi/runtime'
+import type { TranscriptMessage } from '../shared/transcript'
 import type { ChatThread, ThreadContextMessage, ThreadContextSnapshotV1, ThreadStatus, ThreadSummary } from '../shared/threads'
 
 /**
@@ -267,4 +268,53 @@ export function listRecentThreads(limit = 20, db: Database.Database = getDb()): 
     replyCount: replyCountFor(db, row.id),
     updatedAt: row.updated_at,
   }))
+}
+
+/**
+ * Write-back (plans/chat-threads.md "Write-back in v1") — a bounded fast-tier
+ * prompt over the thread's OWN scoped messages only, never the whole
+ * envelope. Never automatic: this is called only when the user explicitly
+ * asks for a summary to review before sending it anywhere.
+ */
+export async function summarizeThread(
+  threadId: string,
+  db: Database.Database = getDb(),
+  /** Injectable so tests never make a real model call — mirrors desk/inference.ts's pattern. */
+  promptRunner: (prompt: string, model: 'fast' | 'balanced' | 'high') => Promise<string> = runPiTextPrompt,
+): Promise<string> {
+  ensureTranscriptSchema(db)
+  const rows = db.prepare(`
+    SELECT role, text FROM messages
+    WHERE thread_id = ? AND role IN ('user', 'bond') AND text IS NOT NULL AND trim(text) != ''
+    ORDER BY seq ASC
+  `).all(threadId) as Array<{ role: string; text: string }>
+  if (!rows.length) return ''
+
+  const transcript = rows.map(r => `${r.role}: ${escapeHistoricalText(r.text)}`).join('\n\n')
+  const prompt = `Summarize the following side conversation in 2-4 plain sentences — what was discussed and what (if anything) was concluded or decided. No markdown headers, no preamble like "Here is a summary".\n\n${transcript}`
+  try {
+    return (await promptRunner(prompt, 'fast')).trim()
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The one write-back action in v1: a confirmed, edited summary becomes a
+ * normal MAIN-conversation message (thread_id null) — never a raw merge of
+ * thread messages, and only ever triggered by an explicit user confirmation
+ * (the RPC layer is the only caller). Inserted as a real 'bond' row (not a
+ * meta/system kind) specifically so it rides the SAME observer path as any
+ * other Bond reply — "normal main-conversation context and memory-observer
+ * input" only holds if the observer's user/bond-only filter can actually see it.
+ */
+export function sendThreadSummaryToMain(summary: string): TranscriptMessage {
+  const message: TranscriptMessage = {
+    id: randomUUID(),
+    role: 'bond',
+    threadId: null,
+    text: `**From thread:**\n\n${summary}`,
+  }
+  upsertMessages([message])
+  return message
 }

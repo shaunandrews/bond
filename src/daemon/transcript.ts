@@ -278,6 +278,7 @@ function rowToMessage(row: MessageRow): TranscriptMessage {
     id: row.id,
     epochId: row.epoch_id,
     turnId: row.turn_id,
+    threadId: row.thread_id,
     seq: row.seq ?? undefined,
     role: row.role,
     kind: row.kind,

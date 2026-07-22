@@ -10,7 +10,7 @@ import type { DetectedWindow } from '../shared/sense'
 import { parseEditMode } from '../shared/session'
 import type { TranscriptMessage } from '../shared/transcript'
 import { listMessages as listTranscriptMessages, upsertMessages as upsertTranscriptMessages, searchMessages as searchTranscriptMessages, getSourceMessages, getTurnThreadId, reconcileInterruptedTurns } from './transcript'
-import { closeThread, createThread, deleteDraftThread, getThread, getThreadForAnchor, listRecentThreads, markThreadRead, touchThread } from './threads'
+import { closeThread, createThread, deleteDraftThread, getThread, getThreadForAnchor, listRecentThreads, markThreadRead, sendThreadSummaryToMain, summarizeThread, touchThread } from './threads'
 import { MAIN_SCOPE, parseConversationScope, threadIdToScope, type ConversationScope } from '../shared/threads'
 import type { ModelId } from '../shared/models'
 import type { DispatchableMethod, RpcParams, RpcResult } from '../shared/rpc-schema'
@@ -688,6 +688,22 @@ const handlers: RpcHandlers = {
     const ok = deleteDraftThread(threadId)
     if (ok) broadcastThreadChanged()
     return { ok }
+  },
+
+  'thread.summarize': async (params) => {
+    const threadId = getStringParam(raw(params), 'threadId')
+    if (!threadId) throw new RpcError(RPC_INVALID_PARAMS, 'threadId is required')
+    return { summary: await summarizeThread(threadId) }
+  },
+
+  'thread.sendSummaryToMain': (params) => {
+    const p = raw(params)
+    const threadId = getStringParam(p, 'threadId')
+    const summary = getStringParam(p, 'summary')
+    if (!threadId) throw new RpcError(RPC_INVALID_PARAMS, 'threadId is required')
+    if (!summary?.trim()) throw new RpcError(RPC_INVALID_PARAMS, 'summary is required')
+    const message = sendThreadSummaryToMain(summary.trim())
+    return { ok: true as const, messageId: message.id }
   },
 
   // --- Sessions ---

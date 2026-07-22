@@ -83,6 +83,8 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     markThreadRead: (threadId: string) => invoke('thread.markRead', { threadId }),
     closeThread: (threadId: string) => invoke('thread.close', { threadId }),
     deleteDraftThread: (threadId: string) => invoke('thread.deleteDraft', { threadId }),
+    summarizeThread: (threadId: string) => invoke('thread.summarize', { threadId }),
+    sendThreadSummaryToMain: (threadId: string, summary: string) => invoke('thread.sendSummaryToMain', { threadId, summary }),
 
     // Legacy transport session used internally by the continuous transcript runtime.
     createSession: (options?: { title?: string }) => invoke('session.create', options),

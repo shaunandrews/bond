@@ -11,8 +11,9 @@ import { getDb } from './db'
 import { listMessages as listTranscriptMessages } from './transcript'
 import { registerApproval } from './approvals'
 
-const { runBondQueryMock } = vi.hoisted(() => ({
+const { runBondQueryMock, runPiTextPromptMock } = vi.hoisted(() => ({
   runBondQueryMock: vi.fn(),
+  runPiTextPromptMock: vi.fn(),
 }))
 
 vi.mock('./agent', async (importOriginal) => {
@@ -20,6 +21,14 @@ vi.mock('./agent', async (importOriginal) => {
   return {
     ...actual,
     runBondQuery: runBondQueryMock,
+  }
+})
+
+vi.mock('./pi/runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./pi/runtime')>()
+  return {
+    ...actual,
+    runPiTextPrompt: runPiTextPromptMock,
   }
 })
 
@@ -31,6 +40,8 @@ let socketPath: string
 beforeEach(async () => {
   runBondQueryMock.mockReset()
   runBondQueryMock.mockResolvedValue({ succeeded: true, piSessionId: 'pi-test', contextTokens: 100, contextWindow: 1000 })
+  runPiTextPromptMock.mockReset()
+  runPiTextPromptMock.mockResolvedValue('a bounded summary of the thread')
   tempDir = mkdtempSync(join(tmpdir(), 'bond-test-'))
   socketPath = join(tempDir, 'bond.sock')
   setDataDir(tempDir)
@@ -458,6 +469,58 @@ describe('chat threads RPC', () => {
 
     await vi.waitFor(() => { expect(events.length).toBeGreaterThanOrEqual(3) })
     client2.close()
+  })
+})
+
+describe('chat threads write-back RPC', () => {
+  async function sendAndGetAnchor(text: string, reply: string): Promise<string> {
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: reply })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await client.send(text)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const anchor = [...rows].reverse().find(m => m.role === 'bond' && m.text === reply)
+    if (!anchor) throw new Error('anchor message not found')
+    return anchor.id
+  }
+
+  it('summarizes a thread via the bounded fast-tier prompt, never calling the model when it has no messages', async () => {
+    const anchorId = await sendAndGetAnchor('q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    const empty = await client.call('thread.summarize', { threadId: thread.id })
+    expect(empty.summary).toBe('')
+    expect(runPiTextPromptMock).not.toHaveBeenCalled()
+
+    await client.call('bond.send', { text: 'a thread question', scope: { type: 'thread', threadId: thread.id } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    const result = await client.call('thread.summarize', { threadId: thread.id })
+    expect(result.summary).toBe('a bounded summary of the thread')
+    expect(runPiTextPromptMock).toHaveBeenCalledTimes(1)
+    expect(runPiTextPromptMock.mock.calls[0][1]).toBe('fast')
+  })
+
+  it('sends a confirmed summary to main as a labeled bond message, never merging raw thread messages', async () => {
+    const anchorId = await sendAndGetAnchor('q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    const result = await client.call('thread.sendSummaryToMain', { threadId: thread.id, summary: 'the agreed conclusion' })
+    expect(result.ok).toBe(true)
+
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const inserted = rows.find(m => m.id === result.messageId)
+    expect(inserted).toMatchObject({ role: 'bond', threadId: null })
+    expect(inserted?.text).toContain('From thread')
+    expect(inserted?.text).toContain('the agreed conclusion')
+  })
+
+  it('rejects an empty summary', async () => {
+    const anchorId = await sendAndGetAnchor('q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+    await expect(client.call('thread.sendSummaryToMain', { threadId: thread.id, summary: '   ' })).rejects.toThrow()
   })
 })
 

@@ -265,6 +265,10 @@ export interface RpcMethods {
   'thread.markRead': { params: { threadId: string }; result: { ok: true } }
   'thread.close': { params: { threadId: string }; result: { ok: true } }
   'thread.deleteDraft': { params: { threadId: string }; result: { ok: boolean } }
+  /** Bounded fast-tier prompt over the thread's own scoped messages — never automatic, only ever user-triggered. */
+  'thread.summarize': { params: { threadId: string }; result: { summary: string } }
+  /** The one v1 write-back action: an explicitly-confirmed summary becomes a normal main-conversation message. */
+  'thread.sendSummaryToMain': { params: { threadId: string; summary: string }; result: { ok: true; messageId: string } }
 
   // Sessions
   'session.list': { params: void; result: Session[] }
@@ -525,6 +529,8 @@ export const RPC_METHOD_NAMES = [
   'thread.markRead',
   'thread.close',
   'thread.deleteDraft',
+  'thread.summarize',
+  'thread.sendSummaryToMain',
   'session.list',
   'session.create',
   'session.get',
