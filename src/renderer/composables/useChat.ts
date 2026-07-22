@@ -354,6 +354,14 @@ export function useChat(deps: ChatDeps = window.bond, options: UseChatOptions = 
   }
 
   function handleChunk(chunk: TaggedChunk) {
+    // The global edit mode is a truly unscoped event — every instance (main
+    // and every open thread) mirrors it regardless of which scope's turn (if
+    // any) changed it, so it must bypass the per-scope gate below entirely.
+    if (chunk.kind === 'edit_mode_changed') {
+      editMode.value = chunk.editMode
+      return
+    }
+
     // One useChat instance is exactly one conversation scope (main, or one
     // thread). The old sessionId check below is a no-op whenever
     // currentSessionId is null (the common continuous-Bond case), which
@@ -414,12 +422,6 @@ export function useChat(deps: ChatDeps = window.bond, options: UseChatOptions = 
         appendAnswerMessage(chunk.questionId, chunk.answer)
         splitActivityAfterAnswer(m.id, chunk.answer)
       }
-      return
-    }
-
-    if (chunk.kind === 'edit_mode_changed') {
-      // One global mode across devices — mirror a change made anywhere.
-      editMode.value = chunk.editMode
       return
     }
 

@@ -711,6 +711,16 @@ describe('useChat continuous transcript', () => {
 })
 
 describe('useChat scoped to a thread', () => {
+  it('mirrors edit_mode_changed even though it carries no scope — it is a truly global event', () => {
+    const deps = mockDeps()
+    const chat = withSetup(deps, { scope: { type: 'thread', threadId: 'thread-1' } })
+    chat.subscribe()
+    const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0] as (c: TaggedChunk) => void
+
+    handler({ kind: 'edit_mode_changed', editMode: { type: 'readonly' } })
+    expect(chat.editMode.value).toEqual({ type: 'readonly' })
+  })
+
   it('tags its own sends with the thread scope', async () => {
     const deps = mockDeps()
     const chat = withSetup(deps, { scope: { type: 'thread', threadId: 'thread-1' }, namespace: 'thread:thread-1' })
