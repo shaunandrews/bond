@@ -4,6 +4,8 @@ import { PANEL_GROUP_KEY } from './panelTypes'
 
 const props = withDefaults(defineProps<{
   id: string
+  beforePanelId: string
+  afterPanelId: string
   disabled?: boolean
   hitArea?: number
 }>(), {
@@ -41,7 +43,7 @@ function onPointerDown(e: PointerEvent) {
   startPointerPos = isHorizontal.value ? e.clientX : e.clientY
   accumulatedDelta = 0
 
-  group.startResize(props.id)
+  group.startResize(props.beforePanelId, props.afterPanelId)
 
   // Capture pointer so webviews/iframes don't steal events during drag
   handleEl.value?.setPointerCapture(e.pointerId)
@@ -93,7 +95,7 @@ function onKeyDown(e: KeyboardEvent) {
 
   if (delta !== 0) {
     e.preventDefault()
-    group.keyboardResize(props.id, delta)
+    group.keyboardResize(props.beforePanelId, props.afterPanelId, delta)
   }
 }
 

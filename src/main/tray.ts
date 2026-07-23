@@ -3,11 +3,26 @@
  * State is driven by daemon WebSocket events.
  */
 
-import { Tray, Menu, nativeImage } from 'electron'
+import { Tray, Menu, Notification, nativeImage } from 'electron'
 import type { BondClient } from '../shared/client'
+import type { AgentRun, AgentRunState } from '../shared/agent-runs'
 
 let tray: Tray | null = null
 let currentState = 'disabled'
+const notifiedAgentStates = new Map<string, AgentRunState>()
+
+export function shouldNotifyAgentRun(previous: AgentRunState | undefined, next: AgentRunState, appFocused: boolean): boolean {
+  if (appFocused || previous === next) return false
+  return ['needs-input', 'succeeded', 'failed'].includes(next)
+}
+
+function notifyAgentRun(run: AgentRun, appFocused: boolean): void {
+  const previous = notifiedAgentStates.get(run.id)
+  notifiedAgentStates.set(run.id, run.status)
+  if (!shouldNotifyAgentRun(previous, run.status, appFocused) || !Notification.isSupported()) return
+  const outcome = run.status === 'needs-input' ? 'needs your input' : run.status === 'succeeded' ? 'finished' : 'failed'
+  new Notification({ title: `${run.agentLabel} ${outcome}`, body: run.status === 'failed' ? run.errorMessage ?? run.brief : run.brief, silent: true }).show()
+}
 
 // Simple dot icons for tray (template images for macOS)
 function createTrayIcon(state: string): Electron.NativeImage {
@@ -71,7 +86,7 @@ function buildContextMenu(client: BondClient): Electron.Menu {
   ])
 }
 
-export function initTray(client: BondClient): void {
+export function initTray(client: BondClient, isAppFocused: () => boolean = () => false): void {
   const icon = createTrayIcon('disabled')
   tray = new Tray(icon)
   tray.setToolTip('Bond Sense')
@@ -87,6 +102,9 @@ export function initTray(client: BondClient): void {
       tray.setToolTip(`Bond Sense: ${label}`)
     }
   })
+  client.onChunk(chunk => {
+    if (chunk.kind === 'agent_run_changed') notifyAgentRun(chunk.run, isAppFocused())
+  })
 
   // Get initial state
   client.senseStatus().then(status => {
@@ -98,6 +116,7 @@ export function initTray(client: BondClient): void {
 }
 
 export function destroyTray(): void {
+  notifiedAgentStates.clear()
   if (tray) {
     tray.destroy()
     tray = null

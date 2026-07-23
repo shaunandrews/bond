@@ -5,6 +5,7 @@ import type { BondSendResult } from '../../shared/rpc-schema'
 import type { AttachedImage, EditMode, SessionMessage } from '../../shared/session'
 import type { QuestionAnswer } from '../../shared/questions'
 import type { TranscriptMessage, TranscriptPage } from '../../shared/transcript'
+import { MAIN_SCOPE, scopesEqual, scopeToThreadId, threadScope, type ConversationScope } from '../../shared/threads'
 import type { Message } from '../types/message'
 import type { TurnActivityData, TurnActivityEvent } from '../types/activity'
 import { formatToolLabel } from '../lib/format'
@@ -21,7 +22,7 @@ export interface QueuedMessage {
 
 export interface ChatDeps {
   send: ((input: BondSendInput) => Promise<BondSendResult>) & ((text: string, sessionId?: string, images?: AttachedImage[]) => Promise<BondSendResult>)
-  cancel: (sessionId?: string) => Promise<{ ok: boolean }>
+  cancel: (sessionId?: string, scope?: ConversationScope) => Promise<{ ok: boolean }>
   onChunk: (fn: (chunk: TaggedChunk) => void) => () => void
   respondToApproval: (requestId: string, approved: boolean) => Promise<{ ok: boolean }>
   answerQuestion: (questionId: string, answer: QuestionAnswer) => Promise<{ ok: boolean }>
@@ -29,13 +30,25 @@ export interface ChatDeps {
   listTranscript: (options?: { beforeSeq?: number; limit?: number }) => Promise<TranscriptPage>
   upsertTranscript: (messages: TranscriptMessage[]) => Promise<{ ok: boolean }>
   createSession?: (options?: { title?: string }) => Promise<{ id: string }>
-  subscribe?: (sessionId?: string) => Promise<{ ok: boolean }>
-  unsubscribe?: (sessionId?: string) => Promise<{ ok: boolean }>
+  subscribe?: (sessionId?: string, scope?: ConversationScope) => Promise<{ ok: boolean }>
+  unsubscribe?: (sessionId?: string, scope?: ConversationScope) => Promise<{ ok: boolean }>
   /** Desktop-only: reveal the Desk notch panel. The web shim no-ops. */
   openDesk?: (opts?: { queued?: boolean }) => Promise<{ opened: boolean; reason?: string }>
   // Legacy deps retained so older component tests can supply partial window.bond mocks.
   getMessages?: (sessionId: string) => Promise<SessionMessage[]>
   saveMessages?: (sessionId: string, messages: SessionMessage[]) => Promise<boolean>
+}
+
+export interface UseChatOptions {
+  /** Omitted means the main conversation. A thread instance passes its own scope. */
+  scope?: ConversationScope
+  /**
+   * Namespaces HMR state and the localStorage recovery stash so two live
+   * instances (main + an open thread) never clobber each other's. Omitted
+   * (main) keeps the exact existing keys — changing them would orphan
+   * everyone's current backup.
+   */
+  namespace?: string
 }
 
 function uid(): string {
@@ -68,11 +81,12 @@ function plainEditMode(mode: EditMode): EditMode {
   return { type: mode.type }
 }
 
-function toTranscriptMessage(m: Message): TranscriptMessage {
-  const base = { id: m.id, role: m.role === 'bond' ? 'bond' as const : m.role, createdAt: m.ts ? new Date(m.ts).toISOString() : undefined, updatedAt: nowIso() }
+function toTranscriptMessage(m: Message, threadId?: string | null): TranscriptMessage {
+  const base = { id: m.id, role: m.role === 'bond' ? 'bond' as const : m.role, threadId, createdAt: m.ts ? new Date(m.ts).toISOString() : undefined, updatedAt: nowIso() }
   if (m.role === 'user') return { ...base, role: 'user', text: m.text, images: plainImages(m.images), imageIds: m.imageIds ? [...m.imageIds] : undefined }
   if (m.role === 'bond') return { ...base, role: 'bond', text: m.text }
   if (m.kind === 'activity') return { ...base, role: 'meta', kind: 'activity', data: plainJson(m.data) as unknown as Record<string, unknown> }
+  if (m.kind === 'agent-run') return { ...base, role: 'meta', kind: 'agent-run', text: m.text, data: plainJson(m.data) as unknown as Record<string, unknown> }
   if (m.kind === 'image') return { ...base, role: 'meta', kind: 'image', imageIds: [...m.imageIds], data: m.alt ? { alt: m.alt } : undefined }
   if (m.kind === 'tool') return { ...base, role: 'meta', kind: 'tool', text: m.summary ?? null, data: { name: m.name, summary: m.summary } }
   if (m.kind === 'skill') return { ...base, role: 'meta', kind: 'skill', text: m.args ?? null, data: { name: m.name, args: m.args } }
@@ -87,6 +101,7 @@ function fromTranscriptMessage(m: TranscriptMessage): Message | null {
   if (m.role === 'user') return { id: m.id, role: 'user', text: m.text ?? '', images: m.images, imageIds: m.imageIds, ts }
   if (m.role === 'bond') return { id: m.id, role: 'bond', text: m.text ?? '', streaming: false, ts }
   if (m.kind === 'activity' && m.data) return { id: m.id, role: 'meta', kind: 'activity', data: m.data as unknown as TurnActivityData, ts }
+  if (m.kind === 'agent-run' && m.data) return { id: m.id, role: 'meta', kind: 'agent-run', text: m.text ?? '', data: m.data as unknown as Extract<Message, { kind: 'agent-run' }>['data'], ts }
   if (m.kind === 'image') return { id: m.id, role: 'meta', kind: 'image', imageIds: m.imageIds ?? [], images: m.images, alt: typeof m.data?.alt === 'string' ? m.data.alt : undefined, ts }
   if (m.kind === 'tool') return { id: m.id, role: 'meta', kind: 'tool', name: String(m.data?.name ?? ''), summary: m.text ?? String(m.data?.summary ?? ''), ts }
   if (m.kind === 'skill') return { id: m.id, role: 'meta', kind: 'skill', name: String(m.data?.name ?? ''), args: m.text ?? String(m.data?.args ?? ''), ts }
@@ -99,9 +114,19 @@ function fromTranscriptMessage(m: TranscriptMessage): Message | null {
   return { id: m.id, role: 'meta', kind: 'system', text: m.text ?? '', ts }
 }
 
-const _hmr = import.meta.hot?.data as
-  | { messages?: Message[]; busy?: boolean; queuedMessages?: QueuedMessage[]; transportSessionId?: string | null; nextBeforeSeq?: number | null; hasLoaded?: boolean; activeTurnId?: string | null; activeActivityId?: string | null; dirtyIds?: string[] }
-  | undefined
+type HmrSlot = { messages?: Message[]; busy?: boolean; queuedMessages?: QueuedMessage[]; transportSessionId?: string | null; nextBeforeSeq?: number | null; hasLoaded?: boolean; activeTurnId?: string | null; activeActivityId?: string | null; dirtyIds?: string[] }
+
+/**
+ * One conversation instance = one namespaced slot. A flat module-level
+ * constant here would let every instance (main + however many open threads)
+ * read and overwrite the SAME slot — losing turn ownership across whichever
+ * one hot-reloaded last.
+ */
+function hmrSlot(namespace: string): HmrSlot | undefined {
+  if (!import.meta.hot?.data) return undefined
+  const data = import.meta.hot.data as Record<string, HmrSlot>
+  return (data[`chat:${namespace}`] ??= {})
+}
 
 /** Chunk kinds owned by a single turn — anything here from a foreign turnId is a straggler. */
 const TURN_SCOPED_CHUNKS: ReadonlySet<string> = new Set([
@@ -109,7 +134,13 @@ const TURN_SCOPED_CHUNKS: ReadonlySet<string> = new Set([
   'tool_result', 'tool_approval', 'user_question', 'raw_error', 'result', 'generated_image', 'system',
 ])
 
-export function useChat(deps: ChatDeps = window.bond) {
+export function useChat(deps: ChatDeps = window.bond, options: UseChatOptions = {}) {
+  const myScope = options.scope ?? MAIN_SCOPE
+  const myThreadId = scopeToThreadId(myScope)
+  const namespace = options.namespace ?? 'main'
+  const backupKey = options.namespace ? `${TRANSCRIPT_BACKUP_KEY}:${options.namespace}` : TRANSCRIPT_BACKUP_KEY
+  const _hmr = hmrSlot(namespace)
+
   const messages = ref<Message[]>(_hmr?.messages ?? [])
   const busy = ref(!!_hmr?.busy)
   const queuedMessages = ref<QueuedMessage[]>(_hmr?.queuedMessages ?? [])
@@ -180,7 +211,7 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   function upsertMessages(msgs: Message[]): Promise<boolean> {
-    const payload = msgs.map(m => toTranscriptMessage({ ...m }))
+    const payload = msgs.map(m => toTranscriptMessage({ ...m }, myThreadId))
     const promise = (async () => {
       try {
         const res = await deps.upsertTranscript(payload)
@@ -325,6 +356,32 @@ export function useChat(deps: ChatDeps = window.bond) {
   }
 
   function handleChunk(chunk: TaggedChunk) {
+    // The global edit mode is a truly unscoped event — every instance (main
+    // and every open thread) mirrors it regardless of which scope's turn (if
+    // any) changed it, so it must bypass the per-scope gate below entirely.
+    if (chunk.kind === 'edit_mode_changed') {
+      editMode.value = chunk.editMode
+      return
+    }
+
+    // The worker inserts completion off-turn before broadcasting this marker.
+    // Reloading from the daemon gives every live main-conversation client the
+    // same durable card; reconnect follows the same transcript-load path.
+    if (chunk.kind === 'agent_run_changed') {
+      const hasCard = messages.value.some(message => message.role === 'meta' && message.kind === 'agent-run' && message.data.runId === chunk.run.id)
+      if (myScope.type === 'main' && (chunk.run.completionMessageId || !hasCard)) {
+        void loadTranscript().catch(error => console.warn('[bond] agent completion reconciliation failed:', error))
+      }
+      return
+    }
+
+    // One useChat instance is exactly one conversation scope (main, or one
+    // thread). The old sessionId check below is a no-op whenever
+    // currentSessionId is null (the common continuous-Bond case), which
+    // would let another scope's turn_start inject a fake user message here.
+    // Every conversation-scoped chunk carries `scope` explicitly now; reject
+    // anything that isn't this instance's own.
+    if (!scopesEqual(chunk.scope ?? MAIN_SCOPE, myScope)) return
     if (currentSessionId.value && chunk.sessionId && chunk.sessionId !== currentSessionId.value) return
 
     if (chunk.kind === 'turn_start') {
@@ -378,12 +435,6 @@ export function useChat(deps: ChatDeps = window.bond) {
         appendAnswerMessage(chunk.questionId, chunk.answer)
         splitActivityAfterAnswer(m.id, chunk.answer)
       }
-      return
-    }
-
-    if (chunk.kind === 'edit_mode_changed') {
-      // One global mode across devices — mirror a change made anywhere.
-      editMode.value = chunk.editMode
       return
     }
 
@@ -588,7 +639,7 @@ export function useChat(deps: ChatDeps = window.bond) {
 
   async function ensureGlobalSubscription() {
     if (globalSubscribed) return
-    await deps.subscribe?.()
+    await deps.subscribe?.(undefined, myScope)
     globalSubscribed = true
   }
 
@@ -648,7 +699,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     busy.value = true
 
     try {
-      const input: BondSendInput = { text: trimmed, images: plainImages(images), turnId, userMessageId, assistantMessageId, activityMessageId, editMode: plainEditMode(editMode.value) }
+      const input: BondSendInput = { scope: myScope, text: trimmed, images: plainImages(images), turnId, userMessageId, assistantMessageId, activityMessageId, editMode: plainEditMode(editMode.value) }
       const res = await deps.send(input)
       if (res.ok && res.imageIds?.length) {
         for (let i = messages.value.length - 1; i >= 0; i--) {
@@ -744,7 +795,7 @@ export function useChat(deps: ChatDeps = window.bond) {
     // straggler, losing both the final state and queued messages.
     cancellingTurnId = activeTurnId.value
     try {
-      const result = await deps.cancel(currentSessionId.value ?? undefined)
+      const result = await deps.cancel(currentSessionId.value ?? undefined, myScope)
       if (!result.ok) return
       // A sleeping/reconnecting client can miss query_end even though cancel
       // waits for daemon settlement. Reconcile the canonical transcript, then
@@ -790,16 +841,16 @@ export function useChat(deps: ChatDeps = window.bond) {
   function stashToLocalStorage() {
     if (!messages.value.length) return
     try {
-      const tail = messages.value.slice(-TRANSCRIPT_BACKUP_LIMIT).map(toTranscriptMessage)
-      localStorage.setItem(TRANSCRIPT_BACKUP_KEY, JSON.stringify(tail))
-      localStorage.removeItem('bond:transcript-backup')
+      const tail = messages.value.slice(-TRANSCRIPT_BACKUP_LIMIT).map(m => toTranscriptMessage(m, myThreadId))
+      localStorage.setItem(backupKey, JSON.stringify(tail))
+      if (!options.namespace) localStorage.removeItem('bond:transcript-backup')
       localStorage.setItem('bond:msg-backup-ts', String(Date.now()))
     } catch { /* best effort */ }
   }
 
   async function restoreFromBackupIfNeeded(): Promise<boolean> {
     try {
-      const raw = localStorage.getItem(TRANSCRIPT_BACKUP_KEY) ?? localStorage.getItem('bond:transcript-backup')
+      const raw = localStorage.getItem(backupKey) ?? (options.namespace ? null : localStorage.getItem('bond:transcript-backup'))
       if (!raw) return false
       const backed = (JSON.parse(raw) as TranscriptMessage[]).slice(-TRANSCRIPT_BACKUP_LIMIT)
       const dbPage = await deps.listTranscript({ limit: TRANSCRIPT_PAGE_SIZE })
@@ -812,8 +863,8 @@ export function useChat(deps: ChatDeps = window.bond) {
       }
     } catch { /* corrupt backup — ignore */ }
     finally {
-      localStorage.removeItem(TRANSCRIPT_BACKUP_KEY)
-      localStorage.removeItem('bond:transcript-backup')
+      localStorage.removeItem(backupKey)
+      if (!options.namespace) localStorage.removeItem('bond:transcript-backup')
     }
     return false
   }
@@ -823,23 +874,23 @@ export function useChat(deps: ChatDeps = window.bond) {
   function subscribe() { unsub = deps.onChunk(handleChunk) }
   function unsubscribe() { unsub?.() }
 
-  if (import.meta.hot) {
-    import.meta.hot.dispose((data) => {
+  if (import.meta.hot && _hmr) {
+    import.meta.hot.dispose(() => {
       if (persistTimer) clearTimeout(persistTimer)
-      // No DB write here: state survives HMR via `data` below, the daemon
-      // persists every turn's rows itself, and a window holding a stale
-      // transcript (dropped chunks) used to blast it over rows the daemon
-      // had already finalized — regressing done turns and wiping replies.
+      // No DB write here: state survives HMR via the namespaced slot below,
+      // the daemon persists every turn's rows itself, and a window holding a
+      // stale transcript (dropped chunks) used to blast it over rows the
+      // daemon had already finalized — regressing done turns and wiping replies.
       stashToLocalStorage()
-      data.messages = messages.value
-      data.busy = busy.value
-      data.queuedMessages = queuedMessages.value
-      data.transportSessionId = currentSessionId.value
-      data.nextBeforeSeq = nextBeforeSeq.value
-      data.hasLoaded = hasLoadedTranscript.value
-      data.activeTurnId = activeTurnId.value
-      data.activeActivityId = activeActivityId.value
-      data.dirtyIds = [...dirtyIds]
+      _hmr.messages = messages.value
+      _hmr.busy = busy.value
+      _hmr.queuedMessages = queuedMessages.value
+      _hmr.transportSessionId = currentSessionId.value
+      _hmr.nextBeforeSeq = nextBeforeSeq.value
+      _hmr.hasLoaded = hasLoadedTranscript.value
+      _hmr.activeTurnId = activeTurnId.value
+      _hmr.activeActivityId = activeActivityId.value
+      _hmr.dirtyIds = [...dirtyIds]
     })
   }
 
@@ -874,4 +925,21 @@ export function useChat(deps: ChatDeps = window.bond) {
     restoreFromBackupIfNeeded,
     onQueryEnd
   }
+}
+
+export type UseChatReturn = ReturnType<typeof useChat>
+
+/**
+ * A thread's conversation state — same engine as main (activity/approval/
+ * question handling, queueing, persistence), scoped to one thread. The only
+ * thing that actually differs is which RPC lists its history; useChat itself
+ * already attaches `scope` to every send/cancel/subscribe call and filters
+ * incoming chunks to match, so nothing else needs a thread-specific branch.
+ */
+export function useThreadConversation(threadId: string, deps?: ChatDeps): UseChatReturn {
+  const threadDeps: ChatDeps = deps ?? {
+    ...window.bond,
+    listTranscript: (options) => window.bond.listThreadMessages(threadId, options),
+  }
+  return useChat(threadDeps, { scope: threadScope(threadId), namespace: `thread:${threadId}` })
 }

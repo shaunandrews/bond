@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createApp, defineComponent, nextTick, watch } from 'vue'
-import { useChat, type ChatDeps } from './useChat'
+import { useChat, type ChatDeps, type UseChatOptions } from './useChat'
 import type { TaggedChunk } from '../../shared/stream'
 
 function mockDeps(): ChatDeps {
@@ -21,9 +21,9 @@ function mockDeps(): ChatDeps {
 
 type UseChatReturn = ReturnType<typeof useChat>
 
-function withSetup(deps: ChatDeps): UseChatReturn {
+function withSetup(deps: ChatDeps, options?: UseChatOptions): UseChatReturn {
   let result!: UseChatReturn
-  const app = createApp(defineComponent({ setup() { result = useChat(deps); return () => null } }))
+  const app = createApp(defineComponent({ setup() { result = useChat(deps, options); return () => null } }))
   app.mount(document.createElement('div'))
   return result
 }
@@ -68,6 +68,24 @@ describe('useChat continuous transcript', () => {
     expect(assistant && 'text' in assistant ? assistant.text : '').toContain('streamed here too')
   })
 
+  it('ignores a thread turn_start — useChat is the main conversation only', () => {
+    // Regression: currentSessionId is null for continuous Bond, which made
+    // the old sessionId-only filter a no-op — a thread's turn_start would
+    // otherwise inject a fake user message straight into the main transcript.
+    handler({
+      kind: 'turn_start',
+      turnId: 'thread-turn',
+      userMessageId: 'u-thread',
+      assistantMessageId: 'a-thread',
+      activityMessageId: 'm-thread',
+      text: 'a thread message',
+      scope: { type: 'thread', threadId: 'thread-1' },
+    })
+
+    expect(chat.messages.value.some(m => m.id === 'u-thread')).toBe(false)
+    expect(chat.messages.value.some(m => m.id === 'a-thread')).toBe(false)
+  })
+
   it('still processes untagged chunks (legacy compatibility)', async () => {
     await chat.submit('hello')
     handler({ kind: 'assistant_text', text: 'no tags on me' })
@@ -85,6 +103,11 @@ describe('useChat continuous transcript', () => {
     await chat.submit('careful now')
     const input = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(input.editMode).toEqual({ type: 'readonly' })
+  })
+
+  it('reloads the main transcript when a durable agent card is first inserted', async () => {
+    handler({ kind: 'agent_run_changed', run: { id: 'run-card', completionMessageId: null } } as TaggedChunk)
+    await vi.waitFor(() => expect(deps.listTranscript).toHaveBeenCalled())
   })
 
   it('dispatches show_panel chunks as a window event, not transcript content', () => {
@@ -192,7 +215,7 @@ describe('useChat continuous transcript', () => {
     await vi.waitFor(() => expect(deps.send).toHaveBeenCalledTimes(1))
 
     expect(deps.createSession).not.toHaveBeenCalled()
-    expect(deps.subscribe).toHaveBeenCalledWith()
+    expect(deps.subscribe).toHaveBeenCalledWith(undefined, { type: 'main' })
     expect(deps.upsertTranscript).not.toHaveBeenCalled()
     const input = (deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(input).toMatchObject({ text: 'hello', editMode: { type: 'full' } })
@@ -689,5 +712,66 @@ describe('useChat continuous transcript', () => {
       editMode: { type: 'scoped', allowedPaths: ['/tmp/project'] },
       images: [{ data: 'abc', mediaType: 'image/png' }],
     })
+  })
+})
+
+describe('useChat scoped to a thread', () => {
+  it('mirrors edit_mode_changed even though it carries no scope — it is a truly global event', () => {
+    const deps = mockDeps()
+    const chat = withSetup(deps, { scope: { type: 'thread', threadId: 'thread-1' } })
+    chat.subscribe()
+    const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0] as (c: TaggedChunk) => void
+
+    handler({ kind: 'edit_mode_changed', editMode: { type: 'readonly' } })
+    expect(chat.editMode.value).toEqual({ type: 'readonly' })
+  })
+
+  it('tags its own sends with the thread scope', async () => {
+    const deps = mockDeps()
+    const chat = withSetup(deps, { scope: { type: 'thread', threadId: 'thread-1' }, namespace: 'thread:thread-1' })
+    await chat.submit('hello from the thread')
+
+    expect(deps.subscribe).toHaveBeenCalledWith(undefined, { type: 'thread', threadId: 'thread-1' })
+    expect((deps.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      scope: { type: 'thread', threadId: 'thread-1' },
+    })
+  })
+
+  it('cancels with its own thread scope', async () => {
+    const deps = mockDeps()
+    ;(deps.send as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}))
+    const chat = withSetup(deps, { scope: { type: 'thread', threadId: 'thread-1' } })
+    chat.submit('long running')
+    await vi.waitFor(() => expect(chat.busy.value).toBe(true))
+
+    await chat.cancel()
+    expect(deps.cancel).toHaveBeenCalledWith(undefined, { type: 'thread', threadId: 'thread-1' })
+  })
+
+  it('ignores chunks from main and from a different thread', () => {
+    const deps = mockDeps()
+    const chat = withSetup(deps, { scope: { type: 'thread', threadId: 'thread-1' } })
+    chat.subscribe()
+    const handler = (deps.onChunk as ReturnType<typeof vi.fn>).mock.calls[0][0] as (c: TaggedChunk) => void
+
+    handler({ kind: 'turn_start', turnId: 'main-turn', userMessageId: 'u-m', assistantMessageId: 'a-m', activityMessageId: 'm-m', text: 'main message', scope: { type: 'main' } })
+    handler({ kind: 'turn_start', turnId: 'other-thread-turn', userMessageId: 'u-o', assistantMessageId: 'a-o', activityMessageId: 'm-o', text: 'other thread message', scope: { type: 'thread', threadId: 'thread-2' } })
+    expect(chat.messages.value).toHaveLength(0)
+
+    handler({ kind: 'turn_start', turnId: 'my-turn', userMessageId: 'u-t', assistantMessageId: 'a-t', activityMessageId: 'm-t', text: 'my thread message', scope: { type: 'thread', threadId: 'thread-1' } })
+    expect(chat.messages.value.some(m => m.id === 'u-t')).toBe(true)
+  })
+
+  it('two thread instances keep independent busy/message state (no shared HMR slot)', async () => {
+    const depsA = mockDeps()
+    const depsB = mockDeps()
+    ;(depsA.send as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}))
+    const chatA = withSetup(depsA, { scope: { type: 'thread', threadId: 'thread-a' }, namespace: 'thread:thread-a' })
+    const chatB = withSetup(depsB, { scope: { type: 'thread', threadId: 'thread-b' }, namespace: 'thread:thread-b' })
+
+    chatA.submit('a is busy')
+    await vi.waitFor(() => expect(chatA.busy.value).toBe(true))
+    expect(chatB.busy.value).toBe(false)
+    expect(chatB.messages.value).toHaveLength(0)
   })
 })

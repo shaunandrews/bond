@@ -96,6 +96,18 @@ describe('runAgentConsult', () => {
     expect(fakeSession.dispose).toHaveBeenCalled()
   })
 
+  it('records the async start checkpoint only after the Pi session exists', async () => {
+    const onSessionStarted = vi.fn()
+    fakeSession.prompt.mockImplementationOnce(async () => {
+      expect(onSessionStarted).toHaveBeenCalledTimes(1)
+    })
+
+    await runAgentConsult({ definition, verb, settings: settings(), brief: 'x', onSessionStarted })
+
+    expect(onSessionStarted).toHaveBeenCalledTimes(1)
+    expect(fakeSession.dispose).toHaveBeenCalled()
+  })
+
   it('builds the system prompt from the definition and invoked verb', async () => {
     await runAgentConsult({ definition, verb, settings: settings(), brief: 'x' })
     const prompt = (DefaultResourceLoader as any).mock.calls[0][0].systemPromptOverride()

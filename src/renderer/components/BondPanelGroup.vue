@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, provide, computed, watch } from 'vue'
+import { ref, provide, computed, watch, onMounted, onUnmounted } from 'vue'
 import { PANEL_GROUP_KEY, type PanelDirection, type PanelRegistration, type PanelGroupContext, type PanelUnit } from './panelTypes'
 
 const props = withDefaults(defineProps<{
@@ -25,9 +25,10 @@ const collapsed = ref<Set<string>>(new Set())
 // Sizes saved before collapse, for restore (in panel's own unit)
 const preCollapseSize = ref<Record<string, number>>({})
 
-// Active resize state
-let resizeHandleId: string | null = null
-let resizeStartSizes: Record<string, number> = {}
+// Active resize state — the explicit panel pair being dragged, named by the
+// handle itself (not derived from positional index, since a conditionally
+// rendered middle panel shifts index-based adjacency).
+let resizePair: { before: string; after: string } | null = null
 
 const groupEl = ref<HTMLElement | null>(null)
 
@@ -133,49 +134,41 @@ function loadLayout(): SavedLayout | null {
 }
 
 // --- Layout computation ---
+/**
+ * Matched PER PANEL, not all-or-nothing — a panel that's never been seen
+ * before (the thread panel, first time it opens mid-session) falls back to
+ * its own default without discarding every OTHER panel's saved size. The
+ * previous "every registered panel needs a saved entry or default them all"
+ * rule meant a single new panel id reset the whole group back to defaults.
+ */
 function distributeDefaults() {
   const regs = panels.value
   if (regs.length === 0) return
 
   const saved = loadLayout()
-  if (saved && regs.every((r) => saved.sizes[r.id] !== undefined)) {
-    // Check units match — if a panel changed units, discard saved data for it
-    const unitsMatch = regs.every((r) => {
-      const savedUnit = saved.units?.[r.id] ?? '%'
-      return savedUnit === r.constraints.unit
-    })
-
-    if (unitsMatch) {
-      const collapsedSet = new Set(saved.collapsed.filter((id) => regs.some((r) => r.id === id)))
-      const clamped: Record<string, number> = {}
-      for (const r of regs) {
-        const s = saved.sizes[r.id]
-        if (collapsedSet.has(r.id)) {
-          clamped[r.id] = s
-        } else {
-          clamped[r.id] = Math.min(r.constraints.maxSize, Math.max(r.constraints.minSize, s))
-        }
-      }
-      // Normalize % panels so their flex-grow weights sum correctly
-      normalizePercentPanels(clamped, regs)
-      sizes.value = clamped
-      collapsed.value = collapsedSet
-      if (saved.preCollapseSize) {
-        preCollapseSize.value = { ...saved.preCollapseSize }
-      }
-      return
-    }
-    // Units changed — fall through to defaults
-  }
-
-  // Use defaultSizes
   const newSizes: Record<string, number> = {}
+  const collapsedSet = new Set<string>()
+
   for (const r of regs) {
-    newSizes[r.id] = r.constraints.defaultSize
+    const savedSize = saved?.sizes[r.id]
+    const savedUnit = saved?.units?.[r.id] ?? '%'
+    const hasSavedMatch = savedSize !== undefined && savedUnit === r.constraints.unit
+    if (hasSavedMatch) {
+      const wasCollapsed = saved!.collapsed.includes(r.id)
+      newSizes[r.id] = wasCollapsed ? savedSize : Math.min(r.constraints.maxSize, Math.max(r.constraints.minSize, savedSize))
+      if (wasCollapsed) collapsedSet.add(r.id)
+    } else {
+      newSizes[r.id] = r.constraints.defaultSize
+    }
   }
-  // Normalize % panels
+
+  // Normalize % panels so their flex-grow weights sum correctly
   normalizePercentPanels(newSizes, regs)
   sizes.value = newSizes
+  collapsed.value = collapsedSet
+  if (saved?.preCollapseSize) {
+    preCollapseSize.value = { ...saved.preCollapseSize }
+  }
 }
 
 /** Normalize percentage panels so their flex-grow weights sum to 100 */
@@ -211,8 +204,24 @@ function registerPanel(reg: PanelRegistration) {
     panels.value[existing] = reg
     return
   }
+
   panels.value = [...panels.value, reg]
   distributeDefaults()
+
+  if (reg.initialCollapsed !== undefined && reg.constraints.collapsible) {
+    const isCollapsed = collapsed.value.has(reg.id)
+    if (reg.initialCollapsed && !isCollapsed) {
+      preCollapseSize.value[reg.id] = sizes.value[reg.id] ?? reg.constraints.defaultSize
+      collapsed.value = new Set([...collapsed.value, reg.id])
+      sizes.value = { ...sizes.value, [reg.id]: reg.constraints.collapsedSize }
+    } else if (!reg.initialCollapsed && isCollapsed) {
+      const next = new Set(collapsed.value)
+      next.delete(reg.id)
+      collapsed.value = next
+      const restore = preCollapseSize.value[reg.id] ?? reg.constraints.defaultSize
+      sizes.value = { ...sizes.value, [reg.id]: restore }
+    }
+  }
 }
 
 function unregisterPanel(id: string) {
@@ -230,21 +239,11 @@ function getPanelIds(): string[] {
   return panels.value.map((p) => p.id)
 }
 
-// --- Handle helpers ---
-function getHandlePanels(handleId: string): { before: string; after: string } | null {
-  const match = handleId.match(/^handle-(\d+)$/)
-  if (!match) return null
-  const idx = parseInt(match[1], 10)
-  const ids = getPanelIds()
-  if (idx < 0 || idx >= ids.length - 1) return null
-  return { before: ids[idx], after: ids[idx + 1] }
-}
-
 // --- DOM sync ---
 // When CSS flexbox shrinks px panels below their JS state (due to window resize),
 // sync JS state to the actual rendered sizes so drags/animations start correctly.
-function syncPxStateToDom() {
-  if (!groupEl.value) return
+function syncPxStateToDom(): boolean {
+  if (!groupEl.value) return false
   const isH = props.direction === 'horizontal'
   const newSizes = { ...sizes.value }
   let changed = false
@@ -263,41 +262,76 @@ function syncPxStateToDom() {
   }
 
   if (changed) sizes.value = newSizes
+  return changed
 }
 
+// The container can resize for reasons no drag/collapse triggers — an OS
+// window resize, a sibling panel opening/closing elsewhere in the layout.
+// Reconcile JS state (and what's persisted) to whatever CSS actually
+// rendered, so a later drag starts from truth instead of a stale px number.
+//
+// Debounced until the resize settles: reconciling on every observer tick
+// rewrites px flex-bases mid-resize, and each write lags the rendered width
+// by a Vue tick — the flex shrink distribution jumps frame to frame and the
+// panel seams visibly jitter during a manual OS window resize (plus a
+// synchronous localStorage write per frame). CSS flexbox already renders the
+// live resize correctly on its own; JS state only needs the end result.
+let containerResizeObserver: ResizeObserver | null = null
+let containerResizeSettleTimer: ReturnType<typeof setTimeout> | null = null
+const CONTAINER_RESIZE_SETTLE_MS = 150
+
+function handleContainerResize() {
+  if (containerResizeSettleTimer) clearTimeout(containerResizeSettleTimer)
+  containerResizeSettleTimer = setTimeout(() => {
+    containerResizeSettleTimer = null
+    // A drag in progress synced at startResize and saves at endResize —
+    // reconciling under it would yank the handle out of the user's hand.
+    if (resizePair) return
+    if (syncPxStateToDom()) {
+      emit('layoutChanged', { ...sizes.value })
+      saveLayout()
+    }
+  }, CONTAINER_RESIZE_SETTLE_MS)
+}
+
+onMounted(() => {
+  if (typeof ResizeObserver === 'undefined' || !groupEl.value) return
+  containerResizeObserver = new ResizeObserver(handleContainerResize)
+  containerResizeObserver.observe(groupEl.value)
+})
+
+onUnmounted(() => {
+  containerResizeObserver?.disconnect()
+  if (containerResizeSettleTimer) clearTimeout(containerResizeSettleTimer)
+})
+
 // --- Resize logic ---
-function startResize(handleId: string) {
+function startResize(beforePanelId: string, afterPanelId: string) {
   syncPxStateToDom()
-  resizeHandleId = handleId
-  resizeStartSizes = { ...sizes.value }
+  resizePair = { before: beforePanelId, after: afterPanelId }
 }
 
 function moveResize(delta: number) {
-  if (!resizeHandleId) return
-  applyResizeDelta(resizeHandleId, delta)
+  if (!resizePair) return
+  applyResizeDelta(resizePair.before, resizePair.after, delta)
   emit('layoutChange', { ...sizes.value })
 }
 
 function endResize() {
-  if (!resizeHandleId) return
-  resizeHandleId = null
-  resizeStartSizes = {}
+  if (!resizePair) return
+  resizePair = null
   emit('layoutChanged', { ...sizes.value })
   saveLayout()
 }
 
-function keyboardResize(handleId: string, delta: number) {
-  applyResizeDelta(handleId, delta)
+function keyboardResize(beforePanelId: string, afterPanelId: string, delta: number) {
+  applyResizeDelta(beforePanelId, afterPanelId, delta)
   emit('layoutChange', { ...sizes.value })
   emit('layoutChanged', { ...sizes.value })
   saveLayout()
 }
 
-function applyResizeDelta(handleId: string, deltaPercent: number) {
-  const pair = getHandlePanels(handleId)
-  if (!pair) return
-
-  const { before, after } = pair
+function applyResizeDelta(before: string, after: string, deltaPercent: number) {
   const beforeReg = getPanelReg(before)
   const afterReg = getPanelReg(after)
   if (!beforeReg || !afterReg) return
@@ -619,7 +653,6 @@ provide(PANEL_GROUP_KEY, {
   expandPanel,
   isPanelCollapsed,
   resizePanel,
-  getHandlePanels,
 })
 
 defineExpose({
@@ -627,6 +660,16 @@ defineExpose({
   setLayout: (layout: Record<string, number>) => {
     sizes.value = { ...layout }
     saveLayout()
+  },
+  // The width a panel occupies (or would, if currently collapsed) — its live
+  // size when expanded, else the size it will restore to. Lets a consumer
+  // grow/shrink the window by exactly a panel's width on open/close. Returns
+  // 0 for an unregistered id (e.g. a conditionally-rendered panel not mounted).
+  getExpandedWidth: (id: string): number => {
+    const reg = getPanelReg(id)
+    if (!reg) return 0
+    if (collapsed.value.has(id)) return preCollapseSize.value[id] ?? reg.constraints.defaultSize
+    return sizes.value[id] ?? reg.constraints.defaultSize
   },
 })
 </script>

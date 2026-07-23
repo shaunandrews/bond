@@ -212,6 +212,13 @@ W.`, { source: 'user' })
     expect(clamped.ok).toBe(true)
     if (clamped.ok) expect(clamped.definition.defaults.leash).toBe(900)
   })
+
+  it('keeps read-only as the default and parses an explicit write workspace', () => {
+    const readOnly = parseAgentDefinition(MINIMAL, { source: 'user' })
+    expect(readOnly.ok && readOnly.definition.defaults.workspace).toBe('read-only')
+    const writable = parseAgentDefinition(MINIMAL.replace('verbs: [look]', 'verbs: [look]\nworkspace: write'), { source: 'user' })
+    expect(writable.ok && writable.definition.defaults.workspace).toBe('write')
+  })
 })
 
 describe('bundled definitions', () => {
@@ -231,5 +238,18 @@ describe('bundled definitions', () => {
     expect(q.verbs.map(verb => verb.name)).toEqual(['review', 'plan', 'patch', 'debug'])
     expect(felix.evidence.map(runner => runner.name)).toEqual(['detector', 'inventory'])
     expect(q.evidence.every(runner => runner.kind === 'shell')).toBe(true)
+  })
+
+  it('only Mathis opts into worktree writes', () => {
+    const settings = BUILTIN_AGENT_SOURCES.map(source => {
+      const parsed = parseAgentDefinition(source, { source: 'builtin' })
+      if (!parsed.ok) throw new Error(parsed.errors.join('; '))
+      return [parsed.definition.name, parsed.definition.defaults.workspace]
+    })
+    expect(settings).toEqual([
+      ['felix', 'read-only'],
+      ['mathis', 'write'],
+      ['q', 'read-only'],
+    ])
   })
 })

@@ -1,0 +1,321 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_AGENT_SETTINGS } from '../../../shared/agents'
+import { closeDb, getDb } from '../../db'
+import { setDataDir } from '../../paths'
+import { answerAgentRunQuestion, createAgentRunRecord, getAgentRun, listAgentRunEvents, listAgentRunQuestions, transitionAgentRun } from './store'
+import { agentRunActiveWallClockMs, createAgentRunWorker } from './worker'
+import { CommandApprovalRequired } from './write-runner'
+
+let dir: string
+
+function seed(id: string, key = id, resourceCaps = { wallClockSeconds: 300, maxOutputChars: 100_000 }) {
+  return createAgentRunRecord({
+    id,
+    idempotencyKey: key,
+    agent: 'felix',
+    agentLabel: 'Felix',
+    verb: 'critique',
+    brief: `brief ${id}`,
+    paths: [],
+    workspace: { repoRoot: '/repo', isolation: 'in-place', branch: null, readOnly: true },
+    baseSha: null,
+    allowedPaths: [],
+    settings: DEFAULT_AGENT_SETTINGS,
+    agentDefinitionVersion: 'v1',
+    commandPolicyVersion: 'phase0-readonly-no-shell-v1',
+    acceptanceChecks: [],
+    resourceCaps,
+  }).run
+}
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'bond-agent-worker-'))
+  setDataDir(dir)
+  getDb()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+  closeDb()
+  rmSync(dir, { recursive: true, force: true })
+  setDataDir(null as never)
+})
+
+describe('agent run worker', () => {
+  it('reconstructs active wall-clock usage without charging parked time', () => {
+    const event = (sequence: number, fromState: any, toState: any, second: number) => ({
+      id: sequence, runId: 'r', sequence, type: `event-${sequence}`, fromState, toState, data: {},
+      createdAt: `2026-01-01T00:00:${String(second).padStart(2, '0')}.000Z`,
+    })
+    const events = [
+      event(1, 'queued', 'preparing-workspace', 0),
+      event(2, 'preparing-workspace', 'running', 1),
+      event(3, 'running', 'needs-input', 5),
+      event(4, 'needs-input', 'running', 40),
+    ]
+    expect(agentRunActiveWallClockMs(events, Date.parse('2026-01-01T00:00:42.000Z'))).toBe(7_000)
+  })
+
+  it('drains dispatches with concurrency one', async () => {
+    seed('run-1')
+    seed('run-2')
+    let concurrent = 0
+    let maxConcurrent = 0
+    const execute = vi.fn(async (_run, context) => {
+      concurrent++
+      maxConcurrent = Math.max(maxConcurrent, concurrent)
+      context.onStarted({ phase: 'started' })
+      await new Promise(resolve => setTimeout(resolve, 5))
+      concurrent--
+      return 'report'
+    })
+    const worker = createAgentRunWorker({ execute, intervalMs: 60_000 })
+
+    await Promise.all([worker.tickNow(), worker.tickNow()])
+
+    expect(maxConcurrent).toBe(1)
+    expect(getAgentRun('run-1')?.status).toBe('succeeded')
+    expect(getAgentRun('run-2')?.status).toBe('succeeded')
+  })
+
+  it('recovers a run stranded in running after a daemon restart', async () => {
+    seed('recover-me')
+    transitionAgentRun('recover-me', 'preparing-workspace', { eventType: 'workspace_preparing' })
+    transitionAgentRun('recover-me', 'running', { eventType: 'started', checkpoint: { phase: 'old-session' } })
+    const execute = vi.fn(async (_run, context) => {
+      context.onStarted({ phase: 'new-session' })
+      return 'recovered report'
+    })
+    const worker = createAgentRunWorker({ execute, intervalMs: 60_000 })
+
+    worker.start()
+    await worker.tickNow()
+    worker.stop()
+
+    expect(getAgentRun('recover-me')).toMatchObject({ status: 'succeeded', result: 'recovered report', recoveryCount: 1 })
+    expect(listAgentRunEvents('recover-me').map(event => event.type)).toEqual(expect.arrayContaining([
+      'daemon_interrupted', 'recovery_preparing', 'recovery_started', 'succeeded',
+    ]))
+  })
+
+  it('starts a fresh session after a crash during a subprocess and treats the old pid as diagnostic only', async () => {
+    seed('recover-command')
+    transitionAgentRun('recover-command', 'preparing-workspace', { eventType: 'workspace_preparing' })
+    transitionAgentRun('recover-command', 'running', {
+      eventType: 'started',
+      checkpoint: { phase: 'command-started', argv: ['npm', 'run', 'typecheck'], pid: 987654, lastCompletedAction: 'command-spawned-result-unknown' },
+    })
+    const execute = vi.fn(async (run, context) => {
+      expect(run.checkpoint).toMatchObject({ phase: 'command-started', pid: 987654 })
+      expect(context.events.map((event: { type: string }) => event.type)).toContain('daemon_interrupted')
+      context.onStarted({ phase: 'fresh-session', previousCheckpoint: run.checkpoint })
+      return 're-inspected and completed'
+    })
+    const worker = createAgentRunWorker({ execute, intervalMs: 60_000 })
+
+    worker.start()
+    await worker.tickNow()
+    await worker.stop()
+
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(getAgentRun('recover-command')).toMatchObject({ status: 'succeeded', recoveryCount: 1 })
+  })
+
+  it('cancels an active session and never overwrites cancelled with success or failure', async () => {
+    seed('cancel-me')
+    let started!: () => void
+    const didStart = new Promise<void>(resolve => { started = resolve })
+    const observedSignal: { current?: AbortSignal } = {}
+    const worker = createAgentRunWorker({
+      execute: async (_run, context) => {
+        observedSignal.current = context.signal
+        context.onStarted({ phase: 'started' })
+        started()
+        await new Promise<never>((_resolve, reject) => {
+          context.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        })
+        return 'unreachable'
+      },
+    })
+
+    const ticking = worker.tickNow()
+    await didStart
+    expect(worker.cancel('cancel-me')?.status).toBe('cancelled')
+    await ticking
+
+    expect(observedSignal.current?.aborted).toBe(true)
+    expect(worker.activeRunId()).toBeNull()
+    expect(getAgentRun('cancel-me')?.status).toBe('cancelled')
+    expect(listAgentRunEvents('cancel-me').at(-1)?.type).toBe('cancelled')
+  })
+
+  it('keeps cancellation terminal when completion races the abort signal', async () => {
+    seed('cancel-race')
+    let started!: () => void
+    let finish!: () => void
+    const didStart = new Promise<void>(resolve => { started = resolve })
+    const mayFinish = new Promise<void>(resolve => { finish = resolve })
+    const worker = createAgentRunWorker({
+      execute: async (_run, context) => {
+        context.onStarted({ phase: 'started' })
+        started()
+        await mayFinish
+        return 'late success'
+      },
+    })
+
+    const ticking = worker.tickNow()
+    await didStart
+    worker.cancel('cancel-race')
+    finish()
+    await ticking
+
+    expect(getAgentRun('cancel-race')).toMatchObject({ status: 'cancelled', result: null })
+    expect(listAgentRunEvents('cancel-race').filter(event => event.type === 'cancelled')).toHaveLength(1)
+  })
+
+  it('durably parks an unknown command and resumes the same run after restart approval', async () => {
+    seed('park-resume')
+    const argv = ['node', 'scripts/special-check.mjs']
+    const firstWorker = createAgentRunWorker({
+      execute: async (_run, context) => {
+        context.onStarted({ phase: 'first-session' })
+        throw new CommandApprovalRequired({
+          argv,
+          reason: 'node is not allowlisted; needed for the task',
+          proposedAllowlistAddition: `Allow this exact argv for this run only: ${JSON.stringify(argv)}`,
+        })
+      },
+    })
+    await firstWorker.tickNow()
+    await firstWorker.stop()
+
+    const question = listAgentRunQuestions('park-resume')[0]
+    expect(getAgentRun('park-resume')).toMatchObject({
+      status: 'needs-input',
+      checkpoint: { phase: 'awaiting-command-approval', pendingArgv: argv },
+    })
+    expect(question).toMatchObject({ status: 'pending', argv })
+    answerAgentRunQuestion('park-resume', question.id, true, 'Approved for this run only.')
+
+    const resumed = vi.fn(async (run, context) => {
+      expect(run.id).toBe('park-resume')
+      expect(context.exactCommandGrants.has(JSON.stringify(argv))).toBe(true)
+      context.onStarted({ phase: 'resumed-session' })
+      return 'finished in same run'
+    })
+    const restartedWorker = createAgentRunWorker({ execute: resumed, intervalMs: 60_000 })
+    restartedWorker.start()
+    await restartedWorker.tickNow()
+    await restartedWorker.stop()
+
+    expect(resumed).toHaveBeenCalledTimes(1)
+    expect(getAgentRun('park-resume')).toMatchObject({ status: 'succeeded', result: 'finished in same run' })
+    expect(listAgentRunEvents('park-resume').map(event => event.type)).toEqual(expect.arrayContaining([
+      'command_question_asked', 'command_approved', 'command_resume_started', 'succeeded',
+    ]))
+  })
+
+  it('deduplicates concurrent resume requests for the same approved run', async () => {
+    seed('resume-once')
+    transitionAgentRun('resume-once', 'preparing-workspace', { eventType: 'preparing' })
+    transitionAgentRun('resume-once', 'running', { eventType: 'started' })
+    const { parkAgentRunForCommand } = await import('./store')
+    const parked = parkAgentRunForCommand('resume-once', {
+      argv: ['node', 'scripts/check.mjs'], reason: 'needed', proposedAllowlistAddition: 'exact grant',
+    }, { phase: 'awaiting-command-approval' })
+    answerAgentRunQuestion('resume-once', parked.question.id, true, 'yes')
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const execute = vi.fn(async (_run, context) => {
+      context.onStarted({ phase: 'resumed' })
+      await gate
+      return 'done once'
+    })
+    const worker = createAgentRunWorker({ execute })
+
+    const first = worker.resume('resume-once')
+    const second = worker.resume('resume-once')
+    release()
+    await Promise.all([first, second])
+
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(getAgentRun('resume-once')?.status).toBe('succeeded')
+  })
+
+  it('fails a parked run when the command is denied', async () => {
+    seed('deny-command')
+    transitionAgentRun('deny-command', 'preparing-workspace', { eventType: 'preparing' })
+    transitionAgentRun('deny-command', 'running', { eventType: 'started' })
+    const parkedWorker = createAgentRunWorker({
+      execute: async () => 'unused',
+    })
+    // Use the same public parking path exercised above, then deny its question.
+    const { parkAgentRunForCommand } = await import('./store')
+    parkAgentRunForCommand('deny-command', {
+      argv: ['node', 'x.mjs'], reason: 'unknown', proposedAllowlistAddition: 'exact grant',
+    }, { phase: 'awaiting-command-approval' })
+    const question = listAgentRunQuestions('deny-command')[0]
+    const answered = answerAgentRunQuestion('deny-command', question.id, false, 'Do not run it.')
+    expect(answered.run).toMatchObject({ status: 'failed', errorClass: 'policy' })
+    await parkedWorker.stop()
+  })
+
+  it('retries transient failures with a bounded durable schedule', async () => {
+    seed('retry-transient')
+    let attempts = 0
+    const worker = createAgentRunWorker({
+      retryDelayMs: () => 0,
+      execute: async (_run, context) => {
+        context.onStarted({ phase: 'attempt' })
+        attempts += 1
+        if (attempts < 3) throw new Error('HTTP 503 network unavailable')
+        return 'recovered after retry'
+      },
+    })
+    await worker.tickNow()
+    await worker.tickNow()
+    await worker.tickNow()
+
+    expect(getAgentRun('retry-transient')).toMatchObject({
+      status: 'succeeded', retryCount: 2, attemptCount: 3, result: 'recovered after retry',
+    })
+    expect(listAgentRunEvents('retry-transient').filter(event => event.type === 'retry_scheduled')).toHaveLength(2)
+  })
+
+  it('does not retry policy or resource failures', async () => {
+    seed('no-retry-policy')
+    const execute = vi.fn(async (_run, context) => {
+      context.onStarted({ phase: 'attempt' })
+      throw new Error('Command denied by policy')
+    })
+    const worker = createAgentRunWorker({ execute, retryDelayMs: () => 0 })
+    await worker.tickNow()
+    await worker.tickNow()
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(getAgentRun('no-retry-policy')).toMatchObject({ status: 'failed', errorClass: 'policy', retryCount: 0 })
+  })
+
+  it('aborts and terminally classifies wall-clock cap exhaustion', async () => {
+    vi.useFakeTimers()
+    seed('wall-clock', 'wall-clock', { wallClockSeconds: 1, maxOutputChars: 100_000 })
+    const worker = createAgentRunWorker({
+      execute: async (_run, context) => {
+        context.onStarted({ phase: 'started' })
+        await new Promise<never>((_resolve, reject) => {
+          context.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        })
+        return 'unreachable'
+      },
+    })
+
+    const ticking = worker.tickNow()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await ticking
+
+    expect(getAgentRun('wall-clock')).toMatchObject({ status: 'failed', errorClass: 'resource', retryCount: 0 })
+  })
+})

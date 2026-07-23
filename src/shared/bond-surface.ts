@@ -26,6 +26,8 @@ import type { SenseSettings } from './sense'
 import type { CoreMemory, MemoryItemInput, WorkingState } from './memory'
 import type { AssetKind, LibraryAddDocumentInput } from './library'
 import type { AgentSettings } from './agents'
+import type { AgentRetentionConfig } from './agent-runs'
+import type { ConversationScope } from './threads'
 
 /** How a runtime reaches the daemon. Params/results are registry-typed. */
 export type RpcInvoker = <M extends DispatchableMethod>(
@@ -44,14 +46,14 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
       invoke('bond.send', typeof inputOrText === 'string'
         ? { text: inputOrText, sessionId, images }
         : inputOrText),
-    cancel: (sessionId?: string) => invoke('bond.cancel', sessionId ? { sessionId } : undefined),
+    cancel: (sessionId?: string, scope?: ConversationScope) => invoke('bond.cancel', (sessionId || scope) ? { sessionId, scope } : undefined),
     respondToApproval: (requestId: string, approved: boolean) =>
       invoke('bond.approvalResponse', { requestId, approved }),
     answerQuestion: (questionId: string, answer: QuestionAnswer) =>
       invoke('bond.questionResponse', { questionId, answer }),
     pendingQuestion: () => invoke('question.pending'),
-    subscribe: (sessionId?: string) => invoke('bond.subscribe', sessionId ? { sessionId } : undefined),
-    unsubscribe: (sessionId?: string) => invoke('bond.unsubscribe', sessionId ? { sessionId } : undefined),
+    subscribe: (sessionId?: string, scope?: ConversationScope) => invoke('bond.subscribe', (sessionId || scope) ? { sessionId, scope } : undefined),
+    unsubscribe: (sessionId?: string, scope?: ConversationScope) => invoke('bond.unsubscribe', (sessionId || scope) ? { sessionId, scope } : undefined),
 
     // --- Model + Pi setup ---
     getModel: () => invoke('bond.getModel'),
@@ -71,6 +73,19 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     listTranscript: (options?: { beforeSeq?: number; limit?: number }) => invoke('transcript.list', options),
     upsertTranscript: (messages: TranscriptMessage[]) => invoke('transcript.upsert', { messages }),
     searchTranscript: (query: string, limit?: number) => invoke('transcript.search', { query, limit }),
+
+    // --- Chat threads ---
+    createThread: (anchorMessageId: string) => invoke('thread.create', { anchorMessageId }),
+    getThread: (threadId: string) => invoke('thread.get', { threadId }),
+    getThreadForAnchor: (anchorMessageId: string) => invoke('thread.getForAnchor', { anchorMessageId }),
+    listRecentThreads: (limit?: number) => invoke('thread.listRecent', { limit }),
+    listThreadMessages: (threadId: string, options?: { beforeSeq?: number; limit?: number }) => invoke('thread.listMessages', { threadId, ...options }),
+    touchThread: (threadId: string) => invoke('thread.touch', { threadId }),
+    markThreadRead: (threadId: string) => invoke('thread.markRead', { threadId }),
+    closeThread: (threadId: string) => invoke('thread.close', { threadId }),
+    deleteDraftThread: (threadId: string) => invoke('thread.deleteDraft', { threadId }),
+    summarizeThread: (threadId: string) => invoke('thread.summarize', { threadId }),
+    sendThreadSummaryToMain: (threadId: string, summary: string) => invoke('thread.sendSummaryToMain', { threadId, summary }),
 
     // Legacy transport session used internally by the continuous transcript runtime.
     createSession: (options?: { title?: string }) => invoke('session.create', options),
@@ -141,6 +156,26 @@ export function buildDaemonSurface(invoke: RpcInvoker) {
     listAgents: () => invoke('agents.list'),
     updateAgentSettings: (name: string, settings: Partial<AgentSettings>) => invoke('agents.updateSettings', { name, settings }),
     revokeAgentRunner: (command: string) => invoke('agents.revokeRunner', { command }),
+    listAgentRuns: () => invoke('agentruns.list'),
+    getAgentRun: (runId: string) => invoke('agentruns.get', { runId }),
+    cancelAgentRun: (runId: string) => invoke('agentruns.cancel', { runId }),
+    answerAgentRunQuestion: (runId: string, questionId: string, approved: boolean, response?: string) =>
+      invoke('agentruns.answerQuestion', { runId, questionId, approved, response }),
+    inspectAgentRunWorkspace: (runId: string) => invoke('agentruns.inspectWorkspace', { runId }),
+    discardAgentRunWorkspace: (runId: string) => invoke('agentruns.discardWorkspace', { runId }),
+    getAgentRunGitHubConfig: () => invoke('agentruns.githubConfig'),
+    configureAgentRunGitHub: (enabled: boolean, repository: string, remote: string, credentialRef: string) =>
+      invoke('agentruns.configureGithub', { enabled, repository, remote, credentialRef }),
+    /** Write-only: no Bond surface returns the credential value. */
+    setAgentRunGitHubCredential: (value: string) => invoke('agentruns.setGithubCredential', { value }),
+    publishAgentRun: (runId: string) => invoke('agentruns.publish', { runId }),
+    pollAgentRunMerges: () => invoke('agentruns.pollMerges'),
+    applyAgentRunUpdate: (runId: string, confirmed = false) => invoke('agentruns.applyUpdate', { runId, confirmed }),
+    listAgentRepositories: () => invoke('agentruns.repositories'),
+    registerAgentRepository: (input: RpcParams<'agentruns.registerRepository'>) => invoke('agentruns.registerRepository', input),
+    removeAgentRepository: (id: string) => invoke('agentruns.removeRepository', { id }),
+    getAgentRetentionConfig: () => invoke('agentruns.retentionConfig'),
+    configureAgentRetention: (config: Partial<AgentRetentionConfig>) => invoke('agentruns.configureRetention', config),
 
     // --- Skills ---
     listSkills: () => invoke('skills.list'),
@@ -239,6 +274,7 @@ export interface ElectronBondSurface {
   onLibraryChanged(fn: () => void): () => void
   onMcpChanged(fn: () => void): () => void
   onDeskChanged(fn: () => void): () => void
+  onThreadChanged(fn: () => void): () => void
   onViewerFile(fn: (filePath: string, format?: 'markdown' | 'plaintext', title?: string) => void): () => void
   onCreateSkill(fn: (description: string) => void): () => void
   onFullscreenChanged(fn: (isFullScreen: boolean) => void): () => void
@@ -274,6 +310,19 @@ export interface ElectronBondSurface {
 
   // Permissions
   hasScreenRecordingPermission(): Promise<boolean>
+
+  /**
+   * Grow or shrink the main window's content width by `deltaWidth` (positive
+   * when a side panel opens, negative when it closes) so the chat panel keeps
+   * its size, clamped to the current display's work area. Also sets the
+   * window's native minimum width to `minimumWidth` — the chat floor plus
+   * whatever panels remain open — so a manual resize can't crush a visible
+   * panel, yet a chat-only window can shrink small. Returns the resulting
+   * content width so the caller can pick a responsive layout mode. A no-op in
+   * fullscreen (native bounds never change there) and on the web client
+   * (which reports its real viewport width and never resizes natively).
+   */
+  resizeContent(options: { deltaWidth: number; minimumWidth: number }): Promise<{ width: number }>
 }
 
 export type BondSurface = DaemonBondSurface & ElectronBondSurface

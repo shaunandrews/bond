@@ -38,6 +38,7 @@ import type { WebRenderRequest, WebRenderResult } from './web'
 import type { ModelId } from './models'
 import type { AssetBacklink, AssetKind, AssetReference, LibraryAddDocumentInput, LibraryAsset } from './library'
 import type { AgentRosterResult, AgentSettings, AgentSummary } from './agents'
+import type { AgentRetentionConfig, AgentRun, AgentRunDetail, AgentRunPublication, AgentRunQuestion, AgentRunUpdate, GitHubHandoffConfig, ManagedWorkspaceInspection, RegisteredAgentRepository } from './agent-runs'
 import type {
   DeskBlockDetail,
   DeskMatcher,
@@ -47,6 +48,7 @@ import type {
   DeskStatus,
   DeskThread,
 } from './desk'
+import type { ChatThread, ConversationScope, ThreadSummary } from './threads'
 
 // --- Named wire shapes ---
 
@@ -221,7 +223,7 @@ export interface RpcMethods {
 
   // Chat
   'bond.send': { params: Partial<BondSendInput> & { sessionId?: string }; result: BondSendResult }
-  'bond.cancel': { params: { sessionId?: string } | void; result: { ok: true } }
+  'bond.cancel': { params: { sessionId?: string; scope?: ConversationScope } | void; result: { ok: true } }
   'bond.approvalResponse': { params: { requestId: string; approved: boolean }; result: { ok: true } }
   'bond.questionResponse': { params: { questionId: string; answer: QuestionAnswer }; result: { ok: true } }
   'bond.ping': { params: void; result: { ok: true; protocolVersion: number } }
@@ -239,8 +241,8 @@ export interface RpcMethods {
   'remote.revokeAllDevices': { params: void; result: { ok: true; revoked: number } }
 
   // Subscriptions
-  'bond.subscribe': { params: { sessionId?: string } | void; result: { ok: true } }
-  'bond.unsubscribe': { params: { sessionId?: string } | void; result: { ok: true } }
+  'bond.subscribe': { params: { sessionId?: string; scope?: ConversationScope } | void; result: { ok: true } }
+  'bond.unsubscribe': { params: { sessionId?: string; scope?: ConversationScope } | void; result: { ok: true } }
 
   // Model
   'bond.setModel': { params: { model: ModelId }; result: { ok: true } }
@@ -250,6 +252,24 @@ export interface RpcMethods {
   'transcript.list': { params: { beforeSeq?: number; limit?: number } | void; result: TranscriptPage }
   'transcript.upsert': { params: { messages: TranscriptMessage[] }; result: { ok: true } }
   'transcript.search': { params: { query: string; limit?: number }; result: { messages: TranscriptMessage[] } }
+
+  // Chat threads — a temporary side conversation anchored to one completed
+  // Bond response (plans/chat-threads.md). thread.create is idempotent by
+  // anchor. Sending/cancelling/subscribing a thread turn rides the same
+  // bond.* methods above, scoped (see ConversationScope in shared/threads.ts).
+  'thread.create': { params: { anchorMessageId: string }; result: ChatThread }
+  'thread.get': { params: { threadId: string }; result: ChatThread | null }
+  'thread.getForAnchor': { params: { anchorMessageId: string }; result: ChatThread | null }
+  'thread.listRecent': { params: { limit?: number } | void; result: { threads: ThreadSummary[] } }
+  'thread.listMessages': { params: { threadId: string; beforeSeq?: number; limit?: number }; result: TranscriptPage }
+  'thread.touch': { params: { threadId: string }; result: { ok: true } }
+  'thread.markRead': { params: { threadId: string }; result: { ok: true } }
+  'thread.close': { params: { threadId: string }; result: { ok: true } }
+  'thread.deleteDraft': { params: { threadId: string }; result: { ok: boolean } }
+  /** Bounded fast-tier prompt over the thread's own scoped messages — never automatic, only ever user-triggered. */
+  'thread.summarize': { params: { threadId: string }; result: { summary: string } }
+  /** The one v1 write-back action: an explicitly-confirmed summary becomes a normal main-conversation message. */
+  'thread.sendSummaryToMain': { params: { threadId: string; summary: string }; result: { ok: true; messageId: string } }
 
   // Sessions
   'session.list': { params: void; result: Session[] }
@@ -296,6 +316,29 @@ export interface RpcMethods {
   'agents.list': { params: void; result: AgentRosterResult }
   'agents.updateSettings': { params: { name: string; settings: Partial<AgentSettings> }; result: AgentSummary }
   'agents.revokeRunner': { params: { command: string }; result: AgentRosterResult }
+  /** Durable async-run snapshot table used for reconnect reconciliation. */
+  'agentruns.list': { params: void; result: { runs: AgentRun[] } }
+  'agentruns.get': { params: { runId: string }; result: AgentRunDetail | null }
+  'agentruns.cancel': { params: { runId: string }; result: AgentRun | null }
+  'agentruns.answerQuestion': { params: { runId: string; questionId: string; approved: boolean; response?: string }; result: { run: AgentRun; question: AgentRunQuestion; changed: boolean } }
+  'agentruns.inspectWorkspace': { params: { runId: string }; result: ManagedWorkspaceInspection }
+  'agentruns.discardWorkspace': { params: { runId: string }; result: AgentRun }
+  'agentruns.githubConfig': { params: void; result: GitHubHandoffConfig }
+  'agentruns.configureGithub': { params: { enabled: boolean; repository: string; remote: string; credentialRef: string }; result: GitHubHandoffConfig }
+  /** Write-only credential setup; the value is never returned by any RPC. */
+  'agentruns.setGithubCredential': { params: { value: string }; result: GitHubHandoffConfig }
+  'agentruns.publish': { params: { runId: string }; result: AgentRunPublication }
+  'agentruns.pollMerges': { params: void; result: AgentRunUpdate[] }
+  'agentruns.applyUpdate': { params: { runId: string; confirmed?: boolean }; result: AgentRunUpdate }
+  'agentruns.repositories': { params: void; result: { repositories: RegisteredAgentRepository[] } }
+  'agentruns.registerRepository': { params: {
+    id: string; label: string; repoRoot: string; baseRef: string; allowedPathPrefixes: string[]
+    githubRepository?: string; remote?: string; expectedRemoteUrl?: string; credentialRef?: string
+    commandRules: string[]; acceptanceChecks: string[]; trustedInPlace?: boolean; confirmed: boolean
+  }; result: RegisteredAgentRepository }
+  'agentruns.removeRepository': { params: { id: string }; result: { ok: boolean } }
+  'agentruns.retentionConfig': { params: void; result: AgentRetentionConfig }
+  'agentruns.configureRetention': { params: Partial<AgentRetentionConfig>; result: AgentRetentionConfig }
 
   // Skills
   'skills.list': { params: void; result: SkillInfo[] }
@@ -473,6 +516,8 @@ export interface RpcNotifications {
   'web.requestRender': WebRenderRequest
   /** Any block/rule/state change, so the notch and the panel stay in lockstep. */
   'desk.changed': Record<string, never>
+  /** A thread was created, touched, or closed — so a second client's Recent threads / badge stay in sync. */
+  'thread.changed': Record<string, never>
 }
 
 export type RpcNotificationName = keyof RpcNotifications
@@ -499,6 +544,17 @@ export const RPC_METHOD_NAMES = [
   'transcript.list',
   'transcript.upsert',
   'transcript.search',
+  'thread.create',
+  'thread.get',
+  'thread.getForAnchor',
+  'thread.listRecent',
+  'thread.listMessages',
+  'thread.touch',
+  'thread.markRead',
+  'thread.close',
+  'thread.deleteDraft',
+  'thread.summarize',
+  'thread.sendSummaryToMain',
   'session.list',
   'session.create',
   'session.get',
@@ -534,6 +590,23 @@ export const RPC_METHOD_NAMES = [
   'agents.list',
   'agents.updateSettings',
   'agents.revokeRunner',
+  'agentruns.list',
+  'agentruns.get',
+  'agentruns.cancel',
+  'agentruns.answerQuestion',
+  'agentruns.inspectWorkspace',
+  'agentruns.discardWorkspace',
+  'agentruns.githubConfig',
+  'agentruns.configureGithub',
+  'agentruns.setGithubCredential',
+  'agentruns.publish',
+  'agentruns.pollMerges',
+  'agentruns.applyUpdate',
+  'agentruns.repositories',
+  'agentruns.registerRepository',
+  'agentruns.removeRepository',
+  'agentruns.retentionConfig',
+  'agentruns.configureRetention',
   'skills.list',
   'skills.refresh',
   'skills.remove',

@@ -16,6 +16,12 @@ export interface PanelConstraints {
 export interface PanelRegistration {
   id: string
   constraints: PanelConstraints
+  // Only consulted the first time this id is registered (a fresh mount) — an
+  // external boolean the panel should honor as its starting collapse state,
+  // overriding whatever the group's own persisted collapse set says for this
+  // id. Lets a consumer keep one source of truth (its own persisted "is this
+  // panel open" flag) instead of reconciling it against the group's cache.
+  initialCollapsed?: boolean
 }
 
 export interface PanelGroupContext {
@@ -27,15 +33,14 @@ export interface PanelGroupContext {
   getFlexStyle: (id: string) => string
   getMinDimStyle: (id: string) => string
   getPanelIds: () => string[]
-  startResize: (handleId: string) => void
+  startResize: (beforePanelId: string, afterPanelId: string) => void
   moveResize: (delta: number) => void
   endResize: () => void
-  keyboardResize: (handleId: string, delta: number) => void
+  keyboardResize: (beforePanelId: string, afterPanelId: string, delta: number) => void
   collapsePanel: (id: string) => void
   expandPanel: (id: string) => void
   isPanelCollapsed: (id: string) => boolean
   resizePanel: (id: string, size: number) => void
-  getHandlePanels: (handleId: string) => { before: string; after: string } | null
 }
 
 export const PANEL_GROUP_KEY: InjectionKey<PanelGroupContext> = Symbol('BondPanelGroup')

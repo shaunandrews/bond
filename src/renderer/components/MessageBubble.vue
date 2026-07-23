@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watchEffect } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { Message } from '../types/message'
 import { imageDataUri, type AttachedImage } from '../../shared/session'
 import { ISSUE_KEY_RE } from '../../shared/fields'
 import { useIssueReferences } from '../composables/useIssueReferences'
+import { useThreads } from '../composables/useThreads'
+import BondText from './BondText.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 import ArtifactFrame from './ArtifactFrame.vue'
 import EmbedRenderer from './EmbedRenderer.vue'
@@ -13,12 +15,14 @@ import { parseArtifacts, hasRichContent } from '../lib/parseArtifacts'
 import { copyToClipboard } from '../lib/clipboard'
 import { formatApprovalInput, formatDuration, formatToolLabel } from '../lib/format'
 import TurnActivity from './TurnActivity.vue'
-import { PhX } from '@phosphor-icons/vue'
+import AgentRunCard from './AgentRunCard.vue'
+import { PhChatCircleText, PhX } from '@phosphor-icons/vue'
 
 const ISSUE_TOKEN_RE = new RegExp(ISSUE_KEY_RE.source, 'g')
 
 // Singleton reference index — no per-bubble collection scans.
 const { byKey: issueRefsByKey } = useIssueReferences()
+const threads = useThreads()
 
 function renderUserMarkdown(text: string): string {
   const raw = marked.parse(text, { async: false, gfm: true, breaks: true }) as string
@@ -31,14 +35,50 @@ function renderUserMarkdown(text: string): string {
 // MessageBubble's template always has more than one root (the active v-if
 // branch plus a trailing copy-toast Teleport), so Vue can never auto-inherit
 // `id` onto a branch root — it must be declared and bound explicitly.
-const props = defineProps<{ msg: Message; id?: string }>()
+const props = withDefaults(defineProps<{
+  msg: Message
+  id?: string
+  /** False on the remote web client — chat threads are desktop-only for now (plans/chat-threads.md). */
+  threadsEnabled?: boolean
+}>(), { threadsEnabled: true })
 const issueHover = ref<{ key: string; title: string; x: number; y: number } | null>(null)
 const userHtml = computed(() => renderUserMarkdown(props.msg.role === 'user' ? props.msg.text : ''))
 
-defineEmits<{
+const emit = defineEmits<{
   approve: [requestId: string, approved: boolean]
   openActivity: []
+  openThread: [messageId: string]
 }>()
+
+// The Discuss/Thread footer only ever appears on a completed Bond response
+// (never mid-stream, never on the first-run intro before onboarding ends —
+// that message keeps the same 'onboarding-intro' id App.vue already checks
+// elsewhere for the reveal-text override).
+const showThreadFooter = computed(() => props.threadsEnabled && props.msg.role === 'bond' && !props.msg.streaming && props.msg.id !== 'onboarding-intro')
+const threadForThis = computed(() => threads.threadForAnchor(props.msg.id))
+const threadFooterLabel = computed(() => {
+  const t = threadForThis.value
+  return t && t.replyCount > 0 ? `Thread · ${t.replyCount}` : 'Discuss'
+})
+const threadFooterAriaLabel = computed(() => {
+  const t = threadForThis.value
+  return t && t.replyCount > 0
+    ? `Open thread with ${t.replyCount} ${t.replyCount === 1 ? 'reply' : 'replies'}`
+    : 'Start a thread about this response'
+})
+// A failed thread.create surfaces here, next to the action it belongs to,
+// instead of an uncaught rejection — the main UI itself never changes.
+const threadCreateError = computed(() => threads.createErrorFor(props.msg.id))
+
+// Lazy per-anchor lookup (cached) — fires once a response completes, and
+// again if it was already complete on mount (loaded from history).
+watchEffect(() => {
+  if (showThreadFooter.value) threads.ensureAnchorChecked(props.msg.id)
+})
+
+function discuss() {
+  emit('openThread', props.msg.id)
+}
 
 function updateIssueHover(event: MouseEvent) {
   const token = (event.target as HTMLElement).closest('.issue-reference') as HTMLElement | null
@@ -124,45 +164,67 @@ function formatTime(ts: number | undefined): string {
     <span v-if="msg.ts" class="msg-timestamp">{{ formatTime(msg.ts) }}</span>
   </div>
 
-  <!-- Bond message: with artifacts -->
+  <!-- Bond message: shared wrapper for both artifact-bearing and plain markdown
+       responses, so a completed response can carry one footer action below
+       everything (segments, artifacts, embeds) regardless of which shape it is. -->
   <div
     :id="id"
-    v-else-if="msg.role === 'bond' && segments"
+    v-else-if="msg.role === 'bond'"
     class="message-bubble message-bubble--bond self-start w-full text-sm leading-relaxed"
     @dblclick="copyText(msg, $event)"
   >
-    <template v-for="(seg, i) in segments" :key="i">
-      <MarkdownMessage
-        v-if="seg.type === 'text' && seg.content.trim()"
-        :text="seg.content"
-        :streaming="msg.streaming && i === segments.length - 1"
-        class="px-3.5 py-2.5"
-      />
-      <ArtifactFrame
-        v-else-if="seg.type === 'artifact'"
-        :content="seg.content"
-        :title="seg.title"
-        :layout="seg.layout"
-        :chrome="seg.chrome"
-        :streaming="msg.streaming"
-      />
-      <EmbedRenderer
-        v-else-if="seg.type === 'embed'"
-        :embedType="seg.embedType"
-        :attrs="seg.attrs"
-        class="px-3.5"
-      />
+    <template v-if="segments">
+      <template v-for="(seg, i) in segments" :key="i">
+        <MarkdownMessage
+          v-if="seg.type === 'text' && seg.content.trim()"
+          :text="seg.content"
+          :streaming="msg.streaming && i === segments.length - 1"
+          class="px-3.5 py-2.5"
+        />
+        <ArtifactFrame
+          v-else-if="seg.type === 'artifact'"
+          :content="seg.content"
+          :title="seg.title"
+          :layout="seg.layout"
+          :chrome="seg.chrome"
+          :streaming="msg.streaming"
+        />
+        <EmbedRenderer
+          v-else-if="seg.type === 'embed'"
+          :embedType="seg.embedType"
+          :attrs="seg.attrs"
+          class="px-3.5"
+        />
+      </template>
     </template>
+    <MarkdownMessage
+      v-else
+      :text="msg.text"
+      :streaming="msg.streaming"
+      class="px-3.5 py-2.5"
+    />
+
+    <div v-if="showThreadFooter" class="message-thread-footer">
+      <button
+        type="button"
+        class="thread-footer-action"
+        :class="{ 'thread-footer-action--active': threadForThis && threadForThis.replyCount > 0 }"
+        :aria-label="threadFooterAriaLabel"
+        @click="discuss"
+      >
+        <PhChatCircleText :size="13" />
+        <span>{{ threadFooterLabel }}</span>
+      </button>
+      <BondText v-if="threadCreateError" as="span" size="xs" color="err" class="thread-footer-error">{{ threadCreateError }}</BondText>
+    </div>
   </div>
 
-  <!-- Bond message: plain markdown -->
-  <MarkdownMessage
+  <!-- Turn activity -->
+  <AgentRunCard
     :id="id"
-    v-else-if="msg.role === 'bond'"
-    :text="msg.text"
-    :streaming="msg.streaming"
-    class="message-bubble message-bubble--bond self-start w-full px-3.5 py-2.5 text-sm leading-relaxed"
-    @dblclick="copyText(msg, $event)"
+    v-else-if="msg.kind === 'agent-run'"
+    :data="msg.data"
+    :fallbackText="msg.text"
   />
 
   <!-- Turn activity -->
@@ -389,6 +451,50 @@ function formatTime(ts: number | undefined): string {
 }
 .activity-summary:hover {
   opacity: 0.85;
+}
+
+.message-thread-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.875rem 0.375rem;
+}
+
+.thread-footer-error {
+  opacity: 0.85;
+}
+
+.thread-footer-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.4rem;
+  margin-left: -0.4rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.thread-footer-action:hover,
+.thread-footer-action:focus-visible {
+  opacity: 1;
+  background: var(--color-border);
+}
+
+.thread-footer-action--active {
+  opacity: 0.85;
+  color: var(--color-accent);
+}
+
+.thread-footer-action--active:hover,
+.thread-footer-action--active:focus-visible {
+  opacity: 1;
 }
 
 .msg-timestamp {

@@ -106,6 +106,48 @@ describe('consult_agent', () => {
     expect((deps.gatherEvidence as any).mock.calls[0][0]).toMatchObject({ turnId: 'turn-1', onChunk, signal: controller.signal })
     expect((deps.runConsult as any).mock.calls[0][0]).toMatchObject({ parentModel: 'high', signal: controller.signal })
   })
+
+  it('keeps synchronous consultation read-only when an agent opts into writes', async () => {
+    const { effectiveAgentSettings } = await import('./registry')
+    vi.mocked(effectiveAgentSettings).mockReturnValueOnce({ ...DEFAULT_AGENT_SETTINGS, workspace: 'write' })
+    const tool = collectTools(fakes()).get('consult_agent')!
+    await expect(tool.execute('c1', { agent: 'felix', verb: 'critique', brief: 'x' }))
+      .rejects.toThrow('dispatch_agent')
+  })
+})
+
+describe('async agent tools', () => {
+  it('dispatches immediately and reports idempotent duplicates', async () => {
+    const run = { id: 'run-1', agentLabel: 'Felix', status: 'queued' }
+    const dispatchRun = vi.fn()
+      .mockResolvedValueOnce({ run, created: true })
+      .mockResolvedValueOnce({ run, created: false })
+    const tool = collectTools(fakes({ dispatchRun: dispatchRun as any })).get('dispatch_agent')!
+    const params = { agent: 'felix', verb: 'critique', brief: 'Read it', paths: ['/p'], idempotencyKey: 'same-key', confirmed: true }
+
+    expect((await tool.execute('c1', params)).content[0].text).toContain('Queued')
+    expect((await tool.execute('c2', params)).content[0].text).toContain('already dispatched')
+    expect(dispatchRun).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'same-key' }))
+  })
+
+  it('checks durable status and rejects an unknown run', async () => {
+    const detail = { run: { id: 'run-1', agentLabel: 'Felix', verb: 'critique', status: 'succeeded', result: 'report', errorMessage: null }, events: [], questions: [] }
+    const checkRun = vi.fn((id: string) => id === 'run-1' ? detail : null)
+    const tool = collectTools(fakes({ checkRun: checkRun as any })).get('check_agent')!
+
+    expect((await tool.execute('c1', { runId: 'run-1' })).content[0].text).toContain('succeeded')
+    await expect(tool.execute('c2', { runId: 'missing' })).rejects.toThrow('Unknown agent run')
+  })
+
+  it('surfaces and answers a persisted command question', async () => {
+    const question = { id: 'q1', status: 'pending', proposedAllowlistAddition: 'Allow exact ["node","check.mjs"]', reason: 'needed' }
+    const detail = { run: { id: 'run-1', agentLabel: 'Mathis', verb: 'build', status: 'needs-input', result: null, errorMessage: null }, events: [], questions: [question] }
+    const answerQuestion = vi.fn(async () => ({ run: detail.run, question, changed: true }))
+    const tools = collectTools(fakes({ checkRun: vi.fn(() => detail) as any, answerQuestion: answerQuestion as any }))
+    expect((await tools.get('check_agent')!.execute('c1', { runId: 'run-1' })).content[0].text).toContain('Allow exact')
+    expect((await tools.get('answer_agent_question')!.execute('c2', { runId: 'run-1', questionId: 'q1', approved: true })).content[0].text).toContain('same worktree')
+    expect(answerQuestion).toHaveBeenCalledWith('run-1', 'q1', true, undefined)
+  })
 })
 
 describe('buildAgentRosterPrompt', () => {

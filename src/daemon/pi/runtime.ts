@@ -44,6 +44,17 @@ function findSessionFile(sessionId: string): string | undefined {
   return name ? join(dir, name) : undefined
 }
 
+/**
+ * Whether a Pi session's own on-disk transcript still exists. `runPiBondQuery`
+ * already falls back to a brand-new session when it doesn't (isNewSession) —
+ * this lets a caller that tracks its OWN continuation state (e.g. a thread's
+ * `threadHasPriorTurns`) detect the mismatch beforehand: Bond thinks there's
+ * history, but Pi's own memory of it is gone, so re-priming context is needed.
+ */
+export function piSessionFileExists(sessionId: string): boolean {
+  return !!findSessionFile(sessionId)
+}
+
 function summarizeInput(input: unknown): string | undefined {
   if (!input || typeof input !== 'object') return undefined
   const value = input as Record<string, unknown>

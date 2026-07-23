@@ -10,9 +10,12 @@ import { setDataDir } from './paths'
 import { getDb } from './db'
 import { listMessages as listTranscriptMessages } from './transcript'
 import { registerApproval } from './approvals'
+import { DEFAULT_AGENT_SETTINGS } from '../shared/agents'
+import { createAgentRunRecord } from './agents/async/store'
 
-const { runBondQueryMock } = vi.hoisted(() => ({
+const { runBondQueryMock, runPiTextPromptMock } = vi.hoisted(() => ({
   runBondQueryMock: vi.fn(),
+  runPiTextPromptMock: vi.fn(),
 }))
 
 vi.mock('./agent', async (importOriginal) => {
@@ -20,6 +23,14 @@ vi.mock('./agent', async (importOriginal) => {
   return {
     ...actual,
     runBondQuery: runBondQueryMock,
+  }
+})
+
+vi.mock('./pi/runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./pi/runtime')>()
+  return {
+    ...actual,
+    runPiTextPrompt: runPiTextPromptMock,
   }
 })
 
@@ -31,6 +42,8 @@ let socketPath: string
 beforeEach(async () => {
   runBondQueryMock.mockReset()
   runBondQueryMock.mockResolvedValue({ succeeded: true, piSessionId: 'pi-test', contextTokens: 100, contextWindow: 1000 })
+  runPiTextPromptMock.mockReset()
+  runPiTextPromptMock.mockResolvedValue('a bounded summary of the thread')
   tempDir = mkdtempSync(join(tmpdir(), 'bond-test-'))
   socketPath = join(tempDir, 'bond.sock')
   setDataDir(tempDir)
@@ -43,6 +56,41 @@ afterEach(async () => {
   client.close()
   await server.close()
   rmSync(tempDir, { recursive: true, force: true })
+})
+
+describe('async agent run RPC', () => {
+  it('reconciles persisted runs and broadcasts cancellation to subscribers', async () => {
+    createAgentRunRecord({
+      id: 'rpc-run',
+      idempotencyKey: 'rpc-run',
+      agent: 'felix',
+      agentLabel: 'Felix',
+      verb: 'critique',
+      brief: 'read only',
+      paths: [],
+      workspace: { repoRoot: tempDir, isolation: 'in-place', branch: null, readOnly: true },
+      baseSha: null,
+      allowedPaths: [],
+      settings: DEFAULT_AGENT_SETTINGS,
+      agentDefinitionVersion: 'v1',
+      commandPolicyVersion: 'phase0-readonly-no-shell-v1',
+      acceptanceChecks: [],
+      resourceCaps: { wallClockSeconds: 300, maxOutputChars: 100_000 },
+    })
+    await client.call('bond.subscribe')
+    const changed = vi.fn()
+    const off = client.onNotification('bond.chunk', chunk => {
+      if (chunk.kind === 'agent_run_changed') changed(chunk.run)
+    })
+
+    expect((await client.call('agentruns.list')).runs).toEqual([
+      expect.objectContaining({ id: 'rpc-run', status: 'queued' }),
+    ])
+    expect(await client.call('agentruns.cancel', { runId: 'rpc-run' }))
+      .toMatchObject({ id: 'rpc-run', status: 'cancelled' })
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith(expect.objectContaining({ id: 'rpc-run', status: 'cancelled' })))
+    off()
+  })
 })
 
 describe('onboarding RPC', () => {
@@ -388,6 +436,128 @@ describe('library RPC', () => {
     expect(removed.ok).toBe(true)
     expect(await client.call('library.listReferencesForItem', { itemId: item1.id })).toEqual([])
     expect(await client.call('library.listReferencesForItem', { itemId: item2.id })).toHaveLength(1)
+  })
+})
+
+describe('chat threads RPC', () => {
+  async function sendAndGetAnchor(text: string, reply: string): Promise<string> {
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: reply })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await client.send(text)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const anchor = [...rows].reverse().find(m => m.role === 'bond' && m.text === reply)
+    if (!anchor) throw new Error('anchor message not found')
+    return anchor.id
+  }
+
+  it('creates a thread from an anchor, idempotently, and lists it as recent once touched', async () => {
+    const anchorId = await sendAndGetAnchor('what is bond?', 'bond is a chat app')
+
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+    expect(thread.status).toBe('draft')
+    expect(thread.anchorMessageId).toBe(anchorId)
+
+    const again = await client.call('thread.create', { anchorMessageId: anchorId })
+    expect(again.id).toBe(thread.id)
+
+    const byAnchor = await client.call('thread.getForAnchor', { anchorMessageId: anchorId })
+    expect(byAnchor?.id).toBe(thread.id)
+
+    // Still a draft — not in the recent list yet.
+    expect((await client.call('thread.listRecent')).threads.map(t => t.id)).not.toContain(thread.id)
+
+    await client.call('thread.touch', { threadId: thread.id })
+    const recent = await client.call('thread.listRecent')
+    expect(recent.threads.map(t => t.id)).toContain(thread.id)
+
+    const fetched = await client.call('thread.get', { threadId: thread.id })
+    expect(fetched?.status).toBe('open')
+  })
+
+  it('rejects creating a thread from a nonexistent anchor', async () => {
+    await expect(client.call('thread.create', { anchorMessageId: 'no-such-message' })).rejects.toThrow()
+  })
+
+  it('closes and deletes draft threads, refusing to delete a non-draft', async () => {
+    const anchorId = await sendAndGetAnchor('q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    await client.call('thread.touch', { threadId: thread.id })
+    expect((await client.call('thread.deleteDraft', { threadId: thread.id })).ok).toBe(false)
+
+    await client.call('thread.close', { threadId: thread.id })
+    expect((await client.call('thread.get', { threadId: thread.id }))?.status).toBe('closed')
+  })
+
+  it('broadcasts thread.changed to other live clients on create/touch/close', async () => {
+    const client2 = new BondClient(socketPath)
+    await client2.connect()
+    await client2.subscribe()
+    const events: unknown[] = []
+    client2.onThreadChanged(() => events.push('changed'))
+
+    const anchorId = await sendAndGetAnchor('q2', 'a2')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+    await client.call('thread.touch', { threadId: thread.id })
+    await client.call('thread.close', { threadId: thread.id })
+
+    await vi.waitFor(() => { expect(events.length).toBeGreaterThanOrEqual(3) })
+    client2.close()
+  })
+})
+
+describe('chat threads write-back RPC', () => {
+  async function sendAndGetAnchor(text: string, reply: string): Promise<string> {
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: reply })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await client.send(text)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const anchor = [...rows].reverse().find(m => m.role === 'bond' && m.text === reply)
+    if (!anchor) throw new Error('anchor message not found')
+    return anchor.id
+  }
+
+  it('summarizes a thread via the bounded fast-tier prompt, never calling the model when it has no messages', async () => {
+    const anchorId = await sendAndGetAnchor('q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    const empty = await client.call('thread.summarize', { threadId: thread.id })
+    expect(empty.summary).toBe('')
+    expect(runPiTextPromptMock).not.toHaveBeenCalled()
+
+    await client.call('bond.send', { text: 'a thread question', scope: { type: 'thread', threadId: thread.id } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    const result = await client.call('thread.summarize', { threadId: thread.id })
+    expect(result.summary).toBe('a bounded summary of the thread')
+    expect(runPiTextPromptMock).toHaveBeenCalledTimes(1)
+    expect(runPiTextPromptMock.mock.calls[0][1]).toBe('fast')
+  })
+
+  it('sends a confirmed summary to main as a labeled bond message, never merging raw thread messages', async () => {
+    const anchorId = await sendAndGetAnchor('q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    const result = await client.call('thread.sendSummaryToMain', { threadId: thread.id, summary: 'the agreed conclusion' })
+    expect(result.ok).toBe(true)
+
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const inserted = rows.find(m => m.id === result.messageId)
+    expect(inserted).toMatchObject({ role: 'bond', threadId: null })
+    expect(inserted?.text).toContain('From thread')
+    expect(inserted?.text).toContain('the agreed conclusion')
+  })
+
+  it('rejects an empty summary', async () => {
+    const anchorId = await sendAndGetAnchor('q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+    await expect(client.call('thread.sendSummaryToMain', { threadId: thread.id, summary: '   ' })).rejects.toThrow()
   })
 })
 
@@ -737,5 +907,145 @@ describe('attachConnection device-credential gate', () => {
     attachConnection(ws as any, 'shared-token')
     expect((await ws.auth('device-cred')).error).toBeDefined()
     expect(ws.closed).toBe(true)
+  })
+})
+
+describe('scoped subscription routing (chat threads)', () => {
+  async function sendAndGetAnchorId(sender: BondClient, text: string, reply: string): Promise<string> {
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: reply })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await sender.send(text)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const anchor = [...rows].reverse().find(m => m.role === 'bond' && m.text === reply)
+    if (!anchor) throw new Error('anchor message not found')
+    return anchor.id
+  }
+
+  it('a main-only subscriber never receives a thread turn\'s chunks', async () => {
+    const anchorId = await sendAndGetAnchorId(client, 'q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    // A fresh client subscribes to main only and never itself sends into
+    // the thread — sending auto-subscribes the sender to its own scope, so
+    // testing this with `client` (which created the anchor) would be moot.
+    const observer = new BondClient(socketPath)
+    await observer.connect()
+    await observer.subscribe()
+    const mainChunks: unknown[] = []
+    observer.onChunk((c) => mainChunks.push(c))
+
+    const sender = new BondClient(socketPath)
+    await sender.connect()
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'thread reply' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await sender.call('bond.send', { text: 'thread question', scope: { type: 'thread', threadId: thread.id } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    expect(mainChunks.some(c => (c as { text?: string }).text === 'thread reply')).toBe(false)
+    observer.close()
+    sender.close()
+  })
+
+  it('thread A never receives thread B\'s or main\'s chunks', async () => {
+    const anchorA = await sendAndGetAnchorId(client, 'qa', 'aa')
+    const anchorB = await sendAndGetAnchorId(client, 'qb', 'ab')
+    const threadA = await client.call('thread.create', { anchorMessageId: anchorA })
+    const threadB = await client.call('thread.create', { anchorMessageId: anchorB })
+
+    const observer = new BondClient(socketPath)
+    await observer.connect()
+    await observer.subscribe(undefined, { type: 'thread', threadId: threadA.id })
+    const threadAChunks: unknown[] = []
+    observer.onChunk((c) => threadAChunks.push(c))
+
+    const sender = new BondClient(socketPath)
+    await sender.connect()
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'reply for B' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await sender.call('bond.send', { text: 'question for B', scope: { type: 'thread', threadId: threadB.id } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(threadAChunks.some(c => (c as { text?: string }).text === 'reply for B')).toBe(false)
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'main reply' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await sender.send('main question')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(threadAChunks.some(c => (c as { text?: string }).text === 'main reply')).toBe(false)
+
+    observer.close()
+    sender.close()
+  })
+
+  it('a client subscribed to a thread receives that thread\'s own chunks', async () => {
+    const anchorId = await sendAndGetAnchorId(client, 'q', 'a')
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    await client.subscribe(undefined, { type: 'thread', threadId: thread.id })
+    const threadChunks: unknown[] = []
+    client.onChunk((c) => threadChunks.push(c))
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'thread reply' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await client.call('bond.send', { text: 'thread question', scope: { type: 'thread', threadId: thread.id } })
+    await vi.waitFor(() => {
+      expect(threadChunks.some(c => (c as { text?: string }).text === 'thread reply')).toBe(true)
+    })
+  })
+})
+
+describe('reconnect with main and thread subscriptions active', () => {
+  it('a fresh connection re-subscribing to both main and a thread receives chunks for both again', async () => {
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'anchor reply' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await client.send('anchor question')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const rows = listTranscriptMessages({ limit: 20 }).messages
+    const anchorId = [...rows].reverse().find(m => m.role === 'bond' && m.text === 'anchor reply')!.id
+    const thread = await client.call('thread.create', { anchorMessageId: anchorId })
+
+    // Simulate a disconnect: close the original client (server-side cleanup
+    // removes it from every subscriber set), then reconnect fresh.
+    client.close()
+    const reconnected = new BondClient(socketPath)
+    await reconnected.connect()
+    await reconnected.subscribe() // main
+    await reconnected.subscribe(undefined, { type: 'thread', threadId: thread.id })
+
+    const chunks: unknown[] = []
+    reconnected.onChunk((c) => chunks.push(c))
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'main after reconnect' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await reconnected.send('main after reconnect question')
+    await vi.waitFor(() => {
+      expect(chunks.some(c => (c as { text?: string }).text === 'main after reconnect')).toBe(true)
+    })
+
+    runBondQueryMock.mockImplementationOnce(async (_prompt, options) => {
+      options.onChunk({ kind: 'assistant_text', text: 'thread after reconnect' })
+      return { succeeded: true, piSessionId: options.piSessionId }
+    })
+    await reconnected.call('bond.send', { text: 'thread after reconnect question', scope: { type: 'thread', threadId: thread.id } })
+    await vi.waitFor(() => {
+      expect(chunks.some(c => (c as { text?: string }).text === 'thread after reconnect')).toBe(true)
+    })
+
+    reconnected.close()
   })
 })

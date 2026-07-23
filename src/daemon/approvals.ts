@@ -42,3 +42,8 @@ export function clearTurnApprovals(turnId: string): void {
 export function pendingApprovalTurnIds(): string[] {
   return [...new Set([...pending.values()].map((entry) => entry.turnId))]
 }
+
+/** The turnId a still-pending approval belongs to, without resolving it — lets a resolver look up scope before the entry is gone. */
+export function peekApprovalTurnId(requestId: string): string | undefined {
+  return pending.get(requestId)?.turnId
+}

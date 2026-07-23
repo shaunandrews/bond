@@ -158,7 +158,7 @@ Standalone Node.js WebSocket server on `~/.bond/bond.sock`. Manages agent querie
 
 ### Main Process (`src/main/`)
 
-Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. On daemon restart it reconnects the **same** `BondClient` instance in place (the auth token is read through a provider on every attempt), so registered push listeners — chunk streaming, Sense, web renders, tray — survive `bin/bond rebuild daemon` without an app relaunch. Builds the native application menu, including **Bond → Run/Exit New-User Simulation** (⌘⌥N) which toggles the daemon's sandbox data set and reloads the window — the real app then boots into a genuine first-run. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), the web render host (`src/main/web.ts` — a persistent hidden `BrowserWindow` that serves the daemon's `web.requestRender` requests so `web_search`/`fetch_content` get real-Chromium rendered HTML with no API keys), tray indicator (`src/main/tray.ts`).
+Electron main process. Spawns daemon if not running, creates window, proxies all IPC to the daemon via `BondClient`. **Window content-width management** (`window:resizeContent` IPC + pure `computeContentResize` in `src/main/window-layout.ts`): a side panel opening grows the window by its width (`deltaWidth > 0`) and closing shrinks it back (`deltaWidth < 0`), always keeping the chat panel's width and preserving the left edge; the native minimum is set per open-panel set (`windowMinWidthForPanels` in the renderer's `panelLayout.ts` — chat floor `CHAT_MIN_WIDTH` 400 plus each open panel's minimum), so a chat-only window shrinks small while an open panel can never be crushed. App.vue is the sole caller (`resizeWindow`/`openRightPanel`/`closeRightPanel`/`ensureThreadWindowFit`/`closeThread`), reading each panel's width from `BondPanelGroup.getExpandedWidth`. `MAIN_WINDOW_MIN_WIDTH` (400) mirrors `CHAT_MIN_WIDTH`. On daemon restart it reconnects the **same** `BondClient` instance in place (the auth token is read through a provider on every attempt), so registered push listeners — chunk streaming, Sense, web renders, tray — survive `bin/bond rebuild daemon` without an app relaunch. Builds the native application menu, including **Bond → Run/Exit New-User Simulation** (⌘⌥N) which toggles the daemon's sandbox data set and reloads the window — the real app then boots into a genuine first-run. In packaged mode (`app.isPackaged`), resolves the daemon from `process.resourcesPath/daemon/`, finds Node.js via login shell + well-known paths, and resolves the full user PATH (login shell + fallback) so the daemon can find user-installed binaries like `studio`. Also handles Sense screenshot capture (`src/main/sense.ts` — `desktopCapturer` + `NativeImage.toJPEG`), the web render host (`src/main/web.ts` — a persistent hidden `BrowserWindow` that serves the daemon's `web.requestRender` requests so `web_search`/`fetch_content` get real-Chromium rendered HTML with no API keys), tray indicator (`src/main/tray.ts`).
 
 ### Preload (`src/preload/index.ts`)
 
@@ -447,7 +447,8 @@ Segmented tab bar.
 Flex container that manages resizable panel layout. Nest `BondPanel` and `BondPanelHandle` as direct children. Pixel-unit panels use `flex-shrink: 1` so they participate in CSS flexbox shrinking when the container is too small, with CSS `min-width`/`min-height` enforcing minimums natively. JS state is synced to DOM at drag/animation start via `syncPxStateToDom()`.
 - **Props:** `direction?: 'horizontal' | 'vertical'`, `autoSaveId?: string` (localStorage key), `keyboardStep?: number` (default: 5)
 - **Events:** `layoutChange(layout)` (during drag), `layoutChanged(layout)` (after drag ends)
-- **Expose:** `getLayout()`, `setLayout(layout)`
+- **Expose:** `getLayout()`, `setLayout(layout)`, `getExpandedWidth(id)` (a panel's live px width, or its restore width if collapsed — App.vue uses it to grow/shrink the OS window by exactly a panel's width on open/close)
+- The container-resize ResizeObserver reconciliation is **debounced ~150ms** and skipped mid-drag: reconciling px flex-bases on every observer tick made a manual OS window resize visibly jitter. CSS flexbox renders the live resize; JS state only needs the settled end result.
 
 ### BondPanel
 Individual resizable panel. Must be a direct child of `BondPanelGroup`. Slot props: `{ size, collapsed }`. Applies CSS `min-width` (horizontal) or `min-height` (vertical) from the group's `getMinDimStyle()` — suppressed during collapse/expand animation.
@@ -563,6 +564,15 @@ Right-panel memory view for inspecting and editing Bond memory. A health line si
 - **Working:** current scratchpad goal, facts, preferences, decisions, and open threads, plus a read-only **Working on** block listing the deterministically captured artifacts, active skill, and checkpoint (the model cannot write those, so neither can this editor)
 - **Search:** memory item search with inline edit/delete controls
 - **Source:** source messages attached to a selected memory item
+
+### ThreadPanel
+The chat-thread conversation panel — always a middle column between main and the utility panel; a thread never becomes a full-window drawer (opening one instead widens the window, see the Main Process window-sizing note). Renders the frozen anchor root card, the thread's scoped transcript, and its own ChatInput with per-thread localStorage drafts (saved on close AND `onBeforeUnmount` — a thread switch remounts without close). Every MessageBubble inside gets `threadsEnabled=false`; nested threads are impossible. Header end holds only the overflow menu (Send summary to main) — recent threads live in ThreadsView, not here.
+- **Props:** `threadId: string`, `model: ModelId`, `autoFocus?: boolean`
+- **Events:** `close()`, `update:model(value: ModelId)`, `summarySent()`
+
+### ThreadsView
+Right-panel Threads view — recent threads in one list, toggled from the same fixed panel-icon nav as Sense/Library/Memory. Rows show title, reply count ("N messages"), and approximate age; the active thread is highlighted. Selecting a row emits `open` — App.vue owns the layout decision (`openThreadFromList` → `ensureThreadWindowFit`).
+- **Events:** `open(threadId: string)`
 
 ### DevComponents
 Dev-only component catalog with live previews and prop/event documentation. Accessible from the Settings window Components tab. Not rendered in production flows.

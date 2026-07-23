@@ -28,6 +28,7 @@ const electronLocalMethods: ElectronBondSurface = {
   onLibraryChanged: (fn) => listen('bond:libraryChanged', fn),
   onMcpChanged: (fn) => listen('bond:mcpChanged', fn),
   onDeskChanged: (fn) => listen('bond:deskChanged', fn),
+  onThreadChanged: (fn) => listen('bond:threadChanged', fn),
   onViewerFile: (fn) => listen('bond:viewerFile', fn),
   onCreateSkill: (fn) => listen('bond:createSkill', fn),
   onFullscreenChanged: (fn) => listen('bond:fullscreenChanged', fn),
@@ -57,6 +58,8 @@ const electronLocalMethods: ElectronBondSurface = {
 
   // Permissions
   hasScreenRecordingPermission: () => ipcRenderer.invoke('sense:hasPermission'),
+
+  resizeContent: (options) => ipcRenderer.invoke('window:resizeContent', options),
 }
 
 const surface: BondSurface = {

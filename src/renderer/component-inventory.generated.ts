@@ -8,6 +8,12 @@ export const componentInventory = [
     "events": []
   },
   {
+    "name": "AgentRunCard",
+    "file": "components/AgentRunCard.vue",
+    "props": [],
+    "events": []
+  },
+  {
     "name": "AgentsView",
     "file": "components/AgentsView.vue",
     "props": [],
@@ -189,6 +195,10 @@ export const componentInventory = [
       {
         "name": "header",
         "type": "string | undefined"
+      },
+      {
+        "name": "startCollapsed",
+        "type": "boolean | undefined"
       }
     ],
     "events": []
@@ -227,6 +237,14 @@ export const componentInventory = [
     "props": [
       {
         "name": "id",
+        "type": "string"
+      },
+      {
+        "name": "beforePanelId",
+        "type": "string"
+      },
+      {
+        "name": "afterPanelId",
         "type": "string"
       },
       {
@@ -737,7 +755,20 @@ export const componentInventory = [
   {
     "name": "MessageBubble",
     "file": "components/MessageBubble.vue",
-    "props": [],
+    "props": [
+      {
+        "name": "msg",
+        "type": "Message"
+      },
+      {
+        "name": "id",
+        "type": "string | undefined"
+      },
+      {
+        "name": "threadsEnabled",
+        "type": "boolean | undefined"
+      }
+    ],
     "events": [
       {
         "name": "approve",
@@ -746,6 +777,10 @@ export const componentInventory = [
       {
         "name": "openActivity",
         "payload": "void"
+      },
+      {
+        "name": "openThread",
+        "payload": "messageId: string"
       }
     ]
   },
@@ -951,10 +986,60 @@ export const componentInventory = [
     ]
   },
   {
+    "name": "TasksView",
+    "file": "components/TasksView.vue",
+    "props": [
+      {
+        "name": "focusRunId",
+        "type": "string | null | undefined"
+      }
+    ],
+    "events": []
+  },
+  {
     "name": "ThinkingIndicator",
     "file": "components/ThinkingIndicator.vue",
     "props": [],
     "events": []
+  },
+  {
+    "name": "ThreadPanel",
+    "file": "components/ThreadPanel.vue",
+    "props": [
+      {
+        "name": "threadId",
+        "type": "string"
+      },
+      {
+        "name": "model",
+        "type": "ModelId"
+      },
+      {
+        "name": "autoFocus",
+        "type": "boolean | undefined"
+      }
+    ],
+    "events": [
+      {
+        "name": "close",
+        "payload": "void"
+      },
+      {
+        "name": "summarySent",
+        "payload": "void"
+      }
+    ]
+  },
+  {
+    "name": "ThreadsView",
+    "file": "components/ThreadsView.vue",
+    "props": [],
+    "events": [
+      {
+        "name": "open",
+        "payload": "threadId: string"
+      }
+    ]
   },
   {
     "name": "TurnActivity",

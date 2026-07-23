@@ -50,3 +50,8 @@ export function currentPendingQuestion(): PendingQuestion | null {
 export function pendingQuestionTurnIds(): string[] {
   return [...new Set([...pending.values()].map((entry) => entry.turnId))]
 }
+
+/** The turnId a still-pending question belongs to, without resolving it — lets a resolver look up scope before the entry is gone. */
+export function peekQuestionTurnId(questionId: string): string | undefined {
+  return pending.get(questionId)?.turnId
+}

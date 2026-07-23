@@ -3,15 +3,17 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChat } from '../composables/useChat'
 import { useAutoScroll } from '../composables/useAutoScroll'
 import { useAccentColor } from '../composables/useAccentColor'
+import { useAgentRuns } from '../composables/useAgentRuns'
 import type { ModelId } from '../types/message'
 import type { EditMode, AttachedImage } from '../../shared/session'
 import MessageBubble from '../components/MessageBubble.vue'
 import ChatInput from '../components/ChatInput.vue'
 import ApprovalPrompt from '../components/ApprovalPrompt.vue'
 import QuestionPrompt from '../components/QuestionPrompt.vue'
+import TasksView from '../components/TasksView.vue'
 import BondText from '../components/BondText.vue'
 import BondButton from '../components/BondButton.vue'
-import { PhArrowDown, PhX } from '@phosphor-icons/vue'
+import { PhArrowDown, PhRobot, PhX } from '@phosphor-icons/vue'
 import type { WebBondClient, ConnectionState, PairingError } from './client'
 import { clearDeviceCredential, exchangePairingCode, isStandaloneDisplay } from './client'
 
@@ -22,6 +24,8 @@ const props = defineProps<{
 
 const chat = useChat()
 const accent = useAccentColor()
+const agentRuns = useAgentRuns()
+const mobileTasksOpen = ref(false)
 const selectedModel = ref<ModelId>('balanced')
 const connection = ref<ConnectionState>(props.client.state)
 const hasConnected = ref(false)
@@ -98,6 +102,7 @@ onMounted(async () => {
         // reloading: a blind reload can leave local turn ownership/busy state
         // stranded after the daemon has already finalized the turn.
         await chat.reconcileOnReconnect().catch(() => {})
+        await agentRuns.reconcile().catch(() => {})
         nextTick(() => scrollToBottom())
       }
       hasConnected.value = true
@@ -217,11 +222,17 @@ function handleEditModeChange(mode: EditMode) {
     </div>
 
     <template v-else>
-      <header v-if="connection !== 'connected'" class="web-header">
+      <header v-if="connection !== 'connected' || agentRuns.activeRuns.value.length" class="web-header">
         <BondText size="xs" color="muted">
-          {{ connection === 'connecting' ? 'Connecting…' : 'Reconnecting…' }}
+          {{ connection === 'connected' ? `${agentRuns.activeRuns.value.length} active background ${agentRuns.activeRuns.value.length === 1 ? 'task' : 'tasks'}` : connection === 'connecting' ? 'Connecting…' : 'Reconnecting…' }}
         </BondText>
+        <button v-if="agentRuns.activeRuns.value.length" class="web-agent-button" type="button" aria-label="Open background tasks" @click="mobileTasksOpen = true"><PhRobot :size="16" /></button>
       </header>
+
+      <div v-if="mobileTasksOpen" class="web-tasks-drawer" role="dialog" aria-modal="true" aria-label="Background tasks">
+        <button type="button" class="web-tasks-close" aria-label="Close background tasks" @click="mobileTasksOpen = false"><PhX :size="18" /></button>
+        <TasksView />
+      </div>
 
       <div ref="messagesRef" class="messages" @scroll="syncTranscriptOverflow">
         <div class="chat-column messages-column">
@@ -229,6 +240,7 @@ function handleEditModeChange(mode: EditMode) {
             v-for="msg in chat.messages.value"
             :key="msg.id"
             :msg="msg"
+            :threadsEnabled="false"
             @approve="chat.respondToApproval"
           />
         </div>
@@ -539,4 +551,12 @@ function handleEditModeChange(mode: EditMode) {
 .question-stack {
   margin: 0;
 }
+
+.web-header { display: flex; align-items: center; justify-content: space-between; }
+.web-agent-button, .web-tasks-close { display: grid; place-items: center; border: 0; background: transparent; color: var(--color-muted); cursor: pointer; }
+.web-agent-button { width: 36px; height: 36px; border-radius: 50%; background: var(--color-tint); }
+.web-tasks-drawer { position: fixed; inset: 0; z-index: 30; background: var(--color-bg); padding-top: env(safe-area-inset-top); }
+.web-tasks-close { position: absolute; z-index: 40; top: calc(env(safe-area-inset-top) + .45rem); right: .45rem; width: 32px; height: 32px; border-radius: var(--radius-md); }
+.web-tasks-close:focus-visible, .web-agent-button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.web-tasks-drawer :deep(.tasks-panel) { border-left: 0; }
 </style>

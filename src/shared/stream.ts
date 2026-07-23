@@ -1,7 +1,11 @@
 import type { AttachedImage, EditMode } from './session'
 import type { QuestionAnswer, QuestionOption } from './questions'
+import type { ConversationScope } from './threads'
+import type { AgentRun } from './agent-runs'
 
 export interface BondSendInput {
+  /** Omitted means the main conversation — see ConversationScope in shared/threads.ts. */
+  scope?: ConversationScope
   text: string
   images?: AttachedImage[]
   turnId: string
@@ -46,6 +50,8 @@ export type BondStreamChunk =
   | { kind: 'user_question'; questionId: string; question: string; header?: string; options: QuestionOption[] }
   /** A pending question was answered (possibly by another client or the CLI). */
   | { kind: 'question_resolved'; questionId: string; answer: QuestionAnswer }
+  /** Durable background-agent state changed; completionMessageId signals a persisted transcript insertion. */
+  | { kind: 'agent_run_changed'; run: AgentRun }
 
 /** Chunk tagged with global turn/epoch metadata for renderer routing. */
 export type TaggedChunk = BondStreamChunk & {
@@ -53,4 +59,11 @@ export type TaggedChunk = BondStreamChunk & {
   turnId?: string
   /** @deprecated Legacy per-chat routing field. Continuous transcript clients should ignore it. */
   sessionId?: string
+  /**
+   * Omitted/main means the main conversation. Every turn-scoped chunk (see
+   * the four multi-device sync chunks below) carries this so a renderer
+   * conversation instance can accept only its own scope's chunks. Truly
+   * global events (connection status, edit_mode_changed) omit it.
+   */
+  scope?: ConversationScope
 }

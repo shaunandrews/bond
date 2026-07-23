@@ -32,6 +32,7 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     onLibraryChanged: (fn) => client.onNotification('library.changed', () => fn()),
     onMcpChanged: (fn) => client.onNotification('mcp.changed', () => fn()),
     onDeskChanged: (fn) => client.onNotification('desk.changed', () => fn()),
+    onThreadChanged: (fn) => client.onNotification('thread.changed', () => fn()),
     onConnectionLost: (fn) => client.onStateChange((state) => { if (state === 'disconnected') fn() }),
     onConnectionRestored: (fn) => {
       let wasLost = false
@@ -91,6 +92,10 @@ export function buildBondShim(client: WebBondClient): BondSurface {
     // reveal.
     revealInFinder: async () => {},
     hasScreenRecordingPermission: async () => false,
+    // The web client can't resize its own browser tab/window — report the
+    // real viewport width and let the renderer's responsive layout rules
+    // pick a mode from it, rather than pretending a native resize happened.
+    resizeContent: async () => ({ width: window.innerWidth }),
   }
 
   return {

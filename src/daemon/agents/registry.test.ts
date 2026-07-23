@@ -36,7 +36,7 @@ describe('loadAgentRoster', () => {
   it('includes the bundled agents with no user files present', () => {
     const { agents, problems } = loadAgentRoster({ dir: agentsDir })
     expect(problems).toEqual([])
-    expect(agents.map(agent => agent.name)).toEqual(['felix', 'q'])
+    expect(agents.map(agent => agent.name)).toEqual(['felix', 'mathis', 'q'])
     expect(agents.every(agent => agent.source === 'builtin')).toBe(true)
   })
 
@@ -51,7 +51,7 @@ Doctrine.
 ## verb: look
 W.`)
     const { agents } = loadAgentRoster({ dir: agentsDir })
-    expect(agents.map(agent => agent.name)).toEqual(['felix', 'q', 'scout'])
+    expect(agents.map(agent => agent.name)).toEqual(['felix', 'mathis', 'q', 'scout'])
     const scout = agents.find(agent => agent.name === 'scout')!
     expect(scout.source).toBe('user')
     expect(scout.sourcePath).toContain('scout/AGENT.md')
@@ -79,7 +79,7 @@ name: broken
 ---
 No verbs here.`)
     const { agents, problems } = loadAgentRoster({ dir: agentsDir })
-    expect(agents.map(agent => agent.name)).toEqual(['felix', 'q'])
+    expect(agents.map(agent => agent.name)).toEqual(['felix', 'mathis', 'q'])
     expect(problems).toHaveLength(1)
     expect(problems[0].source).toContain('broken/AGENT.md')
     expect(problems[0].reason).toContain('at least one verb')

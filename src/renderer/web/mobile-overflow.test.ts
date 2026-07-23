@@ -28,6 +28,8 @@ describe('mobile transcript overflow containment', () => {
   const webApp = source('./WebApp.vue')
   const markdown = source('../components/MarkdownMessage.vue')
   const bubble = source('../components/MessageBubble.vue')
+  const tasks = source('../components/TasksView.vue')
+  const agentCard = source('../components/AgentRunCard.vue')
 
   it('pins the transcript to a single scroll axis', () => {
     expect(rule(webApp, '.messages')).toMatch(/overflow-x:\s*hidden/)
@@ -54,5 +56,12 @@ describe('mobile transcript overflow containment', () => {
     // A bare `max-w-[420px]` overflows a phone-width column.
     expect(bubble).not.toMatch(/max-w-\[\d+px\]\s+max-h-\[420px\]/)
     expect(bubble).toMatch(/max-w-\[min\(100%,\s*420px\)\]/)
+  })
+
+  it('contains the Tasks drawer and collapses task/card layouts at narrow widths', () => {
+    expect(rule(webApp, '.web-tasks-drawer')).toMatch(/position:\s*fixed/)
+    expect(rule(webApp, '.web-tasks-drawer')).toMatch(/inset:\s*0/)
+    expect(tasks).toContain('@container (max-width: 300px)')
+    expect(agentCard).toContain('@container (max-width: 420px)')
   })
 })

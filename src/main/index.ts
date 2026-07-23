@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } from 'electron'
 import { join, resolve } from 'node:path'
 import { existsSync, readFileSync, mkdirSync, unlinkSync, openSync, writeFileSync, appendFileSync, watch, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
@@ -14,6 +14,7 @@ import { initTray, destroyTray } from './tray'
 import { markDeskReady, openDesk, registerDeskWindowHost, setDeskHotRects } from './desk'
 import { createDeskWindowHost } from './desk-window'
 import { registerWindow, registerSessionWindow, routeChunk, broadcast } from './window-router'
+import { computeContentResize } from './window-layout'
 import type { TaggedChunk } from '../shared/stream'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -227,6 +228,12 @@ async function connectClient(): Promise<void> {
 
 // --- Windows ---
 
+// The main window's base minimum content width, when only the chat panel is
+// visible. The renderer raises the native minimum per open side panel through
+// `window:resizeContent` and drops it back to this floor as panels close.
+// Mirrors CHAT_MIN_WIDTH in src/renderer/lib/panelLayout.ts (separate process).
+const MAIN_WINDOW_MIN_WIDTH = 400
+
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
 const viewerWindows = new Map<string, BrowserWindow>()
@@ -236,7 +243,7 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 960,
     height: 720,
-    minWidth: 640,
+    minWidth: MAIN_WINDOW_MIN_WIDTH,
     minHeight: 480,
     show: false,
     autoHideMenuBar: true,
@@ -295,6 +302,7 @@ function createWindow(): void {
   client.onMcpChanged(() => broadcast('bond:mcpChanged'))
   // registerWindow() alone does not subscribe main to a new daemon notification.
   client.onDeskChanged(() => broadcast('bond:deskChanged'))
+  client.onThreadChanged(() => broadcast('bond:threadChanged'))
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
@@ -633,7 +641,7 @@ app.whenReady().then(async () => {
   setupAutoReconnect()
   initSense(client)
   initWeb(client)
-  initTray(client)
+  initTray(client, () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()))
   createWindow()
   try {
     simulationActive = (await client.sandboxStatus()).sandboxed
@@ -669,6 +677,33 @@ app.whenReady().then(async () => {
   // --- Settings window ---
   ipcMain.handle('window:openSettings', () => {
     createSettingsWindow()
+  })
+
+  // --- Content-width management (side panels grow/shrink the window) ---
+  // A side panel opening grows the window by its width (deltaWidth > 0) so the
+  // chat panel keeps its size; closing shrinks it back (deltaWidth < 0). The
+  // native minimum is set to `minimumWidth` — the chat floor plus whatever
+  // panels remain open — so a manual resize can never crush a visible panel,
+  // yet a chat-only window can shrink small again.
+  ipcMain.handle('window:resizeContent', (event, options: { deltaWidth: number; minimumWidth: number }) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isDestroyed()) return { width: 0 }
+
+    // Native bounds never change in fullscreen — the responsive panel rules
+    // handle it there instead.
+    if (win.isFullScreen()) return { width: win.getContentBounds().width }
+
+    const current = win.getContentBounds()
+    const workArea = screen.getDisplayMatching(win.getBounds()).workArea
+    // Set the floor first so a shrink isn't blocked by a higher stale minimum;
+    // clamp it to the display so it can never force the window off-screen.
+    const minWidth = Math.min(Math.round(options.minimumWidth), Math.round(workArea.width))
+    const [, minHeight] = win.getMinimumSize()
+    win.setMinimumSize(minWidth, minHeight)
+
+    const { bounds, width } = computeContentResize(current, workArea, { deltaWidth: options.deltaWidth, minimumWidth: minWidth })
+    if (bounds) win.setContentBounds(bounds)
+    return { width }
   })
 
   // --- Desk ---

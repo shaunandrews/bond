@@ -13,6 +13,7 @@ import {
   ensureActiveEpoch,
   findActiveEpoch,
   findEpoch,
+  NEVER_OBSERVED_MARKER,
 } from './epochs'
 
 let testDir: string
@@ -47,11 +48,11 @@ describe('epoch store', () => {
       reflectedThroughSeq: 0,
     })
     expect(findEpoch('epoch-1')?.id).toBe('epoch-1')
-    expect(findActiveEpoch()?.id).toBe('epoch-1')
+    expect(findActiveEpoch(null)?.id).toBe('epoch-1')
 
     const closed = closeEpoch({ id: 'epoch-1', reason: 'test_done', now: '2026-01-01T01:00:00.000Z' })
     expect(closed).toMatchObject({ status: 'closed', endedAt: '2026-01-01T01:00:00.000Z', endReason: 'test_done' })
-    expect(findActiveEpoch()).toBeNull()
+    expect(findActiveEpoch(null)).toBeNull()
   })
 
   it('calculates a soft context limit with a deterministic fallback', () => {
@@ -185,7 +186,7 @@ describe('deferred rollover hook work', () => {
     // Swap already happened; hooks have not run and markers are untouched.
     expect(result.rolledOver).toBe(true)
     expect(result.epoch.piSessionId).toBe('pi-2')
-    expect(findActiveEpoch()!.piSessionId).toBe('pi-2')
+    expect(findActiveEpoch(null)!.piSessionId).toBe('pi-2')
     expect(deferred).toHaveLength(1)
     expect(finalObserver).not.toHaveBeenCalled()
     expect(memoryFlush).not.toHaveBeenCalled()
@@ -218,5 +219,85 @@ describe('deferred rollover hook work', () => {
     await deferred[0]()
 
     expect(finalObserver).toHaveBeenCalledWith(expect.objectContaining({ fromSeq: 3, toSeq: 3 }))
+  })
+})
+
+describe('per-scope active epochs (chat threads)', () => {
+  function seedThread(id: string, anchorId = `anchor-${id}`) {
+    const db = getDb()
+    db.prepare("INSERT INTO messages (id, role, text) VALUES (?, 'bond', 'anchor')").run(anchorId)
+    db.prepare(`
+      INSERT INTO threads (id, anchor_message_id, context_snapshot, status, created_at, updated_at)
+      VALUES (?, ?, '{}', 'open', ?, ?)
+    `).run(id, anchorId, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+  }
+
+  it('lets main and a thread each have their own active epoch at the same time', () => {
+    seedThread('thread-1')
+    const main = createEpoch({ id: 'main-epoch', piSessionId: 'pi-main' })
+    const thread = createEpoch({ id: 'thread-epoch', piSessionId: 'pi-thread', threadId: 'thread-1' })
+
+    expect(findActiveEpoch(null)?.id).toBe(main.id)
+    expect(findActiveEpoch('thread-1')?.id).toBe(thread.id)
+  })
+
+  it('rejects a second active epoch in the same thread scope', () => {
+    seedThread('thread-1')
+    createEpoch({ id: 'e1', piSessionId: 'pi-1', threadId: 'thread-1' })
+    expect(() => createEpoch({ id: 'e2', piSessionId: 'pi-2', threadId: 'thread-1' })).toThrow(/UNIQUE constraint/)
+  })
+
+  it('allows two different threads to each have their own active epoch', () => {
+    seedThread('thread-1')
+    seedThread('thread-2')
+    const a = createEpoch({ id: 'ea', piSessionId: 'pi-a', threadId: 'thread-1' })
+    const b = createEpoch({ id: 'eb', piSessionId: 'pi-b', threadId: 'thread-2' })
+    expect(findActiveEpoch('thread-1')?.id).toBe(a.id)
+    expect(findActiveEpoch('thread-2')?.id).toBe(b.id)
+  })
+
+  it('seeds a thread epoch at NEVER_OBSERVED_MARKER instead of the transcript high-water mark', () => {
+    seedThread('thread-1')
+    insertTurnStart({ turnId: 'turn-main', userMessageId: 'u1', assistantMessageId: 'b1', activityMessageId: 'a1', text: 'hi' })
+
+    const epoch = createEpoch({ id: 'thread-epoch', piSessionId: 'pi-t', threadId: 'thread-1' })
+    expect(epoch.observedThroughSeq).toBe(NEVER_OBSERVED_MARKER)
+    expect(epoch.reflectedThroughSeq).toBe(NEVER_OBSERVED_MARKER)
+  })
+
+  it('ensureActiveEpoch resolves the main epoch when no threadId is given, and creates a thread epoch when one is', async () => {
+    seedThread('thread-1')
+    const main = await ensureActiveEpoch({ piSessionId: 'pi-main' })
+    const thread = await ensureActiveEpoch({ piSessionId: 'pi-thread', threadId: 'thread-1' })
+
+    expect(main.epoch.threadId).toBeNull()
+    expect(thread.epoch.threadId).toBe('thread-1')
+    expect(main.epoch.id).not.toBe(thread.epoch.id)
+
+    // Calling again for the same scopes reuses each epoch rather than creating new ones.
+    const mainAgain = await ensureActiveEpoch({ piSessionId: 'pi-main' })
+    const threadAgain = await ensureActiveEpoch({ piSessionId: 'pi-thread', threadId: 'thread-1' })
+    expect(mainAgain.epoch.id).toBe(main.epoch.id)
+    expect(threadAgain.epoch.id).toBe(thread.epoch.id)
+  })
+
+  it('rolls over main at its soft limit without touching a thread\'s epoch, and vice versa', async () => {
+    seedThread('thread-1')
+    const main = await ensureActiveEpoch({ piSessionId: 'pi-main', contextTokens: 10, contextWindow: 1_000 })
+    const thread = await ensureActiveEpoch({ piSessionId: 'pi-thread', threadId: 'thread-1', contextTokens: 10, contextWindow: 1_000 })
+
+    // Push main over its soft limit — only main should roll over.
+    const mainRollover = await ensureActiveEpoch({ contextTokens: 950, contextWindow: 1_000 })
+    expect(mainRollover.rolledOver).toBe(true)
+    expect(mainRollover.epoch.id).not.toBe(main.epoch.id)
+    const threadUnchanged = findEpoch(thread.epoch.id)
+    expect(threadUnchanged).toMatchObject({ id: thread.epoch.id, status: 'active' })
+
+    // Now push the thread over its own soft limit — only the thread should roll over this time.
+    const threadRollover = await ensureActiveEpoch({ threadId: 'thread-1', contextTokens: 950, contextWindow: 1_000 })
+    expect(threadRollover.rolledOver).toBe(true)
+    expect(threadRollover.epoch.id).not.toBe(thread.epoch.id)
+    const mainUnchangedAfter = findEpoch(mainRollover.epoch.id)
+    expect(mainUnchangedAfter).toMatchObject({ id: mainRollover.epoch.id, status: 'active' })
   })
 })
